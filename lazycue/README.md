@@ -111,11 +111,44 @@ and the app shows "Y", that's a genuine failure.
 | `--base-url` | | App URL (**required**) |
 | `--cache-dir` | `.lazycue` | Directory holding cache JSON files |
 | `--artifact-dir` | | Write per-step screenshots + an HTML report (`index.html`) here |
+| `--video-dir` | `LAZYCUE_VIDEO_DIR` | Render an MP4 per test (prompt title card + captioned screenshots) here |
 | `--json` | | Write a machine-readable JSON cache-stats summary here |
 | `--model` | `claude-sonnet-4-6` | LLM model |
 | `--api-url` | `ANTHROPIC_BASE_URL` or `https://api.anthropic.com` | Anthropic API base URL |
 | `--api-key` | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `--verbose` | false | Verbose output |
+
+## Screenshots & Video Artifacts
+
+LazyCue can capture a screenshot after every executed step and, optionally,
+stitch them into a short MP4.
+
+- `--artifact-dir DIR` writes per-step PNGs into `DIR/<prompt-hash>/` (so
+  screenshots are arranged by prompt) plus an HTML report at `DIR/index.html`.
+- `--video-dir DIR` (or `LAZYCUE_VIDEO_DIR`) renders `DIR/<prompt-hash>.mp4`.
+  The video opens with a title card showing the prompt, then shows each
+  screenshot in order with its step instruction overlaid and a PASS/FAIL badge.
+  Setting `--video-dir` alone also captures the underlying screenshots (under
+  `DIR/<prompt-hash>/`), so you don't need `--artifact-dir` too.
+
+Video rendering shells out to `ffmpeg` (and `drawtext`, so a TrueType font is
+required). The font is auto-detected from common locations; override it with
+`LAZYCUE_FONT=/path/to/font.ttf`. If `ffmpeg` or a font is missing, the test
+still runs — only the video is skipped.
+
+Rendering happens *after* the tests finish, not in the per-test path: each MP4
+is a non-trivial ffmpeg job, so rendering inline would inflate every test's
+wall time (and its timeout budget). The Go harness renders in `TestMain` after
+`m.Run()` (call `Harness.RenderVideos()`); the CLI renders after the run. Each
+MP4 is produced by a single ffmpeg invocation (a `filter_complex` that draws
+the overlays once per frame and concats them), and videos for different tests
+render concurrently.
+
+```
+lazycue --base-url http://localhost:3000 --video-dir ./lazycue-video \
+  'Navigate to /login, sign in, and verify the dashboard loads'
+# ... writes ./lazycue-video/<hash>.mp4 and ./lazycue-video/<hash>/step-*.png
+```
 
 ## How the Cache Works
 

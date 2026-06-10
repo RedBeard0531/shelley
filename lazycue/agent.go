@@ -48,6 +48,11 @@ type AgentResult struct {
 	ScreenshotPath string
 	InputTokens    int
 	OutputTokens   int
+	// Effort diagnostics, surfaced so a human can see how hard the agent
+	// worked (e.g. did a heal converge in 1-2 turns, or thrash to the limit?).
+	Turns       int  // number of API round trips the agent took
+	HitMaxTurns bool // true if the agent ran out of turns (maxAgentTurns)
+	ToolCalls   int  // total tool_use calls the agent issued (run_steps/screenshot/git_command)
 }
 
 const maxAgentTurns = 25
@@ -359,8 +364,20 @@ func RunAgent(ctx context.Context, cfg *AgentConfig) (*AgentResult, error) {
 	var lastError string
 	var genuineFailure bool // set when agent determines the APP is broken, not the test
 	var totalInputTokens, totalOutputTokens int
+	// Effort accounting for heal diagnostics: how many API round trips and tool
+	// calls the agent took, and whether it exhausted its turn budget.
+	var turnsTaken, toolCallCount int
+	finish := func(r *AgentResult) (*AgentResult, error) {
+		r.InputTokens = totalInputTokens
+		r.OutputTokens = totalOutputTokens
+		r.Turns = turnsTaken
+		r.ToolCalls = toolCallCount
+		r.HitMaxTurns = turnsTaken >= maxAgentTurns
+		return r, nil
+	}
 
 	for turn := 0; turn < maxAgentTurns; turn++ {
+		turnsTaken = turn + 1
 		logf("turn %d", turn)
 
 		resp, err := callAnthropic(ctx, cfg, systemPrompt, messages, tools)
@@ -409,27 +426,23 @@ func RunAgent(ctx context.Context, cfg *AgentConfig) (*AgentResult, error) {
 				if errMsg == "" {
 					errMsg = "agent determined the application is broken"
 				}
-				return &AgentResult{
-					Success:      false,
-					Error:        errMsg,
-					StepsJSON:    lastStepsJSON,
-					StepResults:  lastStepResults,
-					InputTokens:  totalInputTokens,
-					OutputTokens: totalOutputTokens,
-				}, nil
+				return finish(&AgentResult{
+					Success:     false,
+					Error:       errMsg,
+					StepsJSON:   lastStepsJSON,
+					StepResults: lastStepResults,
+				})
 			}
 			// Only accept a run_steps call the agent explicitly marked "// FINAL"
 			// as the saved test. This prevents caching an exploratory probe that
 			// happened to be the agent's last run_steps but doesn't actually test
 			// the described behavior.
 			if finalStepsJSON != nil && allPassed(finalStepResults) {
-				return &AgentResult{
-					Success:      true,
-					StepsJSON:    finalStepsJSON,
-					StepResults:  finalStepResults,
-					InputTokens:  totalInputTokens,
-					OutputTokens: totalOutputTokens,
-				}, nil
+				return finish(&AgentResult{
+					Success:     true,
+					StepsJSON:   finalStepsJSON,
+					StepResults: finalStepResults,
+				})
 			}
 			// The agent stopped without a passing FINAL test. Nudge it once to
 			// produce one (it may have only run exploratory probes), then fail.
@@ -456,14 +469,12 @@ func RunAgent(ctx context.Context, cfg *AgentConfig) (*AgentResult, error) {
 			if errMsg == "" {
 				errMsg = "agent stopped without producing passing test"
 			}
-			return &AgentResult{
-				Success:      false,
-				Error:        errMsg,
-				StepsJSON:    lastStepsJSON,
-				StepResults:  lastStepResults,
-				InputTokens:  totalInputTokens,
-				OutputTokens: totalOutputTokens,
-			}, nil
+			return finish(&AgentResult{
+				Success:     false,
+				Error:       errMsg,
+				StepsJSON:   lastStepsJSON,
+				StepResults: lastStepResults,
+			})
 		}
 
 		// Append assistant response to messages.
@@ -475,6 +486,7 @@ func RunAgent(ctx context.Context, cfg *AgentConfig) (*AgentResult, error) {
 		// Process tool calls.
 		var toolResults []apiContentBlock
 		var finalSubmittedThisTurn bool
+		toolCallCount += len(toolUses)
 		for _, tu := range toolUses {
 			switch tu.Name {
 			case "run_steps":
@@ -583,13 +595,11 @@ func RunAgent(ctx context.Context, cfg *AgentConfig) (*AgentResult, error) {
 		// "// FINAL") this turn and every step passed: accept it immediately
 		// without burning another round trip waiting for an end-of-turn message.
 		if (turnIsFinal || finalSubmittedThisTurn) && finalStepsJSON != nil && allPassed(finalStepResults) {
-			return &AgentResult{
-				Success:      true,
-				StepsJSON:    finalStepsJSON,
-				StepResults:  finalStepResults,
-				InputTokens:  totalInputTokens,
-				OutputTokens: totalOutputTokens,
-			}, nil
+			return finish(&AgentResult{
+				Success:     true,
+				StepsJSON:   finalStepsJSON,
+				StepResults: finalStepResults,
+			})
 		}
 
 		// If genuine failure was detected, stop immediately.
@@ -598,27 +608,23 @@ func RunAgent(ctx context.Context, cfg *AgentConfig) (*AgentResult, error) {
 			if errMsg == "" {
 				errMsg = "agent determined the application is broken"
 			}
-			return &AgentResult{
-				Success:      false,
-				Error:        errMsg,
-				StepsJSON:    lastStepsJSON,
-				StepResults:  lastStepResults,
-				InputTokens:  totalInputTokens,
-				OutputTokens: totalOutputTokens,
-			}, nil
+			return finish(&AgentResult{
+				Success:     false,
+				Error:       errMsg,
+				StepsJSON:   lastStepsJSON,
+				StepResults: lastStepResults,
+			})
 		}
 
 		// If the agent marked a complete (FINAL) test that passed all steps,
 		// we're done. Exploratory probes are never accepted as the saved test.
 		if finalStepsJSON != nil && allPassed(finalStepResults) {
 			if resp.StopReason == "end_turn" {
-				return &AgentResult{
-					Success:      true,
-					StepsJSON:    finalStepsJSON,
-					StepResults:  finalStepResults,
-					InputTokens:  totalInputTokens,
-					OutputTokens: totalOutputTokens,
-				}, nil
+				return finish(&AgentResult{
+					Success:     true,
+					StepsJSON:   finalStepsJSON,
+					StepResults: finalStepResults,
+				})
 			}
 			// Continue to let agent confirm/finalize.
 		}
@@ -626,23 +632,19 @@ func RunAgent(ctx context.Context, cfg *AgentConfig) (*AgentResult, error) {
 
 	// Exhausted turns: only accept a passing FINAL test.
 	if finalStepsJSON != nil && allPassed(finalStepResults) {
-		return &AgentResult{
-			Success:      true,
-			StepsJSON:    finalStepsJSON,
-			StepResults:  finalStepResults,
-			InputTokens:  totalInputTokens,
-			OutputTokens: totalOutputTokens,
-		}, nil
+		return finish(&AgentResult{
+			Success:     true,
+			StepsJSON:   finalStepsJSON,
+			StepResults: finalStepResults,
+		})
 	}
 
-	return &AgentResult{
-		Success:      false,
-		Error:        "agent exhausted maximum turns",
-		StepsJSON:    lastStepsJSON,
-		StepResults:  lastStepResults,
-		InputTokens:  totalInputTokens,
-		OutputTokens: totalOutputTokens,
-	}, nil
+	return finish(&AgentResult{
+		Success:     false,
+		Error:       "agent exhausted maximum turns",
+		StepsJSON:   lastStepsJSON,
+		StepResults: lastStepResults,
+	})
 }
 
 func allPassed(results []StepResult) bool {

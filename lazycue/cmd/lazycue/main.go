@@ -28,7 +28,9 @@ func runTests() {
 	apiKey := flag.String("api-key", "", "Anthropic API key (env: ANTHROPIC_API_KEY)")
 	verbose := flag.Bool("verbose", false, "Verbose output")
 	artifactDir := flag.String("artifact-dir", "", "Directory to write per-step screenshots and an HTML report (index.html)")
+	videoDir := flag.String("video-dir", "", "Directory to write an MP4 per test (prompt title card + captioned screenshots). Env: LAZYCUE_VIDEO_DIR")
 	jsonOut := flag.String("json", "", "Write a machine-readable JSON summary of the run to this file (for CI cache stats)")
+	repoRoot := flag.String("repo-root", "", "Repository root for the heal agent's git_command tool (default: git repo root of the cwd)")
 
 	flag.Parse()
 
@@ -49,6 +51,11 @@ func runTests() {
 		resolvedCacheDir = ".lazycue"
 	}
 
+	resolvedVideoDir := *videoDir
+	if resolvedVideoDir == "" {
+		resolvedVideoDir = os.Getenv("LAZYCUE_VIDEO_DIR")
+	}
+
 	opts := lazycue.Options{
 		BaseURL:          *baseURL,
 		CacheDir:         resolvedCacheDir,
@@ -57,6 +64,8 @@ func runTests() {
 		AnthropicAPIKey:  *apiKey,
 		Verbose:          *verbose,
 		ArtifactDir:      *artifactDir,
+		VideoDir:         resolvedVideoDir,
+		RepoRoot:         *repoRoot,
 	}
 
 	ctx := context.Background()
@@ -69,6 +78,14 @@ func runTests() {
 
 	printResult(result)
 	results := []*lazycue.TestResult{result}
+
+	// Render the MP4 (after the run, not in the per-test path) so the report can
+	// embed it and the summary can record its path. Best-effort.
+	if resolvedVideoDir != "" {
+		if err := lazycue.RenderVideos(resolvedVideoDir, results); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: render video: %v\n", err)
+		}
+	}
 
 	// Write an HTML report when artifacts are enabled.
 	if *artifactDir != "" {
@@ -84,6 +101,10 @@ func runTests() {
 		if err := lazycue.WriteSummary(*jsonOut, results); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: write json summary: %v\n", err)
 		}
+	}
+
+	if result.VideoPath != "" {
+		fmt.Printf("\033[2mvideo: %s\033[0m\n", result.VideoPath)
 	}
 
 	if !result.Pass {

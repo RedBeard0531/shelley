@@ -24,7 +24,7 @@
     {
       "action": "wait_visible",
       "selector": "[data-testid='tool-call-completed']",
-      "timeout": "30s"
+      "timeout": "60s"
     },
     {
       "action": "wait_visible",

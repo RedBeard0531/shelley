@@ -24,16 +24,19 @@ type RunSummary struct {
 
 // TestSummary is the per-test slice of a RunSummary.
 type TestSummary struct {
-	Description   string  `json:"description"`
-	Pass          bool    `json:"pass"`
-	Mode          string  `json:"mode"`
-	CacheVersion  int     `json:"cache_version"`
-	DurationMS    int64   `json:"duration_ms"`
-	AgentMS       int64   `json:"agent_ms"`
-	InputTokens   int     `json:"input_tokens"`
-	OutputTokens  int     `json:"output_tokens"`
-	EstimatedCost float64 `json:"estimated_cost_usd"`
-	Error         string  `json:"error,omitempty"`
+	Description   string    `json:"description"`
+	Name          string    `json:"name,omitempty"`
+	Pass          bool      `json:"pass"`
+	Mode          string    `json:"mode"`
+	CacheVersion  int       `json:"cache_version"`
+	DurationMS    int64     `json:"duration_ms"`
+	AgentMS       int64     `json:"agent_ms"`
+	InputTokens   int       `json:"input_tokens"`
+	OutputTokens  int       `json:"output_tokens"`
+	EstimatedCost float64   `json:"estimated_cost_usd"`
+	VideoPath     string    `json:"video_path,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	Heal          *HealInfo `json:"heal,omitempty"` // why/how the test self-healed (only set when Mode == "healed")
 }
 
 // Summarize aggregates results into a RunSummary.
@@ -59,6 +62,7 @@ func Summarize(results []*TestResult) RunSummary {
 		s.EstimatedCostUSD += r.EstimatedCost
 		s.Tests = append(s.Tests, TestSummary{
 			Description:   r.Description,
+			Name:          r.Name,
 			Pass:          r.Pass,
 			Mode:          string(r.Mode),
 			CacheVersion:  r.CacheVersion,
@@ -67,7 +71,9 @@ func Summarize(results []*TestResult) RunSummary {
 			InputTokens:   r.InputTokens,
 			OutputTokens:  r.OutputTokens,
 			EstimatedCost: r.EstimatedCost,
+			VideoPath:     r.VideoPath,
 			Error:         r.Error,
+			Heal:          r.Heal,
 		})
 	}
 	if s.Total > 0 {

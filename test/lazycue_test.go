@@ -38,6 +38,7 @@ import (
 // reporting scripts:
 //
 //	LAZYCUE_ARTIFACT_DIR  write per-step screenshots + an HTML report here
+//	LAZYCUE_VIDEO_DIR     render an MP4 per test (prompt + captioned screenshots) here
 //	LAZYCUE_SUMMARY       write a machine-readable JSON cache-stats summary here
 
 // app is the shared harness. Its BaseURL is filled in by TestMain once the
@@ -92,9 +93,17 @@ func TestMain(m *testing.M) {
 		CacheDir:    cacheDir,
 		Verbose:     true,
 		ArtifactDir: os.Getenv("LAZYCUE_ARTIFACT_DIR"),
+		VideoDir:    os.Getenv("LAZYCUE_VIDEO_DIR"),
 	})
 
 	code := m.Run()
+
+	// Render per-test MP4s (out of the per-test hot path; concurrent). Do this
+	// before WriteReport/WriteSummary so the report embeds the videos and the
+	// summary records their paths. Best-effort.
+	if err := app.RenderVideos(); err != nil {
+		slog.Warn("lazycue: render videos", "error", err)
+	}
 
 	// Emit the reporting artifacts CI surfaces (HTML report + JSON summary).
 	results := app.Results()
