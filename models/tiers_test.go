@@ -13,6 +13,16 @@ func TestAssignTiers(t *testing.T) {
 		}
 	})
 
+	t.Run("opus 5 shadows opus 4.8", func(t *testing.T) {
+		tiers := AssignTiers([]string{"claude-opus-5", "claude-opus-4.8"})
+		if tiers["claude-opus-5"] != Tier1 {
+			t.Errorf("opus-5 tier = %d, want %d", tiers["claude-opus-5"], Tier1)
+		}
+		if tiers["claude-opus-4.8"] != Tier2 {
+			t.Errorf("opus-4.8 tier = %d, want %d", tiers["claude-opus-4.8"], Tier2)
+		}
+	})
+
 	t.Run("worse model stays tier 1 when better absent", func(t *testing.T) {
 		tiers := AssignTiers([]string{"claude-opus-4.7"})
 		if tiers["claude-opus-4.7"] != Tier1 {

@@ -37,6 +37,8 @@ type shadowPair struct {
 // available model.
 var shadowPairs = []shadowPair{
 	// Clear supersessions within a family.
+	{Better: "claude-opus-5", Worse: "claude-opus-4.8"},
+	{Better: "claude-opus-5", Worse: "claude-opus-4.7"},
 	{Better: "claude-opus-4.8", Worse: "claude-opus-4.7"},
 	{Better: "claude-opus-4.6", Worse: "claude-opus-4.5"},
 	{Better: "claude-sonnet-5", Worse: "claude-sonnet-4.6"},
@@ -51,6 +53,7 @@ var shadowPairs = []shadowPair{
 	// Arguable / cross-family supersessions. We still encode them so the
 	// default list stays lean; the reasoning is noted inline.
 	{Better: "claude-opus-4.8", Worse: "claude-opus-4.6"},            // 4.6 is cheaper (older tokenizer) but 4.8 is stronger
+	{Better: "claude-opus-5", Worse: "claude-opus-4.6"},              // same reasoning as 4.8 vs 4.6
 	{Better: "glm-5.2-fireworks", Worse: "qwen3.7-plus-fireworks"},   // different families; glm costs a bit more
 	{Better: "glm-5.2-fireworks", Worse: "kimi-k2.7-code-fireworks"}, // different families; glm costs a bit more; kimi-k3 likely soon
 	{Better: "glm-5.2-fireworks", Worse: "deepseek-v4-flash-fireworks"},

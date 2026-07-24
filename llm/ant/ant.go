@@ -34,6 +34,7 @@ const (
 	Claude5Sonnet  = "claude-sonnet-5"
 	Claude47Opus   = "claude-opus-4-7"
 	Claude48Opus   = "claude-opus-4-8"
+	Claude5Opus    = "claude-opus-5"
 	ClaudeFable5   = "claude-fable-5"
 )
 
@@ -41,6 +42,7 @@ const (
 // See https://docs.anthropic.com/en/docs/about-claude/models/all-models
 var modelMaxOutputTokens = map[string]int{
 	ClaudeFable5:   128000,
+	Claude5Opus:    128000,
 	Claude48Opus:   128000,
 	Claude47Opus:   128000,
 	Claude46Opus:   128000,
@@ -124,7 +126,7 @@ func (s *Service) maxOutputTokens() int {
 		model = DefaultModel
 	}
 	switch model {
-	case ClaudeFable5, Claude48Opus, Claude47Opus, Claude46Opus, Claude46Sonnet:
+	case ClaudeFable5, Claude5Opus, Claude48Opus, Claude47Opus, Claude46Opus, Claude46Sonnet:
 		return 128000
 	case Claude4Sonnet, Claude45Sonnet, Claude5Sonnet,
 		Claude45Haiku, Claude45Opus:
@@ -317,7 +319,7 @@ type systemContent struct {
 // "claude-opus-4-80".
 func useAdaptiveThinking(model string) bool {
 	model = "-" + strings.ReplaceAll(model, ".", "-") + "-"
-	for _, m := range []string{ClaudeFable5, Claude5Sonnet, Claude48Opus, Claude47Opus} {
+	for _, m := range []string{ClaudeFable5, Claude5Opus, Claude5Sonnet, Claude48Opus, Claude47Opus} {
 		if strings.Contains(model, "-"+m+"-") {
 			return true
 		}
