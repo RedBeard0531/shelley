@@ -198,6 +198,9 @@
 
       <div v-if="drawerOpen" class="backdrop hide-on-desktop" @click="drawerOpen = false" />
     </div>
+
+    <!-- Recomputation-counter overlay (performance-hud flag). -->
+    <PerfHud v-if="perfHudEnabled" />
   </template>
 </template>
 
@@ -230,8 +233,13 @@ import { connectGlobalStream, type StreamStatus } from "../services/globalStream
 import { handleNotificationEvent } from "../services/notifications";
 import { loadCachedDraft } from "../services/draftCache";
 import { shouldStartDrawerCollapsed } from "../utils/drawerStartup";
+import { perfCount } from "../utils/perf";
 import { useI18n } from "./composables/i18n";
 import { ConversationsListKey, CurrentConversationIdKey } from "./composables/subagentLive";
+import { useFeatureFlag } from "./composables/featureFlags";
+import PerfHud from "./components/PerfHud.vue";
+
+const perfHudEnabled = useFeatureFlag("performance-hud");
 
 const { t } = useI18n();
 
@@ -447,6 +455,7 @@ function recoverConversationListStream() {
 }
 
 function handleConversationListPatch(event: ConversationListPatchEvent) {
+  perfCount("app.listPatch");
   const prev = conversations.value;
   const result = reduceConversationListPatch(listStateNow(), event);
   if (!result.ok) {

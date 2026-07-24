@@ -11839,3 +11839,156 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+
+/* Performance HUD (performance-hud feature flag) */
+.perf-hud {
+  position: fixed;
+  bottom: 8px;
+  left: 8px;
+  z-index: 10000;
+  min-width: 240px;
+  max-width: 340px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: rgba(15, 17, 21, 0.92);
+  color: #d0d6e0;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  line-height: 1.35;
+  pointer-events: auto;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.perf-hud.collapsed {
+  min-width: 0;
+}
+
+.perf-hud-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+  background: rgba(15, 17, 21, 0.97);
+}
+
+.perf-hud.collapsed .perf-hud-header {
+  border-bottom: none;
+}
+
+.perf-hud-title {
+  font-weight: 700;
+  color: #7dd3fc;
+}
+
+.perf-hud-mini {
+  color: #9aa3b2;
+}
+
+.perf-hud-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.perf-hud-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  font: inherit;
+  padding: 0 5px;
+  cursor: pointer;
+}
+
+.perf-hud-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.perf-hud-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.perf-hud-table th,
+.perf-hud-table td {
+  padding: 1px 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.perf-hud-table th {
+  color: #9aa3b2;
+  font-weight: 400;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.perf-hud-name {
+  text-align: left !important;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.perf-hud-hot td {
+  color: #fbbf24;
+}
+
+.perf-hud-empty {
+  text-align: center !important;
+  color: #9aa3b2;
+  padding: 8px !important;
+}
+
+.perf-hud-section {
+  padding: 4px 8px 1px;
+  color: #fbbf24;
+  font-weight: 700;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.perf-hud-section-hint {
+  color: #6b7280;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.perf-hud-longtask td {
+  text-align: left;
+}
+
+.perf-hud-longtask-when {
+  color: #6b7280;
+}
+
+.perf-hud-longtask-dur {
+  color: #fbbf24;
+}
+
+.perf-hud-longtask-suspects {
+  max-width: 200px;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  color: #d0d6e0;
+}
+
+.perf-hud-footer {
+  padding: 2px 8px 4px;
+  color: #6b7280;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 768px) {
+  .perf-hud {
+    max-width: 60vw;
+    max-height: 40vh;
+    font-size: 10px;
+  }
+}

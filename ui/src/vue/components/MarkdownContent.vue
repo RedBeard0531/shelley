@@ -9,6 +9,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { renderMarkdownToSafeHTML } from "../../utils/markdownRender";
+import { perfWrap } from "../../utils/perf";
 
 const props = defineProps<{
   text: string;
@@ -18,5 +19,7 @@ const props = defineProps<{
   messageId?: string;
 }>();
 
-const html = computed(() => renderMarkdownToSafeHTML(props.text, props.messageId));
+const html = computed(
+  perfWrap("markdown.render", () => renderMarkdownToSafeHTML(props.text, props.messageId)),
+);
 </script>

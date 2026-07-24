@@ -280,7 +280,9 @@
       v-if="!currentConversation?.archived"
       :on-send="sendMessage"
       :on-queue="queueMessage"
-      :on-compact="conversationId && onDistillNewGeneration ? handleDistillCompactNewGeneration : undefined"
+      :on-compact="
+        conversationId && onDistillNewGeneration ? handleDistillCompactNewGeneration : undefined
+      "
       :show-queue-option="!!conversationId"
       :can-queue="canQueue"
       :auto-queue="autoQueue"
@@ -399,6 +401,7 @@ import { handleModifiedNavClick } from "../utils/openInNewTab";
 import { isAutoExpandTool } from "../../utils/toolMeta";
 import { formatDay } from "../../utils/messageTime";
 import { SLASH_COMMANDS } from "../../utils/slashCommands";
+import { perfCount, perfWrap } from "../../utils/perf";
 import type { UsageEntry } from "../../utils/tokenCostGraph";
 import { coalesceMessages, type CoalescedItem } from "./coalesce";
 import type { RenderNode, RenderChunk, GenerationBlock } from "./renderNode";
@@ -506,7 +509,10 @@ provide("lastMessageId", lastMessageId);
 // email. Empty-string emails are ignored (unauthenticated/direct access), so a
 // mix of empty and a single real email still counts as one participant and
 // elides the label. Provided to Message.vue through MessageRenderNode.
-const showUserEmails = computed(() => hasMultipleUsers(messages.value));
+const showUserEmails = computed(() => {
+  perfCount("chat.showUserEmails");
+  return hasMultipleUsers(messages.value);
+});
 provide("showUserEmails", showUserEmails);
 const loading = ref(true);
 const showLoadingProgressUI = ref(false);
@@ -1010,7 +1016,9 @@ const welcomeParts = computed(() =>
   t("welcomeMessage").split(/(\{hostname\}|\{docsLink\}|\{proxyLink\})/),
 );
 
-const coalescedItems = computed(() => coalesceMessages(messages.value));
+const coalescedItems = computed(
+  perfWrap("chat.coalesceMessages", () => coalesceMessages(messages.value)),
+);
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -1019,7 +1027,8 @@ function formatBytes(bytes: number): string {
 }
 
 // ---- Render model (porting renderMessages into structured data) ----
-const renderModel = computed<GenerationBlock[]>(() => {
+const renderModel = computed<GenerationBlock[]>(perfWrap("chat.renderModel", buildRenderModel));
+function buildRenderModel(): GenerationBlock[] {
   const msgs = messages.value;
   if (msgs.length === 0) return [];
 
@@ -1245,7 +1254,7 @@ const renderModel = computed<GenerationBlock[]>(() => {
   });
 
   return blocks;
-});
+}
 
 // Wrap consecutive render nodes into fixed-size chunks. Each chunk gets
 // content-visibility:auto (see .messages-chunk in styles.css) so WebKit can
@@ -1330,6 +1339,7 @@ function syncFromStore(focusedId: string) {
   const rec = messageStore.peek(focusedId);
   if (focusedId !== currentConversationId) return;
   if (!rec) return;
+  perfCount("chat.syncFromStore");
   messages.value = rec.messages;
   lastKnownMessageCount.value = rec.messages.length;
   saveMsgCount(rec.messages.length);
@@ -1342,6 +1352,7 @@ function syncFromStore(focusedId: string) {
 function syncTransientFromStore(focusedId: string) {
   const tr = messageStore.getTransient(focusedId);
   if (focusedId !== currentConversationId) return;
+  perfCount("chat.syncTransient");
   toolProgress.value = tr.toolProgress;
   streamingText.value = tr.streamingText;
   agentWorking.value = tr.agentWorking;
@@ -1507,9 +1518,10 @@ async function cancelQueuedMessage(queuedId: string) {
 
 // Ghost pending messages derived from the open conversation's queued_messages
 // JSON array (not messages rows). Rendered at the bottom of the conversation.
-const queuedGhosts = computed(() =>
-  parseQueuedMessages(props.currentConversation?.queued_messages),
-);
+const queuedGhosts = computed(() => {
+  perfCount("chat.queuedGhosts");
+  return parseQueuedMessages(props.currentConversation?.queued_messages);
+});
 
 // Build the conversation_options bundle from the current composer selection
 // (tool overrides, thinking level). "default" omits the
@@ -1928,6 +1940,7 @@ async function saveDraft(value: string) {
 
 const draftAutosave = useDraftAutosave(saveDraft);
 function handleDraftChange(value: string) {
+  perfCount("chat.draftChange");
   draftText = value;
   // Mirror to localStorage SYNCHRONOUSLY before the debounced server autosave:
   // if the tab reloads (or the network silently dropped) before the PUT lands,
@@ -2027,41 +2040,44 @@ const loadingBarFillStyle = computed<Record<string, string> | undefined>(() => {
 
 // Props bundle for ChatStatusContent (rendered in the status bar OR the
 // mobile message-input slot — mutually exclusive locations).
-const statusContentProps = computed(() => ({
-  currentConversation: props.currentConversation,
-  conversationId: props.conversationId,
-  streamStatus: props.streamStatus,
-  error: error.value,
-  agentWorking: agentWorking.value,
-  cancelling: cancelling.value,
-  selectedCwd: selectedCwd.value,
-  contextWindowSize: contextWindowSize.value,
-  maxContextTokens: maxContextTokens.value,
-  usageEntries: usageEntries.value,
-  selectedModelDisplayName: selectedModelDisplayName.value,
-  hostname,
-  models: models.value,
-  selectedModel: selectedModel.value,
-  sending: sending.value,
-  refreshingModels: refreshingModels.value,
-  thinkingLevel: thinkingLevel.value,
-  toolOverrides: toolOverrides.value,
-  toolOverrideList: toolOverrideList.value,
-  toolOverrideCount: toolOverrideCount.value,
-  cwdError: cwdError.value,
-  onUnarchive: handleUnarchive,
-  onClearError: () => (error.value = null),
-  onCancel: handleCancel,
-  onDistillNewGeneration: contextBarDistill.value,
-  onStartNewGeneration: handleStartNewGeneration,
-  onSelectModel: setSelectedModel,
-  onManageModels: () => props.onOpenModelsModal?.(),
-  onRefreshModels: handleRefreshModels,
-  onThinkingChange: setThinkingLevel,
-  onSetToolOverride: setToolOverride,
-  onResetToolOverrides: resetToolOverrides,
-  onOpenDirectoryPicker: () => (showDirectoryPicker.value = true),
-}));
+const statusContentProps = computed(() => {
+  perfCount("chat.statusContentProps");
+  return {
+    currentConversation: props.currentConversation,
+    conversationId: props.conversationId,
+    streamStatus: props.streamStatus,
+    error: error.value,
+    agentWorking: agentWorking.value,
+    cancelling: cancelling.value,
+    selectedCwd: selectedCwd.value,
+    contextWindowSize: contextWindowSize.value,
+    maxContextTokens: maxContextTokens.value,
+    usageEntries: usageEntries.value,
+    selectedModelDisplayName: selectedModelDisplayName.value,
+    hostname,
+    models: models.value,
+    selectedModel: selectedModel.value,
+    sending: sending.value,
+    refreshingModels: refreshingModels.value,
+    thinkingLevel: thinkingLevel.value,
+    toolOverrides: toolOverrides.value,
+    toolOverrideList: toolOverrideList.value,
+    toolOverrideCount: toolOverrideCount.value,
+    cwdError: cwdError.value,
+    onUnarchive: handleUnarchive,
+    onClearError: () => (error.value = null),
+    onCancel: handleCancel,
+    onDistillNewGeneration: contextBarDistill.value,
+    onStartNewGeneration: handleStartNewGeneration,
+    onSelectModel: setSelectedModel,
+    onManageModels: () => props.onOpenModelsModal?.(),
+    onRefreshModels: handleRefreshModels,
+    onThinkingChange: setThinkingLevel,
+    onSetToolOverride: setToolOverride,
+    onResetToolOverrides: resetToolOverrides,
+    onOpenDirectoryPicker: () => (showDirectoryPicker.value = true),
+  };
+});
 
 // ============ effects / watchers ============
 
@@ -2356,6 +2372,7 @@ watch(
     lazyDraftId,
   ],
   () => {
+    perfCount("chat.draftReconcileWatch");
     const result = reconcileComposerDraft({
       conversationId: props.conversationId ?? null,
       lazyDraftId: lazyDraftId.value,
@@ -2490,8 +2507,7 @@ watch(
             // not already near the bottom. Restoring a saved position that sits
             // at the bottom must keep auto-scroll armed and the button hidden,
             // otherwise following conversations silently stops (React parity).
-            const nearBottom =
-              container.scrollHeight - pending - container.clientHeight < 100;
+            const nearBottom = container.scrollHeight - pending - container.clientHeight < 100;
             userScrolled = !nearBottom;
             atBottom = nearBottom;
             showScrollToBottom.value = !nearBottom;
@@ -2537,6 +2553,7 @@ let lastObservedScrollTop = 0;
 function handleScroll() {
   const container = messagesContainerRef.value;
   if (!container) return;
+  perfCount("chat.handleScroll");
   let upwardDelta = lastObservedScrollTop - container.scrollTop;
   // Discount any scrollTop drop the ResizeObserver already attributed to a
   // list shrink (a layout clamp, not a gesture).
@@ -2593,6 +2610,7 @@ function setupScrollObservers() {
     { root: container, rootMargin: "0px 0px 100px 0px", threshold: 0 },
   );
   ro = new ResizeObserver((entries) => {
+    perfCount("chat.listResizeObserver");
     // contentRect.height is already computed for the ResizeObserver callback,
     // so reading it forces no extra layout — unlike container.scrollHeight,
     // which would lay out off-screen content-visibility chunks and stall the

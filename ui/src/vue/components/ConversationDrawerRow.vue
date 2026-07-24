@@ -303,6 +303,7 @@ import {
   stripSnippetMarks,
   renderSnippetSegments,
 } from "./conversationDrawerShared";
+import { perfCount } from "../../utils/perf";
 
 const props = defineProps<{
   conversation: Conversation | ConversationWithState;
@@ -351,7 +352,10 @@ const isNew = computed(
     ctx.seenIds.value !== null &&
     !ctx.seenIds.value.has(props.conversation.conversation_id),
 );
-const conversationTags = computed(() => (isDraft.value ? [] : parseTags(props.conversation)));
+const conversationTags = computed(() => {
+  perfCount("drawerRow.tags");
+  return isDraft.value ? [] : parseTags(props.conversation);
+});
 const tagsEditing = computed(
   () => !isDraft.value && ctx.tagEditorId.value === props.conversation.conversation_id,
 );

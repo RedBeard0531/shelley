@@ -214,6 +214,7 @@ import {
 } from "../../types";
 import { type MarkdownMode } from "../../services/settings";
 import { useMarkdownMode } from "../composables/markdownMode";
+import { usePerfLifecycle } from "../composables/perfLifecycle";
 import { getContentType } from "../utils/messageContent";
 import MarkdownContent from "./MarkdownContent.vue";
 import MessageActionBar from "./MessageActionBar.vue";
@@ -229,6 +230,7 @@ import RefusalContinueButton from "./RefusalContinueButton.vue";
 import MessageContentBlock from "./MessageContentBlock.vue";
 import CitedText from "./CitedText.vue";
 import { coalesceContent } from "../../utils/coalesceContent";
+import { perfCount } from "../../utils/perf";
 import MessageDisplayData from "./MessageDisplayData.vue";
 
 interface ToolDisplay {
@@ -248,6 +250,11 @@ const props = defineProps<{
 }>();
 
 const { markdownMode } = useMarkdownMode();
+
+// Recomputation counters (see utils/perf.ts): mounts tell us how many Message
+// components exist / get recreated; updates reveal wide prop-invalidation
+// churn (e.g. a toolProgress object identity change re-rendering every row).
+usePerfLifecycle("message");
 
 /** Should we render markdown for this content block? */
 function shouldRenderMarkdown(
@@ -284,9 +291,10 @@ function safeParse<T>(value: unknown, label: string): T | null {
   }
 }
 
-const llmMessage = computed<LLMMessage | null>(() =>
-  safeParse<LLMMessage>(props.message.llm_data, "LLM data"),
-);
+const llmMessage = computed<LLMMessage | null>(() => {
+  perfCount("message.parseLlmData");
+  return safeParse<LLMMessage>(props.message.llm_data, "LLM data");
+});
 
 const usage = computed<Usage | null>(() => {
   if (props.message.type === "agent" && props.message.usage_data) {

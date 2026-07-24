@@ -326,6 +326,7 @@ import { handleModifiedNavClick } from "../utils/openInNewTab";
 import ConversationRow from "./ConversationDrawerRow.vue";
 import Button from "primevue/button";
 import { DrawerCtxKey, type GroupBy, parseTags } from "./conversationDrawerShared";
+import { perfCount } from "../../utils/perf";
 
 const props = defineProps<{
   isOpen: boolean;
@@ -505,6 +506,7 @@ watch(
 
 // Bucket subagents under their parent.
 const subagentsByParent = computed<Record<string, ConversationWithState[]>>(() => {
+  perfCount("drawer.subagentsByParent");
   resetOrderRefsForResort();
   void resortKey.value;
   const out: Record<string, ConversationWithState[]> = {};
@@ -792,6 +794,7 @@ function onNewConversationClick(e: MouseEvent) {
 
 // --- Derived lists ---
 const topLevelConversations = computed(() => {
+  perfCount("drawer.topLevel");
   resetOrderRefsForResort();
   void resortKey.value;
   const sorted = sortConversationsByBucket(

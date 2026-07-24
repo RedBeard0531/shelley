@@ -43,6 +43,7 @@ import {
   rowAAD,
   type CacheKeyMaterial,
 } from "./cryptoKey";
+import { perfCount } from "../utils/perf";
 
 // Cross-tab notification channel for key rotation. When one tab runs
 // wipeAndRotateKey() the others must drop their cached CryptoKey and
@@ -581,6 +582,7 @@ export class MessageStore {
   /** Merge a batch of messages into the per-conv cache (streaming upsert). */
   upsertMessages(id: string, incoming: Message[]): void {
     if (incoming.length === 0) return;
+    perfCount("store.upsertMessages");
     const rec = this.hot.get(id) ?? emptyRecord(id);
     const byMsgId = new Map<string, Message>();
     for (const m of rec.messages) byMsgId.set(m.message_id, m);
@@ -1246,12 +1248,14 @@ export class MessageStore {
   // ── Notify helpers ─────────────────────────────────────────────────────────
 
   private notify(id: string): void {
+    perfCount("store.notify");
     const set = this.listenersById.get(id);
     if (set) for (const cb of set) cb();
     for (const cb of this.allListeners) cb();
   }
 
   private notifyTransient(id: string): void {
+    perfCount("store.notifyTransient");
     const set = this.transientListenersById.get(id);
     if (set) for (const cb of set) cb();
   }

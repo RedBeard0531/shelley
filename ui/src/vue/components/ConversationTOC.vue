@@ -67,6 +67,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import Popover from "primevue/popover";
 import type { Message, LLMMessage, LLMContent } from "../../types";
+import { perfCount, perfWrap } from "../../utils/perf";
 
 interface TOCEntry {
   id: string;
@@ -214,7 +215,7 @@ function scrollToFragment(
   return true;
 }
 
-const entries = computed(() => buildEntries(props.messages));
+const entries = computed(perfWrap("toc.buildEntries", () => buildEntries(props.messages)));
 const activeEntryByMessageId = computed(() => {
   const entryByMessageId = new Map<string, string>();
   for (const entry of entries.value) {
@@ -267,6 +268,7 @@ function attachScroll() {
   const container = props.containerRef;
   if (!container) return;
   const update = () => {
+    perfCount("toc.scrollUpdate");
     if (props.nearBottom) {
       activeId.value = "bottom";
       return;

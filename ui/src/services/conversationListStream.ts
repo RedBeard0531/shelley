@@ -3,6 +3,7 @@ import type {
   ConversationListPatchOp,
   ConversationWithState,
 } from "../types";
+import { perfCount } from "../utils/perf";
 
 function decodePointer(path: string): string[] {
   if (path === "") return [];
@@ -119,7 +120,9 @@ export function applyConversationListPatch(
   state: ConversationWithState[],
   patch: ConversationListPatchOp[],
 ): ConversationWithState[] {
+  const start = performance.now();
   let doc: unknown = cloneValue(state);
+  perfCount("list.cloneAll", performance.now() - start);
   for (const op of patch) {
     validateOp(op);
     switch (op.op) {

@@ -101,6 +101,7 @@
 import { computed } from "vue";
 import type { LLMContent } from "../../types";
 import { useInToolDetail } from "../composables/toolDetail";
+import { usePerfLifecycle } from "../composables/perfLifecycle";
 import BashTool from "./tools/BashTool.vue";
 import PatchTool from "./tools/PatchTool.vue";
 import ScreenshotTool from "./tools/ScreenshotTool.vue";
@@ -135,6 +136,9 @@ const props = defineProps<{
 }>();
 
 const inToolDetail = useInToolDetail();
+
+// Component churn counters (see utils/perf.ts / the performance-hud flag).
+usePerfLifecycle("toolCall");
 
 // Map tool names to their specialized components (mirrors TOOL_COMPONENTS).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
