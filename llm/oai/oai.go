@@ -276,17 +276,6 @@ var (
 		SupportsImages:     false,
 	}
 
-	Qwen37PlusFireworks = Model{
-		UserName:           "qwen3.7-plus-fireworks",
-		ModelName:          "accounts/fireworks/models/qwen3p7-plus",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
-	}
-
 	MoonshotKimiK2 = Model{
 		UserName:           "moonshot-kimi-k2",
 		ModelName:          "moonshot-v1-auto",
@@ -629,7 +618,6 @@ var ModelsRegistry = []Model{
 	GLM52Fireworks,
 	KimiK26Fireworks,
 	KimiK27CodeFireworks,
-	Qwen37PlusFireworks,
 	GPTOSS120B,
 	GPTOSS20B,
 	LlamaCPP,
@@ -1180,7 +1168,7 @@ func (s *Service) TokenContextWindow() int {
 		return 128000
 	case "accounts/fireworks/models/deepseek-v4-pro", "accounts/fireworks/models/deepseek-v4-flash":
 		return 1048576
-	case "accounts/fireworks/models/qwen3p7-plus", "accounts/fireworks/models/kimi-k2p7-code", "accounts/fireworks/models/kimi-k2p6":
+	case "accounts/fireworks/models/kimi-k2p7-code", "accounts/fireworks/models/kimi-k2p6":
 		return 262144
 	case "gpt-5.1", "gpt-5.1-mini", "gpt-5.1-nano":
 		return 256000

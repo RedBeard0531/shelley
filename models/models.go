@@ -375,12 +375,6 @@ func All() []Model {
 			Build: oaiChatSvc(oai.DeepseekV4FlashFireworks, "fireworks"),
 		},
 		{
-			ID: "qwen3.7-plus-fireworks", Provider: ProviderFireworks,
-			Description: "Qwen 3.7 Plus on Fireworks", APIModelName: oai.Qwen37PlusFireworks.ModelName,
-			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.Qwen37PlusFireworks, "fireworks"),
-		},
-		{
 			ID: "gpt-oss-20b-fireworks", Provider: ProviderFireworks, Tags: "slug",
 			Description: "GPT-OSS 20B on Fireworks", APIModelName: oai.GPTOSS20B.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
