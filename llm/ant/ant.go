@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -309,22 +310,80 @@ type systemContent struct {
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
+// adaptiveThinkingMinVersion maps Claude family names to the first version
+// (major, minor) that requires adaptive thinking. Models at or above the
+// threshold use thinking.type=adaptive + output_config.effort; older ones use
+// the legacy thinking.type=enabled + budget_tokens. Version thresholds (rather
+// than an exact-name allowlist) make new releases (opus-6, sonnet-5.5, ...)
+// work without a code change.
+var adaptiveThinkingMinVersion = map[string][2]int{
+	"opus":   {4, 7},
+	"sonnet": {5, 0},
+	"haiku":  {5, 0}, // no adaptive haiku yet; assume the next one is
+	"fable":  {0, 0}, // every Fable release is adaptive
+}
+
 // useAdaptiveThinking reports whether the model requires adaptive thinking
 // (thinking: {type: "adaptive"} + output_config: {effort: "..."}) instead of
 // the legacy manual thinking (thinking: {type: "enabled", budget_tokens: N}).
-// Claude Opus 4.7 and later require adaptive thinking.
-// Matching is done on '-'/'.'-delimited tokens so it covers dated snapshots
-// ("claude-opus-4-8-20260115") and provider-qualified names
-// ("us.anthropic.claude-opus-4-8-v1:0") without false positives like
-// "claude-opus-4-80".
 func useAdaptiveThinking(model string) bool {
-	model = "-" + strings.ReplaceAll(model, ".", "-") + "-"
-	for _, m := range []string{ClaudeFable5, Claude5Opus, Claude5Sonnet, Claude48Opus, Claude47Opus} {
-		if strings.Contains(model, "-"+m+"-") {
-			return true
-		}
+	family, major, minor, ok := parseClaudeModel(model)
+	if !ok {
+		return false
 	}
-	return false
+	minVer, ok := adaptiveThinkingMinVersion[family]
+	if !ok {
+		return false
+	}
+	return major > minVer[0] || (major == minVer[0] && minor >= minVer[1])
+}
+
+// parseClaudeModel extracts the family ("opus", "sonnet", "haiku", "fable")
+// and version from a Claude model identifier. It handles bare names
+// ("claude-opus-5"), dotted versions ("claude-opus-4.8"), dated snapshots
+// ("claude-opus-4-8-20260115"), and provider-qualified names
+// ("us.anthropic.claude-opus-4-8-v1:0", "claude-opus-5@20260724"). Returns
+// ok=false for strings that don't follow the claude-<family>-<version> shape,
+// such as the legacy version-first names ("claude-3-opus-20240229"), which
+// all predate adaptive thinking anyway.
+func parseClaudeModel(model string) (family string, major, minor int, ok bool) {
+	tokens := strings.FieldsFunc(strings.ToLower(model), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	seenClaude := false
+	for i, tok := range tokens {
+		if tok == "claude" {
+			seenClaude = true
+			continue
+		}
+		if !seenClaude {
+			continue
+		}
+		if tok != "opus" && tok != "sonnet" && tok != "haiku" && tok != "fable" {
+			continue
+		}
+		// Parse up to two numeric tokens after the family as major/minor.
+		// Date snapshots (20260115) are large; version components are small.
+		var nums []int
+		for _, t := range tokens[i+1:] {
+			n, err := strconv.Atoi(t)
+			if err != nil || n >= 1000 {
+				break
+			}
+			nums = append(nums, n)
+			if len(nums) == 2 {
+				break
+			}
+		}
+		if len(nums) == 0 {
+			return "", 0, 0, false
+		}
+		if len(nums) > 1 {
+			minor = nums[1]
+		}
+		return tok, nums[0], minor, true
+	}
+	return "", 0, 0, false
 }
 
 // request represents the request payload for creating a message.
@@ -736,15 +795,14 @@ func applyAnthropicThinking(req *request, model string, level llm.ThinkingLevel,
 		return
 	}
 	if useAdaptiveThinking(model) {
-		// Only Claude Opus 4.7+ uses adaptive thinking and supports "xhigh".
 		// The adaptive-thinking API only accepts low/medium/high/xhigh/max;
 		// it rejects "minimal" outright.
 		if level == llm.ThinkingLevelMinimal {
 			level = llm.ThinkingLevelLow
 		}
 		effort := level.ThinkingEffort()
-		// Opus 4.7+ defaults thinking.display to "omitted", which returns
-		// thinking blocks with an empty thinking field. Request summarized
+		// Adaptive-thinking models default thinking.display to "omitted", which
+		// returns thinking blocks with an empty thinking field. Request summarized
 		// thinking so the UI can show the model's reasoning.
 		req.Thinking = &thinking{Type: "adaptive", Display: "summarized"}
 		req.OutputConfig = &outputConfig{Effort: effort}

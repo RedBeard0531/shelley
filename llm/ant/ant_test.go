@@ -1959,6 +1959,11 @@ func TestLiveAnthropicModels(t *testing.T) {
 		{"Sonnet 4.6", Claude46Sonnet},
 		{"Opus 4.5", Claude45Opus},
 		{"Opus 4.6", Claude46Opus},
+		// Adaptive-thinking models (thinking.type=adaptive + output_config.effort).
+		{"Opus 4.7", Claude47Opus},
+		{"Opus 4.8", Claude48Opus},
+		{"Opus 5", Claude5Opus},
+		{"Sonnet 5", Claude5Sonnet},
 	}
 
 	req := &llm.Request{
@@ -2875,16 +2880,35 @@ func TestUseAdaptiveThinking(t *testing.T) {
 	}{
 		{Claude48Opus, true},
 		{Claude47Opus, true},
+		{Claude5Opus, true},
+		{Claude5Sonnet, true},
 		{ClaudeFable5, true},
 		{"claude-opus-4-8-20260115", true},
+		{"claude-opus-5-20260724", true},
+		{"us.anthropic.claude-opus-5-v1:0", true},
 		{"anthropic.claude-opus-4-8", true},
 		{"us.anthropic.claude-opus-4-8-v1:0", true},
 		{"anthropic.claude-fable-5-20260301-v1:0", true},
+		// Future releases should be adaptive without a code change.
+		{"claude-opus-6", true},
+		{"claude-opus-5-1", true},
+		{"claude-opus-5.1", true},
+		{"claude-sonnet-5-5-20270101", true},
+		{"claude-haiku-5", true},
+		{"claude-opus-5@20260724", true}, // Vertex-style snapshot
 		{Claude46Opus, false},
 		{Claude46Sonnet, false},
+		{Claude45Opus, false},
+		{Claude45Haiku, false},
+		{Claude4Sonnet, false},
 		{"anthropic.claude-sonnet-4-5-20250929-v1:0", false},
-		{"claude-opus-4-80", false},
-		{"anthropic.claude-opus-4-85-v1:0", false},
+		// Legacy version-first names all predate adaptive thinking.
+		{"claude-3-opus-20240229", false},
+		{"claude-3-5-sonnet-20241022", false},
+		// Non-Claude and malformed names.
+		{"gpt-5.6-sol", false},
+		{"claude-opus", false},
+		{"opus-5", false},
 	}
 	for _, tt := range tests {
 		if got := useAdaptiveThinking(tt.model); got != tt.want {
