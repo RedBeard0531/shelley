@@ -706,6 +706,22 @@ let atBottom = true;
 // ResizeObserver setup for what they mean.
 let lastListHeight = 0;
 let clampBudget = 0;
+let lastContainerHeight = 0;
+// The IntersectionObserver's raw view of the bottom sentinel. Unlike atBottom
+// (which handleScroll also flips on inferred scroll-ups) this only changes
+// when the sentinel actually enters/leaves the viewport, so the container
+// ResizeObserver can use it to recognize clamps that left us at the bottom.
+let sentinelAtBottom = true;
+// When handleScroll last inferred a user scroll-up from a scrollTop drop, and
+// by how much. A container-growth clamp normally reaches the ResizeObserver
+// before its scroll event, but a forced reflow (anything reading layout right
+// after the DOM change) flushes the clamp early so the scroll event lands
+// first; the ResizeObserver uses these to retroactively undo that misread.
+let inferredScrollUpAt = -Infinity;
+let inferredScrollUpDelta = 0;
+// Last upward wheel / touch gesture; a scroll-up near a real gesture must
+// never be undone as a clamp misread.
+let lastScrollGestureAt = -Infinity;
 let hiddenAt: number | null = null;
 let lastGeneration: { id: string | null; gen: number } | null = null;
 
@@ -1256,6 +1272,10 @@ const showStreamingPreview = computed(() => !!streamingText.value && agentWorkin
 // ---- scroll ----
 const MAX_SCROLL_OFFSET = 0x7fffffff;
 const BOTTOM_PIN_SCROLL_RELEASE_DELTA = 128;
+// How long a clamp bookkeeping entry stays valid. A layout clamp and its
+// scroll event land within a rendering update or two of each other; anything
+// older is stale and must not affect genuine gestures.
+const CLAMP_MISREAD_UNDO_WINDOW_MS = 250;
 let bottomPinFrame: number | null = null;
 let bottomPinActive = false;
 
@@ -1273,10 +1293,14 @@ function releaseBottomPinForUser() {
 }
 
 function handleBottomPinWheel(e: WheelEvent) {
-  if (e.deltaY < 0) releaseBottomPinForUser();
+  if (e.deltaY < 0) {
+    lastScrollGestureAt = performance.now();
+    releaseBottomPinForUser();
+  }
 }
 
 function handleBottomPinTouch() {
+  lastScrollGestureAt = performance.now();
   releaseBottomPinForUser();
 }
 
@@ -2219,6 +2243,10 @@ watch(
     // true because a freshly loaded conversation renders pinned to the bottom.
     lastListHeight = 0;
     clampBudget = 0;
+    lastContainerHeight = 0;
+    sentinelAtBottom = true;
+    inferredScrollUpAt = -Infinity;
+    inferredScrollUpDelta = 0;
     atBottom = true;
     if (!id) {
       messages.value = [];
@@ -2490,17 +2518,20 @@ let scrollSaveTimer: number | null = null;
 let ro: ResizeObserver | null = null;
 let bottomObserver: IntersectionObserver | null = null;
 let lastObservedScrollTop = 0;
-// Last observed height of the message list, read for free from the
-// ResizeObserver entry's contentRect (no forced layout). When the list shrinks
-// the browser clamps scrollTop down, which is indistinguishable from a user
+// Last observed heights of the message list and container, read for free from
+// the ResizeObserver entries' contentRect (no forced layout). When the list
+// shrinks — or the container grows (composer resizing, panels opening) — the
+// browser clamps scrollTop down, which is indistinguishable from a user
 // scroll-up if you only watch scrollTop. content-visibility:auto makes this
 // routine: off-screen chunks swap their estimated height for the real one as
 // they lay out, so scrollHeight (and the max scrollTop) keeps changing.
 // Misreading those clamps as scroll-ups wrongly disarmed auto-follow and left
 // the scroll-to-bottom button stranded (GitHub #245). The ResizeObserver fires
 // before the clamp's scroll event, so it hands handleScroll a pixel budget to
-// discount. (lastListHeight/clampBudget are declared with atBottom near the top
-// of setup: the immediate conversationId watch resets them, and a `let` in TDZ
+// discount; when a forced reflow flushes the clamp first instead, the
+// ResizeObserver retroactively undoes the misread (see inferredScrollUpAt).
+// (lastListHeight/clampBudget are declared with atBottom near the top of
+// setup: the immediate conversationId watch resets them, and a `let` in TDZ
 // there would throw during setup and strand the composer disabled.)
 
 function handleScroll() {
@@ -2518,6 +2549,14 @@ function handleScroll() {
     stopBottomPin();
   }
   if (!bottomPinActive && upwardDelta > 0) {
+    // Record the inference so the container ResizeObserver can undo it if a
+    // growth report arrives that explains this drop as a layout clamp.
+    const now = performance.now();
+    inferredScrollUpDelta =
+      now - inferredScrollUpAt < CLAMP_MISREAD_UNDO_WINDOW_MS
+        ? inferredScrollUpDelta + upwardDelta
+        : upwardDelta;
+    inferredScrollUpAt = now;
     userScrolled = true;
     atBottom = false;
     showScrollToBottom.value = true;
@@ -2543,6 +2582,7 @@ function setupScrollObservers() {
   bottomObserver = new IntersectionObserver(
     ([entry]) => {
       const nearBottom = entry?.isIntersecting ?? false;
+      sentinelAtBottom = nearBottom;
       atBottom = nearBottom;
       showScrollToBottom.value = !nearBottom;
       if (nearBottom) {
@@ -2556,12 +2596,41 @@ function setupScrollObservers() {
     // contentRect.height is already computed for the ResizeObserver callback,
     // so reading it forces no extra layout — unlike container.scrollHeight,
     // which would lay out off-screen content-visibility chunks and stall the
-    // main thread. A shrink means the imminent scroll event is a clamp, not a
-    // gesture, so record how much handleScroll should discount.
-    const listHeight = entries[entries.length - 1]?.contentRect.height ?? lastListHeight;
+    // main thread. A list shrink means the imminent scroll event is a clamp,
+    // not a gesture, so record how much handleScroll should discount.
+    let listHeight = lastListHeight;
+    let containerHeight = lastContainerHeight;
+    for (const entry of entries) {
+      if (entry.target === container) containerHeight = entry.contentRect.height;
+      else listHeight = entry.contentRect.height;
+    }
     if (listHeight < lastListHeight) {
       clampBudget += lastListHeight - listHeight;
     }
+    // Container growth clamps scrollTop down too (the viewport got taller, so
+    // the max offset got smaller). When we were following the bottom, that
+    // clamp is not a gesture. Its scroll event may land before or after this
+    // callback depending on when layout flushed, so cover both orders:
+    // budget the pixels for a scroll event still to come, or retroactively
+    // undo a scroll-up handleScroll already misread.
+    const containerGrowth = containerHeight - lastContainerHeight;
+    if (lastContainerHeight > 0 && containerGrowth > 0 && sentinelAtBottom) {
+      const now = performance.now();
+      if (
+        now - inferredScrollUpAt < CLAMP_MISREAD_UNDO_WINDOW_MS &&
+        now - lastScrollGestureAt > CLAMP_MISREAD_UNDO_WINDOW_MS &&
+        inferredScrollUpDelta <= containerGrowth + 1
+      ) {
+        userScrolled = false;
+        atBottom = true;
+        showScrollToBottom.value = false;
+        inferredScrollUpAt = -Infinity;
+        inferredScrollUpDelta = 0;
+      } else {
+        clampBudget += containerGrowth;
+      }
+    }
+    lastContainerHeight = containerHeight;
     lastListHeight = listHeight;
     // Keep following pinned to the bottom as content streams in. User scroll-up
     // detection lives solely in handleScroll (with clamp discounting); inferring
@@ -2581,6 +2650,11 @@ function setupScrollObservers() {
     ([list, sentinel]) => {
       ro?.disconnect();
       bottomObserver?.disconnect();
+      // Observe the container alongside the list: container resizes (composer
+      // growing/shrinking, panels opening) clamp scrollTop just like list
+      // shrinks do, and must not read as user scroll-ups.
+      lastContainerHeight = 0;
+      ro?.observe(container);
       if (list) ro?.observe(list);
       if (sentinel) bottomObserver?.observe(sentinel);
     },
