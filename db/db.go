@@ -2051,10 +2051,10 @@ func (db *DB) GetCacheSession(ctx context.Context, tokenHash string) (CacheSessi
 	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
 		q := generated.New(rx.Conn())
 		row, err := q.GetCacheSession(ctx, tokenHash)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNoCacheSession
-			}
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return ErrNoCacheSession
+		case err != nil:
 			return err
 		}
 		out = CacheSession{
