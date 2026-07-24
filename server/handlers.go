@@ -186,6 +186,52 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// maxEditableFileBytes caps how large a file handleReadFile will load into
+// memory. The web editor is for source/config files, not large blobs.
+const maxEditableFileBytes = 16 << 20 // 16 MiB
+
+// handleReadFile returns the text content of an arbitrary file as JSON
+// {path, content}. The editor modal loads files through this (rather than
+// /api/read, which is restricted to image/upload dirs) so it can open any
+// file the fuzzy finder surfaces. Writing already accepts arbitrary absolute
+// paths via /api/write-file, so reading them is consistent.
+func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	p := r.URL.Query().Get("path")
+	if p == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+	clean := filepath.Clean(p)
+	if !filepath.IsAbs(clean) {
+		http.Error(w, "absolute path required", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "path is a directory", http.StatusBadRequest)
+		return
+	}
+	if info.Size() > maxEditableFileBytes {
+		http.Error(w, "file too large to edit", http.StatusRequestEntityTooLarge)
+		return
+	}
+	b, err := os.ReadFile(clean)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to read file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"path": clean, "content": string(b)})
+}
+
 // userAgentsMdPath returns the path to ~/.config/shelley/AGENTS.md
 func userAgentsMdPath() (string, error) {
 	home, err := os.UserHomeDir()

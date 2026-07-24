@@ -338,6 +338,9 @@ type Server struct {
 	notifDispatcher          *notifications.Dispatcher
 	conversationListStream   *conversationListStream
 	conversationListGitCache *conversationListGitCache
+	// fileListCache memoizes working-directory file listings for the fuzzy
+	// file finder (/api/find-files) so a burst of queries lists the tree once.
+	fileListCache *fileListCache
 	// exeNotifyOnce guards lazy detection of the exe.dev "notify" integration
 	// (push notifications). exeNotifyDetected caches the result.
 	exeNotifyOnce     sync.Once
@@ -394,6 +397,7 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 	s.conversationListStream = newConversationListStream(s)
 	s.streamPub = subpub.New[StreamResponse]()
 	s.conversationListGitCache = newConversationListGitCache()
+	s.fileListCache = newFileListCache()
 
 	// Persistent terminal sessions live alongside the database so that they
 	// survive shelley restarts. In tests DBPath is empty; use a unique
@@ -455,6 +459,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/validate-cwd", http.HandlerFunc(s.handleValidateCwd)) // Small response
 	mux.Handle("POST /api/model-costs", http.HandlerFunc(s.handleModelCosts))
 	mux.Handle("/api/list-directory", compressionHandler(http.HandlerFunc(s.handleListDirectory)))
+	mux.Handle("/api/find-files", compressionHandler(http.HandlerFunc(s.handleFindFiles)))
 	mux.Handle("/api/create-directory", http.HandlerFunc(s.handleCreateDirectory))
 	mux.Handle("/api/git/repos", compressionHandler(http.HandlerFunc(s.handleGitRepos)))
 	mux.Handle("/api/git/diffs", compressionHandler(http.HandlerFunc(s.handleGitDiffs)))
@@ -472,6 +477,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/message/{message_id}/image/{content_index}/{toolresult_index}", s.handleMessageImage) // Serves images from DB
 	mux.HandleFunc("GET /api/message/{message_id}/file", s.handleMessageFile)                                      // Serves local images referenced in message markdown
 	mux.Handle("/api/write-file", http.HandlerFunc(s.handleWriteFile))                                             // Small response
+	mux.Handle("/api/read-file", compressionHandler(http.HandlerFunc(s.handleReadFile)))                           // Reads arbitrary text files as JSON
 	mux.Handle("/api/user-agents-md", http.HandlerFunc(s.handleUserAgentsMd))                                      // Small response
 	mux.HandleFunc("/api/exec-ws", s.handleExecWS)                                                                 // Websocket for shell commands
 	mux.HandleFunc("GET /api/terminals", s.handleTerminalsList)                                                    // List persistent dtach sessions

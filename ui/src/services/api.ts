@@ -571,6 +571,29 @@ class ApiService {
     return response.json();
   }
 
+  // findFiles fuzzy-searches files under `dir` server-side. `query` is the
+  // fuzzy pattern (empty returns the first files alphabetically). `signal`
+  // lets callers abort superseded requests while the user types.
+  async findFiles(
+    dir: string,
+    query: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    dir: string;
+    query: string;
+    matches: Array<{ path: string; matched_indexes?: number[] }>;
+    total: number;
+    truncated: boolean;
+  }> {
+    const params = new URLSearchParams({ dir });
+    if (query) params.set("q", query);
+    const response = await fetch(`${this.baseUrl}/find-files?${params.toString()}`, { signal });
+    if (!response.ok) {
+      throw await responseError(response, "Failed to find files");
+    }
+    return response.json();
+  }
+
   async renameConversation(conversationId: string, slug: string): Promise<Conversation> {
     const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/rename`, {
       method: "POST",

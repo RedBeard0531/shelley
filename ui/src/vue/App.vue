@@ -124,6 +124,7 @@
             commandPaletteOpen = false;
           }
         "
+        @open-file-finder="openFileFinder"
         @open-models-modal="
           () => {
             modelsModalOpen = true;
@@ -179,6 +180,22 @@
         "
       />
 
+      <FileFinderModal
+        :is-open="fileFinderOpen"
+        :initial-dir="finderDir"
+        @close="fileFinderOpen = false"
+        @select="openFileInEditor"
+      />
+
+      <EditableFileModal
+        v-if="editorFilePath"
+        :is-open="!!editorFilePath"
+        :path="editorFilePath"
+        :title="`Edit ${tildifyPath(editorFilePath)}`"
+        :load-url="`/api/read-file?path=${encodeURIComponent(editorFilePath)}`"
+        @close="editorFilePath = null"
+      />
+
       <div v-if="drawerOpen" class="backdrop hide-on-desktop" @click="drawerOpen = false" />
     </div>
   </template>
@@ -192,9 +209,12 @@ import CommandPalette from "./components/CommandPalette.vue";
 import ModelsModal from "./components/ModelsModal.vue";
 import NotificationsModal from "./components/NotificationsModal.vue";
 import FeatureFlagsModal from "./components/FeatureFlagsModal.vue";
+import FileFinderModal from "./components/FileFinderModal.vue";
+import EditableFileModal from "./components/EditableFileModal.vue";
 import Button from "primevue/button";
 import type { EphemeralTerminal } from "./components/terminalTypes";
 import { focusMessageInputIfUnfocused } from "../utils/focusMessageInput";
+import { tildifyPath } from "../utils/tildify";
 import {
   type Conversation,
   type ConversationWithState,
@@ -282,6 +302,9 @@ const terminalTrigger = ref(0);
 const modelsModalOpen = ref(false);
 const notificationsModalOpen = ref(false);
 const featureFlagsModalOpen = ref(false);
+// Fuzzy file finder (Cmd/Ctrl+Shift+P) + the generic editor it opens.
+const fileFinderOpen = ref(false);
+const editorFilePath = ref<string | null>(null);
 const modelsRefreshTrigger = ref(0);
 const cwdSyncTrigger = ref(0);
 const navigateUserMessageTrigger = ref(0);
@@ -357,6 +380,17 @@ const commandPaletteHasCwd = computed(
       localStorage.getItem("shelley_selected_cwd") ||
       window.__SHELLEY_INIT__?.default_cwd
     ),
+);
+
+// Directory the fuzzy file finder searches: the current conversation's cwd,
+// else the last-used/most-recent cwd, else the server default, else $HOME.
+const finderDir = computed(
+  () =>
+    currentConversation.value?.cwd ||
+    mostRecentCwd.value ||
+    localStorage.getItem("shelley_selected_cwd") ||
+    window.__SHELLEY_INIT__?.default_cwd ||
+    "",
 );
 
 // ---- navigation ----
@@ -600,6 +634,18 @@ function onCommandPaletteClose() {
   focusMessageInputIfUnfocused();
 }
 
+// Open the fuzzy file finder (also reachable via the command palette).
+function openFileFinder() {
+  commandPaletteOpen.value = false;
+  fileFinderOpen.value = true;
+}
+
+// Finder selected a file: close it and open the generic editor on that path.
+function openFileInEditor(absPath: string) {
+  fileFinderOpen.value = false;
+  editorFilePath.value = absPath;
+}
+
 async function handleFirstMessage(
   message: string,
   model: string,
@@ -691,6 +737,14 @@ function handleKeyDown(e: KeyboardEvent) {
   if (modifierPressed && e.key === "k") {
     e.preventDefault();
     commandPaletteOpen.value = !commandPaletteOpen.value;
+    return;
+  }
+
+  // Cmd/Ctrl+Shift+P opens the fuzzy file finder. `e.key` is "P" (uppercase)
+  // when Shift is held; also accept "p" defensively across layouts.
+  if (modifierPressed && e.shiftKey && (e.key === "p" || e.key === "P")) {
+    e.preventDefault();
+    fileFinderOpen.value = true;
     return;
   }
 

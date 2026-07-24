@@ -14,6 +14,7 @@ require (
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pkg/diff v0.0.0-20241224192749-4e6772a4315c
 	github.com/richardlehane/crock32 v1.0.1
+	github.com/sahilm/fuzzy v0.1.3
 	github.com/samber/slog-http v1.12.1
 	github.com/sashabaranov/go-openai v1.41.2
 	go.skia.org/infra v0.0.0-20260709164234-a736e8709729

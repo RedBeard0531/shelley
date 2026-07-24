@@ -21,6 +21,7 @@
          (e: "open-diff-viewer"): void                        // onOpenDiffViewer
          (e: "open-git-graph"): void                          // onOpenGitGraph
          (e: "open-terminal"): void                           // onOpenTerminal
+         (e: "open-file-finder"): void                       // onOpenFileFinder
          (e: "open-models-modal"): void                       // onOpenModelsModal
          (e: "open-notifications-modal"): void                // onOpenNotificationsModal
          (e: "open-feature-flags-modal"): void                // onOpenFeatureFlagsModal
@@ -148,6 +149,7 @@ const emit = defineEmits<{
   (e: "open-diff-viewer"): void;
   (e: "open-git-graph"): void;
   (e: "open-terminal"): void;
+  (e: "open-file-finder"): void;
   (e: "open-models-modal"): void;
   (e: "open-notifications-modal"): void;
   (e: "open-feature-flags-modal"): void;
@@ -190,6 +192,9 @@ const ICON_WORKTREE = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="
 const ICON_LANG = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>`;
 const ICON_TRASH = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a2 2 0 012-2h2a2 2 0 012 2v3" /></svg>`;
 const ICON_CHAT = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>`;
+const ICON_FILE = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>`;
+
+const isMac = navigator.platform.toUpperCase().includes("MAC");
 
 // Simple fuzzy match for actions - returns score (higher is better), -1 if no match
 function fuzzyMatch(q: string, text: string): number {
@@ -384,6 +389,20 @@ const actionItems = computed<CommandItem[]>(() => {
       emit("close");
     },
     keywords: ["terminal", "shell", "bash", "zsh", "fish", "login", "console", "tty", "pty"],
+  });
+
+  items.push({
+    id: "open-file-finder",
+    type: "action",
+    title: "Edit a file",
+    subtitle: "Fuzzy-find a file under the working directory",
+    shortcut: isMac ? "\u2318\u21e7P" : "Ctrl+Shift+P",
+    icon: ICON_FILE,
+    action: () => {
+      emit("open-file-finder");
+      emit("close");
+    },
+    keywords: ["file", "edit", "open", "find", "fuzzy", "finder", "editor", "path", "goto"],
   });
 
   items.push({

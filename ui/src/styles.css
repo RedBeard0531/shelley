@@ -10351,6 +10351,67 @@ kbd {
   flex-shrink: 0;
 }
 
+/* Fuzzy file finder: the directory chip lives in the modal title-right slot
+   and re-roots the search when clicked. Reuses .grp-* for the list body. */
+.ff-dir-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 22rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.ff-dir-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--primary);
+}
+.ff-dir-btn:active {
+  transform: translateY(0.5px);
+}
+.ff-dir-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.ff-dir-btn .grp-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+.ff-dir-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* Mobile: keep the finder title compact so the directory chip fits on the
+   same row instead of wrapping the title across three lines. */
+@media (max-width: 768px) {
+  .ff-modal .modal-title {
+    font-size: 0.95rem;
+    white-space: nowrap;
+  }
+  .ff-modal .modal-title-right {
+    margin-right: 0.5rem;
+    min-width: 0;
+  }
+  .ff-dir-btn {
+    max-width: 48vw;
+  }
+}
+
 /* Mobile: use the full screen, slim header, and stack branch/worktree
    onto a second line so the repo path always gets full width. */
 @media (max-width: 768px) {

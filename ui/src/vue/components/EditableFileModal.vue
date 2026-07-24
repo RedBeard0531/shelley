@@ -79,10 +79,12 @@ const props = withDefaults(
     isOpen: boolean;
     path: string;
     title?: string;
+    /** Explicit Monaco language id. When omitted, the language is detected
+     *  from the file extension (falling back to markdown). */
     language?: string;
     loadUrl?: string;
   }>(),
-  { language: "markdown" },
+  {},
 );
 const emit = defineEmits<{
   (e: "close"): void;
@@ -215,6 +217,20 @@ useMonacoVim(
   handleVimQuit,
 );
 
+// Resolve the Monaco language id: an explicit prop wins; otherwise detect
+// from the file extension via Monaco's registered languages (matching
+// DiffViewer), defaulting to markdown when unknown.
+function resolveLanguage(monaco: typeof Monaco, path: string): string {
+  if (props.language) return props.language;
+  const dot = path.lastIndexOf(".");
+  if (dot < 0) return "markdown";
+  const ext = path.slice(dot).toLowerCase();
+  for (const lang of monaco.languages.getLanguages()) {
+    if (lang.extensions?.includes(ext)) return lang.id;
+  }
+  return "markdown";
+}
+
 // --- Create the editor once content + monaco are ready ---
 watch(
   () => [monacoLoaded.value, content.value, props.language] as const,
@@ -225,7 +241,7 @@ watch(
     const monaco = monacoMod;
     const nextEditor = monaco.editor.create(containerRef.value, {
       value: content.value,
-      language: props.language,
+      language: resolveLanguage(monaco, props.path),
       theme: isDarkModeActive() ? "vs-dark" : "vs",
       minimap: { enabled: false },
       wordWrap: "on",
