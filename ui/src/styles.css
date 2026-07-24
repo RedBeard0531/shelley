@@ -2582,7 +2582,7 @@ body {
   position: absolute;
   bottom: calc(100% + 4px);
   right: 0;
-  background: var(--bg-primary);
+  background: var(--bg-base);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -9909,7 +9909,7 @@ kbd {
 .distillation-edit-button {
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--bg-primary);
+  background: var(--bg-base);
   color: var(--blue-text);
   cursor: pointer;
   font-size: 0.75rem;
@@ -10579,7 +10579,7 @@ kbd {
 
 .citation-ref:hover {
   background: var(--link-color);
-  color: var(--bg-primary, #fff);
+  color: var(--bg-base, #fff);
 }
 
 .citation-sources {
