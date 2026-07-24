@@ -79,6 +79,7 @@
             <span class="commit-message">{{ commit.message }}</span>
           </li>
         </ul>
+        <div v-else-if="commitsError" class="version-no-commits">Couldn't load changelog</div>
         <div v-else class="version-no-commits">No commits found</div>
       </div>
     </template>
@@ -191,6 +192,7 @@ const emit = defineEmits<{ (e: "close"): void }>();
 
 const commits = ref<CommitInfo[]>([]);
 const loadingCommits = ref(false);
+const commitsError = ref(false);
 const upgrading = ref(false);
 const upgradeError = ref<string | null>(null);
 const startingRebase = ref(false);
@@ -224,12 +226,14 @@ async function handleAutoUpgradeChange(enabled: boolean) {
 
 async function loadCommits(currentTag: string, latestTag: string) {
   loadingCommits.value = true;
+  commitsError.value = false;
   try {
     const result = await api.getChangelog(currentTag, latestTag);
     commits.value = result || [];
   } catch (err) {
     console.error("Failed to load changelog:", err);
     commits.value = [];
+    commitsError.value = true;
   } finally {
     loadingCommits.value = false;
   }

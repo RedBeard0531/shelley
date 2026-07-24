@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -263,7 +264,13 @@ func (vc *VersionChecker) FetchChangelog(ctx context.Context, currentTag, latest
 		return nil, nil
 	}
 
-	url := staticMetadataURL + "/commits.json"
+	// Cache-bust with the latest tag. GitHub Pages sits behind a CDN with
+	// cache-control: max-age=600, and release.json and commits.json are
+	// cached independently. Right after a release, a fresh release.json can
+	// pair with a stale commits.json that doesn't contain the new tag's
+	// commit yet, making the changelog come up empty. The tag is a perfect
+	// cache key: a new tag implies a redeployed commits.json containing it.
+	url := staticMetadataURL + "/commits.json?v=" + neturl.QueryEscape(latestTag)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
