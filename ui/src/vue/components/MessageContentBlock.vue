@@ -104,6 +104,7 @@
 import { computed } from "vue";
 import type { LLMContent } from "../../types";
 import { getContentType } from "../utils/messageContent";
+import { useToolStreamingOutput } from "../composables/toolProgress";
 import MarkdownContent from "./MarkdownContent.vue";
 import InlineText from "./InlineText.vue";
 import ThinkingContent from "./tools/ThinkingContent.vue";
@@ -137,11 +138,14 @@ const props = defineProps<{
   content: LLMContent;
   renderMd: boolean;
   messageId?: string;
-  toolProgress?: Record<string, import("../../types").ToolProgress>;
   toolUseMap: Record<string, ToolInfo>;
   serverToolResultMap: Record<string, LLMContent[]>;
   onCommentTextChange?: (text: string) => void;
 }>();
+
+// Injected per-tool streaming output (see composables/toolProgress.ts):
+// only this block re-renders when its own tool's output grows.
+const streamingOutput = useToolStreamingOutput(() => props.content.ID);
 
 const ct = computed(() => getContentType(props.content.Type));
 
@@ -223,8 +227,7 @@ const toolDispatch = computed<{ is: unknown; props: Record<string, unknown> } | 
     const comp = componentForTool(name);
     const base: Record<string, unknown> = { toolInput: c.ToolInput, isRunning: true };
     if (name === "bash" || name === "shell") {
-      base.streamingOutput =
-        c.ID && props.toolProgress ? props.toolProgress[c.ID]?.output : undefined;
+      base.streamingOutput = streamingOutput.value;
     }
     if (name === "patch") {
       base.onCommentTextChange = props.onCommentTextChange;

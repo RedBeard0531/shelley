@@ -24,14 +24,12 @@
     :message="node.item.message"
     :on-open-diff-viewer="onOpenDiffViewer"
     :on-comment-text-change="onCommentTextChange"
-    :tool-progress="toolProgress"
     :on-fork="conversationId ? onFork : undefined"
   />
   <ToolPillsRow
     v-else-if="node.kind === 'tool-pills'"
     :items="node.items"
     :on-comment-text-change="onCommentTextChange"
-    :tool-progress="toolProgress"
   />
   <CoalescedToolCall
     v-else-if="node.kind === 'tool-call'"
@@ -44,14 +42,13 @@
     :has-result="node.item.hasResult"
     :display="node.item.display"
     :on-comment-text-change="onCommentTextChange"
-    :streaming-output="node.item.toolUseId ? toolProgress[node.item.toolUseId]?.output : undefined"
+    :tool-use-id="node.item.toolUseId"
   />
   <CarriedBand v-else-if="node.kind === 'carried-band'" :count="node.count">
     <MessageRenderNode
       v-for="child in node.children"
       :key="child.key"
       :node="child"
-      :tool-progress="toolProgress"
       :conversation-id="conversationId"
       :on-open-diff-viewer="onOpenDiffViewer"
       :on-comment-text-change="onCommentTextChange"
@@ -61,7 +58,6 @@
 </template>
 
 <script setup lang="ts">
-import { type ToolProgress } from "../../types";
 import type { RenderNode } from "./renderNode";
 import MessageComponent from "./Message.vue";
 import MessageTimestamp from "./MessageTimestamp.vue";
@@ -71,7 +67,6 @@ import CarriedBand from "./CarriedBand.vue";
 
 defineProps<{
   node: RenderNode;
-  toolProgress: Record<string, ToolProgress>;
   conversationId: string | null;
   onOpenDiffViewer: (commit: string, cwd?: string) => void;
   onCommentTextChange: (text: string) => void;

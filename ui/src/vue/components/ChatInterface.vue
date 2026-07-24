@@ -178,7 +178,6 @@
                   v-for="node in chunk.nodes"
                   :key="node.key"
                   :node="node"
-                  :tool-progress="toolProgress"
                   :conversation-id="conversationId"
                   :on-open-diff-viewer="handleOpenDiffViewer"
                   :on-comment-text-change="setDiffCommentText"
@@ -392,6 +391,7 @@ import { useI18n } from "../composables/i18n";
 import { useDraftAutosave } from "../composables/draftAutosave";
 import { useFeatureFlag } from "../composables/featureFlags";
 import { useVersionChecker } from "../composables/versionChecker";
+import { provideToolProgress } from "../composables/toolProgress";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import { buildMessageQuote } from "../../utils/messageQuote";
 import { hasMultipleUsers } from "../../utils/messageAuthors";
@@ -668,6 +668,10 @@ const agentWorking = ref(false);
 const cancelling = ref(false);
 const contextWindowSize = ref(0);
 const toolProgress = ref<Record<string, ToolProgress>>({});
+// Distributed via provide/inject so per-second tool-progress events reach
+// only the running tool's component instead of re-rendering every message
+// via a changed prop identity (see composables/toolProgress.ts).
+provideToolProgress(toolProgress);
 const streamingText = ref("");
 const showAdvancedSettings = ref(false);
 const advancedSettingsRef = ref<HTMLDivElement | null>(null);

@@ -102,6 +102,7 @@ import { computed } from "vue";
 import type { LLMContent } from "../../types";
 import { useInToolDetail } from "../composables/toolDetail";
 import { usePerfLifecycle } from "../composables/perfLifecycle";
+import { useToolStreamingOutput } from "../composables/toolProgress";
 import BashTool from "./tools/BashTool.vue";
 import PatchTool from "./tools/PatchTool.vue";
 import ScreenshotTool from "./tools/ScreenshotTool.vue";
@@ -132,10 +133,15 @@ const props = defineProps<{
   hasResult?: boolean;
   display?: unknown;
   onCommentTextChange?: (text: string) => void;
-  streamingOutput?: string;
+  toolUseId?: string;
 }>();
 
 const inToolDetail = useInToolDetail();
+
+// Streaming output is injected (see composables/toolProgress.ts) so that
+// per-second progress events re-render only the running tool's card instead
+// of invalidating a toolProgress prop on every rendered component.
+const streamingOutput = useToolStreamingOutput(() => props.toolUseId);
 
 // Component churn counters (see utils/perf.ts / the performance-hud flag).
 usePerfLifecycle("toolCall");
@@ -189,8 +195,8 @@ const toolComponentProps = computed<Record<string, unknown>>(() => {
   if (props.toolName === "patch" && props.onCommentTextChange) {
     base.onCommentTextChange = props.onCommentTextChange;
   }
-  if (props.streamingOutput !== undefined) {
-    base.streamingOutput = props.streamingOutput;
+  if (streamingOutput.value !== undefined) {
+    base.streamingOutput = streamingOutput.value;
   }
   if (props.toolName === "subagent") {
     base.displayData = props.display;

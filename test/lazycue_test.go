@@ -254,6 +254,21 @@ func TestNewPageBashTool(t *testing.T) {
 	lazyTest(t, `Navigate to /new. Type the text bash: echo "hello world" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for the agent text that begins with "I'll run the command:" and includes echo "hello world". A completed tool call (an element with data-testid "tool-call-completed") should become visible, and the text "bash" should be visible somewhere on the page.`)
 }
 
+// Regression test for tool-progress render churn. A running tool reports
+// partial output every ~500ms (claudetool/bash.go progressInterval); each
+// report used to replace ChatInterface's toolProgress object, which was
+// passed as a PROP to every rendered message component, re-rendering all of
+// them per event (~800 updates/event in a 250-turn conversation, one ~80ms
+// main-thread block per event for the life of the tool). Streaming output is
+// now injected per tool call (ui/src/vue/composables/toolProgress.ts), so a
+// progress event re-renders only the running tool's card. The UI counts
+// component updates at window.__shelleyPerf (ui/src/utils/perf.ts); we watch
+// a slow bash command stream its output and assert Message components stay
+// quiet while progress events arrive.
+func TestToolProgressDoesNotRerenderMessages(t *testing.T) {
+	lazyTest(t, `Navigate to /new. Type "echo: warmup one" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"), then wait for the reply text "warmup one" to appear. Then type the text bash: for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 1; done into the message input and click the send button. The bash tool card streams the command's output while it runs, so wait for the text "tick 2" to appear on the page (allow up to 30 seconds). Then reset the UI's recomputation counters: eval "(function(){window.__shelleyPerf.reset();return true;})()" and expect "true". Wait for at least 4 tool-progress events to arrive: eval "(function(){var s=window.__shelleyPerf.snapshot();return (((s['store.notifyTransient']||{}).count)||0)>=4;})()" with expect "true" (allow up to 15 seconds). Then assert the progress events did not re-render the conversation's message components: eval "(function(){var s=window.__shelleyPerf.snapshot();var prog=((s['store.notifyTransient']||{}).count)||0;var upd=((s['message.update']||{}).count)||0;return upd<=5?'pass':'fail: '+upd+' message updates during '+prog+' progress events';})()" and expect "pass". Finally wait for the completed tool call (data-testid "tool-call-completed") to become visible (allow up to 30 seconds).`)
+}
+
 func TestNewPageThinkTool(t *testing.T) {
 	lazyTest(t, `Navigate to /new. Type "think: I need to analyze this problem" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for the agent text "I've considered my approach." to appear. The thinking content (an element with data-testid "thinking-content") should become visible, and the 💭 emoji should be visible on the page.`)
 }
