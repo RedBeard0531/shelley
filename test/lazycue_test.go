@@ -45,9 +45,35 @@ import (
 var app *lazycue.Harness
 
 func TestMain(m *testing.M) {
+	// Resolve the LazyCue cache dir relative to this package before leaving
+	// it for a temp working directory below.
+	pkgDir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	cacheDir := filepath.Join(pkgDir, "..", "ui", "lazycue", ".lazycue")
+
+	// Run from an empty temp dir, not the package dir. Conversations created
+	// with an empty cwd fall back to os.Getwd(), and system-prompt generation
+	// then walks the surrounding git repo (guidance-file + skills walks).
+	// Inside a large monorepo checkout that walk is capped at 2s but still
+	// costs hundreds of ms per conversation and floods go test's testlog,
+	// slowing every LazyCue test for no coverage benefit.
+	tmp, err := os.MkdirTemp("", "shelley-test-cwd-")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		panic(err)
+	}
+	// Note: os.Exit below skips deferred calls; remove the (empty) dir
+	// explicitly on each exit path.
+
 	if os.Getenv("LAZYCUE_INTEGRATION") == "" {
 		// Tests below all skip; run them so `go test` reports them as skipped.
-		os.Exit(m.Run())
+		code := m.Run()
+		os.RemoveAll(tmp)
+		os.Exit(code)
 	}
 
 	ts, cleanup := startPredictableServer()
@@ -63,7 +89,7 @@ func TestMain(m *testing.M) {
 
 	app = lazycue.New(lazycue.Options{
 		BaseURL:     ts.URL,
-		CacheDir:    filepath.Join("..", "ui", "lazycue", ".lazycue"),
+		CacheDir:    cacheDir,
 		Verbose:     true,
 		ArtifactDir: os.Getenv("LAZYCUE_ARTIFACT_DIR"),
 	})
@@ -83,10 +109,29 @@ func TestMain(m *testing.M) {
 		}
 	}
 
+	os.RemoveAll(tmp)
 	os.Exit(code)
 }
 
 func lazyTest(t *testing.T, description string) {
+	t.Helper()
+	if os.Getenv("LAZYCUE_INTEGRATION") == "" {
+		t.Skip("set LAZYCUE_INTEGRATION=1 to run the LazyCue browser integration tests")
+	}
+	// Each lazycue run gets its own browser and its own conversation(s), so
+	// the tests are independent; run them in parallel to cut suite wall time.
+	// CI bounds concurrency with -parallel (browser instances are ~1 CPU
+	// each). Tests that assert against the SHARED conversation list (ordering
+	// or adjacency of other tests' conversations) must use lazyTestSerial.
+	t.Parallel()
+	app.Test(t, description)
+}
+
+// lazyTestSerial is lazyTest without t.Parallel, for descriptions that make
+// assumptions about the global conversation list (e.g. "the conversation
+// immediately below"). Go runs all serial tests before releasing the paused
+// parallel ones, so a serial test never overlaps another lazycue test.
+func lazyTestSerial(t *testing.T, description string) {
 	t.Helper()
 	if os.Getenv("LAZYCUE_INTEGRATION") == "" {
 		t.Skip("set LAZYCUE_INTEGRATION=1 to run the LazyCue browser integration tests")
@@ -448,7 +493,7 @@ func TestNewPageQueueDrains(t *testing.T) {
 // deterministic. ---
 
 func TestArchiveSelectsConversationBelow(t *testing.T) {
-	lazyTest(t, `This test verifies that archiving the current conversation selects the one immediately below it in the list. Conversations are listed newest-first.
+	lazyTestSerial(t, `This test verifies that archiving the current conversation selects the one immediately below it in the list. Conversations are listed newest-first.
 Step A — create conversation "alpha": navigate to /new, wait for the message input (data-testid "message-input") to be visible, fill it with "echo: alpha", and click the send button (data-testid "send-button"). Wait for the echoed text "alpha" to appear and for the URL to contain "/c/". Then run an eval step with expression "sessionStorage.setItem('alphaUrl', location.pathname)".
 Step B — create conversation "bravo": navigate to /new again, wait for the message input (data-testid "message-input") to be visible, fill it with "echo: bravo", and click the send button (data-testid "send-button"). Wait for the echoed text "bravo" to appear and for the URL to contain "/c/". Then run an eval step with expression "sessionStorage.setItem('bravoUrl', location.pathname)".
 Now "bravo" is the current conversation and is at the TOP of the list, with "alpha" immediately below it.

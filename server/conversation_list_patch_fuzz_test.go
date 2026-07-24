@@ -14,25 +14,40 @@ import (
 // the emitted patch turns oldList into newList. Catches index-math regressions
 // triggered by complex reorderings (the "bad array index in patch path"
 // crash class seen by the UI client).
+//
+// The trials are split into parallel shards, each with its own deterministic
+// seed: single-threaded 2000 trials ran 35-45s under -race and was the
+// longest test in the package (it gated the whole CI shard). 8x125 keeps the
+// coverage class (complex random reorderings) at a fraction of the cost, and
+// still fully deterministic.
 func TestComputeListPatchFuzz(t *testing.T) {
 	t.Parallel()
-	rng := rand.New(rand.NewSource(1))
-	for trial := 0; trial < 2000; trial++ {
-		oldList := randomList(rng)
-		newList := mutate(rng, oldList)
-		ops, err := computeListPatch(oldList, newList)
-		if err != nil {
-			t.Fatalf("trial %d: compute: %v", trial, err)
-		}
-		got, err := applyTestPatch(oldList, ops)
-		if err != nil {
-			t.Fatalf("trial %d: apply: %v\nold=%s\nnew=%s\nops=%s", trial, err,
-				dumpList(oldList), dumpList(newList), dumpOps(ops))
-		}
-		if !equalLists(got, newList) {
-			t.Fatalf("trial %d: mismatch\nold=%s\nnew=%s\ngot=%s\nops=%s",
-				trial, dumpList(oldList), dumpList(newList), dumpList(got), dumpOps(ops))
-		}
+	const (
+		shards         = 8
+		trialsPerShard = 125
+	)
+	for shard := 0; shard < shards; shard++ {
+		t.Run(fmt.Sprintf("shard%d", shard), func(t *testing.T) {
+			t.Parallel()
+			rng := rand.New(rand.NewSource(int64(shard + 1)))
+			for trial := 0; trial < trialsPerShard; trial++ {
+				oldList := randomList(rng)
+				newList := mutate(rng, oldList)
+				ops, err := computeListPatch(oldList, newList)
+				if err != nil {
+					t.Fatalf("trial %d: compute: %v", trial, err)
+				}
+				got, err := applyTestPatch(oldList, ops)
+				if err != nil {
+					t.Fatalf("trial %d: apply: %v\nold=%s\nnew=%s\nops=%s", trial, err,
+						dumpList(oldList), dumpList(newList), dumpOps(ops))
+				}
+				if !equalLists(got, newList) {
+					t.Fatalf("trial %d: mismatch\nold=%s\nnew=%s\ngot=%s\nops=%s",
+						trial, dumpList(oldList), dumpList(newList), dumpList(got), dumpOps(ops))
+				}
+			}
+		})
 	}
 }
 

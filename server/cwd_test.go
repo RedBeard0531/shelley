@@ -49,7 +49,22 @@ func TestListDirectory(t *testing.T) {
 	h := NewTestHarness(t)
 
 	t.Run("list_tmp", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/list-directory?path=/tmp", nil)
+		// List a fresh subdirectory of /tmp rather than /tmp itself: on CI
+		// machines /tmp is shared by dozens of agents and fills with git-repo
+		// fixtures from concurrently running tests, and the handler execs
+		// `git log` for every repo it finds — turning this subtest into a
+		// 20s+ scan of other tests' leftovers. A fixture dir exercises the
+		// same path/parent logic hermetically.
+		dir, err := os.MkdirTemp("/tmp", "listdir_fixture")
+		if err != nil {
+			t.Fatalf("failed to create fixture dir: %v", err)
+		}
+		defer os.RemoveAll(dir)
+		if err := os.Mkdir(dir+"/sub", 0o755); err != nil {
+			t.Fatalf("failed to create subdir: %v", err)
+		}
+
+		req := httptest.NewRequest("GET", "/api/list-directory?path="+dir, nil)
 		w := httptest.NewRecorder()
 		h.server.handleListDirectory(w, req)
 
@@ -62,12 +77,12 @@ func TestListDirectory(t *testing.T) {
 			t.Fatalf("failed to parse response: %v", err)
 		}
 
-		if resp.Path != "/tmp" {
-			t.Errorf("expected path '/tmp', got: %s", resp.Path)
+		if resp.Path != dir {
+			t.Errorf("expected path %q, got: %s", dir, resp.Path)
 		}
 
-		if resp.Parent != "/" {
-			t.Errorf("expected parent '/', got: %s", resp.Parent)
+		if resp.Parent != "/tmp" {
+			t.Errorf("expected parent '/tmp', got: %s", resp.Parent)
 		}
 	})
 

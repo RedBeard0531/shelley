@@ -677,22 +677,34 @@ func (s *Server) handleListDirectory(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range dirEntries {
 		// Only include directories
 		if entry.IsDir() {
-			dirEntry := DirectoryEntry{
+			entries = append(entries, DirectoryEntry{
 				Name:  entry.Name(),
 				IsDir: true,
-			}
-
-			// Check if this is a git repo root and get HEAD commit subject
-			entryPath := filepath.Join(path, entry.Name())
-			if isGitRepo(entryPath) {
-				if subject := getGitHeadSubject(entryPath); subject != "" {
-					dirEntry.GitHeadSubject = subject
-				}
-			}
-
-			entries = append(entries, dirEntry)
+			})
 		}
 	}
+
+	// Check which entries are git repo roots and fetch their HEAD subjects.
+	// Each check execs git, so run them concurrently (bounded): serially, a
+	// directory full of repos (e.g. a worktree farm in $HOME) took multiple
+	// seconds to list.
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for i := range entries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			entryPath := filepath.Join(path, entries[i].Name)
+			if isGitRepo(entryPath) {
+				if subject := getGitHeadSubject(entryPath); subject != "" {
+					entries[i].GitHeadSubject = subject
+				}
+			}
+		}()
+	}
+	wg.Wait()
 
 	// Sort entries: non-hidden first, then hidden (.*), alphabetically within each group
 	sort.Slice(entries, func(i, j int) bool {
