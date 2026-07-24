@@ -494,6 +494,9 @@ const DESKTOP_VERTICAL_SCROLLBAR_SIZE = 14;
 const DESKTOP_HORIZONTAL_SCROLLBAR_SIZE = 10;
 const MOBILE_OVERVIEW_RULER_LANES = 1;
 const DESKTOP_OVERVIEW_RULER_LANES = 3;
+// When one side of the diff is empty (new/deleted file), give the non-empty
+// side most of the width. Monaco clamps splitViewDefaultRatio to [0.1, 0.9].
+const EMPTY_SIDE_SPLIT_RATIO = 0.1;
 
 function isCommitMessageFile(path: string): boolean {
   return path.startsWith(COMMIT_MSG_PREFIX);
@@ -645,6 +648,10 @@ let cwdVal = props.cwd;
 let commitMessagesVal: GitCommitMessage[] = [];
 let currentFileIsHeadCommit = false;
 let hoverDecorations: string[] = [];
+// Current split ratio for the active file. Monaco 0.44's updateOptions()
+// resets splitViewDefaultRatio to 0.5 when omitted, so every
+// diffEditor.updateOptions() call must pass this along.
+let splitViewRatioVal = 0.5;
 let touchScrolled = false;
 let touchStartPos: { x: number; y: number } | null = null;
 // Desktop: where a comment-mode mousedown started, to distinguish click vs drag.
@@ -678,7 +685,7 @@ watch([mode, selectedFile, selectedDiff, selectedTo], () => {
     // Only allow drag-and-drop of selected text in edit mode. In comment mode
     // (including editable commit messages) selecting text must not move it.
     const dragAndDrop = mode.value === "edit";
-    diffEditor.updateOptions({ readOnly, dragAndDrop });
+    diffEditor.updateOptions({ readOnly, dragAndDrop, splitViewDefaultRatio: splitViewRatioVal });
     diffEditor.getModifiedEditor().updateOptions({ readOnly, dragAndDrop });
   }
 });
@@ -1046,6 +1053,7 @@ watch(isMobile, (mob) => {
     overviewRulerLanes: mob ? MOBILE_OVERVIEW_RULER_LANES : DESKTOP_OVERVIEW_RULER_LANES,
     folding: !mob,
     padding: mob ? { bottom: 80 } : {},
+    splitViewDefaultRatio: splitViewRatioVal,
   });
 });
 
@@ -1091,7 +1099,19 @@ watch(
     const readOnly = isCommitMsg ? !isHeadCommit : modeVal === "comment" || !isWorkingView;
     // Drag-and-drop of text only in edit mode (never on commit messages).
     const dragAndDrop = !isCommitMsg && modeVal === "edit";
-    diffEditor.updateOptions({ readOnly, dragAndDrop });
+    // For new/deleted files one side is empty; shrink it so the non-empty
+    // side gets most of the width instead of wasting half the screen.
+    splitViewRatioVal = 0.5;
+    if (fd.oldContent === "" && fd.newContent !== "") {
+      splitViewRatioVal = EMPTY_SIDE_SPLIT_RATIO;
+    } else if (fd.newContent === "" && fd.oldContent !== "") {
+      splitViewRatioVal = 1 - EMPTY_SIDE_SPLIT_RATIO;
+    }
+    diffEditor.updateOptions({
+      readOnly,
+      dragAndDrop,
+      splitViewDefaultRatio: splitViewRatioVal,
+    });
     diffEditor.getModifiedEditor().updateOptions({ readOnly, dragAndDrop });
 
     let hasScrolledToFirstChange = false;
