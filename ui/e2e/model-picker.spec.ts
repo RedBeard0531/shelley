@@ -55,6 +55,10 @@ test.describe("Model picker (PrimeVue)", () => {
   test("keeps model and directory inline when they fit, then wraps when needed", async ({
     page,
   }) => {
+    // Pin the directory so layout doesn't depend on the length of the
+    // server's checkout path (which varies across CI agents and wraps the
+    // Dir chip onto its own line when long).
+    await page.addInitScript(() => localStorage.setItem("shelley_selected_cwd", "/tmp/e2e-dir"));
     await page.setViewportSize({ width: 412, height: 915 });
     await page.goto("/new");
 
