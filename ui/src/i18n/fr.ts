@@ -19,10 +19,6 @@ export const fr: TranslationKeys = {
   archiveConversation: "Archiver la conversation",
   exportConversation: "Exporter la conversation",
   checkForNewVersion: "Vérifier les mises à jour",
-  markdown: "Markdown",
-  off: "Désactivé",
-  agent: "Agent",
-  all: "Tout",
 
   // Theme
   system: "Système",
@@ -256,14 +252,15 @@ export const fr: TranslationKeys = {
 
   // Sidebar buttons
   editUserAgentsMd: "Modifier AGENTS.md utilisateur",
+  editFile: "Modifier un fichier…",
 
   openConversations: "Ouvrir les conversations",
   expandSidebar: "Développer la barre latérale",
 
   // Language
   language: "Langue",
+  off: "Désactivé",
   switchLanguage: "Changer de langue",
-  reportBug: "Signaler un bug",
   english: "English",
   japanese: "日本語",
   french: "Français",

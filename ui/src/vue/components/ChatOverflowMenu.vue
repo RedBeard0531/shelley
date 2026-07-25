@@ -139,6 +139,10 @@
         <i class="pi pi-pencil chat-menu-icon" aria-hidden="true" />
         {{ t("editUserAgentsMd") }}
       </button>
+      <button class="overflow-menu-item" @click="onEditFile">
+        <i class="pi pi-file-edit chat-menu-icon" aria-hidden="true" />
+        {{ t("editFile") }}
+      </button>
 
       <div class="overflow-menu-divider" />
       <button class="overflow-menu-item" @click="onCheckVersion">
@@ -188,37 +192,10 @@
         </div>
       </template>
 
-      <!-- Markdown rendering: Off / Agent / All -->
+      <!-- Language -->
       <div class="overflow-menu-divider" />
       <div class="overflow-menu-control">
-        <div class="md-toggle-label">{{ t("markdown") }}</div>
-        <SelectButton
-          v-model="markdown"
-          :options="markdownOptions"
-          option-label="label"
-          option-value="value"
-          data-key="value"
-          :allow-empty="false"
-          :aria-label="t('markdown')"
-          @update:model-value="onMarkdownChange"
-        />
-      </div>
-
-      <!-- Language + report-a-bug link -->
-      <div class="overflow-menu-divider" />
-      <div class="overflow-menu-control">
-        <div class="md-toggle-label">
-          {{ t("language") }}
-          <a
-            :href="reportBugHref"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="report-bug-link"
-            @click.stop
-          >
-            [{{ t("reportBug") }}]
-          </a>
-        </div>
+        <div class="md-toggle-label">{{ t("language") }}</div>
         <Select
           v-model="lang"
           :options="languageOptions"
@@ -252,7 +229,6 @@ import Select from "primevue/select";
 import type { Link } from "../../types";
 import type { Locale } from "../../i18n/types";
 import { useI18n } from "../composables/i18n";
-import { useMarkdownMode, type MarkdownMode } from "../composables/markdownMode";
 import { type ThemeMode, getStoredTheme, setStoredTheme, applyTheme } from "../../services/theme";
 import {
   isChannelEnabled,
@@ -278,11 +254,11 @@ const emit = defineEmits<{
   (e: "archive"): void;
   (e: "export"): void;
   (e: "edit-agents-md"): void;
+  (e: "edit-file"): void;
   (e: "check-version"): void;
 }>();
 
 const { t, locale, setLocale } = useI18n();
-const { markdownMode, setMarkdownMode } = useMarkdownMode();
 
 const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
 const open = ref(false);
@@ -303,6 +279,7 @@ const onTerminal = () => (emit("open-terminal"), hide());
 const onArchive = () => (emit("archive"), hide());
 const onExport = () => (emit("export"), hide());
 const onEditAgentsMd = () => (emit("edit-agents-md"), hide());
+const onEditFile = () => (emit("edit-file"), hide());
 const onCheckVersion = () => (emit("check-version"), hide());
 function onExternalLink(url: string) {
   emit("open-external-link", url);
@@ -350,18 +327,6 @@ async function onNotifChange(next: boolean) {
   }
 }
 
-// ---- Markdown rendering (Off / Agent / All) ----
-const markdown = ref<MarkdownMode>(markdownMode.value);
-const markdownOptions = computed(() => [
-  { value: "off" as MarkdownMode, label: t("off") },
-  { value: "agent" as MarkdownMode, label: t("agent") },
-  { value: "all" as MarkdownMode, label: t("all") },
-]);
-function onMarkdownChange(mode: MarkdownMode) {
-  markdown.value = mode;
-  setMarkdownMode(mode);
-}
-
 // ---- Language picker ----
 interface LanguageOption {
   locale: Locale;
@@ -391,10 +356,4 @@ function onLangChange(l: Locale) {
   lang.value = l;
   setLocale(l);
 }
-
-const reportBugHref = `https://github.com/boldsoftware/shelley/issues/new?labels=translation&title=${encodeURIComponent(
-  "Translation issue: ",
-)}&body=${encodeURIComponent(
-  "**Language:** \n**Where in the UI:** \n**Current text:** \n**Suggested text:** \n",
-)}`;
 </script>

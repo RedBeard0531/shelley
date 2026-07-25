@@ -18,10 +18,6 @@ export const upgoer5: TranslationKeys = {
   archiveConversation: "Put Away Talk",
   exportConversation: "Save Out Talk",
   checkForNewVersion: "Look for a newer one",
-  markdown: "Pretty Words",
-  off: "Off",
-  agent: "Helper",
-  all: "All",
 
   // Theme
   system: "Same as computer",
@@ -252,14 +248,15 @@ export const upgoer5: TranslationKeys = {
 
   // Sidebar buttons
   editUserAgentsMd: "Change your helper words file",
+  editFile: "Change a words file…",
 
   openConversations: "Open talks",
   expandSidebar: "Make side bigger",
 
   // Language
   language: "Words",
+  off: "Off",
   switchLanguage: "Change words",
-  reportBug: "Tell us something is broken",
   english: "English",
   japanese: "日本語",
   french: "Français",

@@ -18,10 +18,6 @@ export interface TranslationKeys {
   archiveConversation: string;
   exportConversation: string;
   checkForNewVersion: string;
-  markdown: string;
-  off: string;
-  agent: string;
-  all: string;
 
   // Theme
   system: string;
@@ -246,6 +242,7 @@ export interface TranslationKeys {
 
   // AGENTS.md editor
   editUserAgentsMd: string;
+  editFile: string;
 
   // Sidebar buttons
   openConversations: string;
@@ -253,8 +250,8 @@ export interface TranslationKeys {
 
   // Language
   language: string;
+  off: string;
   switchLanguage: string;
-  reportBug: string;
   english: string;
   japanese: string;
   french: string;

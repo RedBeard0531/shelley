@@ -18,10 +18,6 @@ export const vi: TranslationKeys = {
   archiveConversation: "Hội thoại đã lưu trữ",
   exportConversation: "Xuất hội thoại",
   checkForNewVersion: "Kiểm tra cập nhật",
-  markdown: "Markdown",
-  off: "Tắt",
-  agent: "Agent",
-  all: "Tất cả",
 
   // Theme
   system: "Hệ thống",
@@ -252,14 +248,15 @@ export const vi: TranslationKeys = {
 
   // Sidebar buttons
   editUserAgentsMd: "Chỉnh sửa AGENTS.md",
+  editFile: "Chỉnh sửa tệp…",
 
   openConversations: "Mở lịch sử trò chuyện",
   expandSidebar: "Mở rộng sidebar",
 
   // Language
   language: "Ngôn ngữ",
+  off: "Tắt",
   switchLanguage: "Chỉnh ngôn ngữ",
-  reportBug: "Báo lỗi",
   english: "English",
   japanese: "日本語",
   french: "Français",

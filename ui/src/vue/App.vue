@@ -66,6 +66,7 @@
           :models-refresh-trigger="modelsRefreshTrigger"
           :cwd-sync-trigger="cwdSyncTrigger"
           :on-open-models-modal="() => (modelsModalOpen = true)"
+          :on-open-file-finder="openFileFinder"
           :ephemeral-terminals="ephemeralTerminals"
           :set-ephemeral-terminals="setEphemeralTerminals"
           :on-terminal-attached="handleTerminalAttached"

@@ -3471,17 +3471,6 @@ svg {
   border-bottom-right-radius: 0.5rem;
 }
 
-.report-bug-link {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  text-decoration: none;
-}
-
-.report-bug-link:hover {
-  color: var(--text-primary);
-  text-decoration: underline;
-}
-
 .overflow-menu-divider {
   height: 1px;
   background: var(--border);

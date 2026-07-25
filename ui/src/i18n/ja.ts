@@ -18,10 +18,6 @@ export const ja: TranslationKeys = {
   archiveConversation: "会話をアーカイブ",
   exportConversation: "会話をエクスポート",
   checkForNewVersion: "新しいバージョンを確認",
-  markdown: "Markdown",
-  off: "オフ",
-  agent: "エージェント",
-  all: "すべて",
 
   // Theme
   system: "システム",
@@ -252,14 +248,15 @@ export const ja: TranslationKeys = {
 
   // Sidebar buttons
   editUserAgentsMd: "ユーザー AGENTS.md を編集",
+  editFile: "ファイルを編集…",
 
   openConversations: "会話を開く",
   expandSidebar: "サイドバーを展開",
 
   // Language
   language: "言語",
+  off: "オフ",
   switchLanguage: "言語を切り替える",
-  reportBug: "バグを報告",
   english: "English",
   japanese: "日本語",
   french: "Français",

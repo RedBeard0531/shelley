@@ -117,6 +117,11 @@ function onResize() {
   isDesktop.value = window.innerWidth >= 768;
 }
 
+// Re-apply viewport-dependent Monaco options when crossing the breakpoint.
+watch(isDesktop, (desktop) => {
+  editor.value?.updateOptions(mobileLayoutOptions(!desktop));
+});
+
 // --- File load (when opened / path / loadUrl change) ---
 watch(
   () => [props.isOpen, props.path, props.loadUrl] as const,
@@ -231,6 +236,27 @@ function resolveLanguage(monaco: typeof Monaco, path: string): string {
   return "markdown";
 }
 
+// Viewport-dependent layout options (mirrors DiffViewer's mobile handling).
+// On mobile we drop line numbers / folding / glyph margin so Monaco's own
+// layout leaves only a slim gutter. This must be real Monaco options — the
+// mobile CSS that squeezes `.margin` to 8px doesn't change Monaco's internal
+// layout math, so with a wide margin the text column (and its scrollbar)
+// would end ~54px short of the right edge.
+function mobileLayoutOptions(mobile: boolean): Monaco.editor.IEditorOptions {
+  return {
+    lineNumbers: mobile ? "off" : "on",
+    lineNumbersMinChars: mobile ? 0 : 3,
+    lineDecorationsWidth: mobile ? 8 : 10,
+    glyphMargin: !mobile,
+    folding: !mobile,
+    scrollbar: {
+      verticalScrollbarSize: mobile ? 8 : 14,
+      horizontalScrollbarSize: mobile ? 8 : 12,
+    },
+    overviewRulerLanes: mobile ? 1 : 3,
+  };
+}
+
 // --- Create the editor once content + monaco are ready ---
 watch(
   () => [monacoLoaded.value, content.value, props.language] as const,
@@ -245,11 +271,11 @@ watch(
       theme: isDarkModeActive() ? "vs-dark" : "vs",
       minimap: { enabled: false },
       wordWrap: "on",
-      lineNumbers: "on",
       scrollBeyondLastLine: false,
       automaticLayout: true,
       fontSize: 14,
       padding: { top: 8 },
+      ...mobileLayoutOptions(!isDesktop.value),
     });
     editor.value = nextEditor;
 

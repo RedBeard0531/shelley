@@ -18,10 +18,6 @@ export const ru: TranslationKeys = {
   archiveConversation: "Архивировать диалог",
   exportConversation: "Экспортировать диалог",
   checkForNewVersion: "Проверить обновления",
-  markdown: "Markdown",
-  off: "Откл",
-  agent: "Агент",
-  all: "Все",
 
   // Theme
   system: "Системная",
@@ -253,14 +249,15 @@ export const ru: TranslationKeys = {
 
   // Sidebar buttons
   editUserAgentsMd: "Редактировать AGENTS.md",
+  editFile: "Редактировать файл…",
 
   openConversations: "Открыть диалоги",
   expandSidebar: "Развернуть боковую панель",
 
   // Language
   language: "Язык",
+  off: "Откл",
   switchLanguage: "Сменить язык",
-  reportBug: "Сообщить об ошибке",
   english: "English",
   japanese: "日本語",
   french: "Français",

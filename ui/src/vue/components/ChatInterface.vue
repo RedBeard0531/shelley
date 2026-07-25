@@ -77,6 +77,7 @@
           @archive="archiveFromMenu"
           @export="openExport"
           @edit-agents-md="showAgentsMdEditor = true"
+          @edit-file="props.onOpenFileFinder?.()"
           @check-version="openVersionModal"
         />
       </div>
@@ -462,6 +463,7 @@ const props = withDefaults(
     modelsRefreshTrigger?: number;
     cwdSyncTrigger?: number;
     onOpenModelsModal?: () => void;
+    onOpenFileFinder?: () => void;
     ephemeralTerminals: EphemeralTerminal[];
     setEphemeralTerminals: (
       next: EphemeralTerminal[] | ((prev: EphemeralTerminal[]) => EphemeralTerminal[]),

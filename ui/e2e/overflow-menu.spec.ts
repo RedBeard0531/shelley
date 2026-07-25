@@ -7,7 +7,7 @@ import { createConversationViaAPI } from "./helpers";
 // is covered by other specs (agents-md-vim, diff-viewer-find); here we
 // exercise the PrimeVue-specific controls.
 test.describe("Overflow menu (PrimeVue)", () => {
-  test("popover opens, theme/markdown SelectButtons and language Select work", async ({
+  test("popover opens, theme SelectButton and language Select work", async ({
     page,
     request,
   }) => {
@@ -21,7 +21,6 @@ test.describe("Overflow menu (PrimeVue)", () => {
     // what an earlier test in the same worker stored.
     await page.evaluate(() => {
       localStorage.setItem("shelley-theme", "system");
-      localStorage.setItem("shelley-markdown-rendering", "agent");
     });
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
@@ -53,13 +52,6 @@ test.describe("Overflow menu (PrimeVue)", () => {
     await lightBtn.click();
     await expect(page.locator("html")).not.toHaveClass(/dark/);
 
-    // --- Markdown SelectButton: switch to Off ---
-    // The markdown SelectButton is the last one (after theme + notifications,
-    // when notifications are supported). Locate it by its labelled options.
-    const offBtn = popover.locator(".p-togglebutton").filter({ hasText: /^Off$/ });
-    await offBtn.click();
-    expect(await page.evaluate(() => localStorage.getItem("shelley-markdown-rendering"))).toBe("off");
-
     // --- Language Select: open and pick Japanese ---
     const select = popover.locator(".overflow-language-select");
     await select.click();
@@ -72,10 +64,10 @@ test.describe("Overflow menu (PrimeVue)", () => {
     await expect(popover).toBeVisible();
 
     // The SelectButton option labels must re-translate live (they're computed,
-    // not captured once at setup): the markdown "Off" option should now read in
-    // Japanese while the popover is still open.
+    // not captured once at setup): the theme "Dark" option's sr-only label
+    // should now read in Japanese while the popover is still open.
     await expect(
-      popover.locator(".p-togglebutton").filter({ hasText: "オフ" }),
+      popover.locator(".p-togglebutton").filter({ hasText: "ダーク" }),
     ).toBeVisible();
 
     // Reset locale so we don't leak Japanese UI into sibling tests' assertions.

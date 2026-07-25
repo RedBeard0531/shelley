@@ -18,10 +18,6 @@ export const zhCN: TranslationKeys = {
   archiveConversation: "归档对话",
   exportConversation: "导出对话",
   checkForNewVersion: "检查新版本",
-  markdown: "Markdown",
-  off: "关闭",
-  agent: "代理",
-  all: "全部",
 
   // Theme
   system: "跟随系统",
@@ -251,14 +247,15 @@ export const zhCN: TranslationKeys = {
 
   // Sidebar buttons
   editUserAgentsMd: "编辑用户 AGENTS.md",
+  editFile: "编辑文件…",
 
   openConversations: "打开对话",
   expandSidebar: "展开侧边栏",
 
   // Language
   language: "语言",
+  off: "关闭",
   switchLanguage: "切换语言",
-  reportBug: "报告错误",
   english: "English",
   japanese: "日本語",
   french: "Français",
