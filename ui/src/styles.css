@@ -6936,9 +6936,11 @@ svg {
 }
 
 /* Version modal: chrome comes from the shared Modal (PrimeVue Dialog);
-   these classes only size it and lay out the body/footer content. */
+   these classes only size it and lay out the body/footer content. Sized like
+   .modal-xwide (that class also carries Manage-Models-specific layout, so only
+   the width is borrowed) so most changelog commit subjects fit on one line. */
 .modal.version-modal {
-  max-width: 500px;
+  max-width: 64rem;
 }
 
 .version-modal .modal-body {
