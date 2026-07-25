@@ -274,6 +274,35 @@ func TestLLMIntegrationUnknownModelUsesDynamicCapabilities(t *testing.T) {
 	}
 }
 
+func TestLLMIntegrationPrefersOpenAIAPIOverAnthropic(t *testing.T) {
+	// Fireworks models advertise both OpenAI and Anthropic APIs; prefer the
+	// more common OpenAI protocol over anthropic_messages.
+	integ := &LLMIntegrationConfig{
+		Name: "llm", Host: "llm.int.exe.xyz", URL: "https://llm.int.exe.xyz",
+		Models: []IntegrationModel{
+			{ID: "fireworks/some-new-model", Provider: "fireworks", NativeID: "accounts/fireworks/models/some-new-model", APIs: []string{"openai_chat", "openai_responses", "anthropic_messages"}},
+			{ID: "fireworks/chat-only", Provider: "fireworks", NativeID: "accounts/fireworks/models/chat-only", APIs: []string{"anthropic_messages", "openai_chat"}},
+		},
+	}
+
+	got := Build(models.All(), []Source{LLMIntegration(integ, "")}, &http.Client{}, nil)
+	if len(got) != 2 {
+		t.Fatalf("built models = %+v, want two", got)
+	}
+	if got[0].APIType != models.APITypeOpenAIResponses {
+		t.Errorf("APIType = %q, want %q", got[0].APIType, models.APITypeOpenAIResponses)
+	}
+	if _, ok := got[0].Service.(*oai.ResponsesService); !ok {
+		t.Fatalf("service = %T, want *oai.ResponsesService", got[0].Service)
+	}
+	if got[1].APIType != models.APITypeOpenAIChat {
+		t.Errorf("APIType = %q, want %q", got[1].APIType, models.APITypeOpenAIChat)
+	}
+	if _, ok := got[1].Service.(*oai.Service); !ok {
+		t.Fatalf("service = %T, want *oai.Service", got[1].Service)
+	}
+}
+
 func TestLLMIntegrationAPIMismatchUsesDynamicService(t *testing.T) {
 	integ := &LLMIntegrationConfig{
 		Name: "llm", Host: "llm.int.exe.xyz", URL: "https://llm.int.exe.xyz",

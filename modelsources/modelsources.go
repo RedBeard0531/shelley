@@ -377,15 +377,18 @@ func integrationAdvertisesAPI(model IntegrationModel, apiType models.APIType) bo
 	return slices.Contains(model.APIs, api)
 }
 
+// integrationAPIType picks the wire protocol for an integration model.
+// Providers that serve multiple protocols (e.g. Fireworks) advertise both
+// OpenAI and Anthropic APIs; prefer the more common OpenAI protocol.
 func integrationAPIType(model IntegrationModel) (models.APIType, bool) {
-	if slices.Contains(model.APIs, "anthropic_messages") {
-		return models.APITypeAnthropicMessages, true
-	}
 	if slices.Contains(model.APIs, "openai_responses") {
 		return models.APITypeOpenAIResponses, true
 	}
 	if slices.Contains(model.APIs, "openai_chat") {
 		return models.APITypeOpenAIChat, true
+	}
+	if slices.Contains(model.APIs, "anthropic_messages") {
+		return models.APITypeAnthropicMessages, true
 	}
 	return "", false
 }
