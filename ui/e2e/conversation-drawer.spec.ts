@@ -97,4 +97,34 @@ test.describe("conversation drawer startup and app bar", () => {
     expect(metrics.drawerTitle.margin).toBe("0px");
     expect(metrics.chatTitle.margin).toBe("0px");
   });
+
+  test("manual expand survives reload despite the sparse heuristic", async ({ page }) => {
+    await stubConversationList(page, [conversation("only")]);
+
+    await page.goto("/new");
+
+    const drawer = page.locator(".drawer");
+    await expect(drawer).toHaveClass(/collapsed/);
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await expect(drawer).not.toHaveClass(/collapsed/);
+
+    await page.reload();
+
+    await expect(drawer).not.toHaveClass(/collapsed/);
+  });
+
+  test("manual collapse survives reload with many conversations", async ({ page }) => {
+    await stubConversationList(page, [conversation("first"), conversation("second")]);
+
+    await page.goto("/new");
+
+    const drawer = page.locator(".drawer");
+    await expect(drawer).not.toHaveClass(/collapsed/);
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expect(drawer).toHaveClass(/collapsed/);
+
+    await page.reload();
+
+    await expect(drawer).toHaveClass(/collapsed/);
+  });
 });

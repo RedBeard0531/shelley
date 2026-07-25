@@ -232,7 +232,7 @@ import {
 import { connectGlobalStream, type StreamStatus } from "../services/globalStream";
 import { handleNotificationEvent } from "../services/notifications";
 import { loadCachedDraft } from "../services/draftCache";
-import { shouldStartDrawerCollapsed } from "../utils/drawerStartup";
+import { initialDrawerCollapsed, saveDrawerCollapsedPreference } from "../utils/drawerStartup";
 import { perfCount } from "../utils/perf";
 import { useI18n } from "./composables/i18n";
 import { ConversationsListKey, CurrentConversationIdKey } from "./composables/subagentLive";
@@ -521,7 +521,7 @@ async function loadConversations() {
     }
     const currentList = streamHash ? conversations.value : snapshot.conversations;
     if (!startupDrawerStateApplied) {
-      drawerCollapsed.value = shouldStartDrawerCollapsed(currentList);
+      drawerCollapsed.value = initialDrawerCollapsed(currentList, localStorage);
       startupDrawerStateApplied = true;
     }
     const topLevel = currentList.filter((c) => !c.parent_conversation_id);
@@ -585,6 +585,7 @@ function selectConversation(conversation: Conversation) {
 
 function toggleDrawerCollapsed() {
   drawerCollapsed.value = !drawerCollapsed.value;
+  saveDrawerCollapsedPreference(drawerCollapsed.value, localStorage);
 }
 
 function updateConversation(updatedConversation: Conversation) {
