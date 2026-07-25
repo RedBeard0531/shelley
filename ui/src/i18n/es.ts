@@ -101,6 +101,7 @@ export const es: TranslationKeys = {
   duplicateName: "Ya existe una conversación con este nombre",
   agentIsWorking: "El agente está trabajando...",
   subagentIsWorking: "El subagente está trabajando...",
+  running: "en ejecución",
   hideSubagents: "Ocultar subagentes",
   showSubagents: "Mostrar subagentes",
   groupConversations: "Agrupar conversaciones",

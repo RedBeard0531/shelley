@@ -100,6 +100,7 @@ export const upgoer5: TranslationKeys = {
   duplicateName: "There is already a talk with that name",
   agentIsWorking: "Helper is working...",
   subagentIsWorking: "Little helper is working...",
+  running: "going",
   hideSubagents: "Hide little helpers",
   showSubagents: "Show little helpers",
   groupConversations: "Put talks in groups",

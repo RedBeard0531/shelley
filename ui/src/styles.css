@@ -8960,6 +8960,91 @@ kbd {
   text-decoration: underline;
 }
 
+/* Strip under the SubagentTool card header while the subagent is working.
+ * Full-width click target that opens the subagent conversation. */
+.subagent-live {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.25rem 0.75rem;
+  border: none;
+  border-top: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.subagent-live:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.subagent-live-slug {
+  color: var(--link-color);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.subagent-live:hover .subagent-live-slug {
+  text-decoration: underline;
+}
+
+.subagent-live-activity {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Live segment attached to a subagent tool pill: its own small chip to
+ * the right of the pill (a button can't nest interactive content). */
+.subagent-pill-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px dashed var(--tp-border, var(--border));
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.subagent-pill-live:hover {
+  color: var(--link-color);
+  border-color: var(--link-color);
+}
+
+.subagent-pill-live:focus-visible {
+  outline: 2px solid var(--link-color);
+  outline-offset: 1px;
+}
+
+.subagent-pill-activity {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .subagent-pill-activity {
+    max-width: 110px;
+  }
+}
+
 /* ConfigFieldInput styles */
 .config-field-description {
   font-size: 0.75rem;
@@ -8991,19 +9076,25 @@ kbd {
   color: inherit;
 }
 
-.drawer-working-indicator {
-  width: 8px;
-  height: 8px;
+/* "Working" mark shared by the drawer rows, subagent badges, and the live
+   subagent strips/chips: a subtle, non-animated hollow ring in the current
+   text color. Tracks the foreground so it stays legible on both the default
+   and selected (var(--primary)) backgrounds without re-using the same hue as
+   the row fill. */
+.working-indicator {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  /* Subtle, non-animated "agent is working" mark: a hollow ring in the
-     row's current text color. Tracks the foreground so it stays
-     legible on both the default and selected (var(--primary)) row
-     backgrounds without re-using the same hue as the row fill. */
   border: 1.5px solid currentColor;
   background-color: transparent;
   box-sizing: border-box;
   opacity: 0.75;
   flex-shrink: 0;
+}
+
+.drawer-working-indicator {
+  width: 8px;
+  height: 8px;
 }
 
 .drawer-subagent-count-badge-text {
@@ -9118,17 +9209,6 @@ kbd {
   font-size: 0.875rem;
   padding-left: 0.5rem;
   border-left: 2px solid var(--border-color);
-}
-
-.drawer-subagent-working-indicator {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-  background-color: transparent;
-  box-sizing: border-box;
-  opacity: 0.75;
-  flex-shrink: 0;
 }
 
 .drawer-subagent-date {
@@ -10873,6 +10953,8 @@ kbd {
 
 .tool-pill-item {
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .tool-pill {

@@ -100,6 +100,7 @@ export const zhCN: TranslationKeys = {
   duplicateName: "已存在同名对话",
   agentIsWorking: "代理正在工作...",
   subagentIsWorking: "子代理正在工作...",
+  running: "运行中",
   hideSubagents: "隐藏子代理",
   showSubagents: "显示子代理",
   groupConversations: "对话分组",

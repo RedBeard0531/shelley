@@ -100,6 +100,7 @@ export interface TranslationKeys {
   duplicateName: string;
   agentIsWorking: string;
   subagentIsWorking: string;
+  running: string;
   hideSubagents: string;
   showSubagents: string;
   groupConversations: string;

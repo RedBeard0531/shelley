@@ -100,6 +100,7 @@ export const vi: TranslationKeys = {
   duplicateName: "Bị trùng tên với hội thoại đã có",
   agentIsWorking: "Agent đang làm việc...",
   subagentIsWorking: "Subagent đang làm việc...",
+  running: "đang chạy",
   hideSubagents: "Ẩn subagent",
   showSubagents: "Hiện subagent",
   groupConversations: "Gộp nhóm các hội thoại",

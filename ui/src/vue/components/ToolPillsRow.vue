@@ -29,6 +29,12 @@
             <span v-if="!item.hasResult" class="tool-pill-spinner" aria-hidden="true" />
             <span v-if="pillErrored(item)" class="tool-pill-err" aria-hidden="true">✗</span>
           </button>
+          <SubagentPillLive
+            v-if="item.toolName === 'subagent'"
+            :tool-input="item.toolInput"
+            :display="item.display"
+            :is-running="!item.hasResult"
+          />
         </li>
       </ul>
       <Modal
@@ -93,6 +99,7 @@ import {
 import { provideToolDetail } from "../composables/toolDetail";
 import Modal from "./Modal.vue";
 import CoalescedToolCall from "./CoalescedToolCall.vue";
+import SubagentPillLive from "./SubagentPillLive.vue";
 
 const props = defineProps<{
   items: CoalescedItem[];

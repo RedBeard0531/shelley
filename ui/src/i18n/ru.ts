@@ -100,6 +100,7 @@ export const ru: TranslationKeys = {
   duplicateName: "Диалог с таким именем уже существует",
   agentIsWorking: "Агент работает...",
   subagentIsWorking: "Субагент работает...",
+  running: "работает",
   hideSubagents: "Скрыть субагентов",
   showSubagents: "Показать субагентов",
   groupConversations: "Группировать диалоги",

@@ -100,6 +100,7 @@ export const ja: TranslationKeys = {
   duplicateName: "同じ名前の会話がすでに存在します",
   agentIsWorking: "エージェントが作業中...",
   subagentIsWorking: "サブエージェントが作業中...",
+  running: "実行中",
   hideSubagents: "サブエージェントを非表示",
   showSubagents: "サブエージェントを表示",
   groupConversations: "会話をグループ化",

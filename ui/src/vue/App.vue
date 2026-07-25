@@ -202,7 +202,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
 import ChatInterface from "./components/ChatInterface.vue";
 import ConversationDrawer from "./components/ConversationDrawer.vue";
 import CommandPalette from "./components/CommandPalette.vue";
@@ -231,6 +231,7 @@ import { handleNotificationEvent } from "../services/notifications";
 import { loadCachedDraft } from "../services/draftCache";
 import { shouldStartDrawerCollapsed } from "../utils/drawerStartup";
 import { useI18n } from "./composables/i18n";
+import { ConversationsListKey, CurrentConversationIdKey } from "./composables/subagentLive";
 
 const { t } = useI18n();
 
@@ -292,6 +293,10 @@ const banner = window.__SHELLEY_INIT__?.banner;
 // ---- state ----
 const conversations = ref<ConversationWithState[]>([]);
 const currentConversationId = ref<string | null>(null);
+// Subagent tool widgets (SubagentTool.vue) join their slug against the live
+// conversation list to show what the subagent is doing right now.
+provide(ConversationsListKey, conversations);
+provide(CurrentConversationIdKey, currentConversationId);
 const viewedConversation = ref<Conversation | null>(null);
 const drawerOpen = ref(false);
 const drawerCollapsed = ref(false);
