@@ -6,7 +6,7 @@ Use this as a foundation to build your own service.
 
 ## Building and Running
 
-Build with `make build`, then run `./srv`. The server listens on port 8000 by default.
+Build with `make build`, then run `./srv/srv`. (Because `srv` is a directory, `go build -o srv` places the binary inside it, at `srv/srv`.) The server listens on port 8000 by default.
 
 ## Running as a systemd service
 
