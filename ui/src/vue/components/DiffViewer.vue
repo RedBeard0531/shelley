@@ -400,51 +400,13 @@
       </div>
 
       <!-- Comment dialog -->
-      <div
+      <CommentDialog
         v-if="showCommentDialog"
-        ref="commentDialogRef"
-        class="diff-viewer-comment-dialog"
-        :class="{ 'is-dragged': commentDialogPos }"
-        :style="
-          commentDialogPos
-            ? { top: `${commentDialogPos.top}px`, left: `${commentDialogPos.left}px` }
-            : undefined
-        "
-      >
-        <h4 class="diff-viewer-comment-dialog-handle" @mousedown="startDialogDrag">
-          <span>
-            Add Comment (Line{{
-              showCommentDialog.startLine !== showCommentDialog.endLine
-                ? `s ${showCommentDialog.startLine}-${showCommentDialog.endLine}`
-                : ` ${showCommentDialog.line}`
-            }}, {{ showCommentDialog.side === "left" ? "old" : "new" }})
-          </span>
-        </h4>
-        <pre v-if="showCommentDialog.selectedText" class="diff-viewer-selected-text">{{
-          showCommentDialog.selectedText
-        }}</pre>
-        <textarea
-          ref="commentInputRef"
-          v-model="commentText"
-          placeholder="Enter your comment..."
-          class="diff-viewer-comment-input"
-        />
-        <div class="diff-viewer-comment-actions">
-          <button
-            class="diff-viewer-btn diff-viewer-btn-secondary"
-            @click="showCommentDialog = null"
-          >
-            Cancel
-          </button>
-          <button
-            class="diff-viewer-btn diff-viewer-btn-primary"
-            :disabled="!commentText.trim()"
-            @click="handleAddComment"
-          >
-            Add Comment
-          </button>
-        </div>
-      </div>
+        v-model:text="commentText"
+        :info="showCommentDialog"
+        @submit="handleAddComment"
+        @cancel="showCommentDialog = null"
+      />
     </div>
 
     <!-- Directory picker -->
@@ -465,7 +427,9 @@ import { api } from "../../services/api";
 import { loadMonaco } from "../../services/monaco";
 import { isDarkModeActive } from "../../services/theme";
 import { useVimEnabled, useMonacoVim } from "../composables/monacoVim";
+import { useMonacoComments, truncateWithEllipsis } from "../composables/monacoComments";
 import VimToggle from "./VimToggle.vue";
+import CommentDialog from "./CommentDialog.vue";
 import CommitPicker from "./CommitPicker.vue";
 import RangeToggle from "./RangeToggle.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
@@ -509,10 +473,6 @@ function formatCommitMessage(msg: GitCommitMessage): string {
   if (msg.body) text += "\n\n" + msg.body;
   return text;
 }
-function truncateWithEllipsis(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, Math.max(0, maxLength - 3)) + "...";
-}
 
 // SVG icon markup (rendered via v-html into <span>). Mirrors the React icon
 // components: two-chevron file nav + single-chevron change nav + dir folder.
@@ -541,58 +501,6 @@ const error = ref<string | null>(null);
 const monacoLoaded = ref(false);
 const currentChangeIndex = ref(-1);
 const saveStatus = ref<"idle" | "saving" | "saved" | "error">("idle");
-const showCommentDialog = ref<{
-  line: number;
-  side: "left" | "right";
-  selectedText?: string;
-  startLine?: number;
-  endLine?: number;
-} | null>(null);
-// Floating "add comment" prompt shown after a text selection in comment mode.
-// Lets the user keep their selection (rather than the dialog popping up
-// immediately on click and interfering with selecting text).
-const commentPrompt = ref<{
-  top: number;
-  left: number;
-  startLine: number;
-  endLine: number;
-  selectedText: string;
-} | null>(null);
-const commentText = ref("");
-// Optional drag offset for the comment dialog. Null => use the CSS-centered
-// default position; otherwise an explicit top/left in px relative to the viewer.
-const commentDialogPos = ref<{ top: number; left: number } | null>(null);
-const commentDialogRef = ref<HTMLDivElement | null>(null);
-let dialogDrag: { startX: number; startY: number; baseTop: number; baseLeft: number } | null = null;
-
-function startDialogDrag(e: MouseEvent) {
-  // Ignore drags that begin on interactive controls inside the header.
-  if ((e.target as HTMLElement).closest("button, textarea, input")) return;
-  const el = commentDialogRef.value;
-  if (!el) return;
-  const rect = el.getBoundingClientRect();
-  const parent = mainRef.value?.getBoundingClientRect();
-  const baseTop = parent ? rect.top - parent.top : rect.top;
-  const baseLeft = parent ? rect.left - parent.left : rect.left;
-  dialogDrag = { startX: e.clientX, startY: e.clientY, baseTop, baseLeft };
-  window.addEventListener("mousemove", onDialogDrag);
-  window.addEventListener("mouseup", endDialogDrag);
-  e.preventDefault();
-}
-
-function onDialogDrag(e: MouseEvent) {
-  if (!dialogDrag) return;
-  commentDialogPos.value = {
-    top: dialogDrag.baseTop + (e.clientY - dialogDrag.startY),
-    left: dialogDrag.baseLeft + (e.clientX - dialogDrag.startX),
-  };
-}
-
-function endDialogDrag() {
-  dialogDrag = null;
-  window.removeEventListener("mousemove", onDialogDrag);
-  window.removeEventListener("mouseup", endDialogDrag);
-}
 const mode = ref<ViewMode>("comment");
 const commitMessages = ref<GitCommitMessage[]>([]);
 const amendStatus = ref<"idle" | "saving" | "saved" | "error">("idle");
@@ -635,7 +543,6 @@ const vimStatusRef = ref<HTMLDivElement | null>(null);
 let monacoMod: typeof Monaco | null = null;
 const editorContainerRef = ref<HTMLDivElement | null>(null);
 const mainRef = ref<HTMLDivElement | null>(null);
-const commentInputRef = ref<HTMLTextAreaElement | null>(null);
 let diffEditor: Monaco.editor.IStandaloneDiffEditor | null = null;
 let saveTimeout: number | null = null;
 let amendTimeout: number | null = null;
@@ -647,16 +554,43 @@ let modeVal: ViewMode = mode.value;
 let cwdVal = props.cwd;
 let commitMessagesVal: GitCommitMessage[] = [];
 let currentFileIsHeadCommit = false;
-let hoverDecorations: string[] = [];
 // Current split ratio for the active file. Monaco 0.44's updateOptions()
 // resets splitViewDefaultRatio to 0.5 when omitted, so every
 // diffEditor.updateOptions() call must pass this along.
 let splitViewRatioVal = 0.5;
-let touchScrolled = false;
-let touchStartPos: { x: number; y: number } | null = null;
-// Desktop: where a comment-mode mousedown started, to distinguish click vs drag.
-let mouseDownPos: { x: number; y: number } | null = null;
 let scheduleSaveFn: (() => void) | null = null;
+
+// Shared comment-mode UX (click-to-comment, selection prompt, dialog state).
+const {
+  showCommentDialog,
+  commentPrompt,
+  commentText,
+  attach: attachComments,
+  handleAddComment,
+  openCommentFromPrompt,
+  reset: resetComments,
+} = useMonacoComments({
+  monaco: () => monacoMod,
+  mode: () => modeVal,
+  isMobile: () => isMobileVal,
+  promptHost: () => mainRef.value,
+  fileRef: commentFileRef,
+  onSubmit: (block) => emit("comment-text-change", block),
+});
+
+// Reference used in the quote header of a submitted comment: the file path,
+// or "commit <hash> (<subject>)" for commit-message pseudo-files.
+function commentFileRef(): string | null {
+  if (!selectedFile.value) return null;
+  if (isCommitMessageFile(selectedFile.value)) {
+    const hash = commitHashFromPath(selectedFile.value);
+    const msg = commitMessages.value.find((m) => m.hash === hash);
+    return msg
+      ? `commit ${hash.slice(0, 8)} (${truncateWithEllipsis(msg.subject, 40)})`
+      : `commit ${hash.slice(0, 8)}`;
+  }
+  return selectedFile.value;
+}
 
 // Keep mirror values in sync.
 watch(commitMessages, (v) => (commitMessagesVal = v), { immediate: true });
@@ -694,15 +628,6 @@ watch([mode, selectedFile, selectedDiff, selectedTo], () => {
 function handleResize() {
   isMobile.value = window.innerWidth < 768;
 }
-
-// Focus comment input when dialog opens.
-watch(showCommentDialog, (v) => {
-  if (v) {
-    // Each freshly opened dialog starts from the centered default position.
-    commentDialogPos.value = null;
-    setTimeout(() => commentInputRef.value?.focus(), 50);
-  }
-});
 
 // Load Monaco when viewer opens.
 watch(
@@ -756,9 +681,7 @@ watch(
       selectedTo.value = "working";
       diffs.value = [];
       error.value = null;
-      showCommentDialog.value = null;
-      commentPrompt.value = null;
-      commentText.value = "";
+      resetComments();
       commitMessages.value = [];
       amendStatus.value = "idle";
       if (amendTimeout) {
@@ -832,159 +755,9 @@ function createEditor() {
   const modEditor = diffEditor.getModifiedEditor();
   modifiedEditor.value = modEditor;
 
-  const openCommentDialog = (lineNumber: number) => {
-    const model = modEditor.getModel();
-    const selection = modEditor.getSelection();
-    let selectedText = "";
-    let startLine = lineNumber;
-    let endLine = lineNumber;
-    if (selection && !selection.isEmpty() && model) {
-      selectedText = model.getValueInRange(selection);
-      startLine = selection.startLineNumber;
-      endLine = selection.endLineNumber;
-    } else if (model) {
-      selectedText = model.getLineContent(lineNumber) || "";
-    }
-    showCommentDialog.value = { line: startLine, side: "right", selectedText, startLine, endLine };
-  };
-
-  // A click counts as a "comment on this line" gesture if it lands on the line
-  // text/empty area OR on the gutter (line numbers, line decorations, or the
-  // glyph-margin comment indicator).
-  const isCommentClickTarget = (e: Monaco.editor.IEditorMouseEvent) => {
-    const T = monaco.editor.MouseTargetType;
-    return (
-      e.target.type === T.CONTENT_TEXT ||
-      e.target.type === T.CONTENT_EMPTY ||
-      e.target.type === T.GUTTER_GLYPH_MARGIN ||
-      e.target.type === T.GUTTER_LINE_NUMBERS ||
-      e.target.type === T.GUTTER_LINE_DECORATIONS
-    );
-  };
-
-  // Desktop: on mousedown in comment mode, dismiss any open selection prompt
-  // and remember where the press started so we can tell a click from a drag.
-  modEditor.onMouseDown((e: Monaco.editor.IEditorMouseEvent) => {
-    if (isMobileVal) return;
-    if (modeVal !== "comment") return;
-    commentPrompt.value = null;
-    // Starting a new selection/click with an empty comment box hides it, so an
-    // abandoned empty dialog doesn't linger while you pick a new section.
-    if (showCommentDialog.value && !commentText.value.trim()) {
-      showCommentDialog.value = null;
-    }
-    const be = e.event.browserEvent;
-    mouseDownPos = { x: be.clientX, y: be.clientY };
-  });
-
-  // Desktop: decide on mouseup. If the user made a text selection, show a
-  // floating "Comment" prompt next to it (so the selection stays usable). If
-  // it was just a click on a line with no selection, open the comment dialog
-  // for that line directly.
-  modEditor.onMouseUp((e: Monaco.editor.IEditorMouseEvent) => {
-    if (isMobileVal) return;
-    if (modeVal !== "comment") return;
-    const model = modEditor.getModel();
-    const selection = modEditor.getSelection();
-    const be = e.event.browserEvent;
-    if (selection && !selection.isEmpty() && model) {
-      // Show the floating prompt near the mouse-up point.
-      const rect = mainRef.value?.getBoundingClientRect();
-      if (rect) {
-        commentPrompt.value = {
-          top: be.clientY - rect.top + 8,
-          left: Math.max(0, Math.min(be.clientX - rect.left, rect.width - 110)),
-          startLine: selection.startLineNumber,
-          endLine: selection.endLineNumber,
-          selectedText: model.getValueInRange(selection),
-        };
-      }
-      return;
-    }
-    // No selection: treat as a click to comment on the line, but only if the
-    // pointer didn't move (a tiny drag that collapsed to an empty selection
-    // shouldn't trigger the dialog).
-    if (mouseDownPos) {
-      const dx = be.clientX - mouseDownPos.x;
-      const dy = be.clientY - mouseDownPos.y;
-      mouseDownPos = null;
-      if (dx * dx + dy * dy > 16) return;
-    }
-    if (isCommentClickTarget(e)) {
-      const position = e.target.position;
-      if (position) openCommentDialog(position.lineNumber);
-    }
-  });
-
-  // Mobile: track tap-without-scroll.
-  const editorDom = editorContainerRef.value;
-  const onTouchStart = (e: TouchEvent) => {
-    touchScrolled = false;
-    const t = e.touches[0];
-    touchStartPos = { x: t.clientX, y: t.clientY };
-  };
-  const onTouchMove = (e: TouchEvent) => {
-    if (touchScrolled || !touchStartPos) return;
-    const t = e.touches[0];
-    const dx = t.clientX - touchStartPos.x;
-    const dy = t.clientY - touchStartPos.y;
-    if (dx * dx + dy * dy > 100) touchScrolled = true;
-  };
-  const onTouchEnd = () => {
-    touchStartPos = null;
-  };
-  editorDom.addEventListener("touchstart", onTouchStart, { passive: true });
-  editorDom.addEventListener("touchmove", onTouchMove, { passive: true });
-  editorDom.addEventListener("touchend", onTouchEnd, { passive: true });
-  touchCleanup = () => {
-    editorDom.removeEventListener("touchstart", onTouchStart);
-    editorDom.removeEventListener("touchmove", onTouchMove);
-    editorDom.removeEventListener("touchend", onTouchEnd);
-  };
-
-  modEditor.onMouseUp((e: Monaco.editor.IEditorMouseEvent) => {
-    if (!isMobileVal) return;
-    if (modeVal !== "comment") return;
-    if (touchScrolled) return;
-    if (isCommentClickTarget(e)) {
-      const position = e.target.position;
-      if (position) openCommentDialog(position.lineNumber);
-    }
-  });
-
-  // Hover highlighting with comment indicator (comment mode only).
-  let lastHoveredLine = -1;
-  modEditor.onMouseMove((e: Monaco.editor.IEditorMouseEvent) => {
-    if (modeVal !== "comment") {
-      if (hoverDecorations.length > 0) {
-        hoverDecorations = modEditor.deltaDecorations(hoverDecorations, []);
-      }
-      return;
-    }
-    const position = e.target.position;
-    const lineNumber = position?.lineNumber ?? -1;
-    if (lineNumber === lastHoveredLine) return;
-    lastHoveredLine = lineNumber;
-    if (lineNumber > 0) {
-      hoverDecorations = modEditor.deltaDecorations(hoverDecorations, [
-        {
-          range: new monaco.Range(lineNumber, 1, lineNumber, 1),
-          options: {
-            isWholeLine: true,
-            className: "diff-viewer-line-hover",
-            glyphMarginClassName: "diff-viewer-comment-glyph",
-          },
-        },
-      ]);
-    } else {
-      hoverDecorations = modEditor.deltaDecorations(hoverDecorations, []);
-    }
-  });
-
-  modEditor.onMouseLeave(() => {
-    lastHoveredLine = -1;
-    hoverDecorations = modEditor.deltaDecorations(hoverDecorations, []);
-  });
+  // Comment-mode interactions (click-to-comment, selection prompt, hover
+  // indicator) via the shared composable.
+  commentsCleanup = attachComments(modEditor, editorContainerRef.value);
 
   // Single content change listener; branches on current file context.
   modEditor.onDidChangeModelContent(() => {
@@ -1009,12 +782,12 @@ function createEditor() {
     }
   });
 }
-let touchCleanup: (() => void) | null = null;
+let commentsCleanup: (() => void) | null = null;
 
 function disposeEditor() {
   if (!diffEditor) return;
-  touchCleanup?.();
-  touchCleanup = null;
+  commentsCleanup?.();
+  commentsCleanup = null;
   const model = diffEditor.getModel();
   diffEditor.dispose();
   model?.original.dispose();
@@ -1247,40 +1020,6 @@ async function loadFileDiff(diffId: string, filePath: string) {
   } finally {
     loading.value = false;
   }
-}
-
-function handleAddComment() {
-  if (!showCommentDialog.value || !commentText.value.trim() || !selectedFile.value) return;
-  const line = showCommentDialog.value.line;
-  const codeSnippet = showCommentDialog.value.selectedText?.split("\n")[0]?.trim() || "";
-  const truncatedCode = truncateWithEllipsis(codeSnippet, 60);
-  let fileRef = selectedFile.value;
-  if (isCommitMessageFile(selectedFile.value)) {
-    const hash = commitHashFromPath(selectedFile.value);
-    const msg = commitMessages.value.find((m) => m.hash === hash);
-    fileRef = msg
-      ? `commit ${hash.slice(0, 8)} (${truncateWithEllipsis(msg.subject, 40)})`
-      : `commit ${hash.slice(0, 8)}`;
-  }
-  const commentBlock = `> ${fileRef}:${line}: ${truncatedCode}\n${commentText.value}\n\n`;
-  emit("comment-text-change", commentBlock);
-  showCommentDialog.value = null;
-  commentText.value = "";
-}
-
-// Open the comment dialog from the floating selection prompt, preserving the
-// lines and text that were selected when the prompt appeared.
-function openCommentFromPrompt() {
-  const p = commentPrompt.value;
-  if (!p) return;
-  showCommentDialog.value = {
-    line: p.startLine,
-    side: "right",
-    selectedText: p.selectedText,
-    startLine: p.startLine,
-    endLine: p.endLine,
-  };
-  commentPrompt.value = null;
 }
 
 // --- Navigation ---
@@ -1718,7 +1457,6 @@ onUnmounted(() => {
   if (saveTimeout) clearTimeout(saveTimeout);
   if (amendTimeout) clearTimeout(amendTimeout);
   if (keyboardHintTimer) clearTimeout(keyboardHintTimer);
-  endDialogDrag();
   disposeEditor();
 });
 </script>

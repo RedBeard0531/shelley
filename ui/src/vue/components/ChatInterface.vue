@@ -473,6 +473,9 @@ const props = withDefaults(
     navigateUserMessageTrigger?: number;
     onConversationUnarchived?: (conversation: Conversation) => void;
     onDraftCreated?: (conversationId: string) => void;
+    /** Comment block from the standalone file editor (App-level modal) to
+     *  inject into the message input. Fresh object per submit. */
+    externalCommentText?: { text: string } | null;
   }>(),
   {
     streamStatus: "connected",
@@ -2012,6 +2015,14 @@ const contextBarDistill = computed(() =>
 function setDiffCommentText(text: string) {
   diffCommentText.value = text;
 }
+
+// Comments submitted from the App-level file editor modal flow in via prop.
+watch(
+  () => props.externalCommentText,
+  (v) => {
+    if (v?.text) diffCommentText.value = v.text;
+  },
+);
 
 function onTerminalCloseHandler(id: string) {
   if (props.onTerminalClose) {

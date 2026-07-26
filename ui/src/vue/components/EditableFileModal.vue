@@ -4,7 +4,10 @@
      aria-modal, the aria-label "Edit file" (or the given title), and the
      agents-md-* header/save-status classes. Loads Monaco via services/monaco,
      auto-saves (debounced) to /api/write-file, and wires vim via
-     useMonacoVim + <VimToggle>. Emits "close" (React onClose) and
+     useMonacoVim + <VimToggle>. When `commentable`, offers the same
+     edit/comment mode toggle as DiffViewer: comment mode makes the editor
+     read-only and click-to-comment, emitting "comment" with the quoted
+     comment block. Emits "close" (React onClose) and
      "saved" (React onSaved, with the saved content). -->
 <template>
   <Teleport v-if="isOpen" to="body">
@@ -27,6 +30,24 @@
               <template v-else-if="saveStatus === 'saved'">Saved</template>
               <template v-else-if="saveStatus === 'error'">Error saving</template>
             </span>
+            <div v-if="commentable" class="diff-viewer-mode-toggle">
+              <button
+                v-tooltip.top="'Comment mode'"
+                :class="`diff-viewer-mode-btn ${mode === 'comment' ? 'active' : ''}`"
+                aria-label="Comment mode"
+                @click="mode = 'comment'"
+              >
+                💬
+              </button>
+              <button
+                v-tooltip.top="'Edit mode'"
+                :class="`diff-viewer-mode-btn ${mode === 'edit' ? 'active' : ''}`"
+                aria-label="Edit mode"
+                @click="mode = 'edit'"
+              >
+                ✏️
+              </button>
+            </div>
             <VimToggle v-if="isDesktop" :enabled="vimEnabled" @change="setVimEnabled" />
             <button
               v-tooltip.top="'Close (Esc)'"
@@ -38,7 +59,7 @@
             </button>
           </div>
         </div>
-        <div class="diff-viewer-content">
+        <div ref="contentRef" class="diff-viewer-content">
           <div v-if="loadStatus === 'error'" class="diff-viewer-loading">
             <span>Failed to load {{ path }}. Editing is disabled.</span>
           </div>
@@ -55,21 +76,45 @@
                   monacoLoaded && content !== null && loadStatus === 'loaded' ? 'block' : 'none',
               }"
             />
-            <div v-if="isDesktop && vimEnabled" ref="vimStatusRef" class="monaco-vim-status" />
+            <div v-if="isDesktop && vimActive" ref="vimStatusRef" class="monaco-vim-status" />
           </template>
+          <!-- Floating "add comment" prompt shown next to a selection in comment mode -->
+          <button
+            v-if="commentPrompt"
+            v-tooltip.top="'Add comment on selection'"
+            class="diff-viewer-comment-prompt"
+            :style="{ top: `${commentPrompt.top}px`, left: `${commentPrompt.left}px` }"
+            @mousedown.prevent
+            @click="openCommentFromPrompt"
+          >
+            💬 Comment
+          </button>
         </div>
+
+        <!-- Comment dialog -->
+        <CommentDialog
+          v-if="showCommentDialog"
+          v-model:text="commentText"
+          :info="showCommentDialog"
+          :show-side="false"
+          @submit="handleAddComment"
+          @cancel="showCommentDialog = null"
+        />
       </div>
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import type * as Monaco from "monaco-editor";
 import { loadMonaco } from "../../services/monaco";
 import { isDarkModeActive } from "../../services/theme";
+import { tildifyPath } from "../../utils/tildify";
 import { useVimEnabled, useMonacoVim } from "../composables/monacoVim";
+import { useMonacoComments } from "../composables/monacoComments";
 import VimToggle from "./VimToggle.vue";
+import CommentDialog from "./CommentDialog.vue";
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type LoadStatus = "loading" | "loaded" | "error";
@@ -83,18 +128,26 @@ const props = withDefaults(
      *  from the file extension (falling back to markdown). */
     language?: string;
     loadUrl?: string;
+    /** Offer the edit/comment mode toggle (like DiffViewer). Comment mode
+     *  makes the editor read-only; submitted comments are emitted as
+     *  "comment" with a quoted block for the message input. */
+    commentable?: boolean;
   }>(),
   {},
 );
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "saved", content: string): void;
+  (e: "comment", text: string): void;
 }>();
 
 const content = ref<string | null>(null);
 const loadStatus = ref<LoadStatus>("loading");
 const monacoLoaded = ref(false);
 const saveStatus = ref<SaveStatus>("idle");
+// Interaction mode. Commentable modals open in edit mode (matching the plain
+// editor behavior); the toggle switches to read-only click-to-comment.
+const mode = ref<"comment" | "edit">("edit");
 
 // Monaco editor instances must NOT be deeply reactive: a plain ref() proxies
 // the editor's huge internal object graph, so vim mode (which drives the editor
@@ -103,6 +156,7 @@ const saveStatus = ref<SaveStatus>("idle");
 const editor = shallowRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
 let monacoMod: typeof Monaco | null = null;
 const containerRef = ref<HTMLDivElement | null>(null);
+const contentRef = ref<HTMLDivElement | null>(null);
 const vimStatusRef = ref<HTMLDivElement | null>(null);
 let saveTimeout: number | null = null;
 let statusTimeout: number | null = null;
@@ -112,6 +166,37 @@ function setVimEnabled(v: boolean) {
   setVimEnabledFn(v);
 }
 const isDesktop = ref(window.innerWidth >= 768);
+// vim status bar only makes sense while the editor is writable.
+const vimActive = computed(() => vimEnabled.value && mode.value === "edit");
+
+// Shared comment-mode UX (click-to-comment, selection prompt, dialog state).
+const {
+  showCommentDialog,
+  commentPrompt,
+  commentText,
+  attach: attachComments,
+  handleAddComment,
+  openCommentFromPrompt,
+  clearPrompt,
+  reset: resetComments,
+} = useMonacoComments({
+  monaco: () => monacoMod,
+  mode: () => mode.value,
+  isMobile: () => !isDesktop.value,
+  promptHost: () => contentRef.value,
+  fileRef: () => tildifyPath(props.path),
+  onSubmit: (block) => emit("comment", block),
+});
+let commentsCleanup: (() => void) | null = null;
+
+// Apply mode changes to the live editor: comment mode is read-only and must
+// not drag-and-drop selections; leaving comment mode clears the prompt and,
+// with pending text, the dialog stays (matching DiffViewer's behavior of
+// clearing only the selection prompt).
+watch(mode, (m) => {
+  clearPrompt();
+  editor.value?.updateOptions({ readOnly: m === "comment" });
+});
 
 function onResize() {
   isDesktop.value = window.innerWidth >= 768;
@@ -218,7 +303,7 @@ function handleVimQuit({ save }: { save: boolean }) {
 useMonacoVim(
   () => editor.value,
   () => vimStatusRef.value,
-  () => isDesktop.value && vimEnabled.value,
+  () => isDesktop.value && vimEnabled.value && mode.value === "edit",
   handleVimQuit,
 );
 
@@ -275,9 +360,14 @@ watch(
       automaticLayout: true,
       fontSize: 14,
       padding: { top: 8 },
+      readOnly: mode.value === "comment",
       ...mobileLayoutOptions(!isDesktop.value),
     });
     editor.value = nextEditor;
+
+    if (props.commentable) {
+      commentsCleanup = attachComments(nextEditor, containerRef.value);
+    }
 
     nextEditor.onDidChangeModelContent(() => scheduleSave(nextEditor.getValue()));
     nextEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
@@ -296,6 +386,8 @@ function disposeEditor() {
     clearTimeout(saveTimeout);
     saveTimeout = null;
   }
+  commentsCleanup?.();
+  commentsCleanup = null;
   if (editor.value) {
     editor.value.dispose();
     editor.value = null;
@@ -328,10 +420,15 @@ function handleKeyDown(e: KeyboardEvent) {
     vimStatusRef.value?.contains(document.activeElement);
   if (
     isDesktop.value &&
-    vimEnabled.value &&
+    vimActive.value &&
     vimFocused &&
     (vimStatusRef.value?.textContent ?? "").trim() !== ""
   ) {
+    return;
+  }
+  // A first Escape dismisses an open comment dialog rather than the modal.
+  if (showCommentDialog.value) {
+    showCommentDialog.value = null;
     return;
   }
   emit("close");
@@ -358,6 +455,10 @@ watch(
       currentLoadCancel?.();
       disposeEditor();
       content.value = null;
+      resetComments();
+      // Fresh open starts back in edit mode (the default), even if the
+      // component instance is reused rather than remounted.
+      mode.value = "edit";
     }
   },
 );
