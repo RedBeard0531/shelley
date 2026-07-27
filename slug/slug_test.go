@@ -658,3 +658,179 @@ func TestGenerateSlug_ReasoningModel(t *testing.T) {
 func (m *MockLLMService) SupportsImages() bool              { return true }
 func (m *MockLLMServiceWithError) SupportsImages() bool     { return true }
 func (m *MockLLMServiceEmptyResponse) SupportsImages() bool { return true }
+
+// recordingProvider is a mock provider with a fixed model list and per-model
+// tags (empty by default, mimicking models discovered from a gateway
+// integration). It records which model IDs GetService was asked for.
+type recordingProvider struct {
+	modelIDs   []string
+	tags       map[string]string // optional per-model tags
+	requested  []string
+	services   map[string]llm.Service // optional per-model service override
+	fallbackTo llm.Service
+}
+
+func (p *recordingProvider) GetService(modelID string) (llm.Service, error) {
+	p.requested = append(p.requested, modelID)
+	if svc, ok := p.services[modelID]; ok {
+		return svc, nil
+	}
+	return p.fallbackTo, nil
+}
+
+func (p *recordingProvider) GetAvailableModels() []string { return p.modelIDs }
+
+func (p *recordingProvider) GetModelInfo(modelID string) *models.ModelInfo {
+	return &models.ModelInfo{DisplayName: modelID, Tags: p.tags[modelID]}
+}
+
+// TestGenerateSlugText_PreferenceFallback verifies that when no model is
+// tagged "slug"/"slug-backup" (e.g. all models come from a gateway
+// integration, which strips tags), slug generation picks a model from the
+// substring preference list instead of the conversation's model.
+func TestGenerateSlugText_PreferenceFallback(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	provider := &recordingProvider{
+		modelIDs:   []string{"claude-opus-5", "claude-fable-5", "claude-haiku-4-5", "gpt-oss-20b-fireworks"},
+		fallbackTo: &MockLLMService{ResponseText: "my-slug"},
+	}
+
+	slug, err := generateSlugText(context.Background(), provider, logger, "some message", "claude-fable-5")
+	if err != nil {
+		t.Fatalf("generateSlugText failed: %v", err)
+	}
+	if slug != "my-slug" {
+		t.Errorf("expected slug %q, got %q", "my-slug", slug)
+	}
+	if len(provider.requested) == 0 {
+		t.Fatal("no model requested")
+	}
+	// gpt-oss-20b is first in the preference list and present in the model list.
+	if provider.requested[0] != "gpt-oss-20b-fireworks" {
+		t.Errorf("expected preferred model gpt-oss-20b-fireworks to be tried first, got %q (all: %v)", provider.requested[0], provider.requested)
+	}
+}
+
+// TestGenerateSlugText_PreferenceFallbackChain verifies that a failing
+// preferred model falls through to the next preference, and ultimately to the
+// conversation model.
+func TestGenerateSlugText_PreferenceFallbackChain(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	provider := &recordingProvider{
+		modelIDs: []string{"claude-fable-5", "claude-haiku-4-5", "gpt-oss-20b-fireworks"},
+		services: map[string]llm.Service{
+			"gpt-oss-20b-fireworks": &MockLLMServiceWithError{},
+		},
+		fallbackTo: &MockLLMService{ResponseText: "haiku-slug"},
+	}
+
+	slug, err := generateSlugText(context.Background(), provider, logger, "some message", "claude-fable-5")
+	if err != nil {
+		t.Fatalf("generateSlugText failed: %v", err)
+	}
+	if slug != "haiku-slug" {
+		t.Errorf("expected slug %q, got %q", "haiku-slug", slug)
+	}
+	want := []string{"gpt-oss-20b-fireworks", "claude-haiku-4-5"}
+	if len(provider.requested) < 2 || provider.requested[0] != want[0] || provider.requested[1] != want[1] {
+		t.Errorf("expected request order %v, got %v", want, provider.requested)
+	}
+}
+
+// TestGenerateSlugText_ConversationModelLastResort verifies that when every
+// preferred model fails, the conversation model is finally tried.
+func TestGenerateSlugText_ConversationModelLastResort(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	provider := &recordingProvider{
+		modelIDs: []string{"claude-fable-5", "claude-haiku-4-5", "gpt-oss-20b-fireworks"},
+		services: map[string]llm.Service{
+			"gpt-oss-20b-fireworks": &MockLLMServiceWithError{},
+			"claude-haiku-4-5":      &MockLLMServiceWithError{},
+		},
+		fallbackTo: &MockLLMService{ResponseText: "fable-slug"},
+	}
+
+	slug, err := generateSlugText(context.Background(), provider, logger, "some message", "claude-fable-5")
+	if err != nil {
+		t.Fatalf("generateSlugText failed: %v", err)
+	}
+	if slug != "fable-slug" {
+		t.Errorf("expected slug %q, got %q", "fable-slug", slug)
+	}
+	want := []string{"gpt-oss-20b-fireworks", "claude-haiku-4-5", "claude-fable-5"}
+	if len(provider.requested) != 3 || provider.requested[0] != want[0] || provider.requested[1] != want[1] || provider.requested[2] != want[2] {
+		t.Errorf("expected request order %v, got %v", want, provider.requested)
+	}
+}
+
+// TestGenerateSlugText_TaggedModelWins verifies that tagged models still take
+// priority over the substring preference list, and that a tagged model which
+// fails is not retried by the substring fallback.
+func TestGenerateSlugText_TaggedModelWins(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	// claude-fable-5 is tagged "slug" and doesn't match any preferred substring.
+	provider := &recordingProvider{
+		modelIDs:   []string{"gpt-oss-20b-fireworks", "claude-fable-5"},
+		tags:       map[string]string{"claude-fable-5": "slug"},
+		fallbackTo: &MockLLMService{ResponseText: "tagged-slug"},
+	}
+
+	slug, err := generateSlugText(context.Background(), provider, logger, "some message", "")
+	if err != nil {
+		t.Fatalf("generateSlugText failed: %v", err)
+	}
+	if slug != "tagged-slug" {
+		t.Errorf("expected slug %q, got %q", "tagged-slug", slug)
+	}
+	if provider.requested[0] != "claude-fable-5" {
+		t.Errorf("expected tagged model claude-fable-5 first, got %v", provider.requested)
+	}
+
+	// Now make the tagged model fail: it must not be retried by the substring
+	// fallback (it matches no substring here, so verify with a model that does).
+	provider2 := &recordingProvider{
+		modelIDs: []string{"gpt-oss-20b-fireworks", "claude-haiku-4-5"},
+		tags:     map[string]string{"gpt-oss-20b-fireworks": "slug"},
+		services: map[string]llm.Service{
+			"gpt-oss-20b-fireworks": &MockLLMServiceWithError{},
+		},
+		fallbackTo: &MockLLMService{ResponseText: "backup-slug"},
+	}
+	slug2, err := generateSlugText(context.Background(), provider2, logger, "some message", "")
+	if err != nil {
+		t.Fatalf("generateSlugText failed: %v", err)
+	}
+	if slug2 != "backup-slug" {
+		t.Errorf("expected slug %q, got %q", "backup-slug", slug2)
+	}
+	// gpt-oss tried once (tagged), then haiku via substring list; gpt-oss NOT retried.
+	want := []string{"gpt-oss-20b-fireworks", "claude-haiku-4-5"}
+	if len(provider2.requested) != 2 || provider2.requested[0] != want[0] || provider2.requested[1] != want[1] {
+		t.Errorf("expected request order %v (no retries), got %v", want, provider2.requested)
+	}
+}
+
+func TestPreferredModels(t *testing.T) {
+	available := []string{
+		"claude-opus-5",
+		"gpt-5.4-mini",
+		"claude-haiku-4-5",
+		"gpt-5.6-luna",
+		"gpt-oss-20b-fireworks",
+		"gpt-5.4-nano",
+	}
+	got := preferredModels(available, map[string]bool{"claude-haiku-4-5": true})
+	want := []string{"gpt-oss-20b-fireworks", "gpt-5.6-luna", "gpt-5.4-nano", "gpt-5.4-mini"}
+	if len(got) != len(want) {
+		t.Fatalf("preferredModels = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("preferredModels = %v, want %v", got, want)
+		}
+	}
+}

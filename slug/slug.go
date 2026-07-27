@@ -63,12 +63,43 @@ func GenerateSlug(ctx context.Context, llmProvider LLMServiceProvider, database 
 	return "", fmt.Errorf("failed to generate unique slug after 100 attempts")
 }
 
+// preferredModelSubstrings is an ordered priority list of model-ID substrings
+// used to pick a slug model when no tagged model produced a slug. Models
+// discovered from a gateway integration carry no catalog tags, so without
+// this list slug generation would fall through to the conversation's model.
+// Cheap, fast models first.
+var preferredModelSubstrings = []string{
+	"gpt-oss-20b",
+	"gpt-5.6-luna",
+	"haiku",
+	"gemini-3-flash",
+	"-nano",
+	"-mini",
+}
+
+// preferredModels returns available model IDs matching the substring priority
+// list, in priority order, deduplicated and excluding already-tried models.
+func preferredModels(available []string, tried map[string]bool) []string {
+	var out []string
+	seen := make(map[string]bool, len(available))
+	for _, sub := range preferredModelSubstrings {
+		for _, id := range available {
+			if !seen[id] && !tried[id] && strings.Contains(id, sub) {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
 // generateSlugText generates a human-readable slug for a conversation based on the user message
 // Priority order:
 // 1. If conversationModelID is "predictable", use it
 // 2. Try models tagged with "slug" (try the LLM call; if it fails, continue)
 // 3. Try models tagged with "slug-backup"
-// 4. Fall back to the conversation's model (conversationModelID)
+// 4. Try models matching preferredModelSubstrings (covers untagged gateway models)
+// 5. Fall back to the conversation's model (conversationModelID)
 func generateSlugText(ctx context.Context, llmProvider LLMServiceProvider, logger *slog.Logger, userMessage, conversationModelID string) (string, error) {
 	// If conversation is using predictable model, use it for slug generation too
 	if conversationModelID == "predictable" {
@@ -81,12 +112,17 @@ func generateSlugText(ctx context.Context, llmProvider LLMServiceProvider, logge
 	}
 
 	// Try models tagged with "slug", then "slug-backup"
+	tried := map[string]bool{}
 	for _, tag := range []string{"slug", "slug-backup"} {
 		for _, modelID := range llmProvider.GetAvailableModels() {
 			info := llmProvider.GetModelInfo(modelID)
 			if info == nil || !hasTag(info.Tags, tag) {
 				continue
 			}
+			if tried[modelID] {
+				continue
+			}
+			tried[modelID] = true
 			llmService, err := llmProvider.GetService(modelID)
 			if err != nil {
 				logger.Debug("Failed to get model for slug generation", "model", modelID, "tag", tag, "error", err)
@@ -101,8 +137,29 @@ func generateSlugText(ctx context.Context, llmProvider LLMServiceProvider, logge
 		}
 	}
 
+	// No tagged model produced a slug (typical for gateway integrations, which
+	// don't carry tags at all). Try the substring preference list, skipping
+	// models already tried above.
+	for _, modelID := range preferredModels(llmProvider.GetAvailableModels(), tried) {
+		if ctx.Err() != nil {
+			break
+		}
+		tried[modelID] = true
+		llmService, err := llmProvider.GetService(modelID)
+		if err != nil {
+			logger.Debug("Failed to get preferred model for slug generation", "model", modelID, "error", err)
+			continue
+		}
+		logger.Debug("Trying preferred model for slug generation", "model", modelID)
+		slug, err := callSlugLLM(ctx, llmService, userMessage)
+		if err == nil {
+			return slug, nil
+		}
+		logger.Warn("Slug generation failed, trying next model", "model", modelID, "error", err)
+	}
+
 	// Fall back to the conversation's model
-	if conversationModelID != "" && conversationModelID != "predictable" {
+	if conversationModelID != "" && conversationModelID != "predictable" && !tried[conversationModelID] {
 		llmService, err := llmProvider.GetService(conversationModelID)
 		if err == nil {
 			logger.Debug("Using conversation model for slug generation", "model", conversationModelID)
