@@ -50,6 +50,7 @@ type Message struct {
 	ModelName           *string   `json:"model_name"`
 	ForkedFromMessageID *string   `json:"forked_from_message_id"`
 	UserEmail           *string   `json:"user_email"`
+	OtherUsageData      *string   `json:"other_usage_data"`
 }
 
 type Model struct {

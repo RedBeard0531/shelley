@@ -4,8 +4,12 @@
      fixed-width gaps. Y axis: cumulative dollars per (model, token-band)
      segment — every segment has its own color — falling back to raw token
      counts when no model in the conversation has known pricing. Subagent cost
-     is not part of the graph; it is fetched separately and shown as a
-     "plus $X for subagents" line. -->
+     and "other" (indirect) LLM usage — compaction summarization, LLM-backed
+     tools, slug generation, … — are not part of the graph; other-usage rows
+     arrive via the otherUsageRows prop (aggregated client-side from message
+     other_usage_data), subagent cost is fetched separately, and both show as
+     an "Other (indirect)" breakdown section and
+     "plus ≈$Y other, plus ≈$Z for subagents" note segments. -->
 <template>
   <div class="token-cost-graph">
     <div v-if="loading" class="token-cost-graph-note">Loading pricing…</div>
@@ -97,6 +101,9 @@
             <span v-if="mu.priced" class="token-cost-legend-cost">{{
               formatUsd(mu.totalCost)
             }}</span>
+            <span v-else-if="mu.reportedUsd > 0" class="token-cost-legend-cost">
+              {{ formatUsd(mu.reportedUsd) }} reported
+            </span>
             <span v-else class="token-cost-legend-unit">no pricing</span>
           </div>
           <div v-for="t in rowsFor(mu)" :key="t.band.key" class="token-cost-legend-row">
@@ -109,21 +116,65 @@
             <span v-if="mu.priced" class="token-cost-legend-cost">{{ formatUsd(t.cost) }}</span>
           </div>
         </template>
+        <template v-if="otherBreakdown && otherBreakdown.perPurpose.length > 0">
+          <div class="token-cost-model-row">
+            <span class="token-cost-model-name">Other (indirect)</span>
+            <span v-if="otherBreakdown.totals.estimatedUsd > 0" class="token-cost-legend-cost">{{
+              formatUsd(otherBreakdown.totals.estimatedUsd)
+            }}</span>
+            <span
+              v-else-if="otherBreakdown.totals.reportedUsd > 0"
+              class="token-cost-legend-cost"
+            >
+              {{ formatUsd(otherBreakdown.totals.reportedUsd) }} reported
+            </span>
+            <span
+              v-else-if="otherBreakdown.totals.unpricedCalls === 0"
+              class="token-cost-legend-cost"
+              >{{ formatUsd(0) }}</span
+            >
+            <span v-else class="token-cost-legend-unit">no pricing</span>
+          </div>
+          <div
+            v-for="p in otherBreakdown.perPurpose"
+            :key="p.purpose"
+            class="token-cost-legend-row"
+          >
+            <span class="token-cost-legend-label">{{ p.purpose }}</span>
+            <span class="token-cost-legend-tokens"
+              >{{ p.llmCalls }} {{ p.llmCalls === 1 ? "call" : "calls" }}</span
+            >
+            <span class="token-cost-legend-tokens">{{ formatTokenCount(p.tokens) }}</span>
+            <span v-if="p.priced" class="token-cost-legend-cost">{{
+              formatUsd(p.estimatedUsd)
+            }}</span>
+            <span v-else-if="p.reportedUsd > 0" class="token-cost-legend-cost">
+              {{ formatUsd(p.reportedUsd) }} reported
+            </span>
+            <span v-else class="token-cost-legend-unit">no pricing</span>
+          </div>
+        </template>
       </div>
       <div class="token-cost-graph-note">
         <template v-if="fetchFailed && !stack.weighted">
           Pricing lookup failed — showing raw token counts.
         </template>
         <template v-else-if="stack.weighted">
-          ≈{{ formatUsd(stack.maxY) }} total<template v-if="subagentNote"
-            >, {{ subagentNote }}</template
-          >
+          ≈{{ formatUsd(stack.maxY) }} total<template v-if="otherNote">, {{ otherNote }}</template
+          ><template v-if="subagentNote">, {{ subagentNote }}</template>
           <template v-if="fetchFailed"> · pricing lookup failed for some models</template>
           <template v-if="stack.reportedCostUsd > 0">
             · provider-reported {{ formatUsd(stack.reportedCostUsd) }}
           </template>
         </template>
-        <template v-else>Raw token counts — no pricing known.</template>
+        <template v-else
+          >Raw token counts — no pricing known.<template v-if="stack.reportedCostUsd > 0">
+            Provider-reported {{ formatUsd(stack.reportedCostUsd) }}.</template
+          ></template
+        >
+      </div>
+      <div v-if="!stack.weighted && otherNote" class="token-cost-graph-note">
+        Other: {{ otherNote }}
       </div>
       <div v-if="!stack.weighted && subagentNote" class="token-cost-graph-note">
         Subagents: {{ subagentNote }}
@@ -142,6 +193,7 @@ import {
   type SubagentUsageDTO,
 } from "../../services/api";
 import {
+  buildOtherUsageBreakdown,
   buildTokenCostStack,
   callXLayout,
   formatDuration,
@@ -151,12 +203,18 @@ import {
   timeXLayout,
   yTicks,
   type ModelUsage,
+  type OtherUsageBreakdown,
+  type OtherUsageRow,
   type TokenCostStack,
   type UsageEntry,
   type XLayout,
 } from "../../utils/tokenCostGraph";
 
-const props = defineProps<{ entries: UsageEntry[]; conversationId?: string | null }>();
+const props = defineProps<{
+  entries: UsageEntry[];
+  otherUsageRows?: OtherUsageRow[];
+  conversationId?: string | null;
+}>();
 
 const W = 280;
 const H = 150;
@@ -169,10 +227,20 @@ const loading = ref(false);
 const fetchFailed = ref(false);
 const costs = ref<Record<string, ModelCostDTO | null>>({});
 
+// "Other" (indirect) LLM usage — compaction, LLM-backed tools, slug
+// generation, … — arrives pre-aggregated via the otherUsageRows prop. It has
+// no per-call timeline, so it stays out of the graph and only appears in the
+// breakdown and the note line; its models join the pricing batch below.
+
+// (model, url) pairs to price: the graph's entries plus other-usage models,
+// deduped by model name (first-seen URL wins).
 const distinctModels = computed(() => {
   const seen = new Map<string, string>();
   for (const e of props.entries) {
     if (e.model && !seen.has(e.model)) seen.set(e.model, e.url || "");
+  }
+  for (const row of props.otherUsageRows ?? []) {
+    if (row.model && !seen.has(row.model)) seen.set(row.model, row.url || "");
   }
   return seen;
 });
@@ -227,6 +295,26 @@ const subagentNote = computed(() => {
     return note;
   }
   return `plus ${sub.llm_calls} unpriced subagent calls`;
+});
+
+const otherBreakdown = computed<OtherUsageBreakdown | null>(() => {
+  const rows = props.otherUsageRows;
+  if (!rows || rows.length === 0) return null;
+  return buildOtherUsageBreakdown(rows, costs.value);
+});
+
+const otherNote = computed(() => {
+  const b = otherBreakdown.value;
+  if (!b || b.totals.llmCalls === 0) return "";
+  if (b.totals.estimatedUsd > 0) {
+    let note = `plus ≈${formatUsd(b.totals.estimatedUsd)} other`;
+    if (b.totals.unpricedCalls > 0) note += ` (${b.totals.unpricedCalls} calls unpriced)`;
+    return note;
+  }
+  if (b.totals.reportedUsd > 0) {
+    return `plus ${formatUsd(b.totals.reportedUsd)} other (reported)`;
+  }
+  return `plus ${b.totals.llmCalls} unpriced other calls`;
 });
 
 const plotW = W - PADL - PADR;

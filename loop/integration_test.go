@@ -11,7 +11,7 @@ import (
 func TestLoopWithClaudeTools(t *testing.T) {
 	var recordedMessages []llm.Message
 
-	recordFunc := func(ctx context.Context, message llm.Message, usage llm.Usage) error {
+	recordFunc := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 		recordedMessages = append(recordedMessages, message)
 		return nil
 	}
@@ -89,7 +89,7 @@ func TestLoopContextCancellation(t *testing.T) {
 		LLM:     service,
 		History: []llm.Message{},
 		Tools:   []*llm.Tool{},
-		RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage) error {
+		RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 			return nil
 		},
 	})
@@ -115,7 +115,7 @@ func TestLoopSystemMessages(t *testing.T) {
 		History: []llm.Message{},
 		Tools:   []*llm.Tool{},
 		System:  system,
-		RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage) error {
+		RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 			return nil
 		},
 	})

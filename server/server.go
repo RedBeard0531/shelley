@@ -35,13 +35,17 @@ import (
 // APIMessage is the message format sent to clients
 // TODO: We could maybe omit llm_data when display_data is available
 type APIMessage struct {
-	MessageID      string    `json:"message_id"`
-	ConversationID string    `json:"conversation_id"`
-	SequenceID     int64     `json:"sequence_id"`
-	Type           string    `json:"type"`
-	LlmData        *string   `json:"llm_data,omitempty"`
-	UserData       *string   `json:"user_data,omitempty"`
-	UsageData      *string   `json:"usage_data,omitempty"`
+	MessageID      string  `json:"message_id"`
+	ConversationID string  `json:"conversation_id"`
+	SequenceID     int64   `json:"sequence_id"`
+	Type           string  `json:"type"`
+	LlmData        *string `json:"llm_data,omitempty"`
+	UserData       *string `json:"user_data,omitempty"`
+	UsageData      *string `json:"usage_data,omitempty"`
+	// OtherUsageData is a JSON array of llm.PurposedUsage: usage from indirect
+	// LLM calls affiliated with this message (compaction summarization,
+	// LLM-backed tools, slug generation). Nil when none.
+	OtherUsageData *string   `json:"other_usage_data,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	DisplayData    *string   `json:"display_data,omitempty"`
 	Generation     int64     `json:"generation"`
@@ -173,6 +177,7 @@ func toAPIMessages(messages []generated.Message) []APIMessage {
 			LlmData:             llmData,
 			UserData:            msg.UserData,
 			UsageData:           msg.UsageData,
+			OtherUsageData:      msg.OtherUsageData,
 			CreatedAt:           msg.CreatedAt,
 			DisplayData:         msg.DisplayData,
 			Generation:          msg.Generation,
@@ -904,11 +909,11 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		}
 		s.mu.Unlock()
 
-		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage) error {
-			return s.recordMessage(ctx, conversationID, message, usage)
+		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+			return s.recordMessage(ctx, conversationID, message, usage, otherUsage)
 		}
-		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage) error {
-			return s.recordTurnStartMessage(ctx, conversationID, message, usage)
+		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
 		}
 
 		onStateChange := func(state ConversationState) {
@@ -954,11 +959,11 @@ func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, con
 		}
 		s.mu.Unlock()
 
-		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage) error {
-			return s.recordMessage(ctx, conversationID, message, usage)
+		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+			return s.recordMessage(ctx, conversationID, message, usage, otherUsage)
 		}
-		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage) error {
-			return s.recordTurnStartMessage(ctx, conversationID, message, usage)
+		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
 		}
 
 		onStateChange := func(state ConversationState) {
@@ -1031,7 +1036,7 @@ func ExtractDisplayData(message llm.Message) interface{} {
 // applying the same message-type detection, display-data extraction, error
 // user_data stamping, and end-of-turn agent-done folding that recordMessage
 // uses. Shared by recordMessage and recordMessages.
-func (s *Server) buildCreateMessageParams(conversationID string, message llm.Message, usage llm.Usage, userData ...interface{}) (db.CreateMessageParams, error) {
+func (s *Server) buildCreateMessageParams(conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage, userData ...interface{}) (db.CreateMessageParams, error) {
 	// Log message based on role
 	if message.Role == llm.MessageRoleUser {
 		s.logger.Info("User message", "conversation_id", conversationID, "content_items", len(message.Content))
@@ -1075,7 +1080,7 @@ func (s *Server) buildCreateMessageParams(conversationID string, message llm.Mes
 	// visible" flake. Mirror of AcceptUserMessage's SetAgentWorking(true)-
 	// before-recordMessage ordering on the Send side.
 	markAgentDone := (messageType == db.MessageTypeAgent || messageType == db.MessageTypeError) && message.EndOfTurn
-	return db.CreateMessageParams{
+	params := db.CreateMessageParams{
 		ConversationID:      conversationID,
 		Type:                messageType,
 		LLMData:             message,
@@ -1086,11 +1091,15 @@ func (s *Server) buildCreateMessageParams(conversationID string, message llm.Mes
 		DisplayData:         ExtractDisplayData(message),
 		ExcludedFromContext: message.ExcludedFromContext,
 		MarkAgentDone:       markAgentDone,
-	}, nil
+	}
+	if len(otherUsage) > 0 {
+		params.OtherUsageData = otherUsage
+	}
+	return params, nil
 }
 
-func (s *Server) recordMessage(ctx context.Context, conversationID string, message llm.Message, usage llm.Usage, userData ...interface{}) error {
-	params, err := s.buildCreateMessageParams(conversationID, message, usage, userData...)
+func (s *Server) recordMessage(ctx context.Context, conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage, userData ...interface{}) error {
+	params, err := s.buildCreateMessageParams(conversationID, message, usage, otherUsage, userData...)
 	if err != nil {
 		return err
 	}
@@ -1146,7 +1155,7 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 // background context, so it can't be read from the request here); it is
 // stamped onto the new row. Empty when the queuing request carried no header.
 func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID, queuedID string, message llm.Message, userEmail string) error {
-	params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{})
+	params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil)
 	if err != nil {
 		return err
 	}
@@ -1196,8 +1205,8 @@ func userEmailFromContext(ctx context.Context) string {
 // AND working=true, so the conversation-list patch can't briefly snapshot a
 // stale working=false row (the flicker the old ordering guarded against), and
 // we drop two commits (the working flip and the timestamp bump) per turn.
-func (s *Server) recordTurnStartMessage(ctx context.Context, conversationID string, message llm.Message, usage llm.Usage) error {
-	params, err := s.buildCreateMessageParams(conversationID, message, usage)
+func (s *Server) recordTurnStartMessage(ctx context.Context, conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+	params, err := s.buildCreateMessageParams(conversationID, message, usage, otherUsage)
 	if err != nil {
 		return err
 	}
@@ -1236,7 +1245,7 @@ func (s *Server) recordMessages(ctx context.Context, conversationID string, msgs
 	}
 	paramsList := make([]db.CreateMessageParams, 0, len(msgs))
 	for _, m := range msgs {
-		params, err := s.buildCreateMessageParams(conversationID, m.message, m.usage, m.userData...)
+		params, err := s.buildCreateMessageParams(conversationID, m.message, m.usage, m.otherUsage, m.userData...)
 		if err != nil {
 			return err
 		}
@@ -1276,9 +1285,10 @@ func (s *Server) recordMessages(ctx context.Context, conversationID string, msgs
 
 // recordMessageInput is one message to record via recordMessages.
 type recordMessageInput struct {
-	message  llm.Message
-	usage    llm.Usage
-	userData []interface{}
+	message    llm.Message
+	usage      llm.Usage
+	otherUsage []llm.PurposedUsage
+	userData   []interface{}
 }
 
 // getMessageType determines the message type from an LLM message

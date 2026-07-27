@@ -1,10 +1,13 @@
 import {
+  aggregateOtherUsage,
+  buildOtherUsageBreakdown,
   buildTokenCostStack,
   callXLayout,
   formatDuration,
   formatTokenCount,
   formatUsd,
   generationStarts,
+  OtherUsageRow,
   segmentColor,
   timeXLayout,
   TOKEN_BANDS,
@@ -99,12 +102,82 @@ function entry(partial: Partial<UsageEntry>): UsageEntry {
   );
 }
 
-// Reported cost accumulates.
+// Other-usage aggregation: raw parsed entries → per-(purpose, model, url) rows.
+{
+  const rows = aggregateOtherUsage([
+    { purpose: "compaction", model: "opus", input_tokens: 100, output_tokens: 50, cost_usd: 0.01 },
+    { purpose: "compaction", model: "opus", input_tokens: 30, cache_read_input_tokens: 7 },
+    { purpose: "compaction", model: "haiku", input_tokens: 1 },
+    { purpose: "slug", model: "opus", url: "https://x", output_tokens: 5, cost_usd: 0.02 },
+  ]);
+  assert(rows.length === 3, "otherAgg: grouped by (purpose, model, url)");
+  const comp = rows[0];
+  assert(comp.purpose === "compaction" && comp.model === "opus", "otherAgg: first-seen order");
+  assert(comp.llm_calls === 2, "otherAgg: llm_calls counts entries");
+  assert(comp.input_tokens === 130, "otherAgg: input tokens summed");
+  assert(comp.cache_read_input_tokens === 7, "otherAgg: missing fields treated as 0");
+  assert(comp.output_tokens === 50, "otherAgg: output tokens summed");
+  assert(approx(comp.cost_usd, 0.01), "otherAgg: reported cost summed");
+  assert(rows[1].model === "haiku" && rows[1].llm_calls === 1, "otherAgg: model splits rows");
+  assert(rows[2].purpose === "slug" && rows[2].url === "https://x", "otherAgg: url preserved");
+  assert(aggregateOtherUsage([]).length === 0, "otherAgg: empty input");
+}
+
+// Other-usage breakdown: per-purpose aggregation with estimated cost.
+{
+  const row = (partial: Partial<OtherUsageRow>): OtherUsageRow => ({
+    purpose: "compaction",
+    model: "claude-opus-4-6",
+    llm_calls: 1,
+    input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+    output_tokens: 0,
+    cost_usd: 0,
+    ...partial,
+  });
+
+  const b = buildOtherUsageBreakdown(
+    [
+      row({ purpose: "compaction", llm_calls: 2, input_tokens: 1_000_000, output_tokens: 100_000 }),
+      row({ purpose: "slug", llm_calls: 3, cache_read_input_tokens: 2_000_000, cost_usd: 0.25 }),
+      // Second model for the same purpose merges into one per-purpose row.
+      row({ purpose: "slug", model: "mystery", llm_calls: 4, input_tokens: 500, cost_usd: 0.1 }),
+    ],
+    { "claude-opus-4-6": opusCost, mystery: null },
+  );
+  assert(b.perPurpose.length === 2, "other: purposes merged across models");
+  const compaction = b.perPurpose[0];
+  assert(compaction.purpose === "compaction", "other: first-seen purpose order");
+  assert(compaction.llmCalls === 2, "other: compaction calls");
+  assert(compaction.tokens === 1_100_000, "other: compaction tokens across bands");
+  // input $5 + output $2.5
+  assert(approx(compaction.estimatedUsd, 7.5), "other: compaction estimate");
+  assert(compaction.priced, "other: compaction fully priced");
+  const slug = b.perPurpose[1];
+  assert(slug.llmCalls === 7, "other: slug calls sum across models");
+  assert(slug.tokens === 2_000_500, "other: slug tokens sum across models");
+  // Only the priced model contributes: cacheRead $1.
+  assert(approx(slug.estimatedUsd, 1), "other: unpriced model adds $0");
+  assert(!slug.priced, "other: purpose with an unpriced model flagged");
+  assert(approx(slug.reportedUsd, 0.35), "other: per-purpose reported cost sums");
+  assert(compaction.reportedUsd === 0, "other: compaction has no reported cost");
+  assert(approx(b.totals.estimatedUsd, 8.5), "other: total estimate");
+  assert(approx(b.totals.reportedUsd, 0.35), "other: reported cost sums");
+  assert(b.totals.llmCalls === 9, "other: total calls");
+  assert(b.totals.unpricedCalls === 4, "other: unpriced calls counted");
+
+  const empty = buildOtherUsageBreakdown([], {});
+  assert(empty.perPurpose.length === 0 && empty.totals.llmCalls === 0, "other: empty rows");
+}
+
+// Reported cost accumulates, both overall and per model.
 {
   const s = buildTokenCostStack([entry({ cost_usd: 0.5 }), entry({ cost_usd: 0.25 })], {
     "claude-opus-4-6": opusCost,
   });
   assert(approx(s.reportedCostUsd, 0.75), "reported cost sums");
+  assert(approx(s.perModel[0].reportedUsd, 0.75), "per-model reported cost sums");
 }
 
 // Empty input.

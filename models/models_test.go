@@ -13,6 +13,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/loop"
 )
 
@@ -191,6 +192,72 @@ func TestLoggingService(t *testing.T) {
 	if loggingSvc.MaxImageDimension() != mockService.MaxImageDimension() {
 		t.Errorf("MaxImageDimension mismatch")
 	}
+}
+
+func TestLoggingServiceUsageCollector(t *testing.T) {
+	type collected struct {
+		purpose string
+		usage   llm.Usage
+	}
+	var got []collected
+	svc := &loggingService{
+		service: &mockLLMService{},
+		logger:  slog.Default(),
+		modelID: "test-model",
+	}
+	req := &llm.Request{Messages: []llm.Message{llm.UserStringMessage("hi")}}
+	ctxWithCollector := llmhttp.WithUsageCollector(context.Background(), func(purpose string, usage llm.Usage) {
+		got = append(got, collected{purpose, usage})
+	})
+
+	// No purpose tag: nothing collected even with a collector.
+	if _, err := svc.Do(ctxWithCollector, req); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("collected %d calls without purpose, want 0", len(got))
+	}
+
+	// Purpose tag: collected, model falls back to modelID (mock leaves Model empty).
+	ctx := llmhttp.WithPurpose(ctxWithCollector, "keyword_search")
+	if _, err := svc.Do(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("collected %d calls, want 1", len(got))
+	}
+	r := got[0]
+	if r.purpose != "keyword_search" || r.usage.Model != "test-model" {
+		t.Errorf("collected purpose=%q model=%q, want keyword_search/test-model", r.purpose, r.usage.Model)
+	}
+	if r.usage.InputTokens != 10 || r.usage.OutputTokens != 5 || r.usage.CostUSD != 0.001 {
+		t.Errorf("collected usage = %+v", r.usage)
+	}
+
+	// Zero usage: not collected even with a purpose tag.
+	svc.service = &zeroUsageLLMService{}
+	if _, err := svc.Do(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("zero-usage response was collected (%d calls)", len(got))
+	}
+
+	// Purpose tag but no collector in ctx: no panic, nothing collected.
+	svc.service = &mockLLMService{}
+	if _, err := svc.Do(llmhttp.WithPurpose(context.Background(), "keyword_search"), req); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("collector-less call was collected (%d calls)", len(got))
+	}
+}
+
+// zeroUsageLLMService responds with no usage data.
+type zeroUsageLLMService struct{ mockLLMService }
+
+func (z *zeroUsageLLMService) Do(ctx context.Context, request *llm.Request) (*llm.Response, error) {
+	return &llm.Response{Content: llm.TextContent("ok")}, nil
 }
 
 // mockLLMService implements llm.Service for testing.

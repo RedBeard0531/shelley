@@ -1098,6 +1098,11 @@ type CreateMessageParams struct {
 	UserEmail           string
 	DisplayData         interface{} // Will be JSON marshalled, tool-specific display content
 	ExcludedFromContext bool        // If true, message is stored but not sent to LLM
+	// OtherUsageData is the usage of indirect LLM calls affiliated with this
+	// message (compaction summarization for a summary message, LLM-backed
+	// tools for a tool-result message), as []llm.PurposedUsage. Marshalled to
+	// a JSON array; NULL when empty.
+	OtherUsageData interface{}
 	// MarkAgentDone, when true, also writes conversations.agent_working=false
 	// inside the same Tx as the message INSERT. The list-patch stream's
 	// OnCommit hook then fires exactly one patch carrying both the new
@@ -1135,42 +1140,36 @@ func nullableString(s string) *string {
 	return &s
 }
 
-// marshalMessageJSON marshals the four JSON columns of a message into the
+// marshalMessageJSON marshals the JSON columns of a message into the
 // nullable strings the generated query expects.
-func marshalMessageJSON(params CreateMessageParams) (llmDataJSON, userDataJSON, usageDataJSON, displayDataJSON *string, err error) {
-	if params.LLMData != nil {
-		data, merr := json.Marshal(params.LLMData)
+func marshalMessageJSON(params CreateMessageParams) (llmDataJSON, userDataJSON, usageDataJSON, displayDataJSON, otherUsageDataJSON *string, err error) {
+	marshal := func(v interface{}, what string) (*string, error) {
+		if v == nil {
+			return nil, nil
+		}
+		data, merr := json.Marshal(v)
 		if merr != nil {
-			return nil, nil, nil, nil, fmt.Errorf("failed to marshal LLM data: %w", merr)
+			return nil, fmt.Errorf("failed to marshal %s: %w", what, merr)
 		}
 		str := string(data)
-		llmDataJSON = &str
+		return &str, nil
 	}
-	if params.UserData != nil {
-		data, merr := json.Marshal(params.UserData)
-		if merr != nil {
-			return nil, nil, nil, nil, fmt.Errorf("failed to marshal user data: %w", merr)
-		}
-		str := string(data)
-		userDataJSON = &str
+	if llmDataJSON, err = marshal(params.LLMData, "LLM data"); err != nil {
+		return nil, nil, nil, nil, nil, err
 	}
-	if params.UsageData != nil {
-		data, merr := json.Marshal(params.UsageData)
-		if merr != nil {
-			return nil, nil, nil, nil, fmt.Errorf("failed to marshal usage data: %w", merr)
-		}
-		str := string(data)
-		usageDataJSON = &str
+	if userDataJSON, err = marshal(params.UserData, "user data"); err != nil {
+		return nil, nil, nil, nil, nil, err
 	}
-	if params.DisplayData != nil {
-		data, merr := json.Marshal(params.DisplayData)
-		if merr != nil {
-			return nil, nil, nil, nil, fmt.Errorf("failed to marshal display data: %w", merr)
-		}
-		str := string(data)
-		displayDataJSON = &str
+	if usageDataJSON, err = marshal(params.UsageData, "usage data"); err != nil {
+		return nil, nil, nil, nil, nil, err
 	}
-	return llmDataJSON, userDataJSON, usageDataJSON, displayDataJSON, nil
+	if displayDataJSON, err = marshal(params.DisplayData, "display data"); err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	if otherUsageDataJSON, err = marshal(params.OtherUsageData, "other usage data"); err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	return llmDataJSON, userDataJSON, usageDataJSON, displayDataJSON, otherUsageDataJSON, nil
 }
 
 // insertMessageTx inserts one message within an open Tx, allocating its
@@ -1180,7 +1179,7 @@ func insertMessageTx(ctx context.Context, q *generated.Queries, params CreateMes
 	if params.MarkAgentDone && params.MarkAgentStart {
 		return generated.Message{}, fmt.Errorf("insertMessageTx: MarkAgentDone and MarkAgentStart are mutually exclusive")
 	}
-	llmDataJSON, userDataJSON, usageDataJSON, displayDataJSON, err := marshalMessageJSON(params)
+	llmDataJSON, userDataJSON, usageDataJSON, displayDataJSON, otherUsageDataJSON, err := marshalMessageJSON(params)
 	if err != nil {
 		return generated.Message{}, err
 	}
@@ -1206,6 +1205,7 @@ func insertMessageTx(ctx context.Context, q *generated.Queries, params CreateMes
 		LlmApiUrl:           nullableString(params.LLMAPIURL),
 		ModelName:           nullableString(params.ModelName),
 		UserEmail:           nullableString(params.UserEmail),
+		OtherUsageData:      otherUsageDataJSON,
 	})
 	if err != nil {
 		return generated.Message{}, err
@@ -1685,6 +1685,36 @@ func (db *DB) GetSubagentUsage(ctx context.Context, parentID string) ([]generate
 		return err
 	})
 	return rows, err
+}
+
+// GetSubagentOtherUsage aggregates indirect LLM usage (other_usage_data
+// entries) across all descendant conversations of parentID (recursively),
+// grouped by model.
+func (db *DB) GetSubagentOtherUsage(ctx context.Context, parentID string) ([]generated.GetSubagentOtherUsageRow, error) {
+	var rows []generated.GetSubagentOtherUsageRow
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		q := generated.New(rx.Conn())
+		var err error
+		rows, err = q.GetSubagentOtherUsage(ctx, &parentID)
+		return err
+	})
+	return rows, err
+}
+
+// SetFirstUserMessageOtherUsage attaches indirect-LLM-call usage (e.g. slug
+// generation) to a conversation's first user message. Returns the number of
+// rows updated (0 when the conversation has no user message yet).
+func (db *DB) SetFirstUserMessageOtherUsage(ctx context.Context, conversationID, otherUsageJSON string) (int64, error) {
+	var n int64
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		var err error
+		n, err = generated.New(tx.Conn()).SetFirstUserMessageOtherUsage(ctx, generated.SetFirstUserMessageOtherUsageParams{
+			OtherUsageData: &otherUsageJSON,
+			ConversationID: conversationID,
+		})
+		return err
+	})
+	return n, err
 }
 
 // GetSubagentCounts returns a map of parent_conversation_id -> subagent count.

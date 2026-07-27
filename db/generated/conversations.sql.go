@@ -377,6 +377,78 @@ func (q *Queries) GetSubagentCounts(ctx context.Context) ([]GetSubagentCountsRow
 	return items, nil
 }
 
+const getSubagentOtherUsage = `-- name: GetSubagentOtherUsage :many
+WITH RECURSIVE descendants(conversation_id) AS (
+  SELECT p.conversation_id FROM conversations p WHERE p.parent_conversation_id = ?
+  UNION ALL
+  SELECT c.conversation_id FROM conversations c
+  JOIN descendants d ON c.parent_conversation_id = d.conversation_id
+)
+SELECT
+  CAST(COALESCE(je.value ->> 'model', '') AS TEXT) AS model_name,
+  CAST(COALESCE(je.value ->> 'url', '') AS TEXT) AS llm_api_url,
+  COUNT(*) AS llm_calls,
+  CAST(COALESCE(SUM(je.value ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cost_usd'), 0) AS REAL) AS cost_usd
+FROM messages m
+JOIN descendants d ON m.conversation_id = d.conversation_id,
+  json_each(m.other_usage_data) je
+WHERE m.other_usage_data IS NOT NULL
+GROUP BY je.value ->> 'model', je.value ->> 'url'
+`
+
+type GetSubagentOtherUsageRow struct {
+	ModelName                string  `json:"model_name"`
+	LlmApiUrl                string  `json:"llm_api_url"`
+	LlmCalls                 int64   `json:"llm_calls"`
+	InputTokens              int64   `json:"input_tokens"`
+	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64   `json:"cache_read_input_tokens"`
+	OutputTokens             int64   `json:"output_tokens"`
+	CostUsd                  float64 `json:"cost_usd"`
+}
+
+// Aggregate indirect LLM usage (messages.other_usage_data entries) across all
+// descendant conversations (subagents, recursively), grouped by model.
+// Folded into handleSubagentUsage's totals alongside GetSubagentUsage; the
+// parent's own indirect usage rides on its own messages instead.
+// Group by the JSON expressions, not the aliases: bare model_name/llm_api_url
+// would resolve to the messages table's own columns (NULL here).
+func (q *Queries) GetSubagentOtherUsage(ctx context.Context, parentConversationID *string) ([]GetSubagentOtherUsageRow, error) {
+	rows, err := q.db.QueryContext(ctx, getSubagentOtherUsage, parentConversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetSubagentOtherUsageRow{}
+	for rows.Next() {
+		var i GetSubagentOtherUsageRow
+		if err := rows.Scan(
+			&i.ModelName,
+			&i.LlmApiUrl,
+			&i.LlmCalls,
+			&i.InputTokens,
+			&i.CacheCreationInputTokens,
+			&i.CacheReadInputTokens,
+			&i.OutputTokens,
+			&i.CostUsd,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getSubagentUsage = `-- name: GetSubagentUsage :many
 WITH RECURSIVE descendants(conversation_id) AS (
   SELECT p.conversation_id FROM conversations p WHERE p.parent_conversation_id = ?

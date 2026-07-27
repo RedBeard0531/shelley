@@ -87,6 +87,7 @@ type apiMessageForTS struct {
 	LlmData        *string   `json:"llm_data,omitempty"`
 	UserData       *string   `json:"user_data,omitempty"`
 	UsageData      *string   `json:"usage_data,omitempty"`
+	OtherUsageData *string   `json:"other_usage_data,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	DisplayData    *string   `json:"display_data,omitempty"`
 	Generation     int64     `json:"generation"`

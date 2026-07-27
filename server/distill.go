@@ -26,7 +26,7 @@ func (s *Server) insertDistillError(ctx context.Context, conversationID, errMsg 
 			{Type: llm.ContentTypeText, Text: errMsg},
 		},
 	}
-	if err := s.recordMessage(ctx, conversationID, errorMessage, llm.Usage{}); err != nil {
+	if err := s.recordMessage(ctx, conversationID, errorMessage, llm.Usage{}, nil); err != nil {
 		s.logger.Error("Failed to record distill error message", "conversationID", conversationID, "error", err)
 	}
 }
@@ -82,7 +82,7 @@ func (s *Server) insertDistillStatus(ctx context.Context, conversationID, status
 	if !ok {
 		return
 	}
-	if err := s.recordMessage(ctx, conversationID, message, llm.Usage{}, userData); err != nil {
+	if err := s.recordMessage(ctx, conversationID, message, llm.Usage{}, nil, userData); err != nil {
 		s.logger.Error("Failed to insert distill status", "conversationID", conversationID, "error", err)
 	}
 }

@@ -709,7 +709,7 @@ func (cm *ConversationManager) AcceptUserMessage(ctx context.Context, service ll
 	// flip + broadcast without its own DB write.
 	if recordTurnStart != nil {
 		cm.syncAgentWorking(true)
-		if err := recordTurnStart(ctx, message, llm.Usage{}); err != nil {
+		if err := recordTurnStart(ctx, message, llm.Usage{}, nil); err != nil {
 			cm.logger.Error("failed to record user message immediately", "error", err)
 			// Continue anyway - the loop will also try to record it.
 		}
@@ -722,7 +722,7 @@ func (cm *ConversationManager) AcceptUserMessage(ctx context.Context, service ll
 		// getOrCreate*ConversationManager always wire a non-nil recordTurnStart.
 		cm.SetAgentWorking(true)
 		if recordMessage != nil {
-			if err := recordMessage(ctx, message, llm.Usage{}); err != nil {
+			if err := recordMessage(ctx, message, llm.Usage{}, nil); err != nil {
 				cm.logger.Error("failed to record user message immediately", "error", err)
 			}
 		}
@@ -1833,7 +1833,7 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 			},
 		}
 
-		if err := cm.recordMessage(ctx, cancelledMessage, llm.Usage{}); err != nil {
+		if err := cm.recordMessage(ctx, cancelledMessage, llm.Usage{}, nil); err != nil {
 			cm.logger.Error("Failed to record cancelled tool result", "error", err)
 			return fmt.Errorf("failed to record cancelled tool result: %w", err)
 		}
@@ -1874,7 +1874,7 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 		EndOfTurn: true,
 	}
 
-	if err := cm.recordMessage(ctx, endTurnMessage, llm.Usage{}); err != nil {
+	if err := cm.recordMessage(ctx, endTurnMessage, llm.Usage{}, nil); err != nil {
 		cm.logger.Error("Failed to record end turn message", "error", err)
 		return fmt.Errorf("failed to record end turn message: %w", err)
 	}

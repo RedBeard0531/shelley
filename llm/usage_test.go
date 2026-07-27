@@ -1,6 +1,9 @@
 package llm
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestUsageTotalInputTokens(t *testing.T) {
 	tests := []struct {
@@ -96,5 +99,34 @@ func TestUsageContextWindowUsed(t *testing.T) {
 				t.Errorf("ContextWindowUsed() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPurposedUsageJSONInlinesUsageFields(t *testing.T) {
+	data, err := json.Marshal(PurposedUsage{
+		Purpose: "compaction",
+		Usage:   Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.01, Model: "m", URL: "u"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	// The embedded Usage's fields must be inlined, not nested under "Usage".
+	if m["purpose"] != "compaction" || m["input_tokens"] != float64(100) || m["model"] != "m" || m["url"] != "u" {
+		t.Errorf("unexpected JSON shape: %s", data)
+	}
+	if _, nested := m["Usage"]; nested {
+		t.Errorf("Usage fields nested instead of inlined: %s", data)
+	}
+
+	var back PurposedUsage
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Purpose != "compaction" || back.InputTokens != 100 || back.CostUSD != 0.01 {
+		t.Errorf("round-trip = %+v", back)
 	}
 }

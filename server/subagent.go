@@ -14,6 +14,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/llmhttp"
 )
 
 // SubagentRunner implements claudetool.SubagentRunner.
@@ -310,6 +311,13 @@ func (r *SubagentRunner) getLastAssistantResponse(ctx context.Context, conversat
 // This is called when the timeout is reached and the subagent is still working.
 func (r *SubagentRunner) generateProgressSummary(ctx context.Context, conversationID, modelID string, llmService llm.Service) (string, error) {
 	s := r.server
+
+	// Tag the purpose so the summary call's usage is collected by the parent
+	// loop's tool-call collector (this runs inside the subagent tool's Run) and
+	// lands on the parent's tool-result message. WithConversationID re-tags the
+	// request with the subagent's ID for gateway logging and cache affinity
+	// (the incoming ctx carries the parent's ID).
+	ctx = llmhttp.WithConversationID(llmhttp.WithPurpose(ctx, "subagent_progress"), conversationID)
 
 	// Get the conversation messages
 	var messages []generated.Message

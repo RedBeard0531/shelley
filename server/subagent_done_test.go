@@ -69,7 +69,7 @@ func newSubagentDoneFixture(t *testing.T, subResponse string) *subagentDoneFixtu
 		Content:   []llm.Content{{Type: llm.ContentTypeText, Text: subResponse}},
 		EndOfTurn: true,
 	}
-	if err := server.recordMessage(ctx, subConv.ConversationID, assistantMsg, llm.Usage{}); err != nil {
+	if err := server.recordMessage(ctx, subConv.ConversationID, assistantMsg, llm.Usage{}, nil); err != nil {
 		t.Fatalf("record subagent assistant: %v", err)
 	}
 
@@ -402,7 +402,7 @@ func testSubagentDone_SuppressedDespiteSlugRename(t *testing.T) {
 			ToolName:  "subagent",
 			ToolInput: pendingInput,
 		}},
-	}, llm.Usage{}); err != nil {
+	}, llm.Usage{}, nil); err != nil {
 		t.Fatalf("record pending tool_use: %v", err)
 	}
 
@@ -860,7 +860,7 @@ func testSubagentDone_ConcurrentFinishes(t *testing.T) {
 		Role:      llm.MessageRoleAssistant,
 		Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "beta done"}},
 		EndOfTurn: true,
-	}, llm.Usage{}); err != nil {
+	}, llm.Usage{}, nil); err != nil {
 		t.Fatalf("record subagent 2 assistant: %v", err)
 	}
 
@@ -1001,7 +1001,7 @@ func testSubagentDone_LastMessageIsToolUse(t *testing.T) {
 			ToolInput: []byte(`{"command":"echo hi"}`),
 		}},
 	}
-	if err := f.server.recordMessage(context.Background(), f.subagentID, toolUseOnly, llm.Usage{}); err != nil {
+	if err := f.server.recordMessage(context.Background(), f.subagentID, toolUseOnly, llm.Usage{}, nil); err != nil {
 		t.Fatalf("record tool_use-only message: %v", err)
 	}
 

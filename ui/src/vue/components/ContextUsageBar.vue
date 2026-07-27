@@ -20,6 +20,7 @@
       <TokenCostGraph
         v-if="tokenGraphEnabled"
         :entries="usageEntries || []"
+        :other-usage-rows="otherUsageRows || []"
         :conversation-id="conversationId"
       />
       <div v-if="showLongConversationWarning" class="chat-popup-warning">
@@ -74,7 +75,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import Popover from "primevue/popover";
-import type { UsageEntry } from "../../utils/tokenCostGraph";
+import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
 import { useFeatureFlag } from "../composables/featureFlags";
 import TokenCostGraph from "./TokenCostGraph.vue";
 
@@ -84,6 +85,7 @@ const props = defineProps<{
   conversationId?: string | null;
   modelName?: string;
   usageEntries?: UsageEntry[];
+  otherUsageRows?: OtherUsageRow[];
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration?: () => Promise<void> | void;
   agentWorking?: boolean;

@@ -39,7 +39,7 @@ func TestInterruptionDuringToolExecution(t *testing.T) {
 		},
 	}
 
-	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage) error {
+	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 		return nil
 	}
 
@@ -175,7 +175,7 @@ func TestInterruptionDuringMultiToolChain(t *testing.T) {
 		},
 	}
 
-	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage) error {
+	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 		return nil
 	}
 
@@ -369,7 +369,7 @@ func TestNoInterruptionNormalFlow(t *testing.T) {
 		},
 	}
 
-	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage) error {
+	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 		return nil
 	}
 

@@ -403,7 +403,12 @@ import { isAutoExpandTool } from "../../utils/toolMeta";
 import { formatDay } from "../../utils/messageTime";
 import { SLASH_COMMANDS } from "../../utils/slashCommands";
 import { perfCount, perfWrap } from "../../utils/perf";
-import type { UsageEntry } from "../../utils/tokenCostGraph";
+import {
+  aggregateOtherUsage,
+  type OtherUsageEntry,
+  type OtherUsageRow,
+  type UsageEntry,
+} from "../../utils/tokenCostGraph";
 import { coalesceMessages, type CoalescedItem } from "./coalesce";
 import type { RenderNode, RenderChunk, GenerationBlock } from "./renderNode";
 import type { EphemeralTerminal } from "./terminalTypes";
@@ -929,9 +934,16 @@ function isHumanUserMessage(m: Message): boolean {
 // cost, not just the live context window. All-zero records (e.g. error
 // placeholders) are skipped. Empty while the flag is off so the default path
 // doesn't JSON.parse usage for every message on each stream update.
-const usageEntries = computed<UsageEntry[]>(() => {
-  if (!tokenCostGraphEnabled.value) return [];
+//
+// The same single walk also collects "other" (indirect) LLM usage —
+// compaction summarization, LLM-backed tools, slug generation, … — from any
+// message (any type) carrying other_usage_data, aggregated into per-
+// (purpose, model, url) rows. Inclusion semantics are identical to
+// usage_data: forked copies carry both fields and both are counted.
+const usageData = computed<{ entries: UsageEntry[]; otherRows: OtherUsageRow[] }>(() => {
+  if (!tokenCostGraphEnabled.value) return { entries: [], otherRows: [] };
   const out: UsageEntry[] = [];
+  const otherEntries: OtherUsageEntry[] = [];
   // A turn starts at the first call, after a human user message, or after an
   // agent message that declared end_of_turn. Tool results also arrive as
   // "user" messages; those don't start turns.
@@ -940,6 +952,14 @@ const usageEntries = computed<UsageEntry[]>(() => {
   // first call's duration (created_at only marks call completion).
   let turnStartTs = 0;
   for (const m of messages.value) {
+    if (m.other_usage_data) {
+      try {
+        const parsed = JSON.parse(m.other_usage_data);
+        if (Array.isArray(parsed)) otherEntries.push(...parsed);
+      } catch {
+        /* ignore malformed other usage */
+      }
+    }
     if (isHumanUserMessage(m)) {
       nextStartsTurn = true;
       turnStartTs = Date.parse(m.created_at) || 0;
@@ -981,8 +1001,10 @@ const usageEntries = computed<UsageEntry[]>(() => {
       turnStartTs = 0;
     }
   }
-  return out;
+  return { entries: out, otherRows: aggregateOtherUsage(otherEntries) };
 });
+const usageEntries = computed<UsageEntry[]>(() => usageData.value.entries);
+const otherUsageRows = computed<OtherUsageRow[]>(() => usageData.value.otherRows);
 
 watch(
   selectedModelInfo,
@@ -2075,6 +2097,7 @@ const statusContentProps = computed(() => {
     contextWindowSize: contextWindowSize.value,
     maxContextTokens: maxContextTokens.value,
     usageEntries: usageEntries.value,
+    otherUsageRows: otherUsageRows.value,
     selectedModelDisplayName: selectedModelDisplayName.value,
     hostname,
     models: models.value,

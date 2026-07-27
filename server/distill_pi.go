@@ -13,6 +13,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/llmhttp"
 )
 
 // This file implements a second distillation strategy modeled on the
@@ -501,6 +502,14 @@ func (s *Server) rollbackCompactionFailure(ctx context.Context, logger *slog.Log
 func (s *Server) performPiDistillation(ctx context.Context, conversationID, sourceSlug, modelID, instructions string, sourceGeneration int64, messages []generated.Message) string {
 	logger := s.logger.With("conversationID", conversationID, "sourceSlug", sourceSlug, "method", "compact")
 
+	// Tag the ctx so the summarization calls' usage is collected (and so the
+	// gateway request logs carry the conversation ID; the HTTP request ctx
+	// this derives from carries neither). The collected entries are attached
+	// to the summary message below.
+	var otherUsage llmhttp.UsageAccumulator
+	ctx = llmhttp.WithUsageCollector(ctx, otherUsage.Collect)
+	ctx = llmhttp.WithConversationID(llmhttp.WithPurpose(ctx, "compaction"), conversationID)
+
 	svc, err := s.llmManager.GetService(modelID)
 	if err != nil {
 		logger.Error("Failed to get LLM service for pi distillation", "model", modelID, "error", err)
@@ -619,11 +628,16 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 			"distillation_content": wrapped,
 			"distill_method":       distillMethodCompact,
 		}
-		batch = append(batch, recordMessageInput{message: summaryMessage, userData: []interface{}{userData}})
+		// Attach the summarization calls' usage (primary + fallback) to the
+		// summary message so compaction cost is visible in cost reporting.
+		batch = append(batch, recordMessageInput{message: summaryMessage, otherUsage: otherUsage.Take(), userData: []interface{}{userData}})
 	}
 
 	// Copy recent messages verbatim into the new generation so the agent keeps
-	// exact recent tool calls and results. Preserve each message's user_data so
+	// exact recent tool calls and results. The copies are re-recorded with ZERO
+	// usage (usage_data all zeros) and NULL other_usage_data: the original rows
+	// in the previous generation keep the real numbers, so the cost was already
+	// counted once. Preserve each message's user_data so
 	// a previously-distilled message in the kept tail keeps its distilled=true
 	// marker — otherwise applyDistillationContentOverride would never fire and
 	// its real summary text would be lost. Stamp compaction_carried=true on every

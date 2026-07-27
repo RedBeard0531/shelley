@@ -26,7 +26,10 @@ import (
 const maxTurnDuration = 15 * time.Minute
 
 // MessageRecordFunc is called to record new messages to persistent storage.
-type MessageRecordFunc func(ctx context.Context, message llm.Message, usage llm.Usage) error
+// otherUsage carries the usage of indirect LLM calls affiliated with the
+// message (e.g. LLM-backed tools for a tool-result message); nil for most
+// messages.
+type MessageRecordFunc func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error
 
 // WarningRecordFunc is called to record user-visible warnings that are not sent to the LLM.
 type WarningRecordFunc func(ctx context.Context, text string) error
@@ -420,7 +423,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 				ErrorType:      llm.ErrorTypeLLMRequest,
 				ErrorRetryable: IsRetryableLLMError(err),
 			}
-			if recordErr := l.recordMessage(ctx, errorMessage, llm.Usage{}); recordErr != nil {
+			if recordErr := l.recordMessage(ctx, errorMessage, llm.Usage{}, nil); recordErr != nil {
 				l.logger.Error("failed to record error message", "error", recordErr)
 			}
 			return fmt.Errorf("LLM request failed: %w", err)
@@ -458,12 +461,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		l.mu.Unlock()
 
 		// Record assistant message with model and timing metadata
-		usageWithMeta := resp.Usage
-		usageWithMeta.Model = resp.Model
-		usageWithMeta.URL = resp.URL
-		usageWithMeta.StartTime = resp.StartTime
-		usageWithMeta.EndTime = resp.EndTime
-		if err := l.recordMessage(ctx, assistantMessage, usageWithMeta); err != nil {
+		if err := l.recordMessage(ctx, assistantMessage, resp.UsageWithMeta(), nil); err != nil {
 			l.logger.Error("failed to record assistant message", "error", err)
 		}
 
@@ -607,12 +605,7 @@ func (l *Loop) handleMaxTokensTruncation(ctx context.Context, resp *llm.Response
 	truncatedMessage.ExcludedFromContext = true
 
 	// Record the truncated message with usage metadata
-	usageWithMeta := resp.Usage
-	usageWithMeta.Model = resp.Model
-	usageWithMeta.URL = resp.URL
-	usageWithMeta.StartTime = resp.StartTime
-	usageWithMeta.EndTime = resp.EndTime
-	if err := l.recordMessage(ctx, truncatedMessage, usageWithMeta); err != nil {
+	if err := l.recordMessage(ctx, truncatedMessage, resp.UsageWithMeta(), nil); err != nil {
 		l.logger.Error("failed to record truncated message", "error", err)
 	}
 
@@ -637,7 +630,7 @@ func (l *Loop) handleMaxTokensTruncation(ctx context.Context, resp *llm.Response
 	l.mu.Unlock()
 
 	// Record the truncation error message
-	if err := l.recordMessage(ctx, errorMessage, llm.Usage{}); err != nil {
+	if err := l.recordMessage(ctx, errorMessage, llm.Usage{}, nil); err != nil {
 		l.logger.Error("failed to record truncation error message", "error", err)
 	}
 
@@ -661,12 +654,7 @@ func (l *Loop) handleRefusal(ctx context.Context, resp *llm.Response) error {
 	rawMessage := resp.ToMessage()
 	rawMessage.ExcludedFromContext = true
 
-	usageWithMeta := resp.Usage
-	usageWithMeta.Model = resp.Model
-	usageWithMeta.URL = resp.URL
-	usageWithMeta.StartTime = resp.StartTime
-	usageWithMeta.EndTime = resp.EndTime
-	if err := l.recordMessage(ctx, rawMessage, usageWithMeta); err != nil {
+	if err := l.recordMessage(ctx, rawMessage, resp.UsageWithMeta(), nil); err != nil {
 		l.logger.Error("failed to record refusal message", "error", err)
 	}
 
@@ -717,7 +705,7 @@ func (l *Loop) handleRefusal(ctx context.Context, resp *llm.Response) error {
 		RefusalExplanation: refusalExplanation,
 	}
 
-	if err := l.recordMessage(ctx, errorMessage, llm.Usage{}); err != nil {
+	if err := l.recordMessage(ctx, errorMessage, llm.Usage{}, nil); err != nil {
 		l.logger.Error("failed to record refusal error message", "error", err)
 	}
 
@@ -730,6 +718,13 @@ func (l *Loop) handleRefusal(ctx context.Context, resp *llm.Response) error {
 // to l.history. It does NOT call processLLMRequest — the caller loops instead.
 func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) error {
 	var toolResults []llm.Content
+	// Collect the usage of indirect LLM calls made by tools (keyword_search,
+	// llm_one_shot, tool install validation, subagent progress summaries, ...)
+	// so it can be attached to the tool-result message below. Tools run
+	// sequentially in this loop, but a tool may fan out goroutines internally;
+	// the accumulator is mutex-guarded.
+	var otherUsage llmhttp.UsageAccumulator
+	ctx = llmhttp.WithUsageCollector(ctx, otherUsage.Collect)
 
 	for _, c := range content {
 		if c.Type != llm.ContentTypeToolUse {
@@ -817,7 +812,7 @@ func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) erro
 		l.mu.Unlock()
 
 		// Record tool result message
-		if err := l.recordMessage(ctx, toolMessage, llm.Usage{}); err != nil {
+		if err := l.recordMessage(ctx, toolMessage, llm.Usage{}, otherUsage.Take()); err != nil {
 			l.logger.Error("failed to record tool result message", "error", err)
 		}
 	}

@@ -10,8 +10,8 @@ import (
 )
 
 const copyMessagesForFork = `-- name: CopyMessagesForFork :exec
-INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, forked_from_message_id, created_at)
-SELECT lower(hex(randomblob(16))), ?1, m.sequence_id, 1, m.type, m.llm_data, m.user_data, m.usage_data, m.display_data, m.excluded_from_context, m.llm_api_url, m.model_name, m.user_email, m.message_id, m.created_at
+INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, forked_from_message_id, created_at, other_usage_data)
+SELECT lower(hex(randomblob(16))), ?1, m.sequence_id, 1, m.type, m.llm_data, m.user_data, m.usage_data, m.display_data, m.excluded_from_context, m.llm_api_url, m.model_name, m.user_email, m.message_id, m.created_at, m.other_usage_data
 FROM messages m
 WHERE m.conversation_id = ?2
   AND m.sequence_id <= ?3
@@ -97,9 +97,9 @@ func (q *Queries) CountMessagesInConversation(ctx context.Context, conversationI
 }
 
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email
+INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, other_usage_data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data
 `
 
 type CreateMessageParams struct {
@@ -116,6 +116,7 @@ type CreateMessageParams struct {
 	LlmApiUrl           *string `json:"llm_api_url"`
 	ModelName           *string `json:"model_name"`
 	UserEmail           *string `json:"user_email"`
+	OtherUsageData      *string `json:"other_usage_data"`
 }
 
 func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error) {
@@ -133,6 +134,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 		arg.LlmApiUrl,
 		arg.ModelName,
 		arg.UserEmail,
+		arg.OtherUsageData,
 	)
 	var i Message
 	err := row.Scan(
@@ -151,6 +153,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 		&i.ModelName,
 		&i.ForkedFromMessageID,
 		&i.UserEmail,
+		&i.OtherUsageData,
 	)
 	return i, err
 }
@@ -197,7 +200,7 @@ func (q *Queries) GetGenerationAtOrBeforeSequence(ctx context.Context, arg GetGe
 }
 
 const getLatestMessage = `-- name: GetLatestMessage :one
-SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email FROM messages
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
 WHERE conversation_id = ?
 ORDER BY sequence_id DESC
 LIMIT 1
@@ -222,6 +225,7 @@ func (q *Queries) GetLatestMessage(ctx context.Context, conversationID string) (
 		&i.ModelName,
 		&i.ForkedFromMessageID,
 		&i.UserEmail,
+		&i.OtherUsageData,
 	)
 	return i, err
 }
@@ -261,7 +265,7 @@ func (q *Queries) GetMaxSequenceIDsForAllConversations(ctx context.Context) ([]G
 }
 
 const getMessage = `-- name: GetMessage :one
-SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email FROM messages
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
 WHERE message_id = ?
 `
 
@@ -284,6 +288,7 @@ func (q *Queries) GetMessage(ctx context.Context, messageID string) (Message, er
 		&i.ModelName,
 		&i.ForkedFromMessageID,
 		&i.UserEmail,
+		&i.OtherUsageData,
 	)
 	return i, err
 }
@@ -305,7 +310,8 @@ const listAgentMessagesSinceLastUser = `-- name: ListAgentMessagesSinceLastUser 
 SELECT m.message_id, m.conversation_id, m.sequence_id, m.type,
        m.llm_data, m.user_data, m.usage_data, m.created_at,
        m.display_data, m.excluded_from_context, m.generation,
-       m.llm_api_url, m.model_name, m.forked_from_message_id, m.user_email
+       m.llm_api_url, m.model_name, m.forked_from_message_id, m.user_email,
+       m.other_usage_data
 FROM messages m
 WHERE m.conversation_id = ? AND m.type = 'agent'
   AND m.sequence_id > COALESCE(
@@ -351,6 +357,7 @@ func (q *Queries) ListAgentMessagesSinceLastUser(ctx context.Context, arg ListAg
 			&i.ModelName,
 			&i.ForkedFromMessageID,
 			&i.UserEmail,
+			&i.OtherUsageData,
 		); err != nil {
 			return nil, err
 		}
@@ -366,7 +373,7 @@ func (q *Queries) ListAgentMessagesSinceLastUser(ctx context.Context, arg ListAg
 }
 
 const listMessages = `-- name: ListMessages :many
-SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email FROM messages
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
 WHERE conversation_id = ?
 ORDER BY sequence_id ASC
 `
@@ -396,6 +403,7 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID string) ([]Me
 			&i.ModelName,
 			&i.ForkedFromMessageID,
 			&i.UserEmail,
+			&i.OtherUsageData,
 		); err != nil {
 			return nil, err
 		}
@@ -411,7 +419,7 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID string) ([]Me
 }
 
 const listMessagesByType = `-- name: ListMessagesByType :many
-SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email FROM messages
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
 WHERE conversation_id = ? AND type = ?
 ORDER BY sequence_id ASC
 `
@@ -446,6 +454,7 @@ func (q *Queries) ListMessagesByType(ctx context.Context, arg ListMessagesByType
 			&i.ModelName,
 			&i.ForkedFromMessageID,
 			&i.UserEmail,
+			&i.OtherUsageData,
 		); err != nil {
 			return nil, err
 		}
@@ -461,7 +470,7 @@ func (q *Queries) ListMessagesByType(ctx context.Context, arg ListMessagesByType
 }
 
 const listMessagesForContext = `-- name: ListMessagesForContext :many
-SELECT m.message_id, m.conversation_id, m.sequence_id, m.type, m.llm_data, m.user_data, m.usage_data, m.created_at, m.display_data, m.excluded_from_context, m.generation, m.llm_api_url, m.model_name, m.forked_from_message_id, m.user_email FROM messages m
+SELECT m.message_id, m.conversation_id, m.sequence_id, m.type, m.llm_data, m.user_data, m.usage_data, m.created_at, m.display_data, m.excluded_from_context, m.generation, m.llm_api_url, m.model_name, m.forked_from_message_id, m.user_email, m.other_usage_data FROM messages m
 INNER JOIN conversations c ON m.conversation_id = c.conversation_id
 WHERE m.conversation_id = ?
   AND m.excluded_from_context = FALSE
@@ -494,6 +503,7 @@ func (q *Queries) ListMessagesForContext(ctx context.Context, conversationID str
 			&i.ModelName,
 			&i.ForkedFromMessageID,
 			&i.UserEmail,
+			&i.OtherUsageData,
 		); err != nil {
 			return nil, err
 		}
@@ -509,7 +519,7 @@ func (q *Queries) ListMessagesForContext(ctx context.Context, conversationID str
 }
 
 const listMessagesPaginated = `-- name: ListMessagesPaginated :many
-SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email FROM messages
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
 WHERE conversation_id = ?
 ORDER BY sequence_id ASC
 LIMIT ? OFFSET ?
@@ -546,6 +556,7 @@ func (q *Queries) ListMessagesPaginated(ctx context.Context, arg ListMessagesPag
 			&i.ModelName,
 			&i.ForkedFromMessageID,
 			&i.UserEmail,
+			&i.OtherUsageData,
 		); err != nil {
 			return nil, err
 		}
@@ -561,7 +572,7 @@ func (q *Queries) ListMessagesPaginated(ctx context.Context, arg ListMessagesPag
 }
 
 const listMessagesSince = `-- name: ListMessagesSince :many
-SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email FROM messages
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
 WHERE conversation_id = ? AND sequence_id > ?
 ORDER BY sequence_id ASC
 `
@@ -596,6 +607,7 @@ func (q *Queries) ListMessagesSince(ctx context.Context, arg ListMessagesSincePa
 			&i.ModelName,
 			&i.ForkedFromMessageID,
 			&i.UserEmail,
+			&i.OtherUsageData,
 		); err != nil {
 			return nil, err
 		}
@@ -611,8 +623,8 @@ func (q *Queries) ListMessagesSince(ctx context.Context, arg ListMessagesSincePa
 }
 
 const listMessagesTail = `-- name: ListMessagesTail :many
-SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email FROM (
-  SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email FROM messages
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM (
+  SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
   WHERE conversation_id = ?
   ORDER BY sequence_id DESC
   LIMIT ?
@@ -651,6 +663,7 @@ func (q *Queries) ListMessagesTail(ctx context.Context, arg ListMessagesTailPara
 			&i.ModelName,
 			&i.ForkedFromMessageID,
 			&i.UserEmail,
+			&i.OtherUsageData,
 		); err != nil {
 			return nil, err
 		}
@@ -663,6 +676,32 @@ func (q *Queries) ListMessagesTail(ctx context.Context, arg ListMessagesTailPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const setFirstUserMessageOtherUsage = `-- name: SetFirstUserMessageOtherUsage :execrows
+UPDATE messages SET other_usage_data = ?1
+WHERE message_id = (
+  SELECT sub.message_id FROM messages sub
+  WHERE sub.conversation_id = ?2 AND sub.type = 'user'
+  ORDER BY sub.sequence_id ASC LIMIT 1
+)
+`
+
+type SetFirstUserMessageOtherUsageParams struct {
+	OtherUsageData *string `json:"other_usage_data"`
+	ConversationID string  `json:"conversation_id"`
+}
+
+// Attach indirect-LLM-call usage (e.g. slug generation) to a conversation's
+// first user message after the fact. Messages are otherwise immutable;
+// other_usage_data is accounting metadata, not content, so this narrow
+// UPDATE is allowed.
+func (q *Queries) SetFirstUserMessageOtherUsage(ctx context.Context, arg SetFirstUserMessageOtherUsageParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setFirstUserMessageOtherUsage, arg.OtherUsageData, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateMessageUserData = `-- name: UpdateMessageUserData :exec

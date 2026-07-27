@@ -363,8 +363,8 @@ func TestHydrateDedupesQueuedAgainstInMemory(t *testing.T) {
 	// Build a fresh (un-hydrated) manager and inject an in-memory user batch
 	// for "dup", mirroring QueueMessage having already enqueued it in memory.
 	mgr := NewConversationManager(convID, database, server.logger, server.toolSetConfig,
-		func(context.Context, llm.Message, llm.Usage) error { return nil },
-		func(context.Context, llm.Message, llm.Usage) error { return nil },
+		func(context.Context, llm.Message, llm.Usage, []llm.PurposedUsage) error { return nil },
+		func(context.Context, llm.Message, llm.Usage, []llm.PurposedUsage) error { return nil },
 		func(ConversationState) {}, server.streamPub)
 	mgr.mu.Lock()
 	mgr.pendingBatches = []pendingBatch{{

@@ -88,6 +88,8 @@ export interface ModelUsage {
   /** Per-band tokens, unit price (USD/Mtok), cost, and segment color. */
   rows: { band: TokenBand; tokens: number; unitUsdPerMtok: number; cost: number; color: string }[];
   totalCost: number;
+  /** Provider-reported cost sum (gateway header); fallback when unpriced. */
+  reportedUsd: number;
 }
 
 /** One stacked layer: a (model, band) pair with its own color. */
@@ -145,6 +147,7 @@ export function buildTokenCostStack(
         color: segmentColor(b, mi),
       })),
       totalCost: 0,
+      reportedUsd: 0,
     });
     TOKEN_BANDS.forEach((band, b) => {
       segments.push({ model, band, color: segmentColor(b, mi) });
@@ -161,6 +164,7 @@ export function buildTokenCostStack(
     const cost = costs[model];
     const mu = perModel[mi];
     reportedCostUsd += e.cost_usd || 0;
+    mu.reportedUsd += e.cost_usd || 0;
     TOKEN_BANDS.forEach((band, b) => {
       const tokens = e[band.key] || 0;
       const usd = cost ? tokens * (cost[band.costKey] / 1e6) : 0;
@@ -179,6 +183,141 @@ export function buildTokenCostStack(
   const n = entries.length;
   const maxY = n > 0 && segments.length > 0 ? layers[segments.length - 1][n - 1] : 0;
   return { n, segments, layers, maxY, weighted, perModel, reportedCostUsd };
+}
+
+/** One raw "other" (indirect) LLM usage entry as stored in a message's
+ *  other_usage_data JSON: a usage_data-shaped record plus the purpose that
+ *  incurred it (compaction, keyword_search, slug, …). */
+export interface OtherUsageEntry {
+  purpose: string;
+  input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  model?: string;
+  url?: string;
+}
+
+/** One aggregated row of "other" (indirect) LLM usage — compaction
+ *  summarization, LLM-backed tools, slug generation, … — grouped by
+ *  (purpose, model, url). Built client-side by aggregateOtherUsage from the
+ *  other_usage_data carried on conversation messages. */
+export interface OtherUsageRow {
+  purpose: string;
+  model: string;
+  url?: string;
+  llm_calls: number;
+  input_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  output_tokens: number;
+  /** Provider-reported cost sum (often 0 when the gateway doesn't report). */
+  cost_usd: number;
+}
+
+/** Aggregate raw other-usage entries into rows keyed by (purpose, model,
+ *  url), summing token counts and reported cost and counting entries as
+ *  llm_calls. Rows come out in first-seen order. */
+export function aggregateOtherUsage(entries: OtherUsageEntry[]): OtherUsageRow[] {
+  const byKey = new Map<string, OtherUsageRow>();
+  for (const e of entries) {
+    const purpose = e.purpose || "";
+    const model = e.model || "";
+    const url = e.url || "";
+    const key = `${purpose}\x00${model}\x00${url}`;
+    let row = byKey.get(key);
+    if (!row) {
+      row = {
+        purpose,
+        model,
+        url,
+        llm_calls: 0,
+        input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: 0,
+      };
+      byKey.set(key, row);
+    }
+    row.llm_calls++;
+    row.input_tokens += e.input_tokens || 0;
+    row.cache_creation_input_tokens += e.cache_creation_input_tokens || 0;
+    row.cache_read_input_tokens += e.cache_read_input_tokens || 0;
+    row.output_tokens += e.output_tokens || 0;
+    row.cost_usd += e.cost_usd || 0;
+  }
+  return [...byKey.values()];
+}
+
+export interface OtherPurposeUsage {
+  purpose: string;
+  llmCalls: number;
+  /** Total tokens across all bands. */
+  tokens: number;
+  /** Cost estimated from token counts × model pricing, like the graph. */
+  estimatedUsd: number;
+  /** Provider-reported cost sum (gateway header); fallback when unpriced. */
+  reportedUsd: number;
+  /** False when any contributing model lacks pricing (estimate incomplete). */
+  priced: boolean;
+}
+
+export interface OtherUsageBreakdown {
+  /** Purposes in first-seen row order. */
+  perPurpose: OtherPurposeUsage[];
+  totals: {
+    estimatedUsd: number;
+    /** Sum of provider-reported cost_usd. */
+    reportedUsd: number;
+    llmCalls: number;
+    /** Calls whose model has no known pricing. */
+    unpricedCalls: number;
+  };
+}
+
+/** Aggregate other-usage rows into a per-purpose breakdown, estimating cost
+ *  with the same tokens × price/1e6 per band formula as the graph. */
+export function buildOtherUsageBreakdown(
+  rows: OtherUsageRow[],
+  costs: Record<string, ModelCost | null | undefined>,
+): OtherUsageBreakdown {
+  const byPurpose = new Map<string, OtherPurposeUsage>();
+  const totals = { estimatedUsd: 0, reportedUsd: 0, llmCalls: 0, unpricedCalls: 0 };
+  for (const row of rows) {
+    let p = byPurpose.get(row.purpose);
+    if (!p) {
+      p = {
+        purpose: row.purpose,
+        llmCalls: 0,
+        tokens: 0,
+        estimatedUsd: 0,
+        reportedUsd: 0,
+        priced: true,
+      };
+      byPurpose.set(row.purpose, p);
+    }
+    const cost = costs[row.model];
+    for (const band of TOKEN_BANDS) {
+      const tokens = row[band.key] || 0;
+      p.tokens += tokens;
+      if (cost) {
+        const usd = tokens * (cost[band.costKey] / 1e6);
+        p.estimatedUsd += usd;
+        totals.estimatedUsd += usd;
+      }
+    }
+    if (!cost) {
+      p.priced = false;
+      totals.unpricedCalls += row.llm_calls;
+    }
+    p.llmCalls += row.llm_calls;
+    p.reportedUsd += row.cost_usd || 0;
+    totals.llmCalls += row.llm_calls;
+    totals.reportedUsd += row.cost_usd || 0;
+  }
+  return { perPurpose: [...byPurpose.values()], totals };
 }
 
 /** "$0.0042", "$0.500", "$12.35" — enough precision for small costs. */

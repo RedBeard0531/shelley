@@ -1,6 +1,6 @@
 -- name: CreateMessage :one
-INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, other_usage_data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: GetNextSequenceID :one
@@ -50,8 +50,8 @@ ORDER BY sequence_id DESC LIMIT 1;
 -- are renumbered to generation 1 (the destination starts a fresh generation
 -- history), get new message_ids, and preserve content, ordering, and original
 -- timestamps. Used to fork a conversation.
-INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, forked_from_message_id, created_at)
-SELECT lower(hex(randomblob(16))), sqlc.arg('dest_conversation_id'), m.sequence_id, 1, m.type, m.llm_data, m.user_data, m.usage_data, m.display_data, m.excluded_from_context, m.llm_api_url, m.model_name, m.user_email, m.message_id, m.created_at
+INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, forked_from_message_id, created_at, other_usage_data)
+SELECT lower(hex(randomblob(16))), sqlc.arg('dest_conversation_id'), m.sequence_id, 1, m.type, m.llm_data, m.user_data, m.usage_data, m.display_data, m.excluded_from_context, m.llm_api_url, m.model_name, m.user_email, m.message_id, m.created_at, m.other_usage_data
 FROM messages m
 WHERE m.conversation_id = sqlc.arg('source_conversation_id')
   AND m.sequence_id <= sqlc.arg('cutoff_sequence_id')
@@ -119,6 +119,18 @@ ORDER BY sequence_id ASC;
 -- verifies the messages_fts AFTER UPDATE trigger re-indexes user_data.
 UPDATE messages SET user_data = ? WHERE message_id = ?;
 
+-- name: SetFirstUserMessageOtherUsage :execrows
+-- Attach indirect-LLM-call usage (e.g. slug generation) to a conversation's
+-- first user message after the fact. Messages are otherwise immutable;
+-- other_usage_data is accounting metadata, not content, so this narrow
+-- UPDATE is allowed.
+UPDATE messages SET other_usage_data = sqlc.arg('other_usage_data')
+WHERE message_id = (
+  SELECT sub.message_id FROM messages sub
+  WHERE sub.conversation_id = sqlc.arg('conversation_id') AND sub.type = 'user'
+  ORDER BY sub.sequence_id ASC LIMIT 1
+);
+
 -- name: ListAgentMessagesSinceLastUser :many
 -- Returns the agent messages produced during the most recent user turn,
 -- ordered newest-first. "Most recent user turn" = all agent messages
@@ -129,7 +141,8 @@ UPDATE messages SET user_data = ? WHERE message_id = ?;
 SELECT m.message_id, m.conversation_id, m.sequence_id, m.type,
        m.llm_data, m.user_data, m.usage_data, m.created_at,
        m.display_data, m.excluded_from_context, m.generation,
-       m.llm_api_url, m.model_name, m.forked_from_message_id, m.user_email
+       m.llm_api_url, m.model_name, m.forked_from_message_id, m.user_email,
+       m.other_usage_data
 FROM messages m
 WHERE m.conversation_id = ? AND m.type = 'agent'
   AND m.sequence_id > COALESCE(

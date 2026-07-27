@@ -2,6 +2,7 @@ package slug
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -832,5 +833,81 @@ func TestPreferredModels(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("preferredModels = %v, want %v", got, want)
 		}
+	}
+}
+
+// usageLLMService returns a fixed slug with non-zero usage, mimicking a real
+// provider response.
+type usageLLMService struct{ MockLLMService }
+
+func (u *usageLLMService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	return &llm.Response{
+		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "my-generated-slug"}},
+		Model:   "slug-model-v1",
+		Usage:   llm.Usage{InputTokens: 25, OutputTokens: 5, CostUSD: 0.0002},
+	}, nil
+}
+
+// TestGenerateSlug_UsageOnFirstUserMessage runs GenerateSlug through a real
+// models.Manager (whose loggingService feeds the usage collector) and
+// verifies the slug call's usage lands on the conversation's first user
+// message as other_usage_data.
+func TestGenerateSlug_UsageOnFirstUserMessage(t *testing.T) {
+	tempDB := t.TempDir() + "/slug_usage_test.db"
+	database, err := db.New(db.Config{DSN: tempDB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	mgr, err := models.NewManager(&models.Config{
+		Models: []models.Built{{ID: "slug-model", Provider: models.ProviderBuiltIn, Source: "test", Service: &usageLLMService{}}},
+		Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateMessage(ctx, db.CreateMessageParams{
+		ConversationID: conv.ConversationID,
+		Type:           db.MessageTypeUser,
+		LLMData:        llm.Message{Role: llm.MessageRoleUser},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := GenerateSlug(ctx, mgr, database, logger, conv.ConversationID, "first message", "slug-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "my-generated-slug" {
+		t.Errorf("slug = %q", got)
+	}
+
+	messages, err := database.ListMessages(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(messages))
+	}
+	if messages[0].OtherUsageData == nil {
+		t.Fatal("first user message has no other_usage_data")
+	}
+	var entries []llm.PurposedUsage
+	if err := json.Unmarshal([]byte(*messages[0].OtherUsageData), &entries); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Purpose != "slug" || entries[0].InputTokens != 25 || entries[0].Model != "slug-model-v1" {
+		t.Errorf("entries = %+v", entries)
 	}
 }

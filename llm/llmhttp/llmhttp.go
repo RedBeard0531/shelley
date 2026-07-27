@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"shelley.exe.dev/llm"
 	"shelley.exe.dev/version"
 )
 
@@ -25,6 +26,8 @@ const (
 	modelIDKey
 	providerKey
 	requestTraceKey
+	purposeKey
+	usageCollectorKey
 )
 
 // shelleyRequestIDHeader is the header Shelley sets on every LLM request with a
@@ -150,6 +153,61 @@ func ConversationIDFromContext(ctx context.Context) string {
 		return v.(string)
 	}
 	return ""
+}
+
+// WithPurpose returns a context tagged with the purpose of an indirect LLM
+// call (e.g. "compaction", "keyword_search"), so its usage can be recorded.
+func WithPurpose(ctx context.Context, purpose string) context.Context {
+	return context.WithValue(ctx, purposeKey, purpose)
+}
+
+// PurposeFromContext returns the purpose from the context, if any.
+func PurposeFromContext(ctx context.Context) string {
+	if v := ctx.Value(purposeKey); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+// UsageCollector receives the usage of one indirect LLM call (one tagged with
+// llmhttp.WithPurpose). Implementations must be safe for concurrent use.
+type UsageCollector func(purpose string, usage llm.Usage)
+
+// WithUsageCollector returns a context that collects the usage of indirect
+// LLM calls (those tagged with WithPurpose) made under it.
+func WithUsageCollector(ctx context.Context, c UsageCollector) context.Context {
+	return context.WithValue(ctx, usageCollectorKey, c)
+}
+
+// UsageCollectorFromContext returns the usage collector from the context, if any.
+func UsageCollectorFromContext(ctx context.Context) UsageCollector {
+	if v := ctx.Value(usageCollectorKey); v != nil {
+		return v.(UsageCollector)
+	}
+	return nil
+}
+
+// UsageAccumulator is a mutex-guarded UsageCollector that accumulates
+// collected entries for attachment to a message record.
+type UsageAccumulator struct {
+	mu      sync.Mutex
+	entries []llm.PurposedUsage
+}
+
+// Collect implements UsageCollector.
+func (a *UsageAccumulator) Collect(purpose string, usage llm.Usage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.entries = append(a.entries, llm.PurposedUsage{Purpose: purpose, Usage: usage})
+}
+
+// Take returns the accumulated entries and resets the accumulator.
+func (a *UsageAccumulator) Take() []llm.PurposedUsage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entries := a.entries
+	a.entries = nil
+	return entries
 }
 
 // WithModelID returns a context with the model ID attached.

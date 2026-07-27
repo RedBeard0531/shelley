@@ -2,6 +2,7 @@ package slug
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/models"
 )
 
@@ -31,9 +33,31 @@ func GenerateSlug(ctx context.Context, llmProvider LLMServiceProvider, database 
 		return *conv.Slug, nil
 	}
 
+	// Tag the ctx so the slug LLM call's usage is collected; it is attached to
+	// the conversation's first user message below. (WithConversationID also
+	// stamps the gateway request logs; the caller's ctx does not carry it.)
+	var otherUsage llmhttp.UsageAccumulator
+	ctx = llmhttp.WithUsageCollector(ctx, otherUsage.Collect)
+	ctx = llmhttp.WithConversationID(llmhttp.WithPurpose(ctx, "slug"), conversationID)
+
 	baseSlug, err := generateSlugText(ctx, llmProvider, logger, userMessage, conversationModelID)
 	if err != nil {
 		return "", err
+	}
+
+	// Attach the slug call's usage to the conversation's first user message
+	// (recorded synchronously by AcceptUserMessage before GenerateSlug runs).
+	// If the row is unexpectedly missing, log and drop the usage.
+	if entries := otherUsage.Take(); len(entries) > 0 {
+		usageJSON, err := json.Marshal(entries)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal slug usage: %w", err)
+		}
+		if n, err := database.SetFirstUserMessageOtherUsage(ctx, conversationID, string(usageJSON)); err != nil {
+			logger.Error("Failed to record slug usage", "conversationID", conversationID, "error", err)
+		} else if n == 0 {
+			logger.Warn("No first user message to attach slug usage to", "conversationID", conversationID)
+		}
 	}
 
 	// Try to update with the base slug first, then with numeric suffixes if needed

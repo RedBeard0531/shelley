@@ -39,8 +39,14 @@ func (s *Server) handleModelCosts(w http.ResponseWriter, r *http.Request) {
 // handleSubagentUsage aggregates LLM usage across a conversation's subagents
 // (recursively) and prices it. The token-cost graph shows this as a separate
 // "plus $X for subagents" line; subagent calls are not part of the graph.
+// Descendants' indirect usage (other_usage_data entries) is included.
 func (s *Server) handleSubagentUsage(w http.ResponseWriter, r *http.Request, conversationID string) {
 	rows, err := s.db.GetSubagentUsage(r.Context(), conversationID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	otherRows, err := s.db.GetSubagentOtherUsage(r.Context(), conversationID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -53,9 +59,20 @@ func (s *Server) handleSubagentUsage(w http.ResponseWriter, r *http.Request, con
 		UnpricedCalls  int64    `json:"unpriced_calls"`
 	}
 	resp.UnpricedModels = []string{}
+	fold := func(model, url string, llmCalls, in, cacheWrite, cacheRead, out int64, costUsd float64) {
+		resp.LLMCalls += llmCalls
+		resp.ReportedUsd += costUsd
+		if c, found := modelsdev.LookupCost(url, model); found {
+			resp.EstimatedUsd += float64(in)*c.Input/1e6 +
+				float64(cacheWrite)*c.CacheWrite/1e6 +
+				float64(cacheRead)*c.CacheRead/1e6 +
+				float64(out)*c.Output/1e6
+		} else {
+			resp.UnpricedModels = append(resp.UnpricedModels, model)
+			resp.UnpricedCalls += llmCalls
+		}
+	}
 	for _, row := range rows {
-		resp.LLMCalls += row.LlmCalls
-		resp.ReportedUsd += row.CostUsd
 		model, url := "", ""
 		if row.ModelName != nil {
 			model = *row.ModelName
@@ -63,15 +80,10 @@ func (s *Server) handleSubagentUsage(w http.ResponseWriter, r *http.Request, con
 		if row.LlmApiUrl != nil {
 			url = *row.LlmApiUrl
 		}
-		if c, found := modelsdev.LookupCost(url, model); found {
-			resp.EstimatedUsd += float64(row.InputTokens)*c.Input/1e6 +
-				float64(row.CacheCreationInputTokens)*c.CacheWrite/1e6 +
-				float64(row.CacheReadInputTokens)*c.CacheRead/1e6 +
-				float64(row.OutputTokens)*c.Output/1e6
-		} else {
-			resp.UnpricedModels = append(resp.UnpricedModels, model)
-			resp.UnpricedCalls += row.LlmCalls
-		}
+		fold(model, url, row.LlmCalls, row.InputTokens, row.CacheCreationInputTokens, row.CacheReadInputTokens, row.OutputTokens, row.CostUsd)
+	}
+	for _, row := range otherRows {
+		fold(row.ModelName, row.LlmApiUrl, row.LlmCalls, row.InputTokens, row.CacheCreationInputTokens, row.CacheReadInputTokens, row.OutputTokens, row.CostUsd)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

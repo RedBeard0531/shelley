@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/llmhttp"
 )
 
 // LLMServiceProvider defines the interface for getting LLM services
@@ -189,7 +190,7 @@ func (k *KeywordTool) keywordRun(ctx context.Context, input keywordInput) llm.To
 		System:   system,
 	}
 
-	resp, err := llmService.Do(ctx, req)
+	resp, err := llmService.Do(llmhttp.WithPurpose(ctx, "keyword_search"), req)
 	if err != nil {
 		return llm.ErrorfToolOut("failed to send relevance filtering message: %w", err)
 	}

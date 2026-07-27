@@ -607,6 +607,17 @@ func (m *Response) ToMessage() Message {
 	}
 }
 
+// UsageWithMeta returns the response usage annotated with the response's
+// model, URL, and timing metadata, ready for recording.
+func (m *Response) UsageWithMeta() Usage {
+	u := m.Usage
+	u.Model = m.Model
+	u.URL = m.URL
+	u.StartTime = m.StartTime
+	u.EndTime = m.EndTime
+	return u
+}
+
 func CostUSDFromResponse(headers http.Header) float64 {
 	h := headers.Get("Exedev-Gateway-Cost")
 	if h == "" {
@@ -637,6 +648,14 @@ type Usage struct {
 	URL       string     `json:"url,omitempty"`
 	StartTime *time.Time `json:"start_time,omitempty"`
 	EndTime   *time.Time `json:"end_time,omitempty"`
+}
+
+// PurposedUsage is the usage of one indirect LLM call (compaction,
+// keyword_search, slug generation, ...) tagged with its purpose. Arrays of
+// these are stored in messages.other_usage_data on the affiliated message.
+type PurposedUsage struct {
+	Purpose string `json:"purpose"`
+	Usage
 }
 
 func (u *Usage) Add(other Usage) {
