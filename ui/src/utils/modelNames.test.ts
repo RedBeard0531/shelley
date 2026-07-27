@@ -49,6 +49,7 @@ eq("glm-5p1", "GLM 5.1");
 eq("deepseek-v4-pro-fireworks", "DeepSeek V4 Pro");
 eq("deepseek-v4-flash-fireworks", "DeepSeek V4 Flash");
 eq("grok-4.5", "Grok 4.5");
+eq("kimi-k3-fireworks", "Kimi K3");
 eq("kimi-k2.7-code-fireworks", "Kimi K2.7 Code");
 eq("kimi-k2.6-fireworks", "Kimi K2.6");
 eq("minimax-m3", "MiniMax M3");

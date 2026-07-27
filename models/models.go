@@ -285,10 +285,10 @@ func All() []Model {
 			Build: oaiChatSvc(oai.KimiK27CodeFireworks, "fireworks"),
 		},
 		{
-			ID: "kimi-3-fireworks", Provider: ProviderFireworks,
-			Description: "Kimi 3 on Fireworks", APIModelName: oai.Kimi3Fireworks.ModelName,
+			ID: "kimi-k3-fireworks", Provider: ProviderFireworks,
+			Description: "Kimi K3 on Fireworks", APIModelName: oai.KimiK3Fireworks.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.Kimi3Fireworks, "fireworks"),
+			Build: oaiChatSvc(oai.KimiK3Fireworks, "fireworks"),
 		},
 		{
 			ID: "deepseek-v4-pro-fireworks", Provider: ProviderFireworks,

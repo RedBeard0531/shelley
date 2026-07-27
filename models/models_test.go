@@ -90,10 +90,10 @@ func TestByID(t *testing.T) {
 	}
 }
 
-func TestKimi3FireworksCatalogEntry(t *testing.T) {
-	m := ByID("kimi-3-fireworks")
+func TestKimiK3FireworksCatalogEntry(t *testing.T) {
+	m := ByID("kimi-k3-fireworks")
 	if m == nil {
-		t.Fatal("ByID(kimi-3-fireworks) = nil, want non-nil")
+		t.Fatal("ByID(kimi-k3-fireworks) = nil, want non-nil")
 	}
 	if m.Provider != ProviderFireworks {
 		t.Errorf("Provider = %q, want %q", m.Provider, ProviderFireworks)

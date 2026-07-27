@@ -342,8 +342,8 @@ var (
 		SupportsImages:     true,
 	}
 
-	Kimi3Fireworks = Model{
-		UserName:           "kimi-3-fireworks",
+	KimiK3Fireworks = Model{
+		UserName:           "kimi-k3-fireworks",
 		ModelName:          "accounts/fireworks/models/kimi-k3",
 		TextVerbosity:      "",
 		URL:                FireworksURL,
@@ -629,7 +629,7 @@ var ModelsRegistry = []Model{
 	GLM52Fireworks,
 	KimiK26Fireworks,
 	KimiK27CodeFireworks,
-	Kimi3Fireworks,
+	KimiK3Fireworks,
 	GPTOSS120B,
 	GPTOSS20B,
 	LlamaCPP,

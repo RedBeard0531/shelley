@@ -49,12 +49,14 @@ var shadowPairs = []shadowPair{
 	{Better: "gpt-5.6-terra", Worse: "gpt-5.4-mini"},
 	{Better: "gpt-5.6-luna", Worse: "gpt-5.4-nano"},
 	{Better: "kimi-k2.7-code-fireworks", Worse: "kimi-k2.6-fireworks"},
+	{Better: "kimi-k3-fireworks", Worse: "kimi-k2.7-code-fireworks"},
+	{Better: "kimi-k3-fireworks", Worse: "kimi-k2.6-fireworks"},
 
 	// Arguable / cross-family supersessions. We still encode them so the
 	// default list stays lean; the reasoning is noted inline.
 	{Better: "claude-opus-4.8", Worse: "claude-opus-4.6"},            // 4.6 is cheaper (older tokenizer) but 4.8 is stronger
 	{Better: "claude-opus-5", Worse: "claude-opus-4.6"},              // same reasoning as 4.8 vs 4.6
-	{Better: "glm-5.2-fireworks", Worse: "kimi-k2.7-code-fireworks"}, // different families; glm costs a bit more; kimi-k3 likely soon
+	{Better: "glm-5.2-fireworks", Worse: "kimi-k2.7-code-fireworks"}, // different families; glm costs a bit more; kimi-k3 costs far more, so it doesn't shadow glm
 	{Better: "glm-5.2-fireworks", Worse: "deepseek-v4-flash-fireworks"},
 	{Better: "gpt-5.6-luna", Worse: "claude-haiku-4.5"},
 	{Better: "gpt-5.6-luna", Worse: "gpt-5.3-codex"},
