@@ -90,6 +90,34 @@ func TestByID(t *testing.T) {
 	}
 }
 
+func TestKimi3FireworksCatalogEntry(t *testing.T) {
+	m := ByID("kimi-3-fireworks")
+	if m == nil {
+		t.Fatal("ByID(kimi-3-fireworks) = nil, want non-nil")
+	}
+	if m.Provider != ProviderFireworks {
+		t.Errorf("Provider = %q, want %q", m.Provider, ProviderFireworks)
+	}
+	if m.APIType != APITypeOpenAIChat {
+		t.Errorf("APIType = %q, want %q", m.APIType, APITypeOpenAIChat)
+	}
+	if m.APIModelName != "accounts/fireworks/models/kimi-k3" {
+		t.Errorf("APIModelName = %q, want %q", m.APIModelName, "accounts/fireworks/models/kimi-k3")
+	}
+	if m.DefaultBaseURL != DefaultFireworksBaseURL {
+		t.Errorf("DefaultBaseURL = %q, want %q", m.DefaultBaseURL, DefaultFireworksBaseURL)
+	}
+	if m.Build == nil {
+		t.Fatal("Build is nil")
+	}
+	// Existing Kimi K2.x entries remain available.
+	for _, id := range []string{"kimi-k2.6-fireworks", "kimi-k2.7-code-fireworks"} {
+		if ByID(id) == nil {
+			t.Errorf("ByID(%q) = nil, want non-nil", id)
+		}
+	}
+}
+
 func TestDefault(t *testing.T) {
 	if d := Default(); d.ID != "claude-opus-4.8" {
 		t.Errorf("Default().ID = %q, want %q", d.ID, "claude-opus-4.8")

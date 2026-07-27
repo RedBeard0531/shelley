@@ -342,6 +342,17 @@ var (
 		SupportsImages:     true,
 	}
 
+	Kimi3Fireworks = Model{
+		UserName:           "kimi-3-fireworks",
+		ModelName:          "accounts/fireworks/models/kimi-k3",
+		TextVerbosity:      "",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   true,
+		UseSimplifiedPatch: false,
+		SupportsImages:     true,
+	}
+
 	Grok45 = Model{
 		UserName:           "grok-4.5",
 		ModelName:          "grok-4.5",
@@ -618,6 +629,7 @@ var ModelsRegistry = []Model{
 	GLM52Fireworks,
 	KimiK26Fireworks,
 	KimiK27CodeFireworks,
+	Kimi3Fireworks,
 	GPTOSS120B,
 	GPTOSS20B,
 	LlamaCPP,
@@ -1170,6 +1182,8 @@ func (s *Service) TokenContextWindow() int {
 		return 1048576
 	case "accounts/fireworks/models/kimi-k2p7-code", "accounts/fireworks/models/kimi-k2p6":
 		return 262144
+	case "accounts/fireworks/models/kimi-k3":
+		return 1048576
 	case "gpt-5.1", "gpt-5.1-mini", "gpt-5.1-nano":
 		return 256000
 	default:
