@@ -17,8 +17,8 @@ func TestLookupImageSupport(t *testing.T) {
 		{"gemini", "https://generativelanguage.googleapis.com", "gemini-3-pro-preview", true, true},
 
 		// Hosts that carry an explicit "api" field in models.dev.
-		{"fireworks text-only", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p1", true, false},
-		{"fireworks vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/kimi-k2p6", true, true},
+		{"fireworks text-only", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p2", true, false},
+		{"fireworks vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/kimi-k3", true, true},
 
 		// The original bug: a custom model pointed at opencode.ai/zen. The
 		// host matches even though the configured path needn't be exact, and
