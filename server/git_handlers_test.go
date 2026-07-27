@@ -286,6 +286,153 @@ func TestHandleGitDiffs(t *testing.T) {
 	}
 }
 
+// testGit runs a git command in dir, failing the test on error.
+func testGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// TestHandleGitDiffsLongBranch verifies that all commits ahead of the
+// upstream merge-base are returned (not capped at 20) and that the
+// merge-base commit itself is included and flagged.
+func TestHandleGitDiffsLongBranch(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	testGit(t, dir, "init", "-b", "main")
+	testGit(t, dir, "config", "user.name", "Test User")
+	testGit(t, dir, "config", "user.email", "test@example.com")
+
+	writeAndCommit := func(name, content, msg string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		testGit(t, dir, "add", name)
+		testGit(t, dir, "commit", "--no-verify", "-m", msg)
+	}
+
+	writeAndCommit("base.txt", "base\n", "base commit")
+	testGit(t, dir, "checkout", "-b", "feature")
+	// Local upstream: feature tracks main, so @{upstream} resolves.
+	testGit(t, dir, "branch", "--set-upstream-to=main")
+
+	const ahead = 25 // more than the old hard-coded git log -20
+	for i := 0; i < ahead; i++ {
+		writeAndCommit(fmt.Sprintf("f%d.txt", i), "line1\nline2\n", fmt.Sprintf("feature commit %d", i))
+	}
+	// Empty commit: header with no numstat block must not break parsing.
+	testGit(t, dir, "commit", "--no-verify", "--allow-empty", "-m", "empty commit")
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/git/diffs?cwd=%s", dir), nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitDiffs(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		Diffs []GitDiffInfo `json:"diffs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	var commits []GitDiffInfo
+	for _, d := range response.Diffs {
+		if d.ID != "working" {
+			commits = append(commits, d)
+		}
+	}
+	// All commits ahead of the merge-base (including the empty one) plus
+	// the merge-base itself.
+	if len(commits) < ahead+2 {
+		t.Fatalf("expected at least %d commits, got %d", ahead+2, len(commits))
+	}
+	mbIdx := -1
+	for i, c := range commits {
+		if c.IsMergeBase {
+			mbIdx = i
+			break
+		}
+	}
+	if mbIdx != ahead+1 {
+		t.Errorf("expected merge-base at index %d, got %d", ahead+1, mbIdx)
+	}
+	if mbIdx >= 0 && commits[mbIdx].Message != "base commit" {
+		t.Errorf("expected merge-base message %q, got %q", "base commit", commits[mbIdx].Message)
+	}
+	// The empty commit parses cleanly with zero stats.
+	if commits[0].Message != "empty commit" || commits[0].FilesCount != 0 || commits[0].Additions != 0 {
+		t.Errorf("expected empty commit with zero stats at top, got %q +%d/%d files",
+			commits[0].Message, commits[0].Additions, commits[0].FilesCount)
+	}
+	// Diffstats must be populated for regular commits.
+	top := commits[1]
+	if top.Additions != 2 || top.FilesCount != 1 {
+		t.Errorf("expected commit stats +2/1 file, got +%d/%d files", top.Additions, top.FilesCount)
+	}
+}
+
+// TestHandleGitDiffsMergeCommitStats verifies merge commits report a
+// first-parent diffstat.
+func TestHandleGitDiffsMergeCommitStats(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	testGit(t, dir, "init", "-b", "main")
+	testGit(t, dir, "config", "user.name", "Test User")
+	testGit(t, dir, "config", "user.email", "test@example.com")
+
+	writeAndCommit := func(name, content, msg string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		testGit(t, dir, "add", name)
+		testGit(t, dir, "commit", "--no-verify", "-m", msg)
+	}
+
+	writeAndCommit("base.txt", "base\n", "base commit")
+	testGit(t, dir, "checkout", "-b", "side")
+	writeAndCommit("side.txt", "side1\nside2\nside3\n", "side commit")
+	testGit(t, dir, "checkout", "main")
+	writeAndCommit("main.txt", "main\n", "main commit")
+	testGit(t, dir, "merge", "--no-ff", "--no-verify", "-m", "merge side", "side")
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/git/diffs?cwd=%s", dir), nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitDiffs(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		Diffs []GitDiffInfo `json:"diffs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	var merge *GitDiffInfo
+	for i := range response.Diffs {
+		if response.Diffs[i].Message == "merge side" {
+			merge = &response.Diffs[i]
+			break
+		}
+	}
+	if merge == nil {
+		t.Fatal("merge commit not found in diffs")
+	}
+	// First-parent diff of the merge brings in side.txt (+3, 1 file).
+	if merge.Additions != 3 || merge.FilesCount != 1 {
+		t.Errorf("expected merge stats +3/1 file, got +%d/%d files", merge.Additions, merge.FilesCount)
+	}
+}
+
 // TestHandleGitDiffFiles tests the handleGitDiffFiles function
 func TestHandleGitDiffFiles(t *testing.T) {
 	t.Parallel()

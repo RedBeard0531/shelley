@@ -1393,9 +1393,13 @@ const sidebarCommits = computed<GitDiffInfo[]>(() => {
   const commitsOnly = diffs.value.filter((d) => d.id !== "working");
   const mergeBaseIdx = commitsOnly.findIndex((d) => d.isMergeBase);
   if (mergeBaseIdx >= 0) {
-    list.push(...commitsOnly.slice(0, Math.min(mergeBaseIdx + 1, 50)));
+    // Show the whole stack down to (and including) the merge-base.
+    list.push(...commitsOnly.slice(0, mergeBaseIdx + 1));
   } else {
-    list.push(...commitsOnly.slice(0, 10));
+    // No merge-base in the window (no upstream, or a stack too deep for
+    // the server's cap): show everything the server returned, which is
+    // already bounded.
+    list.push(...commitsOnly);
   }
   return list;
 });

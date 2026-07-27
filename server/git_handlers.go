@@ -121,19 +121,71 @@ func parseDiffStat(output string) (additions, deletions, filesCount int) {
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			if parts[0] != "-" {
-				add, _ := strconv.Atoi(parts[0])
-				additions += add
-			}
-			if parts[1] != "-" {
-				del, _ := strconv.Atoi(parts[1])
-				deletions += del
-			}
-			filesCount++
+		if len(parts) < 2 {
+			continue
 		}
+		// numstat fields are integers, or "-" for binary files. Anything
+		// else is a stray line (e.g. unexpected git stdout), not a file.
+		add, addErr := strconv.Atoi(parts[0])
+		del, delErr := strconv.Atoi(parts[1])
+		if (addErr != nil && parts[0] != "-") || (delErr != nil && parts[1] != "-") {
+			continue
+		}
+		additions += add
+		deletions += del
+		filesCount++
 	}
 	return additions, deletions, filesCount
+}
+
+// gitLogDiffs lists up to limit commits from HEAD with per-commit diffstats
+// in a single git invocation. Merge commits report their first-parent
+// diffstat. mergeBase, if non-empty, marks the matching commit.
+func gitLogDiffs(gitRoot string, limit int, mergeBase string) []GitDiffInfo {
+	// %x01 starts each commit record so numstat lines can't be confused
+	// with headers. --topo-order guarantees descendants of the merge-base
+	// print before it, so the sidebar's slice down to the merge-base
+	// covers the whole stack. %D yields decorating refs (already trimmed)
+	// like "HEAD -> main, origin/main, tag: v1.2".
+	cmd := exec.Command("git", "log", "-n", strconv.Itoa(limit),
+		"--topo-order", "--numstat", "--diff-merges=first-parent",
+		"--no-show-signature", // log.showSignature=true would corrupt parsing
+		"--pretty=format:%x01%H%x00%s%x00%an%x00%at%x00%D")
+	cmd.Dir = gitRoot
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	var diffs []GitDiffInfo
+	// Records are separated by "\n\x01": subjects cannot contain
+	// newlines and git C-quotes control characters in numstat paths, so
+	// the sequence only occurs at record boundaries. (A bare "\x01"
+	// split would mangle subjects containing that byte.)
+	for _, record := range strings.Split(strings.TrimPrefix(string(output), "\x01"), "\n\x01") {
+		if strings.TrimSpace(record) == "" {
+			continue
+		}
+		header, stats, _ := strings.Cut(record, "\n")
+		parts := strings.Split(header, "\x00")
+		if len(parts) < 5 {
+			continue
+		}
+		timestamp, _ := strconv.ParseInt(parts[3], 10, 64)
+		additions, deletions, filesCount := parseDiffStat(stats)
+		diffs = append(diffs, GitDiffInfo{
+			ID:          parts[0],
+			Message:     parts[1],
+			Author:      parts[2],
+			Timestamp:   time.Unix(timestamp, 0),
+			FilesCount:  filesCount,
+			Additions:   additions,
+			Deletions:   deletions,
+			Refs:        parseDecorations(parts[4]),
+			IsMergeBase: mergeBase != "" && parts[0] == mergeBase,
+		})
+	}
+	return diffs
 }
 
 // handleGitDiffs returns available diffs (working changes + recent commits)
@@ -189,44 +241,26 @@ func (s *Server) handleGitDiffs(w http.ResponseWriter, r *http.Request) {
 		mergeBase = strings.TrimSpace(string(out))
 	}
 
-	// Get commits. %D yields decorating refs (already trimmed) like
-	// "HEAD -> main, origin/main, tag: v1.2".
-	cmd := exec.Command("git", "log", "-20", "--pretty=format:%H%x00%s%x00%an%x00%at%x00%D")
-	cmd.Dir = gitRoot
-	output, err := cmd.Output()
-	if err == nil {
-		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-		for _, line := range lines {
-			if line == "" {
-				continue
+	// Decide how many commits to list. Always include the full stack down
+	// to the upstream merge-base (plus a little context past it) so long
+	// branches aren't truncated; without an upstream, fall back to a fixed
+	// window of recent commits.
+	limit := 20
+	if mergeBase != "" {
+		// Bound the count walk; past this depth we give up on reaching
+		// the merge-base and the UI shows a bounded window instead.
+		const maxAhead = 990
+		countCmd := exec.Command("git", "rev-list", "--count", "--max-count="+strconv.Itoa(maxAhead), mergeBase+"..HEAD")
+		countCmd.Dir = gitRoot
+		if out, err := countCmd.Output(); err == nil {
+			if ahead, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
+				// ahead commits + merge-base itself + a few beyond for context.
+				limit = max(limit, ahead+10)
 			}
-			parts := strings.Split(line, "\x00")
-			if len(parts) < 5 {
-				continue
-			}
-
-			timestamp, _ := strconv.ParseInt(parts[3], 10, 64)
-
-			// Get diffstat
-			parent := parentRef(gitRoot, parts[0])
-			statCmd := exec.Command("git", "diff", parent, parts[0], "--numstat")
-			statCmd.Dir = gitRoot
-			statOutput, _ := statCmd.Output()
-			additions, deletions, filesCount := parseDiffStat(string(statOutput))
-
-			diffs = append(diffs, GitDiffInfo{
-				ID:          parts[0],
-				Message:     parts[1],
-				Author:      parts[2],
-				Timestamp:   time.Unix(timestamp, 0),
-				FilesCount:  filesCount,
-				Additions:   additions,
-				Deletions:   deletions,
-				Refs:        parseDecorations(parts[4]),
-				IsMergeBase: mergeBase != "" && parts[0] == mergeBase,
-			})
 		}
 	}
+
+	diffs = append(diffs, gitLogDiffs(gitRoot, limit, mergeBase)...)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -669,7 +703,7 @@ func (s *Server) handleGitCommitMessages(w http.ResponseWriter, r *http.Request)
 	// Format: hash\0subject\0body\0author
 	var output []byte
 	if upperRef != "" {
-		cmd := exec.Command("git", "log", "--format=%H%x00%s%x00%b%x00%an%x01", from+".."+upperRef)
+		cmd := exec.Command("git", "log", "--no-show-signature", "--format=%H%x00%s%x00%b%x00%an%x01", from+".."+upperRef)
 		cmd.Dir = gitRoot
 		out, err := cmd.Output()
 		if err != nil {
@@ -705,7 +739,7 @@ func (s *Server) handleGitCommitMessages(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Also include the 'from' commit itself
-	fromCmd := exec.Command("git", "log", "-1", "--format=%H%x00%s%x00%b%x00%an", from)
+	fromCmd := exec.Command("git", "log", "-1", "--no-show-signature", "--format=%H%x00%s%x00%b%x00%an", from)
 	fromCmd.Dir = gitRoot
 	fromOut, err := fromCmd.Output()
 	if err == nil {
