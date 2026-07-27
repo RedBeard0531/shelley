@@ -8799,6 +8799,15 @@ kbd {
   word-break: break-word;
 }
 
+/* Collapsed preview: single line, ellipsis at the edge instead of a
+   mid-line "..." cutoff. min-width lets the flex item shrink. */
+.thinking-text-collapsed {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 .thinking-toggle-button {
   background: none;
   border: none;
