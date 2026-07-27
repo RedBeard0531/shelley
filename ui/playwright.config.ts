@@ -43,6 +43,25 @@ export default defineConfig({
     screenshot: "on",
     /* Record video on all tests, keep only on failure */
     video: "retain-on-failure",
+    /* Ask the app for reduced motion. Playwright waits for an element to stop
+       moving before it clicks, so UI animations are paid for on every single
+       interaction -- PrimeVue's 0.3s dialog enter/leave alone cost ~0.6s per
+       modal open/close, which was ~10s of tool-components.spec.ts. styles.css
+       honours the preference (and reduced-motion.spec.ts checks that it does,
+       without freezing spinners), so the suite gets the same DOM without the
+       waiting.
+
+       This has to go through contextOptions. The top-level `reducedMotion`
+       option is accepted and even reported by testInfo.project.use, but as of
+       Playwright 1.60 it does not reach the context behind the `page` fixture:
+       matchMedia('(prefers-reduced-motion: reduce)') stays false. colorScheme
+       set the same way does apply, and a hand-rolled browser.newContext({
+       reducedMotion: 'reduce' }) works, so it is specific to this option on the
+       fixture path. contextOptions is passed through verbatim and does work.
+       reduced-motion.spec.ts asserts the emulation is actually in effect, so if
+       a future upgrade fixes or breaks this, a test says so rather than the
+       suite quietly going slow again. */
+    contextOptions: { reducedMotion: "reduce" },
   },
 
   projects: [

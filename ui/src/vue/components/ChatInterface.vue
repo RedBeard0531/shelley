@@ -1290,6 +1290,11 @@ const showStreamingPreview = computed(() => !!streamingText.value && agentWorkin
 // ---- scroll ----
 const MAX_SCROLL_OFFSET = 0x7fffffff;
 const BOTTOM_PIN_SCROLL_RELEASE_DELTA = 128;
+// The bottom sentinel's IntersectionObserver rootMargin, which the observer
+// below is built from. An upward scroll larger than this cannot be one of the
+// sub-margin layout clamps that handleScroll must ignore: it necessarily takes
+// the sentinel out of the near-bottom zone.
+const BOTTOM_SENTINEL_MARGIN_PX = 100;
 // How long a clamp bookkeeping entry stays valid. A layout clamp and its
 // scroll event land within a rendering update or two of each other; anything
 // older is stale and must not affect genuine gestures.
@@ -2582,7 +2587,34 @@ function handleScroll() {
   if (bottomPinActive && upwardDelta >= BOTTOM_PIN_SCROLL_RELEASE_DELTA) {
     stopBottomPin();
   }
-  if (!bottomPinActive && upwardDelta > 0) {
+  // An upward delta this large, after clamp accounting, is unambiguously a
+  // gesture: clampBudget has already absorbed the pixels the ResizeObserver
+  // attributed to a list shrink or container growth, so what remains is not
+  // explained by layout. (Clamps themselves can far exceed this — a 1200px list
+  // shrink is ordinary — which is why the discounting above has to come first.)
+  // Acting on it immediately matters because the observer is async — if the list
+  // grows in the same task, the ResizeObserver's follow-the-bottom branch runs
+  // while sentinelAtBottom is still stale-true and yanks the reader back down
+  // (measured: scrollTop 0 -> 1607). The wheel/touch handlers only cover this
+  // while the bottom pin is active, so they are not a substitute.
+  const definitelyGesture = upwardDelta > BOTTOM_SENTINEL_MARGIN_PX;
+  if (!bottomPinActive && upwardDelta > 0 && (!sentinelAtBottom || definitelyGesture)) {
+    // Below the gesture threshold, only act when the bottom sentinel has
+    // actually left the near-bottom zone. While it still intersects we are
+    // following the conversation, and the
+    // IntersectionObserver reports only *changes*, so it will not fire again:
+    // showing the button here would strand it visible with the container
+    // sitting at the bottom, and disarming auto-follow here would silently
+    // stop streaming from following. Sub-margin drops are routine —
+    // content-visibility:auto chunks swapping estimated for real heights clamp
+    // scrollTop by a few pixels. sentinelAtBottom comes from the observer, so
+    // testing it costs no forced layout (reading scrollHeight here would lay
+    // out every off-screen chunk and stall the main thread).
+    //
+    // A genuine gesture that outruns the observer is still handled: the wheel
+    // and touchstart handlers release the pin synchronously, and the observer
+    // shows the button a frame later when the sentinel leaves the margin.
+    //
     // Record the inference so the container ResizeObserver can undo it if a
     // growth report arrives that explains this drop as a layout clamp.
     const now = performance.now();
@@ -2622,9 +2654,23 @@ function setupScrollObservers() {
       if (nearBottom) {
         userScrolled = false;
         stopBottomPin();
+      } else if (!bottomPinActive) {
+        // The sentinel left the near-bottom zone, so we are no longer following
+        // the conversation and must stop auto-scrolling. handleScroll cannot be
+        // relied on to have noticed: it defers to sentinelAtBottom (so that
+        // routine sub-margin clamps don't strand the button), and this callback
+        // is async, so a genuine gesture's scroll event can land while that flag
+        // is still stale-true. Showing the button without arming userScrolled
+        // left auto-follow on, and the next list growth yanked the reader back
+        // to the bottom.
+        //
+        // Excluded while the bottom pin is active: the pin scrolls the container
+        // itself and briefly moves the sentinel out of view, which is not a
+        // gesture. The pin releases via wheel/touch or a real upward delta.
+        userScrolled = true;
       }
     },
-    { root: container, rootMargin: "0px 0px 100px 0px", threshold: 0 },
+    { root: container, rootMargin: `0px 0px ${BOTTOM_SENTINEL_MARGIN_PX}px 0px`, threshold: 0 },
   );
   ro = new ResizeObserver((entries) => {
     perfCount("chat.listResizeObserver");

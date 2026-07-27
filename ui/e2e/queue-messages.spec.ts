@@ -129,8 +129,12 @@ test.describe('Queue Messages', () => {
   test('queued message drains after agent finishes', async ({ page, request }) => {
     await openConversation(page, request);
 
-    // Agent busy for ~10s
-    await sendAndWaitForWorking(page, 'delay: 10');
+    // The delay only has to outlast the queue interaction below, which takes a
+    // few hundred ms (measured max 336ms over 5 local runs). It used to be 10s,
+    // making this the slowest test in the suite at 14.8s -- nearly all of it
+    // spent watching a sleep. 3s keeps ~9x margin for a loaded CI host; the
+    // sibling test above already waits out a `delay: 2` the same way.
+    await sendAndWaitForWorking(page, 'delay: 3');
 
     // Queue a message
     await queueMessage(page, 'echo: queued drain test');
@@ -139,7 +143,7 @@ test.describe('Queue Messages', () => {
     await expect(queuedBadge).toBeVisible({ timeout: 10000 });
 
     // Wait for the first agent response (delay finishes)
-    await page.waitForFunction(() => document.body.textContent?.includes('Delayed for 10 seconds') ?? false, undefined, { timeout: 30000 });
+    await page.waitForFunction(() => document.body.textContent?.includes('Delayed for 3 seconds') ?? false, undefined, { timeout: 30000 });
 
     // After drain, queued badge should disappear
     await expect(queuedBadge).toBeHidden({ timeout: 15000 });

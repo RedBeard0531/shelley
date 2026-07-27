@@ -229,6 +229,78 @@ test.describe("Scroll behavior", () => {
     await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
   });
 
+  test("a sub-margin scrollTop clamp does not strand the scroll-to-bottom button", async ({
+    page,
+    request,
+  }) => {
+    // Regression for a CI flake (builds 8584/8621/8634): the button latched on
+    // while the container was sitting at the bottom, so it never went away.
+    //
+    // handleScroll treated *any* upward scrollTop delta as "user scrolled up".
+    // Drops smaller than the bottom sentinel's 100px rootMargin leave the
+    // sentinel intersecting, and an IntersectionObserver only reports changes,
+    // so it had already said "at bottom" and would not fire again to correct
+    // the button. Such small clamps are routine rather than exotic:
+    // content-visibility:auto chunks swap estimated heights for real ones as
+    // they lay out, which nudges scrollTop down by a few pixels. On a loaded
+    // CI host that reordering is easy to hit; locally it usually isn't, which
+    // is what made this look flaky instead of broken.
+    const slug = await createConversationViaAPI(request, "echo message 0");
+    await page.goto(`/c/${slug}`);
+    await page.waitForLoadState("domcontentloaded");
+
+    const input = page.locator('[data-testid="message-input"]');
+    const sendButton = page.locator('[data-testid="send-button"]');
+    const scrollButton = page.locator(".scroll-to-bottom-button");
+    const messagesContainer = page.locator(".messages-container");
+    await expect(input).toBeVisible({ timeout: 30000 });
+
+    // Enough content that the list actually scrolls.
+    for (let i = 1; i < 4; i++) {
+      await input.fill(`echo message ${i}`);
+      await sendButton.click();
+      await expect(page.locator(`text=echo message ${i}`).last()).toBeVisible({ timeout: 30000 });
+      await expect(page.getByTestId("agent-thinking")).toBeHidden({ timeout: 30000 });
+    }
+    await expect
+      .poll(() =>
+        messagesContainer.evaluate(
+          (el) => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) <= 1,
+        ),
+      )
+      .toBe(true);
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+
+    // scrollToBottom's rAF pin re-pins scrollTop every frame for ~120 frames,
+    // which would paper over the clamp. Retry the nudge until it survives two
+    // frames: that is precisely the point the pin has lapsed, so the scroll
+    // event is handled the way a mid-conversation clamp would be. (Polling on
+    // the synchronous gap instead would succeed on the very first try, while
+    // the pin was still active and suppressing the code path under test.)
+    await expect
+      .poll(
+        () =>
+          messagesContainer.evaluate(async (el) => {
+            el.scrollTop = el.scrollTop - 5;
+            await new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve)),
+            );
+            return el.scrollHeight - el.clientHeight - el.scrollTop;
+          }),
+        { timeout: 15000 },
+      )
+      .toBeGreaterThan(0);
+
+    // The scroll event has been delivered by now (it precedes those frames), so
+    // this is a settled state, not a race: still following the conversation, so
+    // the button must be hidden and auto-follow must still be armed.
+    expect(await scrollButton.isVisible()).toBe(false);
+    await input.fill("echo after clamp");
+    await sendButton.click();
+    await expect(page.locator("text=echo after clamp").last()).toBeVisible({ timeout: 30000 });
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+  });
+
   test("restores to the true bottom after reload despite content-visibility height estimates", async ({
     page,
     request,
@@ -333,5 +405,107 @@ test.describe("Scroll behavior", () => {
         { timeout: 10000 },
       )
       .toBeLessThan(120);
+  });
+
+  test("a scroll-up the observer has not yet reported still disarms auto-follow", async ({
+    page,
+    request,
+  }) => {
+    // The sub-margin clamp fix above made handleScroll defer to the bottom
+    // sentinel, which is right for clamps but must not swallow a real gesture.
+    // The IntersectionObserver is async, so a scroll event can arrive while
+    // sentinelAtBottom is still stale-true. handleScroll then does nothing, and
+    // the observer's own callback (which shows the button) does not arm
+    // userScrolled -- so auto-follow stayed on and the next list growth yanked
+    // the user back to the bottom.
+    //
+    // Scroll far enough to leave the 100px margin, then check both halves:
+    // the button appears, AND new content does not drag the viewport down.
+    const slug = await createConversationViaAPI(request, "echo message 0");
+    await page.goto(`/c/${slug}`);
+    await page.waitForLoadState("domcontentloaded");
+
+    const input = page.locator('[data-testid="message-input"]');
+    const sendButton = page.locator('[data-testid="send-button"]');
+    const scrollButton = page.locator(".scroll-to-bottom-button");
+    const messagesContainer = page.locator(".messages-container");
+    await expect(input).toBeVisible({ timeout: 30000 });
+
+    for (let i = 1; i < 5; i++) {
+      await input.fill(`echo message ${i}`);
+      await sendButton.click();
+      await expect(page.locator(`text=echo message ${i}`).last()).toBeVisible({ timeout: 30000 });
+    }
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+
+    // A genuine scroll to the very top, dispatched as a bare scrollTop write so
+    // no wheel/touch handler runs -- exactly the path where handleScroll is the
+    // only chance to notice before the observer catches up.
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(scrollButton).toBeVisible({ timeout: 5000 });
+
+    const before = await messagesContainer.evaluate((el) => el.scrollTop);
+    expect(before).toBeLessThan(50);
+
+    // Grow the list. Auto-follow must stay disarmed: the user is reading.
+    await input.fill("echo message 5");
+    await sendButton.click();
+    await expect(page.locator("text=echo message 5").last()).toBeAttached({ timeout: 30000 });
+
+    await expect
+      .poll(() => messagesContainer.evaluate((el) => el.scrollTop), { timeout: 3000 })
+      .toBeLessThan(50);
+    await expect(scrollButton).toBeVisible();
+  });
+
+  test("a scroll-up racing list growth in the same frame is not overridden", async ({
+    page,
+    request,
+  }) => {
+    // Tighter version of the test above. There, the observer had already fired
+    // by the time content grew. Here the scroll and the growth land together, so
+    // the ResizeObserver's follow-the-bottom branch runs while both handleScroll
+    // (which defers to the observer's flag) and the observer itself are still
+    // behind -- and it re-pinned to the bottom, throwing the reader back down.
+    const slug = await createConversationViaAPI(request, "echo message 0");
+    await page.goto(`/c/${slug}`);
+    await page.waitForLoadState("domcontentloaded");
+
+    const input = page.locator('[data-testid="message-input"]');
+    const sendButton = page.locator('[data-testid="send-button"]');
+    const scrollButton = page.locator(".scroll-to-bottom-button");
+    const messagesContainer = page.locator(".messages-container");
+    await expect(input).toBeVisible({ timeout: 30000 });
+
+    for (let i = 1; i < 5; i++) {
+      await input.fill(`echo message ${i}`);
+      await sendButton.click();
+      await expect(page.locator(`text=echo message ${i}`).last()).toBeVisible({ timeout: 30000 });
+    }
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+
+    // Scroll to the top and grow the list in the same task, so no observer
+    // callback can run in between. Deliberately no wheel event: those handlers
+    // only arm auto-follow-off while the bottom pin is active, so relying on
+    // one here would hide the bug (with a wheel event this passed even while a
+    // bare scroll was yanked from 0 to 1607).
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+      const list = el.querySelector(".messages-list");
+      if (list) {
+        const filler = document.createElement("div");
+        filler.style.height = "800px";
+        filler.setAttribute("data-test-filler", "1");
+        list.appendChild(filler);
+      }
+    });
+
+    // The reader must stay where they scrolled to.
+    await expect
+      .poll(() => messagesContainer.evaluate((el) => el.scrollTop), { timeout: 3000 })
+      .toBeLessThan(50);
+    await expect(scrollButton).toBeVisible({ timeout: 5000 });
   });
 });

@@ -3606,6 +3606,15 @@ func (s *Server) handleStartNewGeneration(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) startNewGeneration(ctx context.Context, conversationID string) (generated.Conversation, error) {
+	// Detach from the caller's context. Bumping the generation and hydrating the
+	// new one is a two-step mutation that must not be abandoned half-done: the
+	// bump commits in its own transaction, so a client that disconnects in
+	// between leaves the conversation on a new generation with no system prompt,
+	// and /clear reports a 500. CI saw this as "hydrate after generation bump:
+	// failed to store system prompt: context canceled" -- a loaded host widens
+	// the window, but a user navigating away is enough.
+	ctx = context.WithoutCancel(ctx)
+
 	conversation, err := db.WithTxRes(s.db, ctx, func(q *generated.Queries) (generated.Conversation, error) {
 		return q.IncrementConversationGeneration(ctx, conversationID)
 	})

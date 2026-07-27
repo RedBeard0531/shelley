@@ -172,11 +172,17 @@ func (b *Browser) ExecuteSteps(ctx context.Context, baseURL string, steps []Step
 // agent can read the value it probed for instead of flying blind.
 func (b *Browser) executeStep(ctx context.Context, baseURL string, step Step) (string, error) {
 	if step.Action == ActionEval {
+		timeout := parseTimeout(step.Timeout, defaultStepTimeout)
+		// Bound evaluation on the browser context, which has no deadline of its
+		// own: a wedged renderer would otherwise stall here until the whole-test
+		// budget expired instead of failing this step.
+		runCtx, cancel := context.WithTimeout(b.ctx, timeout)
+		defer cancel()
 		// An eval WITHOUT an expectation is a one-shot probe: run once and
 		// return whatever it yields.
 		if step.Expect == "" {
 			var result interface{}
-			if err := chromedp.Run(b.ctx, chromedp.Evaluate(step.Expression, &result)); err != nil {
+			if err := chromedp.Run(runCtx, chromedp.Evaluate(step.Expression, &result)); err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("%v", result), nil
@@ -188,12 +194,11 @@ func (b *Browser) executeStep(ctx context.Context, baseURL string, step Step) (s
 		// merely SLOW to settle under CI load doesn't spuriously fail the step
 		// (which would trigger a costly LLM heal). The assertion is unchanged:
 		// the expected value must still become true within the window.
-		timeout := parseTimeout(step.Timeout, defaultStepTimeout)
 		deadline := time.Now().Add(timeout)
 		var got string
 		for {
 			var result interface{}
-			if err := chromedp.Run(b.ctx, chromedp.Evaluate(step.Expression, &result)); err != nil {
+			if err := chromedp.Run(runCtx, chromedp.Evaluate(step.Expression, &result)); err != nil {
 				// Transient JS errors (element not present yet) are not fatal
 				// while we still have time to poll.
 				got = "<eval error: " + err.Error() + ">"
@@ -219,13 +224,32 @@ func (b *Browser) executeStep(ctx context.Context, baseURL string, step Step) (s
 func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step) error {
 	timeout := parseTimeout(step.Timeout, defaultStepTimeout)
 
+	// runBounded runs actions against the browser context bounded by this step's
+	// timeout. Many chromedp actions block until their selector matches (Click
+	// waits for a clickable node, Navigate for the load event), and b.ctx has no
+	// deadline, so running them directly lets one unsatisfiable step consume the
+	// entire per-test budget instead of failing its own step. See
+	// TestBlockingStepsHonorTheirTimeout.
+	runBounded := func(actions ...chromedp.Action) error {
+		runCtx, cancel := context.WithTimeout(b.ctx, timeout)
+		defer cancel()
+		err := chromedp.Run(runCtx, actions...)
+		if err != nil && runCtx.Err() != nil && ctx.Err() == nil {
+			// Report the step's own timeout rather than a bare
+			// "context deadline exceeded", which reads like an
+			// infrastructure failure and hides which step stalled.
+			return fmt.Errorf("timeout after %s: %s %s: %w", timeout, step.Action, step.Selector, err)
+		}
+		return err
+	}
+
 	switch step.Action {
 	case ActionNavigate:
 		url := step.URL
 		if !strings.HasPrefix(url, "http") {
 			url = strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(url, "/")
 		}
-		return chromedp.Run(b.ctx, chromedp.Navigate(url))
+		return runBounded(chromedp.Navigate(url))
 
 	case ActionWaitVisible:
 		return b.pollJS(ctx, timeout, fmt.Sprintf(
@@ -258,13 +282,13 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		))
 
 	case ActionFill:
-		return b.fill(ctx, step.Selector, step.Value)
+		return b.fill(ctx, step.Selector, step.Value, timeout)
 
 	case ActionClick:
-		return chromedp.Run(b.ctx, chromedp.Click(step.Selector, chromedp.ByQuery))
+		return runBounded(chromedp.Click(step.Selector, chromedp.ByQuery))
 
 	case ActionPressKey:
-		return chromedp.Run(b.ctx, chromedp.KeyEvent(step.Key))
+		return runBounded(chromedp.KeyEvent(step.Key))
 
 	case ActionScreenshot:
 		// Just take a screenshot, ignore the bytes (used for side effects in agent)
@@ -272,9 +296,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		return err
 
 	case ActionAssertVisible:
-		return b.pollCheck(ctx, timeout, func() error {
+		return b.pollCheck(ctx, timeout, func(runCtx context.Context) error {
 			var visible bool
-			if err := chromedp.Run(b.ctx, chromedp.Evaluate(fmt.Sprintf(
+			if err := chromedp.Run(runCtx, chromedp.Evaluate(fmt.Sprintf(
 				`(function() {
 				const el = document.querySelector(%q);
 				if (!el) return false;
@@ -291,9 +315,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		})
 
 	case ActionAssertNotVisible:
-		return b.pollCheck(ctx, timeout, func() error {
+		return b.pollCheck(ctx, timeout, func(runCtx context.Context) error {
 			var visible bool
-			if err := chromedp.Run(b.ctx, chromedp.Evaluate(fmt.Sprintf(
+			if err := chromedp.Run(runCtx, chromedp.Evaluate(fmt.Sprintf(
 				`(function() {
 				const el = document.querySelector(%q);
 				if (!el) return false;
@@ -310,9 +334,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		})
 
 	case ActionAssertText:
-		return b.pollCheck(ctx, timeout, func() error {
+		return b.pollCheck(ctx, timeout, func(runCtx context.Context) error {
 			var got string
-			if err := chromedp.Run(b.ctx, chromedp.TextContent(step.Selector, &got, chromedp.ByQuery)); err != nil {
+			if err := chromedp.Run(runCtx, chromedp.TextContent(step.Selector, &got, chromedp.ByQuery)); err != nil {
 				return fmt.Errorf("assert_text: %w", err)
 			}
 			got = strings.TrimSpace(got)
@@ -323,9 +347,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		})
 
 	case ActionAssertTextContains:
-		return b.pollCheck(ctx, timeout, func() error {
+		return b.pollCheck(ctx, timeout, func(runCtx context.Context) error {
 			var got string
-			if err := chromedp.Run(b.ctx, chromedp.TextContent(step.Selector, &got, chromedp.ByQuery)); err != nil {
+			if err := chromedp.Run(runCtx, chromedp.TextContent(step.Selector, &got, chromedp.ByQuery)); err != nil {
 				return fmt.Errorf("assert_text_contains: %w", err)
 			}
 			if !strings.Contains(got, step.Text) {
@@ -335,9 +359,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		})
 
 	case ActionAssertAttribute:
-		return b.pollCheck(ctx, timeout, func() error {
+		return b.pollCheck(ctx, timeout, func(runCtx context.Context) error {
 			var got string
-			if err := chromedp.Run(b.ctx, chromedp.AttributeValue(step.Selector, step.Attribute, &got, nil, chromedp.ByQuery)); err != nil {
+			if err := chromedp.Run(runCtx, chromedp.AttributeValue(step.Selector, step.Attribute, &got, nil, chromedp.ByQuery)); err != nil {
 				return fmt.Errorf("assert_attribute: %w", err)
 			}
 			if got != step.Value {
@@ -361,9 +385,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		))
 
 	case ActionAssertURL:
-		return b.pollCheck(ctx, timeout, func() error {
+		return b.pollCheck(ctx, timeout, func(runCtx context.Context) error {
 			var got string
-			if err := chromedp.Run(b.ctx, chromedp.Location(&got)); err != nil {
+			if err := chromedp.Run(runCtx, chromedp.Location(&got)); err != nil {
 				return err
 			}
 			if step.Value != "" && got != step.Value {
@@ -376,9 +400,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		})
 
 	case ActionAssertTitle:
-		return b.pollCheck(ctx, timeout, func() error {
+		return b.pollCheck(ctx, timeout, func(runCtx context.Context) error {
 			var got string
-			if err := chromedp.Run(b.ctx, chromedp.Title(&got)); err != nil {
+			if err := chromedp.Run(runCtx, chromedp.Title(&got)); err != nil {
 				return err
 			}
 			if got != step.Text {
@@ -388,9 +412,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 		})
 
 	case ActionAssertCount:
-		return b.pollCheck(ctx, timeout, func() error {
+		return b.pollCheck(ctx, timeout, func(runCtx context.Context) error {
 			var count int
-			if err := chromedp.Run(b.ctx, chromedp.Evaluate(fmt.Sprintf(
+			if err := chromedp.Run(runCtx, chromedp.Evaluate(fmt.Sprintf(
 				`document.querySelectorAll(%q).length`, step.Selector,
 			), &count)); err != nil {
 				return fmt.Errorf("assert_count: %w", err)
@@ -412,7 +436,9 @@ func (b *Browser) executeStepErr(ctx context.Context, baseURL string, step Step)
 }
 
 // fill sets a value on an input/textarea with React-compatible event dispatching.
-func (b *Browser) fill(ctx context.Context, selector, value string) error {
+// timeout bounds the evaluation so a wedged renderer fails this step rather than
+// hanging on the browser's deadline-free context.
+func (b *Browser) fill(ctx context.Context, selector, value string, timeout time.Duration) error {
 	// Determine if this is a textarea or input.
 	js := fmt.Sprintf(`(function() {
 		const el = document.querySelector(%q);
@@ -427,7 +453,9 @@ func (b *Browser) fill(ctx context.Context, selector, value string) error {
 	})()`, selector, selector, value)
 
 	var result bool
-	return chromedp.Run(b.ctx, chromedp.Evaluate(js, &result))
+	runCtx, cancel := context.WithTimeout(b.ctx, timeout)
+	defer cancel()
+	return chromedp.Run(runCtx, chromedp.Evaluate(js, &result))
 }
 
 // pollCheck repeatedly runs check until it returns nil or the timeout expires,
@@ -439,10 +467,18 @@ func (b *Browser) fill(ctx context.Context, selector, value string) error {
 // that never passes (a genuine mismatch, e.g. a forever-spinner regression)
 // still fails after the timeout. Polling only tolerates late settling; it never
 // turns a currently-passing assert into a failure.
-func (b *Browser) pollCheck(ctx context.Context, timeout time.Duration, check func() error) error {
+func (b *Browser) pollCheck(ctx context.Context, timeout time.Duration, check func(runCtx context.Context) error) error {
+	// One browser context bounded by the whole polling window, handed to each
+	// check. Several chromedp actions (TextContent, AttributeValue, Click, …)
+	// block until their selector matches, so a check run against the unbounded
+	// browser context could hang forever *inside* an iteration and the deadline
+	// below would never be consulted. Bounding it here means a stuck check
+	// unblocks when the step's own timeout expires.
+	runCtx, cancel := context.WithTimeout(b.ctx, timeout)
+	defer cancel()
 	deadline := time.Now().Add(timeout)
 	for {
-		err := check()
+		err := check(runCtx)
 		if err == nil {
 			return nil
 		}
@@ -459,12 +495,14 @@ func (b *Browser) pollCheck(ctx context.Context, timeout time.Duration, check fu
 
 // pollJS polls a JS expression until it returns true or the timeout expires.
 func (b *Browser) pollJS(ctx context.Context, timeout time.Duration, expr string) error {
+	runCtx, cancel := context.WithTimeout(b.ctx, timeout)
+	defer cancel()
 	deadline := time.Now().Add(timeout)
 	interval := 200 * time.Millisecond
 
 	for {
 		var result bool
-		if err := chromedp.Run(b.ctx, chromedp.Evaluate(expr, &result)); err != nil {
+		if err := chromedp.Run(runCtx, chromedp.Evaluate(expr, &result)); err != nil {
 			// JS errors during polling are not fatal — element might not exist yet
 		} else if result {
 			return nil

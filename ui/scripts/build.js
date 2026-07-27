@@ -36,6 +36,16 @@ const verbose = process.env.VERBOSE === "1" || process.env.VERBOSE === "true";
 // to keep the embedded binary small. Other builds emit them (gzip-compressed)
 // so devtools work in development.
 const dropSourceMaps = process.env.NO_SOURCEMAPS === "1";
+// FAST_BUILD=1 is for builds whose output is only ever executed by tests, never
+// shipped or debugged: CI's test steps. Source maps go away (nothing reads them
+// headlessly) and the remaining assets compress at level 1 instead of 9. The
+// output is byte-for-byte equivalent after decompression, so the server, the
+// embed check and every test behave identically — only the artifact is bigger,
+// which nothing downstream of a test run cares about. Worth ~5s per build, and
+// CI builds the UI once per shelley step (8 of them).
+const fastBuild = process.env.FAST_BUILD === "1";
+const gzipLevel = fastBuild ? 1 : 9;
+const noSourceMaps = dropSourceMaps || fastBuild;
 
 function log(...args) {
   if (verbose) console.log(...args);
@@ -57,7 +67,7 @@ async function build() {
       outfile: "dist/editor.worker.js",
       format: "iife",
       minify: isProd,
-      sourcemap: !dropSourceMaps,
+      sourcemap: !noSourceMaps,
     });
 
     // Build @pierre/diffs worker for syntax highlighting (IIFE format for web worker)
@@ -68,7 +78,7 @@ async function build() {
       outfile: "dist/diffs-worker.js",
       format: "iife",
       minify: isProd,
-      sourcemap: !dropSourceMaps,
+      sourcemap: !noSourceMaps,
     });
 
     // Build Monaco editor as a separate chunk (JS + CSS).
@@ -83,7 +93,7 @@ async function build() {
       outfile: "dist/monaco-editor.js",
       format: "esm",
       minify: isProd,
-      sourcemap: !dropSourceMaps,
+      sourcemap: !noSourceMaps,
       loader: {
         ".ttf": "file",
       },
@@ -98,7 +108,7 @@ async function build() {
       outfile: "dist/main.js",
       format: "esm",
       minify: isProd,
-      sourcemap: !dropSourceMaps,
+      sourcemap: !noSourceMaps,
       metafile: true,
       external: ["monaco-editor", "/monaco-editor.js"],
       loader: {
@@ -217,7 +227,7 @@ async function build() {
       const outputPath = `dist/${file}.gz`;
       if (fs.existsSync(inputPath)) {
         const input = fs.readFileSync(inputPath);
-        const compressed = zlib.gzipSync(input, { level: 9 });
+        const compressed = zlib.gzipSync(input, { level: gzipLevel });
         fs.writeFileSync(outputPath, compressed);
 
         // Compute SHA256 of the compressed content for ETag
@@ -244,9 +254,9 @@ async function build() {
     // release.yml) drop them entirely; other builds gzip them so the embedded
     // binary stays small while devtools still work. The server serves
     // <name>.map from the embedded <name>.map.gz, exactly as for .js/.css.
-    log(dropSourceMaps ? "\nRemoving source maps..." : "\nGzipping source maps...");
+    log(noSourceMaps ? "\nRemoving source maps..." : "\nGzipping source maps...");
     for (const file of fs.readdirSync("dist")) {
-      if (dropSourceMaps) {
+      if (noSourceMaps) {
         // dist/ isn't cleaned between builds, so also drop .map.gz left over
         // from a previous dev build.
         if (file.endsWith(".map") || file.endsWith(".map.gz")) {
@@ -257,7 +267,7 @@ async function build() {
       if (!file.endsWith(".map")) continue;
       const inputPath = `dist/${file}`;
       const input = fs.readFileSync(inputPath);
-      const compressed = zlib.gzipSync(input, { level: 9 });
+      const compressed = zlib.gzipSync(input, { level: gzipLevel });
       fs.writeFileSync(`${inputPath}.gz`, compressed);
       // Record a content checksum so the server can emit ETags and answer 304s
       // for source maps, matching the other compressed assets.

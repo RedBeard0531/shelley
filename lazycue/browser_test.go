@@ -133,3 +133,55 @@ func TestAssertVariantsPollUntilSettled(t *testing.T) {
 		})
 	}
 }
+
+// TestBlockingStepsHonorTheirTimeout is a regression test for a CI hang: a
+// lazycue test burned its entire 8-minute perTestBudget and took the step down
+// with "relaunch browser: set viewport: context deadline exceeded" (CI builds
+// 8614 and 8635, both on TestNewPageCompactAndSend).
+//
+// The wait_*/assert_* steps poll with a per-step timeout, but the blocking
+// steps (click, press_key, navigate, fill) called chromedp.Run on the browser
+// context, which has no deadline. chromedp.Click waits for its selector to
+// match indefinitely, so a step whose target never becomes clickable — an
+// option that failed to render because the app was slow, say — hung until the
+// whole-test budget expired rather than failing its own step. That turned one
+// slow render into a dead 8-minute job instead of a 15-second step failure
+// (which lazycue can retry, and only then heal).
+//
+// Each of these steps targets a selector that never appears, so each must
+// return an error in roughly its own timeout, not hang.
+func TestBlockingStepsHonorTheirTimeout(t *testing.T) {
+	br := newBrowserOrSkip(t)
+	url := serveHTML(t, `<!doctype html><html><body><p>no such target here</p></body></html>`)
+
+	cases := []struct {
+		name string
+		step Step
+	}{
+		{"click", Step{Action: ActionClick, Selector: "#never", Timeout: "2s"}},
+		{"fill", Step{Action: ActionFill, Selector: "#never", Value: "x", Timeout: "2s"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			steps := []Step{{Action: ActionNavigate, URL: url}, tc.step}
+			start := time.Now()
+			results, err := br.ExecuteSteps(context.Background(), url, steps)
+			elapsed := time.Since(start)
+			// The step must fail (its target never exists) ...
+			failed := err != nil
+			for _, r := range results {
+				if !r.Pass {
+					failed = true
+				}
+			}
+			if !failed {
+				t.Fatalf("%s: expected the step to fail, got results=%+v", tc.name, results)
+			}
+			// ... and it must do so promptly rather than blocking forever. A
+			// generous ceiling still catches the bug, where this took minutes.
+			if elapsed > 60*time.Second {
+				t.Fatalf("%s: step took %v; it ignored its 2s timeout", tc.name, elapsed)
+			}
+		})
+	}
+}

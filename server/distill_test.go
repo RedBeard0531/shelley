@@ -350,3 +350,48 @@ func stopActiveConversationLoops(server *Server) {
 		manager.stopLoop()
 	}
 }
+
+// A client that goes away mid-request must not leave the generation bumped but
+// unhydrated. The bump commits in its own transaction, so if hydration then
+// inherits the (now cancelled) request context and fails, the conversation is
+// left on a new generation with no system prompt and /clear returns 500. Seen
+// in CI as `hydrate after generation bump: failed to store system prompt:
+// context canceled`, which a loaded host makes easy to hit because it widens
+// the window between the bump and the write.
+func TestStartNewGenerationSurvivesClientDisconnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := NewTestHarness(t)
+		h.NewConversation("before clear", "")
+		h.WaitResponse()
+		convID := h.convID
+
+		// A context already cancelled, standing in for a client that
+		// disconnected between the bump and hydration.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		conversation, err := h.server.startNewGeneration(ctx, convID)
+		if err != nil {
+			t.Fatalf("startNewGeneration with a cancelled client context: %v", err)
+		}
+		if conversation.CurrentGeneration != 2 {
+			t.Fatalf("expected current_generation=2, got %d", conversation.CurrentGeneration)
+		}
+
+		// The new generation must have its system prompt, or the next turn runs
+		// without one.
+		msgs, err := h.db.ListMessagesForContext(context.Background(), convID)
+		if err != nil {
+			t.Fatalf("failed to list context: %v", err)
+		}
+		var system int
+		for _, m := range msgs {
+			if m.Type == string(db.MessageTypeSystem) {
+				system++
+			}
+		}
+		if system == 0 {
+			t.Fatal("new generation has no system prompt after the client disconnected")
+		}
+	})
+}
