@@ -196,6 +196,30 @@
               <div class="git-graph-detail-subject">{{ selectedCommit.subject }}</div>
             </div>
 
+            <!-- Actions sit directly under the subject: long commit bodies and
+                 diffstats used to push them far below the fold. -->
+            <div class="git-graph-detail-actions">
+              <a
+                :class="`git-graph-open-diff${!canOpenDiff ? ' git-graph-open-diff-disabled' : ''}`"
+                :href="openDiffHref"
+                :aria-disabled="!canOpenDiff"
+                @click="onOpenDiffClick"
+              >
+                Open diff →
+              </a>
+              <a
+                v-if="data?.githubBase"
+                v-tooltip.top="'View on GitHub'"
+                class="git-graph-github-link"
+                :href="`${data.githubBase}/commit/${selectedCommit.hash}`"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <OctocatIcon :size="14" />
+                <span>GitHub</span>
+              </a>
+            </div>
+
             <div class="git-graph-detail-meta">
               <div>
                 <strong>Author:</strong> {{ selectedCommit.author
@@ -264,28 +288,6 @@
               <DiffstatList :files="detail.files" />
             </div>
             <div v-if="detailLoading && !detail" class="git-graph-detail-loading">Loading…</div>
-
-            <div class="git-graph-detail-actions">
-              <a
-                :class="`git-graph-open-diff${!canOpenDiff ? ' git-graph-open-diff-disabled' : ''}`"
-                :href="openDiffHref"
-                :aria-disabled="!canOpenDiff"
-                @click="onOpenDiffClick"
-              >
-                Open diff →
-              </a>
-              <a
-                v-if="data?.githubBase"
-                v-tooltip.top="'View on GitHub'"
-                class="git-graph-github-link"
-                :href="`${data.githubBase}/commit/${selectedCommit.hash}`"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <OctocatIcon :size="14" />
-                <span>GitHub</span>
-              </a>
-            </div>
           </div>
         </template>
       </div>

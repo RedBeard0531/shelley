@@ -9595,7 +9595,6 @@ kbd {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  margin-top: 0.25rem;
 }
 
 .git-graph-open-diff {
