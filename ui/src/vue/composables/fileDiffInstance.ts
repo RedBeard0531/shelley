@@ -42,11 +42,50 @@ export function useFileDiffInstance(
 ) {
   let instance: FileDiff<undefined> | null = null;
   let container: HTMLElement | null = null;
-  // True once we've successfully hydrated; controls whether the host's
-  // fallback content (raw <pre>) should be hidden.
+  // True once the hydrated diff has actually laid out to a non-zero height.
+  // Callers use this to drop a height placeholder, so it must not flip on
+  // hydrate() alone: hydrate only starts worker tokenization and returns with
+  // the container still empty. Dropping the placeholder then collapses the host
+  // to zero until the real height arrives, and WebKit does not restore the
+  // scroll offset across such a collapse (Chromium's scroll anchoring does),
+  // which is what broke autoscroll on Safari as diffs streamed by. Waiting for
+  // real layout keeps the host's height monotonic.
   const rendered = ref(false);
+  // Watches the container for its first non-zero layout. Disconnected as soon
+  // as that happens (and on teardown) so an idle observer isn't left attached
+  // to every diff in a long conversation.
+  let layoutObserver: ResizeObserver | null = null;
+
+  function stopLayoutObserver() {
+    layoutObserver?.disconnect();
+    layoutObserver = null;
+  }
+
+  // Flip `rendered` once the container reports a real height. ResizeObserver is
+  // the right signal because the height arrives asynchronously from the worker
+  // and there is no FileDiff callback for "the diff is on screen".
+  //
+  // A diff with no hunks is the exception: FileDiff renders neither code nor
+  // (with disableFileHeader) a header, so the container stays 0px forever and
+  // waiting on layout would strand the placeholder at its estimated height.
+  // A no-op patch produces exactly that, so resolve it up front.
+  function watchForLayout(inputs: FileDiffInputs, target: HTMLElement) {
+    stopLayoutObserver();
+    if (inputs.fileDiff.hunks.length === 0 || typeof ResizeObserver === "undefined") {
+      // Nothing will ever lay out (or, under jsdom, nothing observes it).
+      rendered.value = true;
+      return;
+    }
+    layoutObserver = new ResizeObserver((entries) => {
+      if (!entries.some((entry) => entry.contentRect.height > 0)) return;
+      rendered.value = true;
+      stopLayoutObserver();
+    });
+    layoutObserver.observe(target);
+  }
 
   function teardown() {
+    stopLayoutObserver();
     if (instance) {
       instance.cleanUp();
       instance = null;
@@ -69,7 +108,7 @@ export function useFileDiffInstance(
     // FileDiff won't remove it on cleanUp (we remove it ourselves in teardown).
     instance = new FileDiff<undefined>(inputs.options, getDiffsWorkerPool(), true);
     instance.hydrate({ fileDiff: inputs.fileDiff, fileContainer: container });
-    rendered.value = true;
+    watchForLayout(inputs, container);
   }
 
   // Track both the host element and the inputs: the host is rendered behind a

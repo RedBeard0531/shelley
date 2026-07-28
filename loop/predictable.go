@@ -197,6 +197,14 @@ func (s *PredictableService) Do(ctx context.Context, req *llm.Request) (*llm.Res
 		// Trigger a patch that will succeed (using overwrite, which creates the file)
 		return s.makePatchToolResponseOverwrite("/tmp/test-patch-success.txt", inputTokens), nil
 
+	case "big patch":
+		// A tall patch whose rendered @pierre/diffs output is many viewports
+		// high. Used by the scroll tests: diffs hydrate asynchronously (worker
+		// tokenization, then shadow DOM), so a tall one grows the message list
+		// well after the message itself lands, which is exactly the sequence
+		// that autoscroll has to keep up with.
+		return s.makeBigPatchToolResponse(inputTokens), nil
+
 	case "patch bad json":
 		// Trigger a patch with malformed JSON (simulates Anthropic sending invalid JSON)
 		return s.makeMalformedPatchToolResponse(inputTokens), nil
@@ -513,6 +521,50 @@ func (s *PredictableService) makePatchToolResponseOverwrite(filePath string, inp
 			InputTokens:  inputTokens,
 			OutputTokens: outputTokens,
 			CostUSD:      0.0,
+		},
+	}
+}
+
+// makeBigPatchToolResponse overwrites a fresh file with a few hundred lines of
+// code, so the resulting unified diff renders as an @pierre/diffs view many
+// viewports tall. The path is unique per call so repeated turns each produce a
+// full-file diff rather than a no-op.
+func (s *PredictableService) makeBigPatchToolResponse(inputTokens uint64) *llm.Response {
+	var body strings.Builder
+	body.WriteString("package big\n\n")
+	for i := range 200 {
+		fmt.Fprintf(&body, "// line %d of a deliberately tall generated file\nfunc Fn%d() int { return %d }\n\n", i, i, i)
+	}
+	filePath := fmt.Sprintf("/tmp/shelley-big-patch-%d.go", time.Now().UnixNano())
+	toolInputData := map[string]any{
+		"path": filePath,
+		"patches": []map[string]string{
+			{"operation": "overwrite", "newText": body.String()},
+		},
+	}
+	toolInputBytes, err := json.Marshal(toolInputData)
+	if err != nil {
+		panic(err)
+	}
+	responseText := fmt.Sprintf("I'll write a large file: %s", filePath)
+	return &llm.Response{
+		ID:    fmt.Sprintf("pred-big-patch-%d", time.Now().UnixNano()),
+		Type:  "message",
+		Role:  llm.MessageRoleAssistant,
+		Model: "predictable-v1",
+		Content: []llm.Content{
+			{Type: llm.ContentTypeText, Text: responseText},
+			{
+				ID:        fmt.Sprintf("tool_%d", time.Now().UnixNano()%1000),
+				Type:      llm.ContentTypeToolUse,
+				ToolName:  "patch",
+				ToolInput: json.RawMessage(toolInputBytes),
+			},
+		},
+		StopReason: llm.StopReasonToolUse,
+		Usage: llm.Usage{
+			InputTokens:  inputTokens,
+			OutputTokens: uint64(len(responseText)/4 + len(toolInputBytes)/4),
 		},
 	}
 }

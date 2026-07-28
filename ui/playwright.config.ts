@@ -82,5 +82,20 @@ export default defineConfig({
           },
         ]
       : []),
+    // WebKit is opt-in (PW_WEBKIT=1) for the same reason as Firefox, and it is
+    // the only way to reproduce Safari-specific scroll bugs here. It differs
+    // from Chromium in a way that matters to autoscroll: Chromium's scroll
+    // anchoring restores the offset losslessly when content above the viewport
+    // collapses and then grows back, and WebKit's does not (measured: 5000 ->
+    // 3700 -> 5700 across a 2000px collapse/regrow). Layout bugs that Chromium
+    // silently absorbs are therefore user-visible on Safari.
+    ...(process.env.PW_WEBKIT
+      ? [
+          {
+            name: "webkit",
+            use: { ...devices["Desktop Safari"] },
+          },
+        ]
+      : []),
   ],
 });
