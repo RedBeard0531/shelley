@@ -365,6 +365,7 @@ func TestHydrateDedupesQueuedAgainstInMemory(t *testing.T) {
 	mgr := NewConversationManager(convID, database, server.logger, server.toolSetConfig,
 		func(context.Context, llm.Message, llm.Usage, []llm.PurposedUsage) error { return nil },
 		func(context.Context, llm.Message, llm.Usage, []llm.PurposedUsage) error { return nil },
+		func(context.Context, []recordMessageInput) error { return nil },
 		func(ConversationState) {}, server.streamPub)
 	mgr.mu.Lock()
 	mgr.pendingBatches = []pendingBatch{{

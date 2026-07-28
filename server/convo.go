@@ -70,6 +70,15 @@ type pendingBatch struct {
 	// should remain — the earlier ones echo turns that have already been
 	// superseded and would surface as stray duplicate completions.
 	SubagentConversationID string
+	// isStale, optionally set on Kind=pendingBatchSubagentDone batches, is
+	// evaluated by enqueueBatch under cm.mu immediately before appending.
+	// When it reports true, the batch is discarded: the result it announces
+	// has already been delivered to the parent synchronously (see
+	// notifyParentSubagentDone's producer-side invalidation). Evaluating
+	// under the same mutex dropStaleParentNotification uses to scrub the
+	// queue makes enqueue-vs-scrub ordering irrelevant — whichever runs
+	// second sees the other's effect.
+	isStale func() bool
 }
 
 // ConversationManager manages a single active conversation
@@ -84,6 +93,9 @@ type ConversationManager struct {
 	lastActivity        time.Time
 	modelID             string
 	recordMessage       loop.MessageRecordFunc
+	// recordMessageBatch persists several messages in one Tx (consecutive
+	// sequence ids). Used by mid-turn injection of subagent-done pairs.
+	recordMessageBatch messageBatchRecordFunc
 	// recordTurnStartMessage records the user message that begins a turn,
 	// folding the agent_working=true flip and timestamp bump into the INSERT Tx
 	// (see Server.recordTurnStartMessage). Falls back to recordMessage when nil.
@@ -132,11 +144,14 @@ type ConversationManager struct {
 	// appear before the distillation status.
 	distillSetupDone chan struct{}
 
-	// pendingBatches holds batches of messages queued to be sent after the
-	// current turn ends (or after distillation completes). One queue serves
-	// both user messages and subagent-done notifications, so distillation
-	// and turn-end serialization — which already gate drainPendingMessages —
-	// gate both sources uniformly.
+	// pendingBatches holds batches of messages queued for delivery to the
+	// loop. One queue serves both user messages and subagent-done
+	// notifications, so distillation and turn-end serialization — which
+	// already gate drainPendingMessages — gate both sources uniformly.
+	// User batches wait for the current turn to end; subagent-done batches
+	// are additionally consumed MID-TURN by takeInjectableSubagentDone at
+	// the loop's next LLM round, so the parent reacts to completions
+	// without waiting out its own turn.
 	pendingBatches []pendingBatch
 
 	// draining is true while a drainPendingMessages goroutine is in flight
@@ -195,6 +210,41 @@ type ConversationManager struct {
 	// notification is still owed. Guarded by cm.mu.
 	subagentFinishSuppressed bool
 
+	// handledResponseSeq is the highest sequence id of an agent message of
+	// THIS (subagent) conversation whose content the parent has either
+	// RECEIVED (a wait=true tool call read it for synchronous delivery) or
+	// deliberately SUPERSEDED (the parent sent the subagent new work,
+	// making earlier turns' completions moot). Recorded by
+	// markResponseHandled at each delivery/supersession point in
+	// SubagentRunner — always BEFORE the corresponding queue-scrub
+	// (dropStaleParentNotification).
+	//
+	// notifyParentSubagentDone builds an isStale closure over it; the
+	// PARENT's enqueueBatch evaluates that closure under the parent's cm.mu
+	// immediately before appending, and discards the batch when the response
+	// it announces has sequence id <= this value. This closes the race where
+	// the onDone notifier goroutine is delayed past the queue-scrub: the
+	// scrub takes the same parent mutex the enqueue-time check runs under,
+	// so whichever runs second sees the other's effect — either the scrub
+	// removes the enqueued batch, or the late enqueue sees the watermark
+	// (published before the scrub) and skips. Atomic (not cm.mu) because the
+	// closure reads it while holding the PARENT manager's mutex — no
+	// cross-manager lock ordering to reason about.
+	handledResponseSeq atomic.Int64
+
+	// notifiedResponseSeq is the highest sequence id of an agent message of
+	// THIS (subagent) conversation for which a completion notification has
+	// been APPENDED to the parent's queue (claimed at enqueue time by the
+	// isStale closure, under the parent's cm.mu). A notifier whose response
+	// seq is <= this value skips: some other notifier already announced that
+	// response (or a newer one). This closes the duplicate where a DELAYED
+	// notifier goroutine for turn A re-reads the subagent's latest response
+	// at run time — seeing turn B's response — after B's own notifier
+	// already enqueued (and possibly mid-turn-injected) it: both notifiers
+	// read the same seq, only the first claim wins. Queue coalescing cannot
+	// catch this case because B's batch may have already left the queue.
+	notifiedResponseSeq atomic.Int64
+
 	// cancelling is true while CancelConversation is tearing down the current
 	// turn. The cancel path records a synthetic "[Operation cancelled]"
 	// end-of-turn message, which flips agentWorking→idle and would otherwise
@@ -205,8 +255,12 @@ type ConversationManager struct {
 	cancelling bool
 }
 
+// messageBatchRecordFunc persists a batch of messages atomically (one Tx,
+// consecutive sequence ids). See Server.recordMessages.
+type messageBatchRecordFunc func(ctx context.Context, msgs []recordMessageInput) error
+
 // NewConversationManager constructs a manager with dependencies but defers hydration until needed.
-func NewConversationManager(conversationID string, database *db.DB, baseLogger *slog.Logger, toolSetConfig claudetool.ToolSetConfig, recordMessage, recordTurnStartMessage loop.MessageRecordFunc, onStateChange func(ConversationState), streamPub *subpub.SubPub[StreamResponse]) *ConversationManager {
+func NewConversationManager(conversationID string, database *db.DB, baseLogger *slog.Logger, toolSetConfig claudetool.ToolSetConfig, recordMessage, recordTurnStartMessage loop.MessageRecordFunc, recordMessageBatch messageBatchRecordFunc, onStateChange func(ConversationState), streamPub *subpub.SubPub[StreamResponse]) *ConversationManager {
 	logger := baseLogger
 	if logger == nil {
 		logger = slog.Default()
@@ -219,6 +273,7 @@ func NewConversationManager(conversationID string, database *db.DB, baseLogger *
 		lastActivity:           time.Now(),
 		recordMessage:          recordMessage,
 		recordTurnStartMessage: recordTurnStartMessage,
+		recordMessageBatch:     recordMessageBatch,
 		logger:                 logger,
 		toolSetConfig:          toolSetConfig,
 		subpub:                 subpub.New[StreamResponse](),
@@ -417,6 +472,41 @@ func (cm *ConversationManager) consumeSuppressedFinish() {
 	cm.mu.Lock()
 	cm.subagentFinishSuppressed = false
 	cm.mu.Unlock()
+}
+
+// markResponseHandled records that the parent has received or superseded
+// this (subagent) conversation's agent message with the given sequence id;
+// completion notifications for it (or anything older) are moot. See
+// handledResponseSeq.
+func (cm *ConversationManager) markResponseHandled(seq int64) {
+	for {
+		cur := cm.handledResponseSeq.Load()
+		if seq <= cur || cm.handledResponseSeq.CompareAndSwap(cur, seq) {
+			return
+		}
+	}
+}
+
+// handledSeq returns the highest sequence id recorded by
+// markResponseHandled.
+func (cm *ConversationManager) handledSeq() int64 {
+	return cm.handledResponseSeq.Load()
+}
+
+// claimNotified attempts to claim the right to notify the parent about this
+// (subagent) conversation's agent message with the given sequence id. It
+// returns false when a notification for that response (or a newer one) has
+// already been claimed. See notifiedResponseSeq.
+func (cm *ConversationManager) claimNotified(seq int64) bool {
+	for {
+		cur := cm.notifiedResponseSeq.Load()
+		if seq <= cur {
+			return false
+		}
+		if cm.notifiedResponseSeq.CompareAndSwap(cur, seq) {
+			return true
+		}
+	}
 }
 
 // finishSubagentWait ends a synchronous wait registered by
@@ -938,11 +1028,30 @@ func (cm *ConversationManager) QueueMessage(ctx context.Context, s *Server, mode
 
 // EnqueueSubagentDone appends a subagent-done batch (synthetic
 // assistant tool_use + matching user tool_result) onto the pending-batch
-// queue. If the agent is idle and not distilling, drains immediately;
-// otherwise the batch waits for the current turn or distillation to
-// finish, at which point drainPendingMessages picks it up. The synthetic
-// messages are NOT persisted here — drainPendingMessages records them in
-// order so they can't be reordered relative to other queued work.
+// queue. If the agent is idle and not distilling, drains immediately.
+// If the parent is MID-TURN, the batch does not wait for the turn to end:
+// the running loop splices it in at its next LLM round via
+// takeInjectableSubagentDone (loop.Config.InjectMessages), so the parent
+// reacts to the completion within the same turn. Batches that miss the
+// last round of a turn (or arrive during distillation) are picked up by
+// drainPendingMessages as before. The synthetic messages are NOT persisted
+// here — whichever consumer takes the batch records them at take time.
+//
+// Why persist at delivery instead of at enqueue (crash-durability seems to
+// argue for enqueue): the messages table is not an event log — it IS the
+// conversation history, replayed positionally on hydrate, and the LLM API
+// requires each assistant tool_use row to be immediately followed by the
+// user row carrying its tool_result. Writing this pair at enqueue time,
+// mid-turn, would interleave it between the running turn's own tool_use and
+// tool_result rows — an invalid history that a post-crash rehydrate would
+// "repair" (insertMissingToolResults) into a corrupted turn, and whose DB
+// order would diverge from the order the model actually saw. Persisting at
+// take time — the moment the pair enters the model-visible history — is the
+// only position where the log stays valid and rehydration is faithful.
+// Durability-wise little is at stake: the subagent's response itself is
+// already persisted in the subagent's own conversation; this batch is just a
+// derived "go look" poke, and a crash inside the one-round enqueue-to-take
+// window loses only the poke, never the response.
 //
 // modelID is used to start the parent's loop if it's currently idle; pass
 // the empty string to fall back to the manager's last-known modelID.
@@ -952,13 +1061,103 @@ func (cm *ConversationManager) QueueMessage(ctx context.Context, s *Server, mode
 // notification from an EARLIER turn of the same subagent, so a subagent that
 // finishes repeatedly while the parent is busy never piles up stale
 // completions.
-func (cm *ConversationManager) EnqueueSubagentDone(s *Server, modelID, subagentConversationID string, assistant, toolResult llm.Message) {
+func (cm *ConversationManager) EnqueueSubagentDone(s *Server, modelID, subagentConversationID string, assistant, toolResult llm.Message, isStale func() bool) {
 	cm.enqueueBatch(s, pendingBatch{
 		Kind:                   pendingBatchSubagentDone,
 		Messages:               []llm.Message{assistant, toolResult},
 		ModelID:                modelID,
 		SubagentConversationID: subagentConversationID,
+		isStale:                isStale,
 	})
+}
+
+// DropPendingSubagentDone removes any queued (not-yet-injected/drained)
+// subagent-done batches for the given subagent conversation from this
+// (parent) manager's pending queue, returning how many were dropped. Used
+// when a subagent tool call delivers or supersedes the subagent's result
+// (see dropStaleParentNotification in subagent.go): a notification still
+// queued at that point would be injected (or drained) as a stale duplicate.
+//
+// The in-place filter is safe because both consumers of pendingBatches
+// (drainPendingMessages and takeInjectableSubagentDone) snapshot AND clear/
+// compact under cm.mu before processing, so no live snapshot aliases the
+// backing array we compact here.
+func (cm *ConversationManager) DropPendingSubagentDone(subagentConversationID string) (dropped int) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	kept := cm.pendingBatches[:0]
+	for _, b := range cm.pendingBatches {
+		if b.Kind == pendingBatchSubagentDone && b.SubagentConversationID == subagentConversationID {
+			dropped++
+			continue
+		}
+		kept = append(kept, b)
+	}
+	cm.pendingBatches = kept
+	return dropped
+}
+
+// takeInjectableSubagentDone extracts all queued subagent-done batches,
+// persists their synthetic tool_use/tool_result pairs, and returns the
+// messages for mid-turn splicing into the running loop (see
+// loop.Config.InjectMessages). Returning nil leaves the turn untouched.
+//
+// Persisting BEFORE returning keeps DB sequence order identical to the
+// in-memory splice point: the pair lands between the tool round that just
+// finished and the assistant response that reacts to it. Each pair goes in
+// one Tx (consecutive sequence ids) for the same reason processBatch does. A
+// batch whose persist fails is dropped, not fed — a half-written pair would
+// corrupt history — mirroring processBatch's no-retry policy.
+//
+// While distilling or cancelling, injection is skipped entirely (the
+// conversation is being rewritten / the user is taking over); distillation
+// leaves the batches queued for the post-distillation drain, cancellation
+// clears them. The distilling/cancelling check and the persist below are not
+// atomic — a distillation or cancel can start in between — but that
+// check-then-act window is the same one drainPendingMessages/processBatch
+// already has. Consequences: on cancel, a validly-paired notification lands
+// moments after the cutoff; on distillation, the pair may be recorded into
+// the OLD generation after the compaction snapshot was taken and thus be
+// absent from the new generation's context (visible in the transcript, not
+// re-fed) — an accepted, pre-existing loss mode of the drain path too.
+func (cm *ConversationManager) takeInjectableSubagentDone(ctx context.Context) []llm.Message {
+	cm.mu.Lock()
+	if cm.distilling || cm.cancelling || len(cm.pendingBatches) == 0 || cm.recordMessageBatch == nil {
+		cm.mu.Unlock()
+		return nil
+	}
+	var taken []pendingBatch
+	kept := cm.pendingBatches[:0]
+	for _, b := range cm.pendingBatches {
+		if b.Kind == pendingBatchSubagentDone {
+			taken = append(taken, b)
+		} else {
+			kept = append(kept, b)
+		}
+	}
+	cm.pendingBatches = kept
+	recordBatch := cm.recordMessageBatch
+	cm.mu.Unlock()
+
+	var out []llm.Message
+	for _, b := range taken {
+		inputs := make([]recordMessageInput, 0, len(b.Messages))
+		for _, msg := range b.Messages {
+			inputs = append(inputs, recordMessageInput{message: msg})
+		}
+		// WithoutCancel: ctx is the loop's context; a concurrent cancellation
+		// must not abort the insert halfway and silently eat the notification.
+		// The recorded pair remains valid history either way — hydration picks
+		// it up even if the turn dies before the next LLM round sends it.
+		if err := recordBatch(context.WithoutCancel(ctx), inputs); err != nil {
+			cm.logger.Error("Failed to record injected subagent-done messages", "error", err)
+			continue
+		}
+		cm.logger.Info("Injected subagent-done notification mid-turn",
+			"subagent", b.SubagentConversationID)
+		out = append(out, b.Messages...)
+	}
+	return out
 }
 
 // enqueueBatch appends a batch to the pending queue and, if the agent is
@@ -969,6 +1168,16 @@ func (cm *ConversationManager) EnqueueSubagentDone(s *Server, modelID, subagentC
 // batches for the winning drainer to pick up.
 func (cm *ConversationManager) enqueueBatch(s *Server, b pendingBatch) {
 	cm.mu.Lock()
+	// Producer-side invalidation (see pendingBatch.isStale): a subagent-done
+	// batch whose result has already reached the parent via a synchronous
+	// wait=true tool call is discarded rather than enqueued. Evaluated under
+	// cm.mu so it serializes against dropStaleParentNotification's scrub.
+	if b.isStale != nil && b.isStale() {
+		cm.mu.Unlock()
+		cm.logger.Info("Skipping subagent-done notification: already delivered synchronously",
+			"subagent", b.SubagentConversationID)
+		return
+	}
 	// Coalesce stale subagent-done notifications: if this batch notifies the
 	// parent that a subagent finished, drop any still-queued (not-yet-drained)
 	// notification for the SAME subagent from an earlier turn. Those earlier
@@ -1642,6 +1851,9 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 		},
 		OnStreamDelta: sf.Push,
 		OnStreamDone:  sf.Flush,
+		InjectMessages: func(ctx context.Context) []llm.Message {
+			return cm.takeInjectableSubagentDone(ctx)
+		},
 	})
 
 	cm.mu.Lock()

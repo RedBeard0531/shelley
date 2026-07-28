@@ -65,6 +65,15 @@ type Config struct {
 	// before the assistant message is recorded. Use this to flush any
 	// buffered stream deltas so they reach the UI before the full message.
 	OnStreamDone func()
+	// InjectMessages, if set, is called between LLM rounds (immediately
+	// before each request is built, including the first of a turn). Any
+	// messages it returns are appended to history and included in that
+	// request. Used to splice subagent completion notifications into an
+	// in-flight turn as soon as possible instead of waiting for the turn to
+	// end. The callback owns persistence: it must record the messages before
+	// returning them, so the DB sequence order matches the in-memory splice
+	// point.
+	InjectMessages func(ctx context.Context) []llm.Message
 }
 
 // Loop manages a conversation turn with an LLM including tool execution and message recording.
@@ -87,6 +96,7 @@ type Loop struct {
 	onToolProgress   llm.ToolProgressFunc
 	onStreamDelta    func(llm.StreamDelta)
 	onStreamDone     func()
+	injectMessages   func(ctx context.Context) []llm.Message
 	thinkingLevel    llm.ThinkingLevel
 	notify           chan struct{} // signaled when a message is queued or retry requested
 	retryPending     bool          // set by Retry() to re-run processLLMRequest with current history
@@ -122,6 +132,7 @@ func NewLoop(config Config) *Loop {
 		onToolProgress:   config.OnToolProgress,
 		onStreamDelta:    config.OnStreamDelta,
 		onStreamDone:     config.OnStreamDone,
+		injectMessages:   config.InjectMessages,
 		thinkingLevel:    config.ThinkingLevel,
 		notify:           make(chan struct{}, 1),
 	}
@@ -284,6 +295,19 @@ func (l *Loop) ProcessOneTurn(ctx context.Context) error {
 // each iteration's locals are freed before the next iteration starts.
 func (l *Loop) processLLMRequest(ctx context.Context) error {
 	for {
+		// Splice in externally injected messages (e.g. subagent completion
+		// notifications) so this request already carries them. This runs
+		// between tool rounds too, letting an in-flight turn react to a
+		// subagent finishing without waiting for the turn to end. The callback
+		// persists the messages itself; we only add them to in-memory history.
+		if l.injectMessages != nil {
+			if injected := l.injectMessages(ctx); len(injected) > 0 {
+				l.mu.Lock()
+				l.history = append(l.history, injected...)
+				l.mu.Unlock()
+			}
+		}
+
 		l.mu.Lock()
 		messages := append([]llm.Message(nil), l.history...)
 		tools := l.tools

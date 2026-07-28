@@ -134,6 +134,24 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 	//     notification while we are blocked), then wait for the current turn
 	//     to finish before sending our follow-up.
 	if !wait {
+		// Sending new work supersedes any completion notification still queued
+		// on the parent from an earlier turn of this subagent: the parent is
+		// asking for the NEW turn's outcome, whose completion enqueues a fresh
+		// notification. Two-step supersession, in this order:
+		//  1. watermark: mark every response that ALREADY exists as handled,
+		//     so a straggling notifier goroutine that misses the scrub below
+		//     skips at enqueue time (see handledResponseSeq). Captured before
+		//     the send so the new turn's own response can't be caught.
+		//  2. scrub: drop batches already queued. Done BEFORE sending (no
+		//     waiter slot suppresses onDone here, so dropping later could
+		//     catch a fast new turn's fresh notification).
+		// Accepted loss: if the send below fails, the earlier result's
+		// notification has already been suppressed — but the tool returns an
+		// explicit error, so the parent knows to re-poll the subagent.
+		if seq := r.lastAgentSeq(ctx, conversationID); seq > 0 {
+			manager.markResponseHandled(seq)
+		}
+		r.dropStaleParentNotification(ctx, conversationID)
 		if manager.IsAgentWorking() {
 			if err := manager.QueueMessage(ctx, s, modelID, userMessage); err != nil {
 				return "", fmt.Errorf("failed to queue message for busy subagent: %w", err)
@@ -179,6 +197,12 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		manager.consumeSuppressedFinish()
 	}
 
+	// Capture the supersession watermark BEFORE sending the follow-up: the
+	// latest agent message right now belongs to a turn this re-prompt
+	// supersedes. Reading it after the send could catch the new turn's own
+	// response and wrongly suppress its notification.
+	supersededSeq := r.lastAgentSeq(ctx, conversationID)
+
 	// Accept the follow-up message (this starts a fresh turn).
 	if _, err = manager.AcceptUserMessage(ctx, llmService, modelID, userMessage); err != nil {
 		// Release the slot like any other non-delivery exit; endWait also
@@ -187,6 +211,18 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		r.endWait(manager, conversationID, false)
 		return "", fmt.Errorf("failed to accept user message: %w", err)
 	}
+
+	// The follow-up sent above supersedes completion notifications from
+	// earlier turns of this subagent. Two-step supersession (watermark, then
+	// scrub — see the wait=false branch for the ordering rationale). Both run
+	// only after AcceptUserMessage succeeded: had it failed, the earlier
+	// turn's notification (queued or straggling) would survive and still
+	// deliver its result. The waiter slot suppresses onDone until endWait, so
+	// nothing fresh can be caught by the scrub.
+	if supersededSeq > 0 {
+		manager.markResponseHandled(supersededSeq)
+	}
+	r.dropStaleParentNotification(ctx, conversationID)
 
 	// Wait for the agent to finish (or timeout). waitForResponse owns the
 	// synchronous-waiter slot registered above and releases it on every exit.
@@ -227,7 +263,7 @@ func (r *SubagentRunner) waitForIdle(ctx context.Context, manager *ConversationM
 // subagent's final answer.
 func (r *SubagentRunner) endWait(manager *ConversationManager, conversationID string, delivered bool) {
 	if manager.finishSubagentWait(delivered) {
-		go r.server.notifyParentSubagentDone(conversationID)
+		r.server.dispatchSubagentDone(conversationID)
 	}
 }
 
@@ -264,10 +300,22 @@ func (r *SubagentRunner) waitForResponse(ctx context.Context, manager *Conversat
 
 		if !working {
 			// Agent is done and this wait=true call returns the final answer
-			// synchronously, so we are the delivery path: release the slot as
-			// delivered=true and suppress any async duplicate.
+			// synchronously, so we are the delivery path.
+			response, err := r.getLastAssistantResponse(ctx, conversationID)
+			if err == nil {
+				// Scrub any completion notification for this subagent still
+				// queued on the parent: it predates this wait (the waiter slot
+				// suppresses onDone while held, so nothing fresh can be queued)
+				// and the response returned here is at least as new — injecting
+				// it at the parent's next LLM round would only splice in a
+				// duplicate. Drop BEFORE endWait, while the slot still
+				// guarantees everything droppable is a duplicate.
+				r.dropStaleParentNotification(ctx, conversationID)
+			}
+			// Release the slot as delivered=true, suppressing any async
+			// duplicate of the response we are returning.
 			r.endWait(manager, conversationID, true)
-			return r.getLastAssistantResponse(ctx, conversationID)
+			return response, err
 		}
 
 		// Wait before polling again
@@ -287,6 +335,51 @@ func (r *SubagentRunner) waitForResponse(ctx context.Context, manager *Conversat
 	}
 }
 
+// dropStaleParentNotification removes any queued subagent-done notification
+// for the given subagent from its parent's pending-batch queue. It is called
+// when a subagent tool call delivers or supersedes the subagent's result:
+//
+//  1. wait=true, synchronous delivery: the response returned by the tool call
+//     is at least as new as anything queued (the waiter slot suppresses
+//     onDone while held, so everything queued predates this wait); injecting
+//     it would only splice a duplicate into the parent's turn.
+//  2. wait=true, after sending a follow-up prompt: the re-prompt supersedes
+//     the earlier turn's queued notification — the parent asked for the new
+//     turn's outcome, which arrives via this call or a fresh notification.
+//  3. wait=false, before sending new work: same supersession.
+//
+// Without the drop, the stale notification would be injected at the parent's
+// next LLM round (or drained at turn end) as a confusing echo of a result
+// the parent already has or has moved past.
+//
+// Only an already-active parent manager is consulted: if the parent has no
+// active manager, it has no in-memory pending queue to scrub (queued
+// subagent-done batches live only in memory, and a manager holding pending
+// batches is never evicted).
+func (r *SubagentRunner) dropStaleParentNotification(ctx context.Context, subagentConversationID string) {
+	s := r.server
+
+	conv, err := s.db.GetConversationByID(ctx, subagentConversationID)
+	if err != nil {
+		s.logger.Warn("Failed to look up subagent conversation for stale-notification drop",
+			"subagent", subagentConversationID, "error", err)
+		return
+	}
+	if conv.ParentConversationID == nil {
+		return
+	}
+	s.mu.Lock()
+	parentMgr, ok := s.activeConversations[*conv.ParentConversationID]
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	if dropped := parentMgr.DropPendingSubagentDone(subagentConversationID); dropped > 0 {
+		s.logger.Info("Dropped stale queued subagent-done notification",
+			"subagent", subagentConversationID, "parent", *conv.ParentConversationID, "dropped", dropped)
+	}
+}
+
 func (r *SubagentRunner) isAgentWorking(ctx context.Context, conversationID string) (bool, error) {
 	s := r.server
 
@@ -303,8 +396,38 @@ func (r *SubagentRunner) isAgentWorking(ctx context.Context, conversationID stri
 	return mgr.IsAgentWorking(), nil
 }
 
+// getLastAssistantResponse reads the subagent's latest agent-message text and
+// records its sequence id on the subagent's manager as handled (delivered
+// synchronously), so a straggling notifyParentSubagentDone goroutine for the
+// same (or an older) response skips enqueueing a duplicate notification.
 func (r *SubagentRunner) getLastAssistantResponse(ctx context.Context, conversationID string) (string, error) {
-	return r.server.lastAgentText(ctx, conversationID)
+	text, seq, err := r.server.lastAgentText(ctx, conversationID)
+	if err != nil {
+		return "", err
+	}
+	if seq > 0 {
+		r.server.mu.Lock()
+		mgr, ok := r.server.activeConversations[conversationID]
+		r.server.mu.Unlock()
+		if ok {
+			mgr.markResponseHandled(seq)
+		}
+	}
+	return text, nil
+}
+
+// lastAgentSeq returns the sequence id of the subagent's most recent agent
+// message (0 when none). Used to capture a supersession watermark BEFORE
+// sending new work — reading it after the send could catch the new turn's
+// own response and wrongly mark it handled.
+func (r *SubagentRunner) lastAgentSeq(ctx context.Context, conversationID string) int64 {
+	_, seq, err := r.server.lastAgentText(ctx, conversationID)
+	if err != nil {
+		r.server.logger.Warn("Failed to read last agent message for supersession watermark",
+			"subagent", conversationID, "error", err)
+		return 0
+	}
+	return seq
 }
 
 // generateProgressSummary makes a non-conversation LLM call to summarize the subagent's progress.
@@ -496,15 +619,59 @@ func (r *SubagentRunner) notifySubagentConversation(ctx context.Context, convers
 		"slug", conv.Slug)
 }
 
+// dispatchSubagentDone is the entry point for subagent completion
+// notifications, called SYNCHRONOUSLY from the completion sites (the onDone
+// hook and SubagentRunner.endWait's timeout recovery). It captures the
+// completion's identity — the finished turn's response text and sequence id
+// — before spawning the (potentially slow: parent hydration, lock waits)
+// notification goroutine. Capturing at dispatch rather than inside the
+// goroutine fixes WHAT is being announced at the moment of completion: a
+// delayed goroutine that read "the subagent's latest agent row" at run time
+// could observe a NEWER turn's mid-turn row (e.g. a bare tool_use) and
+// announce an in-progress turn as finished with "(no textual response)".
+func (s *Server) dispatchSubagentDone(subagentConversationID string) {
+	response, responseSeq, ok := s.captureSubagentDone(subagentConversationID)
+	if !ok {
+		return
+	}
+	go s.notifyParentSubagentDone(subagentConversationID, response, responseSeq)
+}
+
+// captureSubagentDone reads the just-finished turn's response text and
+// sequence id. It reports ok=false when the subagent is already working on a
+// NEWER turn: this completion has been superseded — announcing it would
+// splice stale (or mid-turn) content into the parent — and the newer turn's
+// own completion will notify with the real result.
+func (s *Server) captureSubagentDone(subagentConversationID string) (response string, responseSeq int64, ok bool) {
+	ctx := context.Background()
+
+	s.mu.Lock()
+	subMgr, active := s.activeConversations[subagentConversationID]
+	s.mu.Unlock()
+	if active && subMgr.IsAgentWorking() {
+		s.logger.Info("Skipping subagent-done notification: subagent is working on a newer turn",
+			"subagent", subagentConversationID)
+		return "", 0, false
+	}
+
+	response, responseSeq, err := s.lastAgentText(ctx, subagentConversationID)
+	if err != nil || response == "" {
+		response = "(no textual response)"
+	}
+	return response, responseSeq, true
+}
+
 // notifyParentSubagentDone enqueues a synthetic tool_use/tool_result pair
 // onto the parent conversation's pending-batch queue when a subagent
 // finishes, so the parent agent knows to check the results. Inspired by
-// boldsoftware/shelley#200.
+// boldsoftware/shelley#200. response/responseSeq identify the completed
+// turn's final answer, captured at dispatch time (see dispatchSubagentDone).
 //
-// All scheduling — wait for the current turn to end, wait for distillation
-// setup to complete, cooperate with user-typed messages — is handled by the
-// same drainPendingMessages path that user messages already use. We just
-// drop a batch onto the queue and trust that machinery.
+// All scheduling — mid-turn injection at the parent's next LLM round,
+// waiting out distillation, cooperating with user-typed messages — is
+// handled by the pending-batch queue (takeInjectableSubagentDone for a
+// running turn, drainPendingMessages otherwise). We just drop a batch onto
+// the queue and trust that machinery.
 //
 // Deciding WHETHER a notification is owed is no longer this function's job.
 // The synchronous-waiter slot on the subagent manager (see
@@ -518,7 +685,7 @@ func (r *SubagentRunner) notifySubagentConversation(ctx context.Context, convers
 //
 // Both are keyed by the immutable conversation ID, so the old, slug-fragile
 // history parsing that duplicated wait=true responses is gone.
-func (s *Server) notifyParentSubagentDone(subagentConversationID string) {
+func (s *Server) notifyParentSubagentDone(subagentConversationID, response string, responseSeq int64) {
 	ctx := context.Background()
 
 	var conv generated.Conversation
@@ -556,10 +723,32 @@ func (s *Server) notifyParentSubagentDone(subagentConversationID string) {
 	parentModelID := parentManager.modelID
 	parentManager.mu.Unlock()
 
-	response, err := s.lastAgentText(ctx, subagentConversationID)
-	if err != nil || response == "" {
-		response = "(no textual response)"
+	s.mu.Lock()
+	subMgr, subMgrActive := s.activeConversations[subagentConversationID]
+	s.mu.Unlock()
+
+	// Producer-side invalidation, evaluated at enqueue time (see
+	// pendingBatch.isStale). Two conditions, both closing races a delayed
+	// notification can hit between dispatch and enqueue:
+	//  1. handledSeq: the parent already received this response (wait=true
+	//     synchronous delivery) or deliberately superseded it (sent new
+	//     work) — the notification is moot.
+	//  2. claimNotified: another notification already announced this response
+	//     (or a newer one); only the first claim wins. Queue coalescing
+	//     cannot catch this case when the earlier batch has already left the
+	//     queue (mid-turn injection or drain).
+	// The closure runs UNDER THE PARENT MANAGER'S MUTEX — the same mutex
+	// dropStaleParentNotification takes to scrub the queue — so enqueue-vs-
+	// scrub ordering is irrelevant: either the scrub removes the enqueued
+	// batch, or the late enqueue sees the watermark (always published before
+	// the scrub) and skips. Claim-and-append are atomic under that mutex.
+	var stale func() bool
+	if responseSeq > 0 && subMgrActive {
+		stale = func() bool {
+			return subMgr.handledSeq() >= responseSeq || !subMgr.claimNotified(responseSeq)
+		}
 	}
+
 	// Cap the subagent text we splice into the parent's history. A runaway
 	// subagent reply shouldn't dominate the parent's context window; the
 	// parent can always read the full subagent conversation via the
@@ -621,19 +810,20 @@ func (s *Server) notifyParentSubagentDone(subagentConversationID string) {
 		modelID = s.defaultModel
 	}
 
-	// Enqueue onto the parent's pending-batch queue. drainPendingMessages
-	// handles persistence, loop start/wake, and serialization with both
-	// distillation and other queued work. We don't need to read or touch
-	// the parent's agentWorking/distilling/loop state ourselves — the queue
-	// is the single point of coordination.
-	parentManager.EnqueueSubagentDone(s, modelID, subagentConversationID, assistantMsg, toolResultMsg)
+	// Enqueue onto the parent's pending-batch queue. Mid-turn injection /
+	// drainPendingMessages handle persistence, loop start/wake, and
+	// serialization with both distillation and other queued work. We don't
+	// need to read or touch the parent's agentWorking/distilling/loop state
+	// ourselves — the queue is the single point of coordination.
+	parentManager.EnqueueSubagentDone(s, modelID, subagentConversationID, assistantMsg, toolResultMsg, stale)
 	s.logger.Info("Queued subagent-done notification for parent", "subagent", slug, "parent", parentID)
 }
 
 // lastAgentText returns the concatenated text content of the most recent
 // type=agent message in a conversation — specifically the latest such
 // message, skipping non-agent rows (gitinfo, user, tool, system, error)
-// that may have been appended after it.
+// that may have been appended after it — along with that message's
+// sequence id (0 when no agent message exists).
 //
 // In particular gitinfo messages carry assistant-role llm_data and would
 // otherwise be returned as "the subagent's response" when they're really
@@ -643,10 +833,10 @@ func (s *Server) notifyParentSubagentDone(subagentConversationID string) {
 // tool_use), returns "" — we don't walk further back, because earlier
 // agent turns are stale: their text was already conveyed via prior
 // notifications or tool returns.
-func (s *Server) lastAgentText(ctx context.Context, conversationID string) (string, error) {
+func (s *Server) lastAgentText(ctx context.Context, conversationID string) (string, int64, error) {
 	msgs, err := s.db.ListMessages(ctx, conversationID)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	for i := len(msgs) - 1; i >= 0; i-- {
 		m := msgs[i]
@@ -654,11 +844,11 @@ func (s *Server) lastAgentText(ctx context.Context, conversationID string) (stri
 			continue
 		}
 		if m.LlmData == nil {
-			return "", nil
+			return "", m.SequenceID, nil
 		}
 		var llmMsg llm.Message
 		if err := json.Unmarshal([]byte(*m.LlmData), &llmMsg); err != nil {
-			return "", err
+			return "", 0, err
 		}
 		var texts []string
 		for _, content := range llmMsg.Content {
@@ -666,9 +856,9 @@ func (s *Server) lastAgentText(ctx context.Context, conversationID string) (stri
 				texts = append(texts, content.Text)
 			}
 		}
-		return strings.Join(texts, "\n"), nil
+		return strings.Join(texts, "\n"), m.SequenceID, nil
 	}
-	return "", nil
+	return "", 0, nil
 }
 
 // Ensure SubagentRunner implements claudetool.SubagentRunner.

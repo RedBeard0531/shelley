@@ -915,12 +915,15 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
 		}
+		recordBatch := func(ctx context.Context, msgs []recordMessageInput) error {
+			return s.recordMessages(ctx, conversationID, msgs)
+		}
 
 		onStateChange := func(state ConversationState) {
 			s.publishConversationState(state)
 		}
 
-		manager := NewConversationManager(conversationID, s.db, s.logger, s.toolSetConfig, recordMessage, recordTurnStart, onStateChange, s.streamPub)
+		manager := NewConversationManager(conversationID, s.db, s.logger, s.toolSetConfig, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
 		// Hydrate runs DB transactions, which fire OnCommit hooks. Those hooks
@@ -965,6 +968,9 @@ func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, con
 		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
 		}
+		recordBatch := func(ctx context.Context, msgs []recordMessageInput) error {
+			return s.recordMessages(ctx, conversationID, msgs)
+		}
 
 		onStateChange := func(state ConversationState) {
 			s.publishConversationState(state)
@@ -974,12 +980,15 @@ func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, con
 		subagentConfig := s.toolSetConfig
 		subagentConfig.SubagentDepth = s.toolSetConfig.SubagentDepth + 1
 
-		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, recordMessage, recordTurnStart, onStateChange, s.streamPub)
+		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
 		manager.serverPort = s.listenPort
-		// Wire up done notification: when this subagent finishes, notify the parent
-		// by injecting a user message into the parent's loop so the LLM sees it.
+		// Wire up done notification: when this subagent finishes, notify the
+		// parent by splicing a synthetic tool_use/result pair into the
+		// parent's conversation. dispatchSubagentDone captures the completed
+		// turn's response synchronously (fixing what is announced) and then
+		// notifies asynchronously.
 		manager.onDone = func() {
-			go s.notifyParentSubagentDone(conversationID)
+			s.dispatchSubagentDone(conversationID)
 		}
 		// See getOrCreateConversationManager for why we don't hold s.mu here.
 		if err := manager.Hydrate(ctx); err != nil {
