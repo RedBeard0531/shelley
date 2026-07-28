@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -140,6 +141,94 @@ func TestBuildLLMConfigAppliesExeEnvironmentBeforeDiscovery(t *testing.T) {
 	}
 	if !gatewayFound {
 		t.Fatal("parsed llm_gateway was not reused")
+	}
+}
+
+// TestGlobalFlagsDefaultModelEmptyByDefault guards the production fix: the
+// -default-model flag must default to empty so shelley.json's default_model
+// takes effect on VMs (where the systemd unit passes no -default-model). A
+// non-empty flag default would shadow the config field via the
+// defaultModel=="" guard in buildLLMModelSources. This parses through a real
+// FlagSet rather than constructing GlobalConfig directly, so reverting the
+// flag default fails here.
+func TestGlobalFlagsDefaultModelEmptyByDefault(t *testing.T) {
+	var global GlobalConfig
+	fs := flag.NewFlagSet("shelley", flag.ContinueOnError)
+	registerGlobalFlags(fs, &global)
+	if err := fs.Parse([]string{"serve"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if global.DefaultModel != "" {
+		t.Fatalf("DefaultModel default = %q, want empty", global.DefaultModel)
+	}
+
+	// An explicit flag is still captured.
+	global = GlobalConfig{}
+	fs = flag.NewFlagSet("shelley", flag.ContinueOnError)
+	registerGlobalFlags(fs, &global)
+	if err := fs.Parse([]string{"-default-model", "claude-opus-5", "serve"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if global.DefaultModel != "claude-opus-5" {
+		t.Fatalf("DefaultModel = %q, want claude-opus-5", global.DefaultModel)
+	}
+}
+
+// TestBuildLLMConfigDefaultModelPrecedence pins the default-model precedence
+// that the shelley.json default-model mechanism relies on: an explicit
+// -default-model flag wins, otherwise shelley.json's default_model is honored.
+// The flag value is obtained via real flag parsing (see
+// TestGlobalFlagsDefaultModelEmptyByDefault) so on VMs, where the flag is
+// unset, the shelley.json value is what takes effect.
+func TestBuildLLMConfigDefaultModelPrecedence(t *testing.T) {
+	oldDiscover := discoverLLMIntegrations
+	discoverLLMIntegrations = func(context.Context, *http.Client, *slog.Logger) modelsources.LLMIntegrationDiscoveryResult {
+		return modelsources.LLMIntegrationDiscoveryResult{}
+	}
+	t.Cleanup(func() { discoverLLMIntegrations = oldDiscover })
+
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("FIREWORKS_API_KEY", "")
+
+	configPath := filepath.Join(t.TempDir(), "shelley.json")
+	config := `{"default_model": "gpt-5.6-sol"}`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// parseGlobal registers and parses the global flags exactly as main does,
+	// then points -config at our temp file. This ties the flag default to the
+	// precedence assertion so neither can regress silently.
+	parseGlobal := func(t *testing.T, args ...string) GlobalConfig {
+		t.Helper()
+		var global GlobalConfig
+		fs := flag.NewFlagSet("shelley", flag.ContinueOnError)
+		registerGlobalFlags(fs, &global)
+		if err := fs.Parse(append([]string{"-config", configPath}, args...)); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		return global
+	}
+
+	// Flag unset (the VM case): shelley.json's default_model wins.
+	cfg, err := buildLLMConfig(parseGlobal(t, "serve"), logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultModel != "gpt-5.6-sol" {
+		t.Fatalf("flag unset: DefaultModel = %q, want gpt-5.6-sol", cfg.DefaultModel)
+	}
+
+	// Flag explicitly set: it overrides shelley.json.
+	cfg, err = buildLLMConfig(parseGlobal(t, "-default-model", "claude-opus-5", "serve"), logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultModel != "claude-opus-5" {
+		t.Fatalf("flag set: DefaultModel = %q, want claude-opus-5", cfg.DefaultModel)
 	}
 }
 

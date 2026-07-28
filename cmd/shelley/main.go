@@ -49,17 +49,24 @@ type exeEnvironmentConfig struct {
 
 var discoverLLMIntegrations = modelsources.DiscoverLLMIntegrations
 
+// registerGlobalFlags binds the process-wide global flags onto fs, writing into
+// global. Extracted from main so tests can parse flags through a fresh FlagSet
+// and assert defaults (notably that -default-model defaults to empty, which is
+// what lets shelley.json's default_model take effect on VMs).
+func registerGlobalFlags(fs *flag.FlagSet, global *GlobalConfig) {
+	fs.StringVar(&global.DBPath, "db", "shelley.db", "Path to SQLite database file")
+	fs.BoolVar(&global.Debug, "debug", false, "Enable debug logging")
+	fs.BoolVar(&global.PredictableOnly, "predictable-only", false, "Use only the predictable service, ignoring all other models")
+	fs.StringVar(&global.ConfigPath, "config", "", "Path to shelley.json configuration file (optional)")
+	fs.StringVar(&global.DefaultModel, "default-model", "", "Default model for web UI (overrides shelley.json default_model; falls back to the built-in default when unset)")
+	fs.BoolVar(&global.DisableLLMIntegration, "disable-llm-integration", false, "Ignore any discovered exe.dev llm integration")
+	fs.BoolVar(&global.DisableGateway, "disable-gateway", false, "Ignore llm_gateway from shelley.json")
+}
+
 func main() {
 	// Define global flags
 	var global GlobalConfig
-	defaultModelID := models.Default().ID
-	flag.StringVar(&global.DBPath, "db", "shelley.db", "Path to SQLite database file")
-	flag.BoolVar(&global.Debug, "debug", false, "Enable debug logging")
-	flag.BoolVar(&global.PredictableOnly, "predictable-only", false, "Use only the predictable service, ignoring all other models")
-	flag.StringVar(&global.ConfigPath, "config", "", "Path to shelley.json configuration file (optional)")
-	flag.StringVar(&global.DefaultModel, "default-model", defaultModelID, "Default model for web UI")
-	flag.BoolVar(&global.DisableLLMIntegration, "disable-llm-integration", false, "Ignore any discovered exe.dev llm integration")
-	flag.BoolVar(&global.DisableGateway, "disable-gateway", false, "Ignore llm_gateway from shelley.json")
+	registerGlobalFlags(flag.CommandLine, &global)
 
 	// Custom usage function
 	flag.Usage = func() {
