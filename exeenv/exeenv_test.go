@@ -1,6 +1,67 @@
 package exeenv
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestNewBuildsConfiguredEnvironment(t *testing.T) {
+	env, err := New("https", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := env.ReflectionURL(); got != "https://reflection.int.example.test" {
+		t.Fatalf("ReflectionURL() = %q", got)
+	}
+	if got := env.IntegrationURL("llm", true); got != "https://llm.team.example.test" {
+		t.Fatalf("IntegrationURL() = %q", got)
+	}
+}
+
+func TestNewRejectsInvalidConfiguration(t *testing.T) {
+	tests := []struct {
+		name    string
+		scheme  string
+		boxHost string
+		wantErr string
+	}{
+		{name: "missing scheme", boxHost: "example.test", wantErr: "scheme"},
+		{name: "unsupported scheme", scheme: "ftp", boxHost: "example.test", wantErr: "scheme"},
+		{name: "missing box host", scheme: "https", wantErr: "box_host"},
+		{name: "URL as box host", scheme: "https", boxHost: "https://example.test", wantErr: "box_host"},
+		{name: "path in box host", scheme: "https", boxHost: "example.test/path", wantErr: "box_host"},
+		{name: "port in box host", scheme: "https", boxHost: "example.test:443", wantErr: "box_host"},
+		{name: "space in box host", scheme: "https", boxHost: "example test", wantErr: "box_host"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(tt.scheme, tt.boxHost)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("New(%q, %q) error = %v, want error containing %q", tt.scheme, tt.boxHost, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestCurrentPrefersConfiguredEnvironment(t *testing.T) {
+	old := configured.Load()
+	t.Cleanup(func() { configured.Store(old) })
+
+	env, err := New("https", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	Configure(env)
+
+	got, err := Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReflectionURL() != env.ReflectionURL() {
+		t.Fatalf("Current().ReflectionURL() = %q, want %q", got.ReflectionURL(), env.ReflectionURL())
+	}
+}
 
 func TestFromHostnameBuildsEnvironmentURLs(t *testing.T) {
 	tests := []struct {

@@ -879,43 +879,41 @@ func TestRunEndOfTurnHookFailureReturnsError(t *testing.T) {
 	}
 }
 
-func TestExeDevDefaultPortUsesInjectableClient(t *testing.T) {
-	oldClient := exeDevDefaultPortHTTPClient
-	t.Cleanup(func() { exeDevDefaultPortHTTPClient = oldClient })
-
-	exeDevDefaultPortHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != "https://reflection.int.exe.xyz/default_port" {
-			t.Fatalf("unexpected URL %s", req.URL)
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"default_port":8123}`)),
-			Header:     make(http.Header),
-		}, nil
-	})}
-
-	if got := exeDevDefaultPortIn(exeenv.FromHostname("box.exe.xyz")); got != 8123 {
-		t.Fatalf("exeDevDefaultPortIn() = %d, want 8123", got)
+func TestExeDevDefaultPortUsesEnvironmentReflectionURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		scheme  string
+		boxHost string
+		wantURL string
+	}{
+		{"production", "https", "exe.xyz", "https://reflection.int.exe.xyz/default_port"},
+		{"development", "http", "exe.cloud", "http://reflection.int.exe.cloud/default_port"},
+		{"configured HTTPS", "https", "example.test", "https://reflection.int.example.test/default_port"},
 	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldClient := exeDevDefaultPortHTTPClient
+			t.Cleanup(func() { exeDevDefaultPortHTTPClient = oldClient })
 
-func TestExeDevDefaultPortUsesDevelopmentReflectionURL(t *testing.T) {
-	oldClient := exeDevDefaultPortHTTPClient
-	t.Cleanup(func() { exeDevDefaultPortHTTPClient = oldClient })
+			exeDevDefaultPortHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.String() != tt.wantURL {
+					t.Fatalf("unexpected URL %s", req.URL)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"default_port":8123}`)),
+					Header:     make(http.Header),
+				}, nil
+			})}
 
-	exeDevDefaultPortHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != "http://reflection.int.exe.cloud/default_port" {
-			t.Fatalf("unexpected URL %s", req.URL)
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"default_port":8123}`)),
-			Header:     make(http.Header),
-		}, nil
-	})}
-
-	if got := exeDevDefaultPortIn(exeenv.FromHostname("box.exe.cloud")); got != 8123 {
-		t.Fatalf("exeDevDefaultPortIn() = %d, want 8123", got)
+			env, err := exeenv.New(tt.scheme, tt.boxHost)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := exeDevDefaultPortIn(env); got != 8123 {
+				t.Fatalf("exeDevDefaultPortIn() = %d, want 8123", got)
+			}
+		})
 	}
 }
 

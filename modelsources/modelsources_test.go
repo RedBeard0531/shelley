@@ -667,43 +667,61 @@ func TestDiscoverLLMIntegrationsUsesTeamHost(t *testing.T) {
 	}
 }
 
-func TestDiscoverLLMIntegrationsUsesDevelopmentURLs(t *testing.T) {
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		var body string
-		switch req.URL.String() {
-		case "http://reflection.int.exe.cloud/integrations":
-			body = `{"integrations":[{"name":"llm","type":"llm"},{"name":"shared-llm","type":"llm","team":true}]}`
-		case "http://llm.int.exe.cloud/models.json", "http://shared-llm.team.exe.cloud/models.json":
-			body = `{
-				"schema_version": 1,
-				"models": [
-					{"id":"openai/gpt-5.5","provider":"openai","native_id":"gpt-5.5","apis":["openai_responses"]}
-				]
-			}`
-		default:
-			t.Fatalf("unexpected discovery request: %s", req.URL.String())
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(body)),
-			Request:    req,
-		}, nil
-	})}
+func TestDiscoverLLMIntegrationsUsesEnvironmentURLs(t *testing.T) {
+	tests := []struct {
+		name    string
+		scheme  string
+		boxHost string
+	}{
+		{name: "development", scheme: "http", boxHost: "exe.cloud"},
+		{name: "configured HTTPS", scheme: "https", boxHost: "example.test"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reflectionURL := tt.scheme + "://reflection.int." + tt.boxHost + "/integrations"
+			personalURL := tt.scheme + "://llm.int." + tt.boxHost
+			teamURL := tt.scheme + "://shared-llm.team." + tt.boxHost
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				var body string
+				switch req.URL.String() {
+				case reflectionURL:
+					body = `{"integrations":[{"name":"llm","type":"llm"},{"name":"shared-llm","type":"llm","team":true}]}`
+				case personalURL + "/models.json", teamURL + "/models.json":
+					body = `{
+						"schema_version": 1,
+						"models": [
+							{"id":"openai/gpt-5.5","provider":"openai","native_id":"gpt-5.5","apis":["openai_responses"]}
+						]
+					}`
+				default:
+					t.Fatalf("unexpected discovery request: %s", req.URL.String())
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Request:    req,
+				}, nil
+			})}
 
-	env := exeenv.FromHostname("box.exe.cloud")
-	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), env)
-	if !result.Found {
-		t.Fatal("Found = false, want true")
-	}
-	if len(result.Integrations) != 2 {
-		t.Fatalf("integrations = %+v, want two", result.Integrations)
-	}
-	if got := result.Integrations[0]; got.Host != "llm.int.exe.cloud" || got.URL != "http://llm.int.exe.cloud" {
-		t.Errorf("personal integration = %+v, want development host/base URL", got)
-	}
-	if got := result.Integrations[1]; got.Host != "shared-llm.team.exe.cloud" || got.URL != "http://shared-llm.team.exe.cloud" {
-		t.Errorf("team integration = %+v, want development host/base URL", got)
+			env, err := exeenv.New(tt.scheme, tt.boxHost)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), env)
+			if !result.Found {
+				t.Fatal("Found = false, want true")
+			}
+			if len(result.Integrations) != 2 {
+				t.Fatalf("integrations = %+v, want two", result.Integrations)
+			}
+			if got := result.Integrations[0]; got.Host != "llm.int."+tt.boxHost || got.URL != personalURL {
+				t.Errorf("personal integration = %+v, want configured host/base URL", got)
+			}
+			if got := result.Integrations[1]; got.Host != "shared-llm.team."+tt.boxHost || got.URL != teamURL {
+				t.Errorf("team integration = %+v, want configured host/base URL", got)
+			}
+		})
 	}
 }
 

@@ -3,15 +3,29 @@ package exeenv
 
 import (
 	"fmt"
+	"net/url"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Environment describes the scheme and base domain used by exe.dev services.
 type Environment struct {
 	scheme  string
 	boxHost string
+}
+
+// New returns an environment for a configured scheme and box hostname.
+func New(scheme, boxHost string) (Environment, error) {
+	if scheme != "http" && scheme != "https" {
+		return Environment{}, fmt.Errorf("invalid exe environment scheme %q: must be http or https", scheme)
+	}
+	parsed, err := url.Parse(scheme + "://" + boxHost)
+	if err != nil || boxHost == "" || parsed.Host != boxHost || parsed.Hostname() != boxHost || parsed.Port() != "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return Environment{}, fmt.Errorf("invalid exe environment box_host %q: must be a bare hostname", boxHost)
+	}
+	return Environment{scheme: scheme, boxHost: boxHost}, nil
 }
 
 // FromHostname resolves the exe.dev environment containing hostname.
@@ -34,8 +48,18 @@ var current = sync.OnceValues(func() (Environment, error) {
 	return FromHostname(hostname), nil
 })
 
+var configured atomic.Pointer[Environment]
+
+// Configure sets the process-wide exe.dev environment used by Current.
+func Configure(env Environment) {
+	configured.Store(&env)
+}
+
 // Current resolves the environment from this machine's qualified hostname.
 func Current() (Environment, error) {
+	if env := configured.Load(); env != nil {
+		return *env, nil
+	}
 	return current()
 }
 

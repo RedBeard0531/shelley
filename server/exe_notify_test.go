@@ -122,12 +122,14 @@ func TestReflectionProbeSkippedWithoutInjectedClient(t *testing.T) {
 
 func TestExeDevHasNotifyIntegrationUsesEnvironmentReflectionURL(t *testing.T) {
 	tests := []struct {
-		name     string
-		hostname string
-		wantURL  string
+		name    string
+		scheme  string
+		boxHost string
+		wantURL string
 	}{
-		{"production", "box.exe.xyz", "https://reflection.int.exe.xyz/integrations"},
-		{"development", "box.exe.cloud", "http://reflection.int.exe.cloud/integrations"},
+		{"production", "https", "exe.xyz", "https://reflection.int.exe.xyz/integrations"},
+		{"development", "http", "exe.cloud", "http://reflection.int.exe.cloud/integrations"},
+		{"configured HTTPS", "https", "example.test", "https://reflection.int.example.test/integrations"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,7 +146,11 @@ func TestExeDevHasNotifyIntegrationUsesEnvironmentReflectionURL(t *testing.T) {
 				}, nil
 			})}
 
-			if !exeDevHasNotifyIntegrationIn(exeenv.FromHostname(tt.hostname)) {
+			env, err := exeenv.New(tt.scheme, tt.boxHost)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !exeDevHasNotifyIntegrationIn(env) {
 				t.Fatal("expected notify integration")
 			}
 		})

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"shelley.exe.dev/exeenv"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/modelsources"
@@ -77,7 +78,10 @@ func TestBuildLLMConfigSkipsGatewayWhenReflectionFoundLLMIntegration(t *testing.
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	cfg := buildLLMConfig(GlobalConfig{ConfigPath: configPath}, logger, nil)
+	cfg, err := buildLLMConfig(GlobalConfig{ConfigPath: configPath}, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, model := range cfg.Models {
 		if model.Source == "exe.dev gateway" {
 			t.Fatalf("gateway model %q was built despite discovered LLM integration", model.ID)
@@ -85,6 +89,80 @@ func TestBuildLLMConfigSkipsGatewayWhenReflectionFoundLLMIntegration(t *testing.
 	}
 	if findBuiltModelSource(cfg.Models, "predictable") != "builtin" {
 		t.Fatalf("predictable model missing from config")
+	}
+}
+
+func TestBuildLLMConfigAppliesExeEnvironmentBeforeDiscovery(t *testing.T) {
+	oldEnv, err := exeenv.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { exeenv.Configure(oldEnv) })
+
+	oldDiscover := discoverLLMIntegrations
+	discoverLLMIntegrations = func(context.Context, *http.Client, *slog.Logger) modelsources.LLMIntegrationDiscoveryResult {
+		env, err := exeenv.Current()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := env.ReflectionURL(); got != "https://reflection.int.example.test" {
+			t.Fatalf("discovery environment = %q", got)
+		}
+		return modelsources.LLMIntegrationDiscoveryResult{}
+	}
+	t.Cleanup(func() { discoverLLMIntegrations = oldDiscover })
+
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("FIREWORKS_API_KEY", "")
+
+	configPath := filepath.Join(t.TempDir(), "shelley.json")
+	config := `{
+		"llm_gateway": "https://gateway.example.com/",
+		"default_model": "configured-default",
+		"exe_environment": {"scheme": "https", "box_host": "example.test"}
+	}`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := buildLLMConfig(GlobalConfig{ConfigPath: configPath}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultModel != "configured-default" {
+		t.Fatalf("DefaultModel = %q", cfg.DefaultModel)
+	}
+	gatewayFound := false
+	for _, model := range cfg.Models {
+		gatewayFound = gatewayFound || model.Source == "exe.dev gateway"
+	}
+	if !gatewayFound {
+		t.Fatal("parsed llm_gateway was not reused")
+	}
+}
+
+func TestBuildLLMConfigRejectsInvalidExeEnvironmentBeforeDiscovery(t *testing.T) {
+	oldDiscover := discoverLLMIntegrations
+	discoveryCalls := 0
+	discoverLLMIntegrations = func(context.Context, *http.Client, *slog.Logger) modelsources.LLMIntegrationDiscoveryResult {
+		discoveryCalls++
+		return modelsources.LLMIntegrationDiscoveryResult{}
+	}
+	t.Cleanup(func() { discoverLLMIntegrations = oldDiscover })
+
+	configPath := filepath.Join(t.TempDir(), "shelley.json")
+	if err := os.WriteFile(configPath, []byte(`{"exe_environment":{"scheme":"ftp","box_host":"example.test"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := buildLLMConfig(GlobalConfig{ConfigPath: configPath}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err == nil || !strings.Contains(err.Error(), "exe_environment") {
+		t.Fatalf("buildLLMConfig() error = %v", err)
+	}
+	if discoveryCalls != 0 {
+		t.Fatalf("discovery called %d times before config validation", discoveryCalls)
 	}
 }
 

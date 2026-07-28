@@ -15,6 +15,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/client"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/exeenv"
 	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/modelsources"
@@ -33,6 +34,17 @@ type GlobalConfig struct {
 	DefaultModel          string
 	DisableLLMIntegration bool
 	DisableGateway        bool
+}
+
+type shelleyConfig struct {
+	LLMGateway     string                `json:"llm_gateway"`
+	DefaultModel   string                `json:"default_model"`
+	ExeEnvironment *exeEnvironmentConfig `json:"exe_environment"`
+}
+
+type exeEnvironmentConfig struct {
+	Scheme  string `json:"scheme"`
+	BoxHost string `json:"box_host"`
 }
 
 var discoverLLMIntegrations = modelsources.DiscoverLLMIntegrations
@@ -169,7 +181,11 @@ func runServe(global GlobalConfig, args []string) {
 	server.DBPath = global.DBPath
 
 	// Build LLM configuration
-	llmConfig := buildLLMConfig(global, logger, database)
+	llmConfig, err := buildLLMConfig(global, logger, database)
+	if err != nil {
+		logger.Error("Failed to load config", "path", global.ConfigPath, "error", err)
+		os.Exit(1)
+	}
 
 	// Initialize LLM service manager (includes custom model support via database)
 	llmManager := server.NewLLMServiceManager(llmConfig)
@@ -194,7 +210,6 @@ func runServe(global GlobalConfig, args []string) {
 		effectiveSocket = ""
 	}
 
-	var err error
 	if *systemdActivation {
 		listener, listenerErr := systemdListener()
 		if listenerErr != nil {
@@ -396,8 +411,20 @@ func setupToolSetConfig(llmProvider claudetool.LLMServiceProvider, llmManager se
 //  4. Predictable (always available).
 //
 // Custom DB-backed models load on top of the returned set.
-func buildLLMConfig(global GlobalConfig, logger *slog.Logger, database *db.DB) *server.LLMConfig {
-	defaultModel, sources := buildLLMModelSources(context.Background(), global, logger)
+func buildLLMConfig(global GlobalConfig, logger *slog.Logger, database *db.DB) (*server.LLMConfig, error) {
+	config, err := loadConfig(global.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	if config.ExeEnvironment != nil {
+		env, err := exeenv.New(config.ExeEnvironment.Scheme, config.ExeEnvironment.BoxHost)
+		if err != nil {
+			return nil, fmt.Errorf("exe_environment: %w", err)
+		}
+		exeenv.Configure(env)
+	}
+
+	defaultModel, sources := buildLLMModelSources(context.Background(), global, config, logger)
 
 	httpc := llmhttp.NewClient(nil)
 	return &server.LLMConfig{
@@ -406,15 +433,32 @@ func buildLLMConfig(global GlobalConfig, logger *slog.Logger, database *db.DB) *
 		DB:           database,
 		HTTPC:        httpc,
 		RefreshBuiltModels: func(ctx context.Context) ([]models.Built, error) {
-			_, sources := buildLLMModelSources(ctx, global, logger)
+			_, sources := buildLLMModelSources(ctx, global, config, logger)
 			return modelsources.Build(models.All(), sources, httpc, logger), nil
 		},
 		Logger: logger,
-	}
+	}, nil
 }
 
-func buildLLMModelSources(ctx context.Context, global GlobalConfig, logger *slog.Logger) (string, []modelsources.Source) {
-	configPath := global.ConfigPath
+func loadConfig(path string) (shelleyConfig, error) {
+	if path == "" {
+		return shelleyConfig{}, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return shelleyConfig{}, nil
+		}
+		return shelleyConfig{}, fmt.Errorf("read config file: %w", err)
+	}
+	var config shelleyConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return shelleyConfig{}, fmt.Errorf("parse config file: %w", err)
+	}
+	return config, nil
+}
+
+func buildLLMModelSources(ctx context.Context, global GlobalConfig, config shelleyConfig, logger *slog.Logger) (string, []modelsources.Source) {
 	defaultModel := global.DefaultModel
 	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
 	openAIKey := os.Getenv("OPENAI_API_KEY")
@@ -442,26 +486,10 @@ func buildLLMModelSources(ctx context.Context, global GlobalConfig, logger *slog
 		sources = append(sources, modelsources.LLMIntegration(integ, suffix))
 	}
 
-	var gateway string
-	if configPath != "" {
-		data, err := os.ReadFile(configPath)
-		if err == nil {
-			var cfg struct {
-				LLMGateway   string `json:"llm_gateway"`
-				DefaultModel string `json:"default_model"`
-			}
-			if err := json.Unmarshal(data, &cfg); err != nil {
-				logger.Warn("Failed to parse config file", "path", configPath, "error", err)
-			} else {
-				gateway = strings.TrimSuffix(cfg.LLMGateway, "/")
-				if cfg.DefaultModel != "" && defaultModel == "" {
-					defaultModel = cfg.DefaultModel
-					logger.Info("Using default model from config", "model", cfg.DefaultModel)
-				}
-			}
-		} else if !os.IsNotExist(err) {
-			logger.Warn("Failed to read config file", "path", configPath, "error", err)
-		}
+	gateway := strings.TrimSuffix(config.LLMGateway, "/")
+	if config.DefaultModel != "" && defaultModel == "" {
+		defaultModel = config.DefaultModel
+		logger.Info("Using default model from config", "model", config.DefaultModel)
 	}
 
 	if global.DisableGateway {
@@ -512,7 +540,11 @@ func runModels(global GlobalConfig, args []string) {
 	}
 
 	logger := setupLogging(global.Debug)
-	llmCfg := buildLLMConfig(global, logger, nil)
+	llmCfg, err := buildLLMConfig(global, logger, nil)
+	if err != nil {
+		logger.Error("Failed to load config", "path", global.ConfigPath, "error", err)
+		os.Exit(1)
+	}
 
 	defaultID := llmCfg.DefaultModel
 	if defaultID == "" {
