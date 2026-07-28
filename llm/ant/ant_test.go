@@ -642,21 +642,36 @@ func TestFromLLMTool(t *testing.T) {
 }
 
 func TestFromLLMSystem(t *testing.T) {
-	sys := llm.SystemContent{
-		Text:  "You are a helpful assistant",
-		Type:  "text",
-		Cache: true,
+	tests := []struct {
+		name     string
+		in       llm.SystemContent
+		wantJSON string
+	}{
+		{
+			name:     "explicit type and cache",
+			in:       llm.SystemContent{Text: "You are a helpful assistant", Type: "text", Cache: true},
+			wantJSON: `{"text":"You are a helpful assistant","type":"text","cache_control":{"type":"ephemeral"}}`,
+		},
+		{
+			// Anthropic rejects a system block with no type: 400
+			// "system.0.type: Field required". Callers that leave Type blank
+			// must still produce a valid request.
+			name:     "empty type defaults to text",
+			in:       llm.SystemContent{Text: "You are a helpful assistant"},
+			wantJSON: `{"text":"You are a helpful assistant","type":"text"}`,
+		},
 	}
 
-	got := fromLLMSystem(sys)
-	if got.Text != "You are a helpful assistant" {
-		t.Errorf("fromLLMSystem().Text = %v, want %v", got.Text, "You are a helpful assistant")
-	}
-	if got.Type != "text" {
-		t.Errorf("fromLLMSystem().Type = %v, want %v", got.Type, "text")
-	}
-	if string(got.CacheControl) != `{"type":"ephemeral"}` {
-		t.Errorf("fromLLMSystem().CacheControl = %v, want %v", string(got.CacheControl), `{"type":"ephemeral"}`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := json.Marshal(fromLLMSystem(tt.in))
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			if string(b) != tt.wantJSON {
+				t.Errorf("fromLLMSystem() = %s, want %s", b, tt.wantJSON)
+			}
+		})
 	}
 }
 

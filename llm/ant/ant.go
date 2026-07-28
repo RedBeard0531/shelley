@@ -724,8 +724,13 @@ func fromLLMTool(t *llm.Tool) *tool {
 
 func fromLLMSystem(s llm.SystemContent) systemContent {
 	return systemContent{
-		Text:         s.Text,
-		Type:         s.Type,
+		Text: s.Text,
+		// Anthropic requires a type on every system block and rejects the
+		// request with 400 "system.0.type: Field required" when it is absent.
+		// "text" is the only value the API accepts here, so filling it in for
+		// callers that left it blank cannot change the meaning of a request
+		// that would otherwise have succeeded.
+		Type:         cmp.Or(s.Type, "text"),
 		CacheControl: fromLLMCache(s.Cache),
 	}
 }
