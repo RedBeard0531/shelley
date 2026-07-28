@@ -582,6 +582,177 @@ func TestIntegrationModelsFromCatalogUsesNativeIDsForSupportedAPIs(t *testing.T)
 	}
 }
 
+func TestDiscoverLLMIntegrationsFallsBackWhenReflectionRequestFails(t *testing.T) {
+	tests := []struct {
+		name             string
+		catalogStatus    int
+		catalogBody      string
+		wantFound        bool
+		wantIntegrations int
+	}{
+		{
+			name:          "catalog available",
+			catalogStatus: http.StatusOK,
+			catalogBody: `{
+				"schema_version": 1,
+				"models": [
+					{"id":"openai/gpt-5.5","provider":"openai","native_id":"gpt-5.5","apis":["openai_responses"]}
+				]
+			}`,
+			wantFound:        true,
+			wantIntegrations: 1,
+		},
+		{
+			name:             "catalog has no supported models",
+			catalogStatus:    http.StatusOK,
+			catalogBody:      `{"schema_version":1,"models":[]}`,
+			wantFound:        true,
+			wantIntegrations: 0,
+		},
+		{
+			name:             "catalog unavailable",
+			catalogStatus:    http.StatusNotFound,
+			wantFound:        false,
+			wantIntegrations: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests []string
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests = append(requests, req.URL.String())
+				status := http.StatusServiceUnavailable
+				body := ""
+				if req.URL.String() == "https://llm.int.exe.xyz/models.json" {
+					status = tt.catalogStatus
+					body = tt.catalogBody
+				}
+				return &http.Response{
+					StatusCode: status,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Request:    req,
+				}, nil
+			})}
+
+			result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+			if result.Found != tt.wantFound {
+				t.Fatalf("Found = %v, want %v", result.Found, tt.wantFound)
+			}
+			if len(result.Integrations) != tt.wantIntegrations {
+				t.Fatalf("integrations = %+v, want %d", result.Integrations, tt.wantIntegrations)
+			}
+			wantRequests := []string{
+				"https://reflection.int.exe.xyz/integrations",
+				"https://llm.int.exe.xyz/models.json",
+			}
+			if strings.Join(requests, "\n") != strings.Join(wantRequests, "\n") {
+				t.Fatalf("requests = %q, want %q", requests, wantRequests)
+			}
+			if tt.wantIntegrations == 1 {
+				integ := result.Integrations[0]
+				if integ.Name != "llm" || integ.Host != "llm.int.exe.xyz" || integ.URL != "https://llm.int.exe.xyz" {
+					t.Fatalf("integration = %+v, want default llm integration", integ)
+				}
+			}
+		})
+	}
+}
+
+func TestDiscoverLLMIntegrationsDoesNotFallbackAfterSuccessfulReflection(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		if req.URL.String() != "https://reflection.int.exe.xyz/integrations" {
+			t.Fatalf("unexpected fallback request: %s", req.URL.String())
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"integrations":[]}`)),
+			Request:    req,
+		}, nil
+	})}
+
+	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	if result.Found {
+		t.Fatal("Found = true, want false")
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+}
+
+func TestDiscoverLLMIntegrationsKeepsFoundWhenReflectedCatalogFails(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		status := http.StatusOK
+		body := `{"integrations":[{"name":"llm","type":"llm"}]}`
+		if req.URL.String() == "https://llm.int.exe.xyz/models.json" {
+			status = http.StatusServiceUnavailable
+			body = ""
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+
+	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	if !result.Found || len(result.Integrations) != 0 {
+		t.Fatalf("result = %+v, want found integration with unavailable catalog", result)
+	}
+}
+
+func TestDiscoverLLMIntegrationsFallbackUsesEnvironmentURLs(t *testing.T) {
+	env, err := exeenv.New("https", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		status := http.StatusOK
+		body := `{"schema_version":1,"models":[{"id":"openai/gpt-5.5","native_id":"gpt-5.5","apis":["openai_responses"]}]}`
+		switch req.URL.String() {
+		case "https://reflection.int.example.test/integrations":
+			status = http.StatusBadGateway
+		case "https://llm.int.example.test/models.json":
+		default:
+			t.Fatalf("unexpected discovery request: %s", req.URL.String())
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+
+	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), env)
+	if !result.Found || len(result.Integrations) != 1 {
+		t.Fatalf("result = %+v, want one found integration", result)
+	}
+	if got := result.Integrations[0].URL; got != "https://llm.int.example.test" {
+		t.Fatalf("integration URL = %q, want configured environment URL", got)
+	}
+}
+
+func TestDiscoverLLMIntegrationsDoesNotProbeOutsideExeVM(t *testing.T) {
+	oldMarkerPath := exeDevMarkerPath
+	exeDevMarkerPath = t.TempDir() + "/missing"
+	t.Cleanup(func() { exeDevMarkerPath = oldMarkerPath })
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("unexpected discovery request outside exe VM: %s", req.URL.String())
+		return nil, nil
+	})}
+	result := DiscoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if result.Found || len(result.Integrations) != 0 {
+		t.Fatalf("result = %+v, want no discovered integration", result)
+	}
+}
+
 func TestDiscoverLLMIntegrationsReadsModelsJSONCatalog(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		var body string

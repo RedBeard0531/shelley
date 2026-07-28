@@ -445,10 +445,10 @@ type LLMIntegrationConfig struct {
 	Models []IntegrationModel
 }
 
-// LLMIntegrationDiscoveryResult distinguishes "reflection found no LLM
-// integrations" from "reflection found LLM integrations, but none produced a
-// usable catalog." Callers use Found to avoid falling back to the gateway when
-// a VM has an explicit LLM integration attached.
+// LLMIntegrationDiscoveryResult distinguishes "no LLM integration was found"
+// from "an LLM integration exists, but none produced a usable catalog."
+// Callers use Found to avoid falling back to the gateway when a VM has an
+// explicit LLM integration attached.
 type LLMIntegrationDiscoveryResult struct {
 	Found        bool
 	Integrations []*LLMIntegrationConfig
@@ -475,9 +475,10 @@ type llmIntegrationModelCatalog struct {
 
 // DiscoverLLMIntegrations looks up every integration of type "llm" via
 // the reflection endpoint and returns the resolved configs, sorted by name.
-// Found is false when we are not on an exe.dev VM, reflection is unreachable,
-// or no "llm" integration is registered. An integration whose models.json
-// fetch fails is logged and skipped; other integrations are still returned.
+// When the reflection request fails on an exe.dev VM, discovery tries the
+// default personal "llm" integration directly. An integration whose
+// models.json fetch fails is logged and skipped; other integrations are still
+// returned.
 func DiscoverLLMIntegrations(ctx context.Context, httpc *http.Client, logger *slog.Logger) LLMIntegrationDiscoveryResult {
 	if logger == nil {
 		logger = slog.Default()
@@ -500,7 +501,13 @@ func discoverLLMIntegrations(ctx context.Context, httpc *http.Client, logger *sl
 
 	var ints reflectionIntegrationsResponse
 	if !fetchJSON(ctx, httpc, env.ReflectionURL()+"/integrations", &ints) {
-		return LLMIntegrationDiscoveryResult{}
+		logger.Warn("LLM integration discovery: reflection fetch failed; trying default integration")
+		integ, catalogFound := loadLLMIntegration(ctx, httpc, logger, env, reflectionIntegration{Name: "llm"})
+		result := LLMIntegrationDiscoveryResult{Found: catalogFound}
+		if integ != nil {
+			result.Integrations = append(result.Integrations, integ)
+		}
+		return result
 	}
 
 	var llmIntegrations []reflectionIntegration
@@ -521,27 +528,34 @@ func discoverLLMIntegrations(ctx context.Context, httpc *http.Client, logger *sl
 
 	result := LLMIntegrationDiscoveryResult{Found: true}
 	for _, integ := range llmIntegrations {
-		host := integ.host(env)
-		base := env.IntegrationURL(integ.Name, integ.Team)
-		var catalog llmIntegrationModelCatalog
-		if !fetchJSON(ctx, httpc, base+"/models.json", &catalog) {
-			logger.Warn("LLM integration discovery: models.json fetch failed; skipping", "name", integ.Name, "host", host)
-			continue
+		config, _ := loadLLMIntegration(ctx, httpc, logger, env, integ)
+		if config != nil {
+			result.Integrations = append(result.Integrations, config)
 		}
-		models := integrationModelsFromCatalog(catalog)
-		if len(models) == 0 {
-			logger.Warn("LLM integration discovery: models.json returned no supported models; skipping", "name", integ.Name, "host", host)
-			continue
-		}
-		result.Integrations = append(result.Integrations, &LLMIntegrationConfig{
-			Name:   integ.Name,
-			Host:   host,
-			URL:    base,
-			Models: models,
-		})
-		logger.Info("Discovered exe.dev LLM integration", "name", integ.Name, "host", host, "models", len(models))
 	}
 	return result
+}
+
+func loadLLMIntegration(ctx context.Context, httpc *http.Client, logger *slog.Logger, env exeenv.Environment, integ reflectionIntegration) (*LLMIntegrationConfig, bool) {
+	host := integ.host(env)
+	base := env.IntegrationURL(integ.Name, integ.Team)
+	var catalog llmIntegrationModelCatalog
+	if !fetchJSON(ctx, httpc, base+"/models.json", &catalog) {
+		logger.Warn("LLM integration discovery: models.json fetch failed; skipping", "name", integ.Name, "host", host)
+		return nil, false
+	}
+	models := integrationModelsFromCatalog(catalog)
+	if len(models) == 0 {
+		logger.Warn("LLM integration discovery: models.json returned no supported models; skipping", "name", integ.Name, "host", host)
+		return nil, true
+	}
+	logger.Info("Discovered exe.dev LLM integration", "name", integ.Name, "host", host, "models", len(models))
+	return &LLMIntegrationConfig{
+		Name:   integ.Name,
+		Host:   host,
+		URL:    base,
+		Models: models,
+	}, true
 }
 
 func integrationModelsFromCatalog(catalog llmIntegrationModelCatalog) []IntegrationModel {
