@@ -240,7 +240,11 @@ export const zhTW: TranslationKeys = {
   welcomeMessage:
     "Shelley 是一個運行在 {hostname} 上的代理。你可以讓 Shelley 幫你完成各種任務。若你使用 Shelley 建立了網站，可以透過 exe.dev 的代理功能（參見 {docsLink}）在 {proxyLink} 上存取。",
   sendMessageToStart: "傳送訊息以開始對話。",
-  noModelsConfiguredHint: "未設定 AI 模型。按 Ctrl+K 或 ⌘+K 新增模型。",
+  noModelsTitle: "沒有可用的 AI 模型",
+  noModelsExeNote: "Shelley 從 exe.dev 的 llm 整合取得模型。執行下列任一命令即可修復：",
+  noModelsLocalNote: "按 Ctrl+K 或 ⌘+K 新增模型。",
+  noModelsExeRefresh: "然後在模型選擇器中按 Refresh。",
+  noModelSelectedPlaceholder: "無可用模型",
 
   // Status Bar
   dirLabel: "目錄：",

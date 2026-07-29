@@ -235,7 +235,11 @@ export interface TranslationKeys {
   welcomeSubtitle: string;
   welcomeMessage: string;
   sendMessageToStart: string;
-  noModelsConfiguredHint: string;
+  noModelsTitle: string;
+  noModelsExeNote: string;
+  noModelsLocalNote: string;
+  noModelsExeRefresh: string;
+  noModelSelectedPlaceholder: string;
 
   // Status Bar
   dirLabel: string;

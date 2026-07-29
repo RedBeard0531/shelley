@@ -240,8 +240,12 @@ export const ja: TranslationKeys = {
   welcomeMessage:
     "Shelleyは{hostname}で動作するエージェントです。Shelleyに作業を依頼できます。Shelleyでウェブサイトを構築した場合、exe.devのプロキシ機能（{docsLink}を参照）を使用して{proxyLink}からアクセスできます。",
   sendMessageToStart: "メッセージを送信して会話を開始してください。",
-  noModelsConfiguredHint:
-    "AIモデルが設定されていません。Ctrl+K または ⌘+K でモデルを追加してください。",
+  noModelsTitle: "利用可能なAIモデルがありません",
+  noModelsExeNote:
+    "Shelley は exe.dev の llm 統合からモデルを取得します。次のいずれかを実行して修正してください:",
+  noModelsLocalNote: "Ctrl+K または ⌘+K でモデルを追加してください。",
+  noModelsExeRefresh: "その後モデルピッカーで Refresh を押してください。",
+  noModelSelectedPlaceholder: "利用可能なモデルなし",
 
   // Status Bar
   dirLabel: "ディレクトリ:",

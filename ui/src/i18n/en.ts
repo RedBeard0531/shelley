@@ -242,7 +242,12 @@ export const en: TranslationKeys = {
   welcomeMessage:
     "Shelley is an agent, running on {hostname}. You can ask Shelley to do stuff. If you build a web site with Shelley, you can use exe.dev's proxy features (see {docsLink}) to visit it over the web at {proxyLink}.",
   sendMessageToStart: "Send a message to start the conversation.",
-  noModelsConfiguredHint: "No AI models configured. Press Ctrl+K or ⌘+K to add a model.",
+  noModelsTitle: "No AI models available",
+  noModelsExeNote:
+    "Shelley gets its models from the exe.dev llm integration. Run one of these to fix it:",
+  noModelsLocalNote: "Add a model with Ctrl+K or ⌘+K.",
+  noModelsExeRefresh: "Then Refresh in the model picker.",
+  noModelSelectedPlaceholder: "No model available",
 
   // Status Bar
   dirLabel: "Dir:",

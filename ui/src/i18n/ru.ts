@@ -242,7 +242,12 @@ export const ru: TranslationKeys = {
   welcomeMessage:
     "Shelley — это агент, работающий на {hostname}. Вы можете попросить Shelley выполнить задачи. Если вы создали веб-сайт с помощью Shelley, вы можете использовать прокси-функции exe.dev (см. {docsLink}), чтобы открыть его по адресу {proxyLink}.",
   sendMessageToStart: "Отправьте сообщение, чтобы начать диалог.",
-  noModelsConfiguredHint: "Модели ИИ не настроены. Нажмите Ctrl+K или ⌘+K, чтобы добавить модель.",
+  noModelsTitle: "Нет доступных моделей ИИ",
+  noModelsExeNote:
+    "Shelley получает модели из интеграции llm в exe.dev. Выполните одну из этих команд, чтобы исправить:",
+  noModelsLocalNote: "Добавьте модель через Ctrl+K или ⌘+K.",
+  noModelsExeRefresh: "Затем нажмите Refresh в списке моделей.",
+  noModelSelectedPlaceholder: "Нет доступных моделей",
 
   // Status Bar
   dirLabel: "Каталог:",

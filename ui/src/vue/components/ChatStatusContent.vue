@@ -23,7 +23,9 @@
 
   <!-- Error -->
   <template v-else-if="error">
-    <span class="status-message status-error">{{ error }}</span>
+    <span :class="['status-message', models.length === 0 ? 'status-no-models' : 'status-error']">{{
+      error
+    }}</span>
     <button class="status-button status-button-text" @click="onClearError">
       <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path

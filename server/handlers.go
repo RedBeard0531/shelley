@@ -675,6 +675,17 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 		"default_cwd":         defaultCwd,
 		"home_dir":            homeDir,
 		"user_agents_md_path": userAgentsMdPath,
+		// is_exe_dev lets the UI pick exe.dev-specific setup advice even when
+		// model_setup_hint is absent (the catalog can empty AFTER page load, via
+		// a detached integration plus Refresh).
+		"is_exe_dev": isExeDev(),
+	}
+	// With no models the UI cannot send anything, so tell it WHY. On exe.dev
+	// the usual cause is a missing reflection or llm integration, and each has
+	// a different fix; see modelSetupHintForModels. Only computed for the empty
+	// case, so the healthy path pays no reflection probe.
+	if hint := modelSetupHintForModels(r.Context(), modelList, isExeDev()); hint != "" {
+		initData["model_setup_hint"] = hint
 	}
 	// On exe.dev VMs (where /exe.dev exists), auto-derive the terminal URL and
 	// default links from the current hostname so they pick up hostname changes
@@ -1112,7 +1123,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	llmService, err := s.llmManager.GetService(modelID)
 	if err != nil {
 		s.logger.Error("Unsupported model requested", "model", modelID, "error", err)
-		http.Error(w, fmt.Sprintf("Unsupported model: %s", modelID), http.StatusBadRequest)
+		http.Error(w, unsupportedModelMessage(modelID, s.getModelList()), http.StatusBadRequest)
 		return
 	}
 
@@ -1179,7 +1190,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 			llmService, err = s.llmManager.GetService(modelID)
 			if err != nil {
 				s.logger.Error("Unsupported model on promoted draft", "model", modelID, "error", err)
-				http.Error(w, fmt.Sprintf("Unsupported model: %s", modelID), http.StatusBadRequest)
+				http.Error(w, unsupportedModelMessage(modelID, s.getModelList()), http.StatusBadRequest)
 				return
 			}
 		}
@@ -1337,7 +1348,7 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 	llmService, err := s.llmManager.GetService(modelID)
 	if err != nil {
 		s.logger.Error("Unsupported model requested", "model", modelID, "error", err)
-		http.Error(w, fmt.Sprintf("Unsupported model: %s", modelID), http.StatusBadRequest)
+		http.Error(w, unsupportedModelMessage(modelID, s.getModelList()), http.StatusBadRequest)
 		return
 	}
 
@@ -1602,7 +1613,7 @@ func (s *Server) handleRetryConversation(w http.ResponseWriter, r *http.Request,
 		}
 		llmService, err := s.llmManager.GetService(modelID)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Unsupported model: %s", modelID), http.StatusBadRequest)
+			http.Error(w, unsupportedModelMessage(modelID, s.getModelList()), http.StatusBadRequest)
 			return
 		}
 		if err := manager.Hydrate(ctx); err != nil {
@@ -1712,7 +1723,7 @@ func (s *Server) handleContinueConversation(w http.ResponseWriter, r *http.Reque
 
 	llmService, err := s.llmManager.GetService(newModel)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Unsupported model: %s", newModel), http.StatusBadRequest)
+		http.Error(w, unsupportedModelMessage(newModel, s.getModelList()), http.StatusBadRequest)
 		return
 	}
 
@@ -3739,9 +3750,16 @@ func (s *Server) handleCreateDraft(w http.ResponseWriter, r *http.Request) {
 	if modelID == "" {
 		modelID = s.effectiveDefaultModel(s.getModelList())
 	}
-	if _, err := s.llmManager.GetService(modelID); err != nil {
-		http.Error(w, fmt.Sprintf("Unsupported model: %s", modelID), http.StatusBadRequest)
-		return
+	// A draft is autosaved composer text, not a turn, so it must not require a
+	// usable model. Rejecting it would discard what the user typed and wedge
+	// the client's draft autosave in a retry loop while they are off fixing
+	// their model setup. An EXPLICIT model is still validated (that's a real
+	// client error); an empty/defaulted one is left to the promoting send.
+	if req.Model != "" {
+		if _, err := s.llmManager.GetService(modelID); err != nil {
+			http.Error(w, unsupportedModelMessage(modelID, s.getModelList()), http.StatusBadRequest)
+			return
+		}
 	}
 	var cwdPtr *string
 	if req.Cwd != "" {
@@ -3804,7 +3822,7 @@ func (s *Server) handleUpdateDraft(w http.ResponseWriter, r *http.Request, conve
 			return
 		}
 		if _, err := s.llmManager.GetService(*req.Model); err != nil {
-			http.Error(w, fmt.Sprintf("Unsupported model: %s", *req.Model), http.StatusBadRequest)
+			http.Error(w, unsupportedModelMessage(*req.Model, s.getModelList()), http.StatusBadRequest)
 			return
 		}
 	}

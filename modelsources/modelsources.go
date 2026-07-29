@@ -596,3 +596,20 @@ func fetchJSON(ctx context.Context, httpc *http.Client, url string, out any) boo
 	}
 	return json.NewDecoder(resp.Body).Decode(out) == nil
 }
+
+// CatalogHasServeableModels reports whether an "llm" integration models.json
+// body would yield at least one model Shelley can actually serve.
+//
+// Exported for the server's no-models diagnosis, which probes this endpoint to
+// tell "the llm integration is missing" apart from "it is reachable and
+// serving". That question is only meaningful in discovery's own terms: a
+// catalog can be valid JSON yet contain nothing usable (unsupported api types,
+// missing ids), in which case discovery produces no models. Sharing this
+// helper keeps the diagnosis from drifting away from what discovery does.
+func CatalogHasServeableModels(body []byte) bool {
+	var catalog llmIntegrationModelCatalog
+	if err := json.Unmarshal(body, &catalog); err != nil {
+		return false
+	}
+	return len(integrationModelsFromCatalog(catalog)) > 0
+}

@@ -241,7 +241,12 @@ export const vi: TranslationKeys = {
   welcomeMessage:
     "Shelley là một agent lập trình chạy trên {hostname}. Bạn có thể yêu cầu Shelley xây dựng dự án. Nếu bạn build website bằng Shelley, bạn có thể dùng HTTP proxy của exe.dev ({docsLink}) để xem tại {proxyLink}.",
   sendMessageToStart: "Gửi tin nhắn để bắt đầu trò chuyện.",
-  noModelsConfiguredHint: "Không có model AI sẵn sàng. Nhấn Ctrl+K hoặc ⌘+K để thêm model.",
+  noModelsTitle: "Không có model AI khả dụng",
+  noModelsExeNote:
+    "Shelley lấy các mô hình từ tích hợp llm của exe.dev. Chạy một trong các lệnh này để sửa:",
+  noModelsLocalNote: "Thêm model bằng Ctrl+K hoặc ⌘+K.",
+  noModelsExeRefresh: "Sau đó nhấn Refresh trong bộ chọn model.",
+  noModelSelectedPlaceholder: "Không có model khả dụng",
 
   // Status Bar
   dirLabel: "Thư mục:",

@@ -238,8 +238,14 @@ const visibleModels = computed(() => {
 });
 
 const selectedModelObj = computed(() => props.models.find((m) => m.id === props.selectedModel));
+// selectedModel is "" when the server serves no models (see
+// utils/modelSetupHint). Show an explicit placeholder rather than an empty
+// control, so the trigger never looks like a model is selected.
 const selectedLabel = computed(
-  () => labels.value.get(props.selectedModel) || props.selectedModel,
+  () =>
+    labels.value.get(props.selectedModel) ||
+    props.selectedModel ||
+    t("noModelSelectedPlaceholder"),
 );
 
 // ---- reasoning effort --------------------------------------------------

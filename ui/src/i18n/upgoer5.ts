@@ -241,7 +241,12 @@ export const upgoer5: TranslationKeys = {
   welcomeMessage:
     "This is a helper, running on {hostname}. You can ask it to do stuff. If you build something for people to see, you can use the pass through (see {docsLink}) to visit it at {proxyLink}.",
   sendMessageToStart: "Send a note to start talking.",
-  noModelsConfiguredHint: "No brains set up yet. You need to add one to get started.",
+  noModelsTitle: "No brains to talk to",
+  noModelsExeNote:
+    "Shelley gets its thinking friends from the exe.dev llm thing. Run one of these to fix it:",
+  noModelsLocalNote: "Add a brain with Ctrl+K or ⌘+K.",
+  noModelsExeRefresh: "Then press Refresh in the brain picker.",
+  noModelSelectedPlaceholder: "No brain to use",
 
   // Status Bar
   dirLabel: "Place:",

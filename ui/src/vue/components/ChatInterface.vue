@@ -147,9 +147,21 @@
                   <template v-else>{{ part }}</template>
                 </template>
               </p>
-              <div v-if="models.length === 0" class="add-model-hint">
-                <p class="text-sm chat-secondary-text">{{ t("noModelsConfiguredHint") }}</p>
-              </div>
+              <PvMessage v-if="models.length === 0" severity="warn" class="no-models-message">
+                <p class="no-models-title">{{ t(modelSetupHint.title) }}</p>
+                <p v-if="modelSetupHint.note">{{ t(modelSetupHint.note) }}</p>
+                <!-- Render each remedy as the literal command it runs, so the
+                     user can see what a click does (and copy it to a terminal
+                     instead if they prefer). -->
+                <ul v-if="modelSetupHint.actions.length" class="no-models-commands">
+                  <li v-for="action in modelSetupHint.actions" :key="action.command">
+                    <a :href="suggestURL(action.command)" target="_blank" rel="noopener noreferrer"
+                      ><code>{{ sshCommandLine(action.command) }}</code></a
+                    >
+                  </li>
+                </ul>
+                <p v-if="modelSetupHint.footer">{{ t(modelSetupHint.footer) }}</p>
+              </PvMessage>
               <p v-else class="text-sm chat-secondary-text">{{ t("sendMessageToStart") }}</p>
             </div>
           </div>
@@ -367,6 +379,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from "vue";
 import Button from "primevue/button";
+import PvMessage from "primevue/message";
 import {
   type Message,
   type Conversation,
@@ -387,6 +400,13 @@ import {
   reconcileComposerDraft,
 } from "../../services/draftCache";
 import { setFaviconStatus } from "../../services/favicon";
+import {
+  modelSetupHintKeys,
+  canSendWithModel,
+  needsModel,
+  sshCommandLine,
+  suggestURL,
+} from "../../utils/modelSetupHint";
 import { useMarkdownMode } from "../composables/markdownMode";
 import { useI18n } from "../composables/i18n";
 import { useDraftAutosave } from "../composables/draftAutosave";
@@ -548,6 +568,26 @@ const models = ref<
 // Ready model ids, surfaced to MessageInput for /model argument autocomplete.
 const readyModelIds = computed(() => models.value.filter((m) => m.ready).map((m) => m.id));
 
+// Copy for the empty-model-list state. The server tells us WHY the list is
+// empty (missing exe.dev reflection/llm integration, or not on exe.dev at
+// all) so the advice names the right fix.
+const modelSetupHint = computed(() =>
+  modelSetupHintKeys(
+    window.__SHELLEY_INIT__?.model_setup_hint,
+    window.__SHELLEY_INIT__?.is_exe_dev,
+  ),
+);
+
+// noModelErrorMessage is the terse inline error when a send is blocked for
+// want of a model. The remedies live in the warning panel (and its suggest
+// links), so repeating them in the status bar would just be noise; inside an
+// existing conversation the panel is hidden, so add the one-line note.
+function noModelErrorMessage(): string {
+  const hint = modelSetupHint.value;
+  if (messages.value.length === 0 || !hint.note) return t(hint.title);
+  return `${t(hint.title)}. ${t(hint.note)}`;
+}
+
 const THINKING_LEVEL_KEY = "shelley.thinkingLevel.v2";
 const thinkingLevel = ref<ThinkingLevel>(
   (() => {
@@ -580,6 +620,11 @@ function setThinkingLevel(level: ThinkingLevel) {
   }
 }
 
+// selectedModel is "" when the server serves no models. Deliberately no
+// hardcoded fallback id: inventing one (this used to default to
+// "claude-sonnet-4.6") made the composer look usable and turned a clear
+// "no models configured" state into a misleading "Unsupported model:
+// claude-sonnet-4.6" error from the server. Empty disables sending instead.
 const selectedModel = ref<string>(
   (() => {
     const storedModel = localStorage.getItem("shelley_selected_model");
@@ -591,7 +636,7 @@ const selectedModel = ref<string>(
     const defaultModel = window.__SHELLEY_INIT__?.default_model;
     if (defaultModel) return defaultModel;
     const firstReady = initModels.find((m) => m.ready);
-    return firstReady?.id || "claude-sonnet-4.6";
+    return firstReady?.id || "";
   })(),
 );
 // applyModel updates the picker's local state only (ref + localStorage).
@@ -1522,6 +1567,14 @@ async function loadMessages(focusedId: string) {
 // ---- sending / actions ----
 async function queueMessage(message: string) {
   if (!message.trim() || !props.conversationId) return;
+  // Same guard as sendMessage: a queued turn runs the LLM later, so an
+  // unavailable model just defers the confusing "Unsupported model" error.
+  // Throws (not returns) so MessageInput's catch restores the composer text.
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+    const err = new Error(noModelErrorMessage());
+    error.value = err.message;
+    throw err;
+  }
   try {
     await api.sendMessage(props.conversationId, {
       message: message.trim(),
@@ -1579,6 +1632,9 @@ function buildConversationOptions(): ChatRequest["conversation_options"] | undef
 
 async function sendFirstMessage(prompt: string) {
   if (!props.onFirstMessage) return;
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+    throw new Error(noModelErrorMessage());
+  }
   if (selectedCwd.value) {
     const validation = await api.validateCwd(selectedCwd.value);
     if (!validation.valid) {
@@ -1611,6 +1667,23 @@ const forkHandler = (messageId: string) => {
 async function sendMessage(message: string) {
   if (!message.trim() || sending.value) return;
   const trimmedMessage = message.trim();
+
+  // Guard every send path on actually having a model. Shelley used to fall
+  // back to a hardcoded "claude-sonnet-4.6" here, which the server then
+  // rejected with a confusing "Unsupported model" naming an id the user never
+  // picked. Fail locally with setup advice instead. Slash commands that don't
+  // hit the LLM (/fork, /diff, /archive, ...) are handled below and stay
+  // usable; the checks live on the paths that need a model.
+  //
+  // THROW rather than return: MessageInput clears the textarea optimistically
+  // and only restores it in its catch ("Keep the message on error so user can
+  // retry"). Returning would look like success and silently discard what the
+  // user typed — along with its cached draft — exactly when they can't send.
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value) && needsModel(trimmedMessage)) {
+    const err = new Error(noModelErrorMessage());
+    error.value = err.message;
+    throw err;
+  }
 
   if (trimmedMessage === SLASH_COMMANDS.FORK.command) {
     await forkConversation();
@@ -2223,6 +2296,27 @@ watch(
         if (window.__SHELLEY_INIT__) window.__SHELLEY_INIT__.models = newModels;
       })
       .catch((err) => console.error("Failed to refresh models:", err));
+  },
+  { immediate: true },
+);
+
+// Keep the picker honest about availability. A model id can go stale two
+// ways: it was persisted in localStorage while the integrations were healthy,
+// or the catalog shrank under us (integration detached, refresh returned
+// fewer models). Displaying a stale id invites the user to send it, and the
+// server then rejects it with a confusing "Unsupported model" naming a model
+// they never chose — the same class of bug as the old hardcoded fallback.
+// Clear the selection so the picker reads "No model available" and the send
+// guard blocks locally with setup advice.
+watch(
+  readyModelIds,
+  (ready) => {
+    if (!selectedModel.value) return;
+    if (ready.includes(selectedModel.value)) return;
+    // Prefer the server's default (or any ready model) over showing nothing,
+    // so a mere catalog reshuffle doesn't strand the composer.
+    const fallback = window.__SHELLEY_INIT__?.default_model;
+    applyModel(fallback && ready.includes(fallback) ? fallback : ready[0] || "");
   },
   { immediate: true },
 );

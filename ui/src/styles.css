@@ -3200,6 +3200,13 @@ select:disabled {
   font-weight: 500;
 }
 
+/* No models configured is a setup gap, not a failure: warning color, because
+   red reads like something broke inside Shelley. */
+.status-message.status-no-models {
+  color: var(--warning-text);
+  font-weight: 500;
+}
+
 .status-message.status-error {
   color: var(--error-text);
   font-weight: 500;
@@ -8743,6 +8750,59 @@ kbd {
 
 .chat-secondary-text {
   color: var(--text-secondary);
+}
+
+/* Empty-model-list warning. Shown in the welcome panel when the server
+   serves no models. Warning-colored (not plain secondary text) because the
+   composer is unusable until it's resolved — this is a blocking condition,
+   not an informational note. Constrained width and left alignment keep it
+   readable on mobile, where the surrounding welcome copy is centered. */
+/* PrimeVue's Message (severity="warn") supplies the warning palette and
+   chrome; only layout and the command list belong here. */
+.no-models-message {
+  max-width: 34rem;
+  margin: 0.75rem auto 0;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.no-models-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.no-models-message p + p,
+.no-models-message .no-models-commands + p {
+  margin: 0.375rem 0 0;
+}
+
+/* One command per line, each a click-to-apply suggest link. */
+.no-models-commands {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.no-models-commands li + li {
+  margin-top: 0.25rem;
+}
+
+/* Links inherit the Message's warning color: default link blue fights the
+   amber panel, and the underline alone already marks them clickable. */
+.no-models-commands a {
+  color: inherit;
+  text-decoration-color: color-mix(in srgb, currentcolor 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.no-models-commands a:hover {
+  text-decoration-color: currentcolor;
+}
+
+.no-models-commands code {
+  font-size: 0.8125rem;
+  /* Long commands wrap instead of overflowing on narrow viewports. */
+  overflow-wrap: anywhere;
 }
 
 .chat-icon-1rem {

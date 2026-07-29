@@ -240,7 +240,11 @@ export const zhCN: TranslationKeys = {
   welcomeMessage:
     "Shelley 是一个运行在 {hostname} 上的代理。你可以让 Shelley 帮你完成各种任务。如果你使用 Shelley 构建了网站，可以通过 exe.dev 的代理功能（参见 {docsLink}）在 {proxyLink} 上访问。",
   sendMessageToStart: "发送消息以开始对话。",
-  noModelsConfiguredHint: "未配置 AI 模型。按 Ctrl+K 或 ⌘+K 添加模型。",
+  noModelsTitle: "没有可用的 AI 模型",
+  noModelsExeNote: "Shelley 从 exe.dev 的 llm 集成获取模型。运行以下任一命令即可修复：",
+  noModelsLocalNote: "按 Ctrl+K 或 ⌘+K 添加模型。",
+  noModelsExeRefresh: "然后在模型选择器中点击 Refresh。",
+  noModelSelectedPlaceholder: "无可用模型",
 
   // Status Bar
   dirLabel: "目录：",
