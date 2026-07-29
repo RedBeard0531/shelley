@@ -254,6 +254,8 @@ export const zhTW: TranslationKeys = {
   editUserAgentsMd: "編輯使用者 AGENTS.md",
   editFile: "編輯檔案…",
 
+  editFileShortcut: "開啟檔案搜尋器",
+  editFileShortcutFirefox: "Firefox 將此快速鍵保留給私密視窗——請改用命令面板 (Cmd/Ctrl+K)",
   openConversations: "開啟對話",
   expandSidebar: "展開側邊欄",
 

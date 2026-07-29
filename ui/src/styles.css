@@ -6761,6 +6761,30 @@ svg {
   color: var(--text-secondary);
 }
 
+/* Right-aligned keyboard hint on overflow-menu action rows. */
+.overflow-menu-shortcut {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 1rem;
+}
+
+.overflow-menu-shortcut kbd {
+  font-size: 0.75rem;
+  font-family: inherit;
+  padding: 0.125rem 0.375rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Edit File's shortcut is inert in Firefox (reserved for private window). */
+.overflow-menu-shortcut-inert kbd {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
 .command-palette-footer {
   display: flex;
   gap: 1rem;

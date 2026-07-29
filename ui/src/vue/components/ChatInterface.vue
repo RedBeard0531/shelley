@@ -63,7 +63,6 @@
         <!-- Overflow menu (PrimeVue Popover + SelectButton/Select) -->
         <ChatOverflowMenu
           :has-cwd="hasCwd"
-          :terminal-url="terminalURL"
           :links="links"
           :can-archive="
             !!(conversationId && onArchiveConversation && !currentConversation?.archived)
@@ -72,7 +71,7 @@
           :has-update="hasUpdate"
           @open-diffs="showDiffViewer = true"
           @open-git-graph="showGitGraph = true"
-          @open-terminal="openTerminalUrl"
+          @open-terminal="openInAppTerminal"
           @open-external-link="openExternalLink"
           @archive="archiveFromMenu"
           @export="openExport"
@@ -446,6 +445,7 @@ import AgentsMdEditorModal from "./AgentsMdEditorModal.vue";
 import TerminalPanel from "./TerminalPanel.vue";
 import VersionChecker from "./VersionChecker.vue";
 import ChatOverflowMenu from "./ChatOverflowMenu.vue";
+import { matchChatInterfaceAction } from "../../utils/menuShortcuts";
 import MessageRenderNode from "./MessageRenderNode.vue";
 import QueuedGhostMessage from "./QueuedGhostMessage.vue";
 import ChatStatusContent from "./ChatStatusContent.vue";
@@ -846,7 +846,6 @@ let lastScrollGestureAt = -Infinity;
 let hiddenAt: number | null = null;
 let lastGeneration: { id: string | null; gen: number } | null = null;
 
-const terminalURL = window.__SHELLEY_INIT__?.terminal_url || null;
 const links = window.__SHELLEY_INIT__?.links || [];
 const hostname = window.__SHELLEY_INIT__?.hostname || "localhost";
 
@@ -2083,11 +2082,43 @@ function handleInsertFromTerminal(text: string) {
 function openExternalLink(url: string) {
   window.open(url, "_blank");
 }
-function openTerminalUrl() {
-  const cwd = props.currentConversation?.cwd || selectedCwd.value || "";
-  if (!terminalURL) return;
-  const url = terminalURL.replace("WORKING_DIR", encodeURIComponent(cwd));
-  window.open(url, "_blank");
+// Open an in-app interactive shell terminal, mirroring the command palette's
+// "Open Terminal" action (and the openTerminalTrigger watch below). Used by the
+// overflow menu's Terminal item and its keyboard shortcut.
+function openInAppTerminal() {
+  const cwd =
+    props.currentConversation?.cwd ||
+    selectedCwd.value ||
+    window.__SHELLEY_INIT__?.default_cwd ||
+    "/";
+  const terminal: EphemeralTerminal = {
+    id: `term-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    command: 'exec "${SHELL:-bash}" -i',
+    cwd,
+    createdAt: new Date(),
+  };
+  props.setEphemeralTerminals((prev) => [...prev, terminal]);
+  terminalAutoFocusId.value = terminal.id;
+  setTimeout(() => scrollToBottom(), 100);
+}
+// Focus an already-open terminal if there is one, otherwise open a new one.
+// Used by the Ctrl+` shortcut: a repeat press should bring you back to the
+// existing shell rather than spawning another. Setting terminalAutoFocusId lets
+// TerminalPanel un-minimize, activate that tab, and focus its xterm.
+function focusOrOpenTerminal() {
+  const existing = props.ephemeralTerminals;
+  if (existing.length > 0) {
+    // Reset to null first so re-focusing the terminal that's already in
+    // autoFocusId still fires TerminalPanel's watcher (it watches the value,
+    // not a trigger). nextTick re-assigns the id to run the focus effect.
+    terminalAutoFocusId.value = null;
+    const id = existing[existing.length - 1].id;
+    nextTick(() => {
+      terminalAutoFocusId.value = id;
+    });
+    return;
+  }
+  openInAppTerminal();
 }
 function openExport() {
   window.open(`/export/${props.conversationId}`, "_blank", "noopener");
@@ -2099,6 +2130,60 @@ async function archiveFromMenu() {
   } catch (err) {
     console.error("Failed to archive conversation:", err);
   }
+}
+
+// Keyboard shortcuts for the overflow-menu actions this component owns. Each
+// case invokes the same handler as the corresponding menu click (Terminal is
+// the one deliberate exception: the shortcut re-focuses an existing terminal
+// rather than always opening a new one), and is gated by the same availability
+// the menu uses (see the ChatOverflowMenu props bound in the template) so a
+// shortcut never fires for a hidden item. The palette (Cmd/Ctrl+K) and file
+// finder (Cmd/Ctrl+Shift+P) are handled in App.vue, which owns those modals.
+// See utils/menuShortcuts.ts for the combos.
+function handleMenuShortcut(e: KeyboardEvent) {
+  // Don't hijack keystrokes while typing in a field.
+  const target = e.target as HTMLElement | null;
+  if (
+    target &&
+    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+  ) {
+    return;
+  }
+  const action = matchChatInterfaceAction(e);
+  if (!action) return;
+  switch (action) {
+    case "diffs":
+      if (!hasCwd.value) return;
+      showDiffViewer.value = true;
+      break;
+    case "gitGraph":
+      if (!hasCwd.value) return;
+      showGitGraph.value = true;
+      break;
+    case "terminal":
+      focusOrOpenTerminal();
+      break;
+    case "archive":
+      if (
+        !props.conversationId ||
+        !props.onArchiveConversation ||
+        props.currentConversation?.archived
+      )
+        return;
+      void archiveFromMenu();
+      break;
+    case "export":
+      if (!props.conversationId || messages.value.length === 0) return;
+      openExport();
+      break;
+    case "editAgentsMd":
+      showAgentsMdEditor.value = true;
+      break;
+    case "checkVersion":
+      openVersionModal();
+      break;
+  }
+  e.preventDefault();
 }
 
 function onNewConversationClick(e: MouseEvent) {
@@ -2747,25 +2832,11 @@ watch(
   },
 );
 // Trigger: open terminal.
-let terminalCwd = "/";
 watch(
   () => props.openTerminalTrigger,
   (trigger) => {
-    terminalCwd =
-      props.currentConversation?.cwd ||
-      selectedCwd.value ||
-      window.__SHELLEY_INIT__?.default_cwd ||
-      "/";
     if (!trigger || trigger <= 0) return;
-    const terminal: EphemeralTerminal = {
-      id: `term-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      command: 'exec "${SHELL:-bash}" -i',
-      cwd: terminalCwd,
-      createdAt: new Date(),
-    };
-    props.setEphemeralTerminals((prev) => [...prev, terminal]);
-    terminalAutoFocusId.value = terminal.id;
-    setTimeout(() => scrollToBottom(), 100);
+    openInAppTerminal();
   },
 );
 
@@ -3110,6 +3181,7 @@ onMounted(() => {
   window.addEventListener("beforeunload", saveScrollNow);
   document.addEventListener("visibilitychange", handleVisibilityChange);
   document.addEventListener("keydown", handleScrollKeyDown);
+  document.addEventListener("keydown", handleMenuShortcut);
 });
 
 onUnmounted(() => {
@@ -3126,6 +3198,7 @@ onUnmounted(() => {
   window.removeEventListener("beforeunload", saveScrollNow);
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   document.removeEventListener("keydown", handleScrollKeyDown);
+  document.removeEventListener("keydown", handleMenuShortcut);
   document.removeEventListener("mousedown", onAdvancedSettingsOutside);
   mobileMq.removeEventListener("change", onMobileChange);
   if (loadingProgressDelay) clearTimeout(loadingProgressDelay);

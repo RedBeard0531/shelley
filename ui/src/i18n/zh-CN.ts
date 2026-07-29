@@ -254,6 +254,8 @@ export const zhCN: TranslationKeys = {
   editUserAgentsMd: "编辑用户 AGENTS.md",
   editFile: "编辑文件…",
 
+  editFileShortcut: "打开文件查找器",
+  editFileShortcutFirefox: "Firefox 将此快捷键保留用于隐私窗口——请改用命令面板 (Cmd/Ctrl+K)",
   openConversations: "打开对话",
   expandSidebar: "展开侧边栏",
 

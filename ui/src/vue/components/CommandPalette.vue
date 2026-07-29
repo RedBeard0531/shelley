@@ -116,6 +116,7 @@ import { useMarkdownMode } from "../composables/markdownMode";
 import { useI18n } from "../composables/i18n";
 import { tildifyPath } from "../../utils/tildify";
 import { isImeComposing } from "../../utils/imeComposing";
+import { menuShortcutLabel } from "../../utils/menuShortcuts";
 
 interface CommandItem {
   id: string;
@@ -193,8 +194,6 @@ const ICON_LANG = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="roun
 const ICON_TRASH = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a2 2 0 012-2h2a2 2 0 012 2v3" /></svg>`;
 const ICON_CHAT = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>`;
 const ICON_FILE = `${SVG_OPEN}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>`;
-
-const isMac = navigator.platform.toUpperCase().includes("MAC");
 
 // Simple fuzzy match for actions - returns score (higher is better), -1 if no match
 function fuzzyMatch(q: string, text: string): number {
@@ -356,6 +355,7 @@ const actionItems = computed<CommandItem[]>(() => {
       type: "action",
       title: t("viewDiffs"),
       subtitle: t("openGitDiffViewer"),
+      shortcut: menuShortcutLabel("diffs"),
       icon: ICON_DIFF,
       action: () => {
         emit("open-diff-viewer");
@@ -369,6 +369,7 @@ const actionItems = computed<CommandItem[]>(() => {
       type: "action",
       title: t("gitGraph"),
       subtitle: t("openGitGraphViewer"),
+      shortcut: menuShortcutLabel("gitGraph"),
       icon: ICON_GRAPH,
       action: () => {
         emit("open-git-graph");
@@ -396,7 +397,7 @@ const actionItems = computed<CommandItem[]>(() => {
     type: "action",
     title: "Edit a file",
     subtitle: "Fuzzy-find a file under the working directory",
-    shortcut: isMac ? "\u2318\u21e7P" : "Ctrl+Shift+P",
+    shortcut: menuShortcutLabel("editFile"),
     icon: ICON_FILE,
     action: () => {
       emit("open-file-finder");
@@ -484,6 +485,7 @@ const actionItems = computed<CommandItem[]>(() => {
       type: "action",
       title: t("archiveConversationAction"),
       subtitle: t("archiveCurrentConversation"),
+      shortcut: menuShortcutLabel("archive"),
       icon: ICON_ARCHIVE,
       action: () => {
         emit("archive-conversation", conv.conversation_id);

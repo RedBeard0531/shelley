@@ -248,6 +248,8 @@ export interface TranslationKeys {
   // AGENTS.md editor
   editUserAgentsMd: string;
   editFile: string;
+  editFileShortcut: string;
+  editFileShortcutFirefox: string;
 
   // Sidebar buttons
   openConversations: string;

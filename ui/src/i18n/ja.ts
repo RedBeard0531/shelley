@@ -255,6 +255,9 @@ export const ja: TranslationKeys = {
   editUserAgentsMd: "ユーザー AGENTS.md を編集",
   editFile: "ファイルを編集…",
 
+  editFileShortcut: "ファイルファインダーを開く",
+  editFileShortcutFirefox:
+    "Firefox はこのショートカットをプライベートウィンドウ用に予約しています。コマンドパレット（Cmd/Ctrl+K）を使用してください",
   openConversations: "会話を開く",
   expandSidebar: "サイドバーを展開",
 

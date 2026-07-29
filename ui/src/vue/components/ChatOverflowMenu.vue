@@ -71,6 +71,9 @@
           <path d="M14 17h6M17 15v4" />
         </svg>
         {{ t("diffs") }}
+        <span class="overflow-menu-shortcut"
+          ><kbd>{{ menuShortcutLabel("diffs") }}</kbd></span
+        >
       </button>
       <button v-if="hasCwd" class="overflow-menu-item" @click="onGitGraph">
         <!-- Git graph: commits A (top) and B (top-right) branching from C (bottom) -->
@@ -91,10 +94,16 @@
           <circle cx="6" cy="19" r="2.4" />
         </svg>
         {{ t("gitGraph") }}
+        <span class="overflow-menu-shortcut"
+          ><kbd>{{ menuShortcutLabel("gitGraph") }}</kbd></span
+        >
       </button>
-      <button v-if="terminalUrl" class="overflow-menu-item" @click="onTerminal">
+      <button class="overflow-menu-item" @click="onTerminal">
         <i class="pi pi-desktop chat-menu-icon" aria-hidden="true" />
         {{ t("terminal") }}
+        <span class="overflow-menu-shortcut"
+          ><kbd>{{ menuShortcutLabel("terminal") }}</kbd></span
+        >
       </button>
 
       <!-- Custom server-provided links (icon is a raw SVG path) -->
@@ -123,6 +132,9 @@
         <button class="overflow-menu-item" @click="onArchive">
           <i class="pi pi-inbox chat-menu-icon" aria-hidden="true" />
           {{ t("archiveConversation") }}
+          <span class="overflow-menu-shortcut"
+            ><kbd>{{ menuShortcutLabel("archive") }}</kbd></span
+          >
         </button>
       </template>
 
@@ -131,6 +143,9 @@
         <button class="overflow-menu-item" @click="onExport">
           <i class="pi pi-download chat-menu-icon" aria-hidden="true" />
           {{ t("exportConversation") }}
+          <span class="overflow-menu-shortcut"
+            ><kbd>{{ menuShortcutLabel("export") }}</kbd></span
+          >
         </button>
       </template>
 
@@ -138,10 +153,19 @@
       <button class="overflow-menu-item" @click="onEditAgentsMd">
         <i class="pi pi-pencil chat-menu-icon" aria-hidden="true" />
         {{ t("editUserAgentsMd") }}
+        <span class="overflow-menu-shortcut"
+          ><kbd>{{ menuShortcutLabel("editAgentsMd") }}</kbd></span
+        >
       </button>
       <button class="overflow-menu-item" @click="onEditFile">
         <i class="pi pi-file-edit chat-menu-icon" aria-hidden="true" />
         {{ t("editFile") }}
+        <span
+          v-tooltip.bottom="editFileShortcutTooltip"
+          class="overflow-menu-shortcut"
+          :class="{ 'overflow-menu-shortcut-inert': isFirefox }"
+          ><kbd>{{ menuShortcutLabel("editFile") }}</kbd></span
+        >
       </button>
 
       <div class="overflow-menu-divider" />
@@ -149,6 +173,9 @@
         <i class="pi pi-refresh chat-menu-icon" aria-hidden="true" />
         {{ t("checkForNewVersion") }}
         <span v-if="hasUpdate" class="version-menu-dot" />
+        <span class="overflow-menu-shortcut"
+          ><kbd>{{ menuShortcutLabel("checkVersion") }}</kbd></span
+        >
       </button>
 
       <!-- Theme: System / Light / Dark -->
@@ -229,6 +256,7 @@ import Select from "primevue/select";
 import type { Link } from "../../types";
 import type { Locale } from "../../i18n/types";
 import { useI18n } from "../composables/i18n";
+import { menuShortcutLabel, isFirefox } from "../../utils/menuShortcuts";
 import { type ThemeMode, getStoredTheme, setStoredTheme, applyTheme } from "../../services/theme";
 import {
   isChannelEnabled,
@@ -239,7 +267,6 @@ import {
 
 defineProps<{
   hasCwd: boolean;
-  terminalUrl: string | null;
   links: Link[];
   canArchive: boolean;
   canExport: boolean;
@@ -259,6 +286,13 @@ const emit = defineEmits<{
 }>();
 
 const { t, locale, setLocale } = useI18n();
+
+// Edit File uses Cmd/Ctrl+Shift+P (VS Code parity). Firefox reserves that combo
+// for "New Private Window" and never delivers it to the page, so the shortcut
+// is inert there; explain that on hover rather than silently misleading users.
+const editFileShortcutTooltip = computed(() =>
+  isFirefox ? t("editFileShortcutFirefox") : t("editFileShortcut"),
+);
 
 const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
 const open = ref(false);

@@ -257,6 +257,9 @@ export const ru: TranslationKeys = {
   editUserAgentsMd: "Редактировать AGENTS.md",
   editFile: "Редактировать файл…",
 
+  editFileShortcut: "Открыть поиск файлов",
+  editFileShortcutFirefox:
+    "Firefox резервирует это сочетание для приватного окна — используйте палитру команд (Cmd/Ctrl+K)",
   openConversations: "Открыть диалоги",
   expandSidebar: "Развернуть боковую панель",
 
