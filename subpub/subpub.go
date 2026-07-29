@@ -11,7 +11,19 @@ type SubPub[K any] struct {
 }
 
 type subscriber[K any] struct {
-	idx    int64
+	// after is the index this subscriber joined at: it wants every message
+	// published with a strictly greater index. It is fixed for the life of the
+	// subscription and must stay that way.
+	//
+	// Advancing it to the last index delivered would be a filter on "newer than
+	// what I last got", which only works if publishers hand out indexes in
+	// increasing order. They don't: shelley allocates a message's sequence_id in
+	// its own write transaction and publishes from a separate goroutine, so a
+	// message written second can reach Publish first. An advancing cursor would
+	// then skip past the earlier message and drop it permanently — and since a
+	// sequence_id is delivered exactly once, nothing downstream would ever
+	// resend it.
+	after  int64
 	ch     chan K
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -34,7 +46,7 @@ func (sp *SubPub[K]) Subscribe(ctx context.Context, idx int64) func() (K, bool) 
 	// Buffered channel to avoid blocking publishers
 	ch := make(chan K, 10)
 	sub := &subscriber[K]{
-		idx:    idx,
+		after:  idx,
 		ch:     ch,
 		ctx:    subCtx,
 		cancel: cancel,
@@ -68,8 +80,14 @@ func (sp *SubPub[K]) Subscribe(ctx context.Context, idx int64) func() (K, bool) 
 	}
 }
 
-// Publish sends a message to all subscribers waiting for messages after the given index.
-// Subscribers that are "behind" should get a disconnection message.
+// Publish sends a message to all subscribers whose subscription index is below
+// the given index. Subscribers that are "behind" should get a disconnection
+// message.
+//
+// Indexes need not arrive in increasing order; each is judged against the
+// subscription index alone, so an out-of-order publish is still delivered.
+// Callers must publish each index at most once per subscriber, since nothing
+// here suppresses a repeat.
 func (sp *SubPub[K]) Publish(idx int64, message K) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
@@ -86,13 +104,11 @@ func (sp *SubPub[K]) Publish(idx int64, message K) {
 		default:
 		}
 
-		// Only send to subscribers waiting for messages after an index < idx
-		if sub.idx < idx {
+		// Only send to subscribers that subscribed at an index below idx.
+		if sub.after < idx {
 			// Try to send the message
 			select {
 			case sub.ch <- message:
-				// Success, update subscriber's index and keep them
-				sub.idx = idx
 				remaining = append(remaining, sub)
 			default:
 				// Channel full, subscriber is behind - disconnect them

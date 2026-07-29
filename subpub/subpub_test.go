@@ -3,6 +3,7 @@ package subpub
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -84,6 +85,47 @@ func TestSubPubSubscriberAlreadyHasMessage(t *testing.T) {
 			t.Errorf("Expected 200, got %d", msg)
 		}
 	})
+}
+
+// TestSubPubOutOfOrderPublish: a subscriber gets every index above the one it
+// subscribed at, no matter what order the indexes are published in.
+//
+// Publishers allocate indexes independently of when they publish: shelley
+// assigns a message's sequence_id in its own write transaction and publishes
+// from a separate goroutine, so a message written second routinely reaches
+// Publish first. Filtering against the last index delivered instead of the
+// subscription index would swallow whichever message lost that race, and a
+// sequence_id is never published twice, so the client would never see it.
+func TestSubPubOutOfOrderPublish(t *testing.T) {
+	sp := New[int]()
+	// A deadline so a regression reports the messages it did get instead of
+	// blocking in next() forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Joining at 2: the subscriber has already replayed everything up to and
+	// including index 2.
+	next := sp.Subscribe(ctx, 2)
+
+	// 4 lands first, then the message that was written before it.
+	sp.Publish(4, 400)
+	sp.Publish(3, 300)
+	// 1 predates the subscription and stays filtered out, late or not.
+	sp.Publish(1, 100)
+	sp.Publish(5, 500)
+
+	var got []int
+	for range 3 {
+		msg, ok := next()
+		if !ok {
+			t.Fatalf("subscription closed after %d messages: %v", len(got), got)
+		}
+		got = append(got, msg)
+	}
+	want := []int{400, 300, 500}
+	if !slices.Equal(got, want) {
+		t.Errorf("received %v, want %v", got, want)
+	}
 }
 
 func TestSubPubContextCancellation(t *testing.T) {
