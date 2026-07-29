@@ -40,8 +40,14 @@ LIMIT ? OFFSET ?;
 -- Returns the generation of the last message at or before a sequence_id.
 -- Used by fork to copy the generation that was active at the fork point,
 -- which may be older than the conversation's current_generation.
+--
+-- Slug markers are excluded, matching CopyMessagesForFork. A marker is stamped
+-- with whatever current_generation holds when the (racing, 15s-timeout) slug
+-- goroutine lands, so a marker written after a compaction bumped the generation
+-- would otherwise answer this question with the new generation and make the fork
+-- copy the wrong one.
 SELECT generation FROM messages
-WHERE conversation_id = ? AND sequence_id <= ?
+WHERE conversation_id = ? AND sequence_id <= ? AND type != 'slug'
 ORDER BY sequence_id DESC LIMIT 1;
 
 -- name: CopyMessagesForFork :exec
@@ -56,6 +62,12 @@ FROM messages m
 WHERE m.conversation_id = sqlc.arg('source_conversation_id')
   AND m.sequence_id <= sqlc.arg('cutoff_sequence_id')
   AND m.generation = sqlc.arg('source_generation')
+  -- Skip slug markers: a fork derives its slug from the source's synchronously,
+  -- with no LLM call, so copying the marker would re-report a cost the fork
+  -- never incurred. Leaving a hole in the copied sequence is fine here: this
+  -- already copies a single generation while preserving source sequence_ids, so
+  -- forks legitimately have gaps and clients must already tolerate them.
+  AND m.type != 'slug'
 ORDER BY m.sequence_id ASC;
 
 -- name: ListMessagesByType :many
@@ -63,9 +75,14 @@ SELECT * FROM messages
 WHERE conversation_id = ? AND type = ?
 ORDER BY sequence_id ASC;
 
--- name: GetLatestMessage :one
+-- name: GetLatestActionableMessage :one
+-- The latest message a user could act on. Slug markers are excluded: they hold
+-- only the slug LLM call's usage, render as nothing, and land at an arbitrary
+-- point (the call races the first turn). Callers gate the Retry/Continue
+-- affordances on this row's type being 'error', so a trailing slug marker would
+-- otherwise silently disable them.
 SELECT * FROM messages
-WHERE conversation_id = ?
+WHERE conversation_id = ? AND type != 'slug'
 ORDER BY sequence_id DESC
 LIMIT 1;
 
@@ -86,6 +103,14 @@ SELECT COUNT(*) FROM messages
 WHERE conversation_id = ? AND type = ?;
 
 -- name: CountConsecutiveMessagesByType :one
+-- Counts the trailing run of messages of the given type, i.e. those after the
+-- last message of any OTHER type. Used to cap consecutive retry warnings.
+--
+-- Slug markers don't break a run: they are bookkeeping rows carrying only the
+-- cost of the LLM call that named the conversation, they render as nothing, and
+-- slug generation races the first turn, so a marker landing in the middle of a
+-- retry-warning storm would reset the counter and let a fresh batch of warnings
+-- through.
 SELECT COUNT(*) FROM messages m
 WHERE m.conversation_id = sqlc.arg('conversation_id')
   AND m.generation = sqlc.arg('generation')
@@ -94,20 +119,40 @@ WHERE m.conversation_id = sqlc.arg('conversation_id')
     (SELECT MAX(prev.sequence_id) FROM messages prev
      WHERE prev.conversation_id = sqlc.arg('conversation_id')
        AND prev.generation = sqlc.arg('generation')
-       AND prev.type != sqlc.arg('type')),
+       AND prev.type != sqlc.arg('type')
+       AND prev.type != 'slug'),
     0);
 
 -- name: ListMessagesTail :many
 -- Returns the last N messages in ascending order. If fewer than N
 -- exist, returns all of them.
-SELECT * FROM (
-  SELECT * FROM messages
-  WHERE conversation_id = ?
-  ORDER BY sequence_id DESC
-  LIMIT ?
-) ORDER BY sequence_id ASC;
+--
+-- N counts VISIBLE messages, but slug markers inside the resulting window are
+-- still returned. Two reasons to do it this way rather than just excluding them:
+-- an invisible bookkeeping row must not eat the window (?tail=1 would hand back
+-- nothing displayable), yet dropping markers from the middle would punch holes
+-- in the sequence space, and clients that detect lost messages by sequence
+-- contiguity (see the iOS store's firstGapBoundary) would read those holes as
+-- missing data and re-fetch forever.
+SELECT m.* FROM messages m
+WHERE m.conversation_id = sqlc.arg('conversation_id')
+  AND m.sequence_id >= COALESCE((
+    SELECT MIN(v.sequence_id) FROM (
+      SELECT vis.sequence_id FROM messages vis
+      WHERE vis.conversation_id = sqlc.arg('conversation_id')
+        AND vis.type != 'slug'
+      ORDER BY vis.sequence_id DESC
+      LIMIT sqlc.arg('limit')
+    ) v
+  ), 0)
+ORDER BY m.sequence_id ASC;
 
 -- name: ListMessagesSince :many
+-- The client cache-repair path (?last_sequence_id=N). Must NOT filter any type:
+-- it is what heals a client whose view of the sequence space has a hole, so it
+-- has to be able to deliver every row, markers included. Deliberately different
+-- from ListMessagesTail (a display window, which counts visible rows); don't
+-- "make these consistent".
 SELECT * FROM messages
 WHERE conversation_id = ? AND sequence_id > ?
 ORDER BY sequence_id ASC;
@@ -118,18 +163,6 @@ ORDER BY sequence_id ASC;
 -- This UPDATE exists ONLY for the FTS-trigger test (TestMessages*), which
 -- verifies the messages_fts AFTER UPDATE trigger re-indexes user_data.
 UPDATE messages SET user_data = ? WHERE message_id = ?;
-
--- name: SetFirstUserMessageOtherUsage :execrows
--- Attach indirect-LLM-call usage (e.g. slug generation) to a conversation's
--- first user message after the fact. Messages are otherwise immutable;
--- other_usage_data is accounting metadata, not content, so this narrow
--- UPDATE is allowed.
-UPDATE messages SET other_usage_data = sqlc.arg('other_usage_data')
-WHERE message_id = (
-  SELECT sub.message_id FROM messages sub
-  WHERE sub.conversation_id = sqlc.arg('conversation_id') AND sub.type = 'user'
-  ORDER BY sub.sequence_id ASC LIMIT 1
-);
 
 -- name: ListAgentMessagesSinceLastUser :many
 -- Returns the agent messages produced during the most recent user turn,

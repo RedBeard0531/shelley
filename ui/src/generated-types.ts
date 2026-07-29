@@ -113,6 +113,7 @@ export type MessageType =
   | "system"
   | "gitinfo"
   | "warning"
-  | "modelchange";
+  | "modelchange"
+  | "slug";
 
 export type EventType = string;

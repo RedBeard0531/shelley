@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"shelley.exe.dev/db/generated"
+	"shelley.exe.dev/llm"
 
 	_ "modernc.org/sqlite"
 )
@@ -1062,7 +1063,17 @@ func (db *DB) ForceUpdateConversationModel(ctx context.Context, conversationID, 
 
 // Message methods (moved from MessageService)
 
-// MessageType represents the type of message
+// MessageType represents the type of message.
+//
+// Adding a type? Message rows are an APPEND-ONLY log, and a lot depends on that
+// silently: the browser caches rows keyed by (conversation_id, sequence_id) and
+// refreshes only by fetching the tail, forks copy rows wholesale, and the stream
+// contract is that a sequence_id is delivered exactly once. So record data that
+// arrives late by appending a row, never by rewriting one — and if the new row is
+// invisible to users, check the places that ask "what is the last message" or
+// "how many messages are there" (GetLatestActionableMessage, ListMessagesTail,
+// CountConsecutiveMessagesByType, coalesceMessages) before assuming an unseen row
+// is harmless.
 type MessageType string
 
 const (
@@ -1076,6 +1087,14 @@ const (
 	// MessageTypeModelChange marks where the conversation switched models via
 	// the /model command. User-visible only, never sent to the LLM.
 	MessageTypeModelChange MessageType = "modelchange"
+	// MessageTypeSlug records the LLM call that generated the conversation's
+	// slug. Rendered as nothing and never sent to the LLM: it exists only to
+	// carry that call's usage, so the cost shows up in the conversation's
+	// accounting via the same path as every other message's usage.
+	//
+	// It is an appended message rather than a mutable column because of the
+	// append-only invariant described on MessageType above.
+	MessageTypeSlug MessageType = "slug"
 )
 
 // CreateMessageParams contains parameters for creating a message
@@ -1298,6 +1317,55 @@ func (db *DB) CreateMessages(ctx context.Context, paramsList []CreateMessagePara
 	return out, nil
 }
 
+// CreateSlugMessage appends a slug marker carrying the usage of the LLM call
+// that generated the conversation's slug. The message has no content and
+// renders as nothing; it exists so the cost is accounted for through the same
+// path as every other message's usage, without mutating an existing row.
+//
+// Excluded from context so it never reaches the LLM even if a future context
+// builder forgets to filter the type. llm_data stays NULL, which is a second
+// belt: convertToLLMMessage rejects NULL, so paths that build context without
+// checking the type (broadcastEstimatedContextSize, buildConversationSummary)
+// skip the marker too.
+//
+// Returns (nil, nil) when there is nothing to record; callers use that to decide
+// whether there is a marker to publish.
+func (db *DB) CreateSlugMessage(ctx context.Context, conversationID string, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
+	if len(otherUsage) == 0 {
+		return nil, nil
+	}
+	otherUsageJSON, err := marshalJSON(otherUsage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal slug usage: %w", err)
+	}
+	var message generated.Message
+	err = db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		conversation, err := q.GetConversation(ctx, conversationID)
+		if err != nil {
+			return fmt.Errorf("failed to get conversation: %w", err)
+		}
+		sequenceID, err := q.GetNextSequenceID(ctx, conversationID)
+		if err != nil {
+			return fmt.Errorf("failed to get next sequence ID: %w", err)
+		}
+		message, err = q.CreateMessage(ctx, generated.CreateMessageParams{
+			MessageID:           uuid.New().String(),
+			ConversationID:      conversationID,
+			SequenceID:          sequenceID,
+			Generation:          conversation.CurrentGeneration,
+			Type:                string(MessageTypeSlug),
+			OtherUsageData:      otherUsageJSON,
+			ExcludedFromContext: true,
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &message, nil
+}
+
 type CreateWarningMessageResult struct {
 	Message      *generated.Message
 	Conversation generated.Conversation
@@ -1477,13 +1545,14 @@ func (db *DB) ListAgentMessagesSinceLastUser(ctx context.Context, conversationID
 	return messages, err
 }
 
-// GetLatestMessage retrieves the latest message in a conversation
-func (db *DB) GetLatestMessage(ctx context.Context, conversationID string) (*generated.Message, error) {
+// GetLatestActionableMessage retrieves the latest message a user could act on.
+// Slug markers are skipped; see the query comment for why.
+func (db *DB) GetLatestActionableMessage(ctx context.Context, conversationID string) (*generated.Message, error) {
 	var message generated.Message
 	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
 		q := generated.New(rx.Conn())
 		var err error
-		message, err = q.GetLatestMessage(ctx, conversationID)
+		message, err = q.GetLatestActionableMessage(ctx, conversationID)
 		return err
 	})
 	if err == sql.ErrNoRows {
@@ -1699,22 +1768,6 @@ func (db *DB) GetSubagentOtherUsage(ctx context.Context, parentID string) ([]gen
 		return err
 	})
 	return rows, err
-}
-
-// SetFirstUserMessageOtherUsage attaches indirect-LLM-call usage (e.g. slug
-// generation) to a conversation's first user message. Returns the number of
-// rows updated (0 when the conversation has no user message yet).
-func (db *DB) SetFirstUserMessageOtherUsage(ctx context.Context, conversationID, otherUsageJSON string) (int64, error) {
-	var n int64
-	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
-		var err error
-		n, err = generated.New(tx.Conn()).SetFirstUserMessageOtherUsage(ctx, generated.SetFirstUserMessageOtherUsageParams{
-			OtherUsageData: &otherUsageJSON,
-			ConversationID: conversationID,
-		})
-		return err
-	})
-	return n, err
 }
 
 // GetSubagentCounts returns a map of parent_conversation_id -> subagent count.

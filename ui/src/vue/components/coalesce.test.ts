@@ -80,6 +80,52 @@ function toolUse(id: string): LLMContent {
   check("tool only -> tool item only", items.length === 1 && items[0].type === "tool", items);
 }
 
+// --- Slug markers are dropped entirely ---
+{
+  // A slug marker records the cost of the LLM call that named the conversation.
+  // It has no content and renders as nothing, but a coalesced item is what
+  // drives timestamp/day-separator emission, so leaving one in prints a stray
+  // date header with nothing underneath (observed as a spurious "Thu, Jul 30"
+  // band in the real UI). Its cost is read straight off messages elsewhere.
+  const marker = {
+    message_id: "slug1",
+    conversation_id: "c1",
+    sequence_id: 3,
+    type: "slug",
+    generation: 1,
+    llm_data: null,
+    other_usage_data: '[{"purpose":"slug","input_tokens":92}]',
+    created_at: "2026-07-30T14:36:00Z",
+  } as unknown as Message;
+  check(
+    "lone slug marker -> no items",
+    coalesceMessages([marker]).length === 0,
+    coalesceMessages([marker]),
+  );
+
+  const withNeighbors = coalesceMessages([
+    agentMessage([text("before")]),
+    marker,
+    agentMessage([text("after")]),
+  ]);
+  check(
+    "slug marker between messages -> only the two real messages",
+    withNeighbors.length === 2 && withNeighbors.every((i) => i.type === "message"),
+    withNeighbors,
+  );
+  // The visible bug was chrome, not the item: buildRenderModel emits a
+  // timestamp (and a day-separator when the day rolls over) per coalesced item,
+  // and advances its "last seen minute/day" state. Since buildRenderModel lives
+  // inside ChatInterface.vue and isn't importable, assert the chokepoint that
+  // feeds it: no coalesced item for a marker means no chrome for a marker, and
+  // no marker timestamp can suppress the next real message's.
+  check(
+    "no slug marker survives coalescing, so it cannot emit timestamp/day-separator chrome",
+    !withNeighbors.some((i) => i.message?.type === "slug"),
+    withNeighbors,
+  );
+}
+
 console.log(`\ncoalesceMessages Tests: ${passed} passed, ${failed} failed\n`);
 if (failures.length > 0) {
   for (const f of failures) console.log(f);

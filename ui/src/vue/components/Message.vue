@@ -13,6 +13,11 @@
   <!-- system: render nothing. -->
   <template v-else-if="message.type === 'system'" />
 
+  <!-- slug: render nothing. A slug marker exists only to carry the usage of the
+       LLM call that named the conversation, so its cost is accounted for
+       without rewriting an already-published message row. -->
+  <template v-else-if="message.type === 'slug'" />
+
   <!-- warning -->
   <WarningMessage v-else-if="message.type === 'warning'" :message="message" />
 

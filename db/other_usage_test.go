@@ -95,7 +95,7 @@ func mustOtherUsageJSON(t *testing.T, entries []llm.PurposedUsage) string {
 	return string(data)
 }
 
-func TestSetFirstUserMessageOtherUsage(t *testing.T) {
+func TestCreateSlugMessage(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
 
@@ -104,53 +104,125 @@ func TestSetFirstUserMessageOtherUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// No user message yet: 0 rows updated.
-	usageJSON := mustOtherUsageJSON(t, []llm.PurposedUsage{{Purpose: "slug", Usage: llm.Usage{InputTokens: 10, OutputTokens: 2, Model: "m"}}})
-	n, err := database.SetFirstUserMessageOtherUsage(ctx, conv.ConversationID, usageJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatalf("updated %d rows with no user message, want 0", n)
-	}
-
-	// A system message first, then two user messages: the FIRST user message
-	// gets the usage.
 	if _, err := database.CreateMessage(ctx, CreateMessageParams{
 		ConversationID: conv.ConversationID,
-		Type:           MessageTypeSystem,
-		LLMData:        llm.Message{},
+		Type:           MessageTypeUser,
+		LLMData:        llm.Message{Role: llm.MessageRoleUser},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		if _, err := database.CreateMessage(ctx, CreateMessageParams{
-			ConversationID: conv.ConversationID,
-			Type:           MessageTypeUser,
-			LLMData:        llm.Message{Role: llm.MessageRoleUser},
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	n, err = database.SetFirstUserMessageOtherUsage(ctx, conv.ConversationID, usageJSON)
+
+	entries := []llm.PurposedUsage{{Purpose: "slug", Usage: llm.Usage{InputTokens: 10, OutputTokens: 2, CostUSD: 0.001, Model: "m"}}}
+	msg, err := database.CreateSlugMessage(ctx, conv.ConversationID, entries)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("updated %d rows, want 1", n)
+	if msg.Type != string(MessageTypeSlug) {
+		t.Errorf("type = %q, want slug", msg.Type)
+	}
+	// Belt and braces: the type is filtered out of LLM context, and the row is
+	// also flagged so a context builder that forgets the type still can't send it.
+	if !msg.ExcludedFromContext {
+		t.Error("slug marker must be excluded_from_context")
+	}
+	if msg.LlmData != nil {
+		t.Errorf("llm_data = %v, want nil: the marker has no content", *msg.LlmData)
+	}
+	if got := mustParseOtherUsage(t, msg.OtherUsageData); len(got) != 1 || got[0].Purpose != "slug" || got[0].InputTokens != 10 {
+		t.Errorf("other_usage_data = %+v, want the slug entry", got)
 	}
 
+	// It is appended, leaving the user message untouched.
 	messages, err := database.ListMessages(ctx, conv.ConversationID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if messages[1].OtherUsageData == nil || *messages[1].OtherUsageData != usageJSON {
-		t.Errorf("first user message OtherUsageData = %v, want %s", messages[1].OtherUsageData, usageJSON)
+	if len(messages) != 2 || messages[1].MessageID != msg.MessageID {
+		t.Fatalf("messages = %+v, want the user message then the slug marker", messages)
 	}
-	if messages[0].OtherUsageData != nil || messages[2].OtherUsageData != nil {
-		t.Errorf("usage attached to wrong messages: %+v", messages)
+	if messages[0].OtherUsageData != nil {
+		t.Errorf("user message was modified: %v", *messages[0].OtherUsageData)
 	}
+
+	// Nothing to record: no marker, so we don't litter empty rows.
+	empty, err := database.CreateSlugMessage(ctx, conv.ConversationID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != nil {
+		t.Errorf("created a marker for zero usage entries: %+v", empty)
+	}
+}
+
+// TestForkDoesNotCopySlugMarker: a fork derives its slug from the source
+// synchronously, with no LLM call. Copying the marker would bill the fork for a
+// call it never made.
+func TestForkDoesNotCopySlugMarker(t *testing.T) {
+	database := setupTestDB(t)
+	defer database.Close()
+	ctx := context.Background()
+
+	conv, err := database.CreateConversation(ctx, stringPtr("fork-slug-src"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateMessage(ctx, CreateMessageParams{
+		ConversationID: conv.ConversationID,
+		Type:           MessageTypeUser,
+		LLMData:        llm.Message{Role: llm.MessageRoleUser},
+		OtherUsageData: []llm.PurposedUsage{{Purpose: "keyword_search", Usage: llm.Usage{InputTokens: 5, Model: "m"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateSlugMessage(ctx, conv.ConversationID, []llm.PurposedUsage{
+		{Purpose: "slug", Usage: llm.Usage{InputTokens: 10, CostUSD: 0.001, Model: "m"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fork past the slug marker's sequence_id, so the copy exclusion is what
+	// keeps it out rather than the cutoff falling short of it.
+	srcMsgs, err := database.ListMessages(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := srcMsgs[len(srcMsgs)-1].SequenceID
+	if srcMsgs[len(srcMsgs)-1].Type != string(MessageTypeSlug) {
+		t.Fatalf("expected the slug marker last, got %+v", srcMsgs)
+	}
+	forked, err := database.ForkConversation(ctx, conv.ConversationID, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forkedMsgs, err := database.ListMessages(ctx, forked.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range forkedMsgs {
+		if m.Type == string(MessageTypeSlug) {
+			t.Errorf("fork inherited a slug marker (%s); it would re-report the source's slug cost", m.MessageID)
+		}
+	}
+	// Message-affiliated indirect usage still copies: that work IS part of the
+	// forked history.
+	if len(forkedMsgs) != 1 {
+		t.Fatalf("forked messages = %+v, want just the user message", forkedMsgs)
+	}
+	if got := mustParseOtherUsage(t, forkedMsgs[0].OtherUsageData); len(got) != 1 || got[0].Purpose != "keyword_search" {
+		t.Errorf("forked user message usage = %+v, want the keyword_search entry preserved", got)
+	}
+}
+
+func mustParseOtherUsage(t *testing.T, raw *string) []llm.PurposedUsage {
+	t.Helper()
+	if raw == nil {
+		return nil
+	}
+	var entries []llm.PurposedUsage
+	if err := json.Unmarshal([]byte(*raw), &entries); err != nil {
+		t.Fatalf("parse other usage %q: %v", *raw, err)
+	}
+	return entries
 }
 
 func TestGetSubagentOtherUsage(t *testing.T) {

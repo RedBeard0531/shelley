@@ -11,6 +11,8 @@
 // encrypted-at-rest in IDB so a stolen browser profile / shared OS account
 // without a live auth session can't read prior conversations.
 
+import { cacheDiag } from "./cacheDiag";
+
 export interface CacheKeyMaterial {
   keyId: string;
   key: CryptoKey;
@@ -188,7 +190,7 @@ export class CacheKeyHolder {
           return m;
         })
         .catch((err) => {
-          console.warn("cryptoKey.ensure: cache key unavailable:", err);
+          cacheDiag("fail", "cache_key.unavailable", { error: String(err) });
           this.material = null;
           return null;
         })

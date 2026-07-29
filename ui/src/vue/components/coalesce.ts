@@ -101,6 +101,13 @@ export function coalesceMessages(messages: Message[]): CoalescedItem[] {
     // Suppress an in_progress distill status message once its terminal
     // (complete/error) counterpart has arrived, so the spinner doesn't linger.
     if (supersededInProgress.has(message.message_id)) return;
+    // Slug markers carry only the usage of the LLM call that named the
+    // conversation; they have no content and render as nothing. Drop them here
+    // rather than in the renderer: a coalesced item drives timestamp and
+    // day-separator emission, so keeping one would print a stray "Thu, Jul 30"
+    // header with nothing underneath it. Their cost is read straight off
+    // messages in ChatInterface's usage walk, not from coalesced items.
+    if (message.type === "slug") return;
     if (message.type === "system") {
       if (!isDistillStatusMessage(message)) return;
       items.push({ type: "message", generation: message.generation, carried, message });

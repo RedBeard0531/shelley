@@ -317,7 +317,7 @@ type piContextMessage struct {
 
 // piContextMessages converts the source generation's context-eligible messages
 // into llm.Messages (preserving roles and tool structure), filtering out
-// system/error/gitinfo/warning messages and anything excluded from context.
+// system/error/gitinfo/warning/slug messages and anything excluded from context.
 // Each returned entry retains its source DB row.
 func piContextMessages(sourceGeneration int64, messages []generated.Message) []piContextMessage {
 	var out []piContextMessage
@@ -327,7 +327,8 @@ func piContextMessages(sourceGeneration int64, messages []generated.Message) []p
 		}
 		switch m.Type {
 		case string(db.MessageTypeSystem), string(db.MessageTypeError),
-			string(db.MessageTypeGitInfo), string(db.MessageTypeWarning):
+			string(db.MessageTypeGitInfo), string(db.MessageTypeWarning),
+			string(db.MessageTypeSlug):
 			continue
 		}
 		llmMsg, err := convertToLLMMessage(m)

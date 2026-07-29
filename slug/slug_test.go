@@ -157,7 +157,7 @@ func TestGenerateSlug_DatabaseIntegration(t *testing.T) {
 	}
 
 	// Generate first slug - should succeed with "test-slug"
-	slug1, err := GenerateSlug(ctx, mockLLM, database, logger, conv1.ConversationID, "Test message", "test-model")
+	slug1, _, err := GenerateSlug(ctx, mockLLM, database, logger, conv1.ConversationID, "Test message", "test-model")
 	if err != nil {
 		t.Fatalf("Failed to generate first slug: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestGenerateSlug_DatabaseIntegration(t *testing.T) {
 	}
 
 	// Generate second slug - should get "test-slug-1" due to conflict
-	slug2, err := GenerateSlug(ctx, mockLLM, database, logger, conv2.ConversationID, "Test message", "test-model")
+	slug2, _, err := GenerateSlug(ctx, mockLLM, database, logger, conv2.ConversationID, "Test message", "test-model")
 	if err != nil {
 		t.Fatalf("Failed to generate second slug: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestGenerateSlug_DatabaseIntegration(t *testing.T) {
 	}
 
 	// Generate third slug - should get "test-slug-2" due to conflict
-	slug3, err := GenerateSlug(ctx, mockLLM, database, logger, conv3.ConversationID, "Test message", "test-model")
+	slug3, _, err := GenerateSlug(ctx, mockLLM, database, logger, conv3.ConversationID, "Test message", "test-model")
 	if err != nil {
 		t.Fatalf("Failed to generate third slug: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestGenerateSlug_PreservesExisting(t *testing.T) {
 		t.Fatalf("Failed to set initial slug: %v", err)
 	}
 
-	result, err := GenerateSlug(ctx, mockLLM, database, logger, conv.ConversationID, "Some new first-looking message", "test-model")
+	result, _, err := GenerateSlug(ctx, mockLLM, database, logger, conv.ConversationID, "Some new first-looking message", "test-model")
 	if err != nil {
 		t.Fatalf("GenerateSlug returned error: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestGenerateSlug_DatabaseError(t *testing.T) {
 	}
 	closedDB.Close()
 
-	_, err = GenerateSlug(ctx, mockLLM, closedDB, logger, "test-conversation-id", "Test message", "test-model")
+	_, _, err = GenerateSlug(ctx, mockLLM, closedDB, logger, "test-conversation-id", "Test message", "test-model")
 	if err == nil {
 		t.Error("Expected database error, got nil")
 	}
@@ -647,7 +647,7 @@ func TestGenerateSlug_ReasoningModel(t *testing.T) {
 		t.Fatalf("Failed to create conversation: %v", err)
 	}
 
-	slug, err := GenerateSlug(ctx, mockLLM, database, logger, conv.ConversationID, "how do I parse JSON in Go", "test-model")
+	slug, _, err := GenerateSlug(ctx, mockLLM, database, logger, conv.ConversationID, "how do I parse JSON in Go", "test-model")
 	if err != nil {
 		t.Fatalf("GenerateSlug failed: %v", err)
 	}
@@ -848,11 +848,17 @@ func (u *usageLLMService) Do(ctx context.Context, req *llm.Request) (*llm.Respon
 	}, nil
 }
 
-// TestGenerateSlug_UsageOnFirstUserMessage runs GenerateSlug through a real
-// models.Manager (whose loggingService feeds the usage collector) and
-// verifies the slug call's usage lands on the conversation's first user
-// message as other_usage_data.
-func TestGenerateSlug_UsageOnFirstUserMessage(t *testing.T) {
+// TestGenerateSlug_UsageOnAppendedMarker runs GenerateSlug through a real
+// models.Manager (whose loggingService feeds the usage collector) and verifies
+// the slug call's usage lands on a NEWLY APPENDED slug marker message, leaving
+// the already-published user message untouched.
+//
+// Appending is the only way to record this without breaking the append-only
+// contract on message rows: the browser caches them by (conversation_id,
+// sequence_id) and only ever fetches the tail, forks copy them, and a
+// sequence_id is delivered exactly once. An in-place UPDATE (the original
+// design) is invisible to all three.
+func TestGenerateSlug_UsageOnAppendedMarker(t *testing.T) {
 	tempDB := t.TempDir() + "/slug_usage_test.db"
 	database, err := db.New(db.Config{DSN: tempDB})
 	if err != nil {
@@ -885,7 +891,7 @@ func TestGenerateSlug_UsageOnFirstUserMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := GenerateSlug(ctx, mgr, database, logger, conv.ConversationID, "first message", "slug-model")
+	got, marker, err := GenerateSlug(ctx, mgr, database, logger, conv.ConversationID, "first message", "slug-model")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -893,21 +899,51 @@ func TestGenerateSlug_UsageOnFirstUserMessage(t *testing.T) {
 		t.Errorf("slug = %q", got)
 	}
 
+	// The pre-existing user message must be untouched: no in-place mutation of
+	// an already published row. The cost lands on a NEW appended marker.
 	messages, err := database.ListMessages(ctx, conv.ConversationID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 1 {
-		t.Fatalf("got %d messages, want 1", len(messages))
+	if len(messages) != 2 {
+		t.Fatalf("got %d messages, want the user message plus an appended slug marker: %+v", len(messages), messages)
 	}
-	if messages[0].OtherUsageData == nil {
-		t.Fatal("first user message has no other_usage_data")
+	if messages[0].Type != string(db.MessageTypeUser) || messages[0].OtherUsageData != nil {
+		t.Errorf("first user message = type %q usage %v, want an untouched user message: messages are append-only",
+			messages[0].Type, messages[0].OtherUsageData)
+	}
+
+	row := messages[1]
+	if row.Type != string(db.MessageTypeSlug) {
+		t.Fatalf("appended message type = %q, want slug", row.Type)
+	}
+	if row.OtherUsageData == nil {
+		t.Fatal("slug marker carries no other_usage_data")
+	}
+	// GenerateSlug must hand the marker back so the caller can publish it: it
+	// owns a real sequence_id, and a client that never receives it sees a hole
+	// and discards its cached history.
+	if marker == nil {
+		t.Fatal("GenerateSlug returned no marker; the caller cannot publish it")
+	}
+	if marker.MessageID != row.MessageID || marker.SequenceID != row.SequenceID {
+		t.Errorf("returned marker %s/seq %d does not match the stored row %s/seq %d",
+			marker.MessageID, marker.SequenceID, row.MessageID, row.SequenceID)
 	}
 	var entries []llm.PurposedUsage
-	if err := json.Unmarshal([]byte(*messages[0].OtherUsageData), &entries); err != nil {
+	if err := json.Unmarshal([]byte(*row.OtherUsageData), &entries); err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 || entries[0].Purpose != "slug" || entries[0].InputTokens != 25 || entries[0].Model != "slug-model-v1" {
 		t.Errorf("entries = %+v", entries)
+	}
+
+	// The slug write comes after the usage write; both must survive.
+	updated, err := database.GetConversationByID(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Slug == nil || *updated.Slug != "my-generated-slug" {
+		t.Errorf("slug on conversation = %v, want my-generated-slug", updated.Slug)
 	}
 }

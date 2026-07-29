@@ -10,6 +10,36 @@
 // message puts, so concurrent writers (other tabs / store instances) cannot
 // lose `max_sequence_id_local`.
 //
+// Completeness model — two distinct "the cache isn't authoritative" flags,
+// because they warrant very different repairs:
+//
+//   hasFullHistory=false  We are missing messages we cannot name. Only a full
+//                         GET /api/conversation/<id> can repair it.
+//   needsRefresh=true     The cached prefix is complete but may be short: the
+//                         server might have grown past our tail (set on stream
+//                         reconnect). Repaired by a cheap
+//                         ?last_sequence_id=<our max> tail fetch.
+//
+// Conflating them is a real bug in both directions: a tail fetch starts from
+// our cached max, so it can never recover a message missing from the MIDDLE;
+// and re-downloading whole conversations on every reconnect costs megabytes.
+//
+// A hole in the middle is reachable in ordinary use, not just on cache damage.
+// /api/stream2 delivers events for ALL conversations, including ones the user
+// isn't viewing: cache 1..3 for conversation B, close the tab, let 4..6 be
+// written, then open a new tab where a live event delivers 7 for B before B is
+// ever focused. Nothing in the sequence bookkeeping notices — local max jumps
+// to 7 and typically equals the conversation list's known max, so every
+// catch-up counter reports "up to date" over a hole. Hence the join checks in
+// upsertMessages, _persistUpsert and mergeRecords/joinsUp, all of which clear
+// hasFullHistory (never merely needsRefresh).
+//
+// Note we do NOT infer completeness from the sequence_id run being
+// consecutive: ids legitimately have gaps. db.CopyMessagesForFork copies only
+// the fork point's generation while preserving the source sequence_ids, so a
+// fork can hold a complete history with holes in it. Lost rows are detected by
+// row count instead (ConvMetaRow.message_count).
+//
 // At-rest encryption (v4): the sensitive payload of each row is AES-GCM
 // encrypted with a per-browser key derived server-side from a long-lived
 // secret + a session cookie (see services/cryptoKey.ts + server/cache_key.go).
@@ -44,6 +74,7 @@ import {
   type CacheKeyMaterial,
 } from "./cryptoKey";
 import { perfCount } from "../utils/perf";
+import { cacheDiag } from "./cacheDiag";
 
 // Cross-tab notification channel for key rotation. When one tab runs
 // wipeAndRotateKey() the others must drop their cached CryptoKey and
@@ -98,6 +129,34 @@ interface ConvMetaRow {
   max_sequence_id_local: number;
   /** True once a full REST GET has been merged in successfully. */
   has_full_history: boolean;
+  /**
+   * How many message rows this conversation had when has_full_history was
+   * last established, so hydrate can tell "the server's history genuinely
+   * looks like this" from "we lost rows".
+   *
+   * We cannot infer completeness from the sequence_id run: ids are NOT
+   * guaranteed consecutive. db.CopyMessagesForFork copies only the fork
+   * point's generation while preserving the source sequence_ids, so a
+   * forked conversation legitimately has holes where the abandoned
+   * generation's messages used to be.
+   *
+   * Optional: rows written before this field existed read back undefined,
+   * which disables the check rather than failing closed (an older row is
+   * not evidence of damage).
+   */
+  message_count?: number;
+  /**
+   * True when something happened that may have changed history behind our
+   * back (a stream reconnect), so the next focus must re-check with the
+   * server. Distinct from has_full_history=false: the cached prefix is
+   * still believed complete and renderable, we just don't know about the
+   * tail, so the refresh can be an incremental `?last_sequence_id=` fetch
+   * instead of re-downloading the whole conversation.
+   *
+   * Optional: rows written before this field existed read back undefined,
+   * which is treated as false.
+   */
+  needs_refresh?: boolean;
   iv: Uint8Array;
   ct: Uint8Array;
 }
@@ -161,6 +220,8 @@ export interface ConversationCacheRecord {
   /** Server-reported max sequence_id (from stream events or conversation list). */
   maxSequenceIdKnown: number;
   hasFullHistory: boolean;
+  /** See ConvMetaRow.needs_refresh. */
+  needsRefresh: boolean;
   updatedAt: number;
 }
 
@@ -186,8 +247,67 @@ function emptyRecord(id: string): ConversationCacheRecord {
     maxSequenceId: -1,
     maxSequenceIdKnown: 0,
     hasFullHistory: false,
+    needsRefresh: false,
     updatedAt: Date.now(),
   };
+}
+
+/**
+ * Merge a record read from IDB with whatever is already in the hot map.
+ *
+ * Both sides can legitimately hold data the other lacks: the disk row has
+ * the history from previous sessions, while the hot record may already
+ * hold live stream messages plus fresher metadata (conversation row,
+ * context window, known-max) that landed before this conversation was
+ * first focused. `hot` wins for scalar metadata (it is never older than
+ * disk within a session); messages are unioned by message_id.
+ */
+function mergeRecords(
+  disk: ConversationCacheRecord,
+  hot: ConversationCacheRecord,
+): ConversationCacheRecord {
+  const byMsgId = new Map<string, Message>();
+  for (const m of disk.messages) byMsgId.set(m.message_id, m);
+  for (const m of hot.messages) byMsgId.set(m.message_id, m);
+  const messages = Array.from(byMsgId.values()).sort((a, b) => a.sequence_id - b.sequence_id);
+  return {
+    conversation_id: disk.conversation_id,
+    messages,
+    conversation: hot.conversation ?? disk.conversation,
+    contextWindowSize: hot.contextWindowSize || disk.contextWindowSize,
+    minSequenceId: messages.length > 0 ? messages[0].sequence_id : 0,
+    maxSequenceId: messages.length > 0 ? messages[messages.length - 1].sequence_id : -1,
+    maxSequenceIdKnown: Math.max(disk.maxSequenceIdKnown, hot.maxSequenceIdKnown),
+    hasFullHistory: (disk.hasFullHistory || hot.hasFullHistory) && joinsUp(disk, hot),
+    needsRefresh: disk.needsRefresh || hot.needsRefresh,
+    updatedAt: Math.max(disk.updatedAt, hot.updatedAt),
+  };
+}
+
+/**
+ * Whether live messages already in the hot map continue the disk row's
+ * history rather than skipping over messages we never saw.
+ *
+ * The dangerous case: a previous session cached 1..5, messages 6..9 were
+ * added while no tab was open, and now a live event delivers 10 before this
+ * conversation is first focused. Merging blindly would leave a hole in the
+ * middle while every counter (local max, known max) says we're caught up,
+ * so the user would silently see a conversation missing messages.
+ *
+ * Only the JOIN is checked, not the whole run: gaps inside the disk row
+ * itself can be genuine (see ConvMetaRow.message_count). Live messages
+ * append, so the first one past the disk tail must be exactly tail + 1.
+ */
+function joinsUp(disk: ConversationCacheRecord, hot: ConversationCacheRecord): boolean {
+  if (disk.messages.length === 0) return true;
+  const known = new Set(disk.messages.map((m) => m.message_id));
+  let firstNew = Infinity;
+  for (const m of hot.messages) {
+    if (known.has(m.message_id)) continue;
+    if (m.sequence_id > disk.maxSequenceId && m.sequence_id < firstNew) firstNew = m.sequence_id;
+  }
+  if (firstNew === Infinity) return true;
+  return firstNew === disk.maxSequenceId + 1;
 }
 
 function convRange(id: string): IDBKeyRange {
@@ -221,12 +341,29 @@ export class MessageStore {
   private dbPromise: Promise<IDBPDatabase<ShelleyDB>> | null = null;
   private hot = new Map<string, ConversationCacheRecord>();
   private transient = new Map<string, TransientState>();
+  /**
+   * Conversations whose IDB row has been read (or proven absent) — i.e.
+   * `hot` is authoritative for them. Only hydrate() and the paths that
+   * make the disk read unnecessary (applyFullHistory: we just replaced the
+   * whole row) may add to this set. Notably NOT the metadata mutators:
+   * App pumps setMaxSequenceIdKnown/setConversation for every conversation
+   * in the list on page load, and marking those hydrated made the very
+   * first focus skip the disk read and full-REST-reload instead.
+   */
   private hydrated = new Set<string>();
   private listenersById = new Map<string, Set<Listener>>();
   private transientListenersById = new Map<string, Set<Listener>>();
   private allListeners = new Set<Listener>();
   /** Pending write-behind operations. `settle()` awaits these. */
   private inflight = new Set<Promise<unknown>>();
+  /**
+   * Conversations with a hydrate() in flight, and whether markAllStale ran
+   * while it was in flight. A cold hydrate builds its record from the disk
+   * row, so a reconnect landing mid-read would otherwise be overwritten by
+   * the pre-reconnect on-disk value and the conversation would never
+   * re-check with the server.
+   */
+  private hydrating = new Map<string, { staleWhileHydrating: boolean }>();
   /** Cross-tab rotation channel; null when BroadcastChannel is unavailable. */
   private rotateChannel: BroadcastChannel | null = null;
 
@@ -450,7 +587,12 @@ export class MessageStore {
     try {
       return await unwrapJSON<MessagePayload>(key, row.iv, row.ct, this.messageAAD(row));
     } catch (err) {
-      console.warn("messageStore: undecryptable message row", row.message_id, err);
+      cacheDiag(
+        "fail",
+        "decrypt.message_row_failed",
+        { conversation_id: row.conversation_id, message_id: row.message_id, error: String(err) },
+        row.conversation_id,
+      );
       return null;
     }
   }
@@ -464,7 +606,12 @@ export class MessageStore {
         this.metaAAD(row.conversation_id),
       );
     } catch (err) {
-      console.warn("messageStore: undecryptable meta row", row.conversation_id, err);
+      cacheDiag(
+        "fail",
+        "decrypt.meta_row_failed",
+        { conversation_id: row.conversation_id, error: String(err) },
+        row.conversation_id,
+      );
       return null;
     }
   }
@@ -498,17 +645,48 @@ export class MessageStore {
 
   // ── Hydrate ────────────────────────────────────────────────────────────────
 
-  /** Load a conversation from IDB into the hot cache if not already loaded. */
+  /**
+   * Load a conversation from IDB into the hot cache if not already loaded.
+   *
+   * Anything already in the hot map (live stream messages, metadata from the
+   * conversation list) is merged with, not overwritten by, the disk row —
+   * see mergeRecords. Returns the resulting record, or null when there is
+   * nothing cached for this conversation.
+   *
+   * On a cache-key outage or an IDB failure the conversation is left
+   * un-hydrated so a later call can retry; every such path is reported
+   * through cacheDiag so "the cache silently stopped working" is visible in
+   * the console instead of only as extra network traffic.
+   */
   async hydrate(id: string): Promise<ConversationCacheRecord | null> {
     if (this.hydrated.has(id)) {
       return this.hot.get(id) ?? null;
     }
+    // Track the in-flight read so a markAllStale() landing while we're
+    // reading isn't lost when we install the disk-derived record.
+    const inFlight = this.hydrating.get(id) ?? { staleWhileHydrating: false };
+    this.hydrating.set(id, inFlight);
+    try {
+      return await this._hydrate(id, inFlight);
+    } finally {
+      this.hydrating.delete(id);
+    }
+  }
+
+  private async _hydrate(
+    id: string,
+    inFlight: { staleWhileHydrating: boolean },
+  ): Promise<ConversationCacheRecord | null> {
     let rec: ConversationCacheRecord | null = null;
+    let undecryptable = 0;
     try {
       const material = await this.getKey();
       if (!material) {
-        this.hydrated.add(id);
-        return null;
+        // No key: IDB is unreadable for now (auth blip / server refusal).
+        // Do NOT mark hydrated — a retry once the key comes back must be
+        // able to pick the cache up.
+        cacheDiag("fail", "hydrate.no_cache_key", { conversation_id: id }, id);
+        return this.hot.get(id) ?? null;
       }
       const db = await this.db();
       const meta = await db.get("conversation_meta", id);
@@ -522,9 +700,21 @@ export class MessageStore {
           for (const r of rows) {
             const m = await this.decryptMessageRow(material.key, r);
             if (m) decrypted.push(m);
+            else undecryptable++;
           }
           const minSeq = decrypted.length > 0 ? decrypted[0].sequence_id : 0;
           const maxSeq = decrypted.length > 0 ? decrypted[decrypted.length - 1].sequence_id : -1;
+          // Trust has_full_history only if we read back as many rows as were
+          // written. A short read means rows were lost (undecryptable, a
+          // partial wipe, a prune race) and the cached history has a hole,
+          // so it must be repaired rather than rendered as complete.
+          //
+          // Row COUNT, not sequence contiguity: sequence_ids legitimately
+          // have gaps (see ConvMetaRow.message_count). Rows written before
+          // message_count existed leave it undefined — treat that as "no
+          // evidence of damage" so an older cache still works.
+          const lostRows =
+            typeof meta.message_count === "number" && decrypted.length < meta.message_count;
           rec = {
             conversation_id: id,
             messages: decrypted,
@@ -533,18 +723,64 @@ export class MessageStore {
             minSequenceId: minSeq,
             maxSequenceId: maxSeq,
             maxSequenceIdKnown: meta.max_sequence_id_known,
-            hasFullHistory: meta.has_full_history,
+            hasFullHistory: meta.has_full_history && !lostRows,
+            needsRefresh: !!meta.needs_refresh,
             updatedAt: meta.updated_at,
           };
+          if (undecryptable > 0) {
+            cacheDiag(
+              "fail",
+              "hydrate.undecryptable_rows",
+              { conversation_id: id, dropped: undecryptable, kept: decrypted.length },
+              id,
+            );
+          }
+          if (lostRows) {
+            cacheDiag(
+              "fail",
+              "hydrate.rows_missing",
+              { conversation_id: id, expected: meta.message_count, got: decrypted.length },
+              id,
+            );
+          }
+        } else {
+          cacheDiag("fail", "hydrate.undecryptable_meta", { conversation_id: id }, id);
         }
+      } else {
+        cacheDiag("info", "hydrate.miss", { conversation_id: id });
       }
     } catch (err) {
-      console.warn("messageStore.hydrate: IDB read failed:", err);
+      // IDB is unavailable (private mode, quota, corrupt db, another tab
+      // blocking an upgrade). Leave it retryable and be loud once.
+      cacheDiag("fail", "hydrate.idb_error", { conversation_id: id, error: String(err) }, id);
+      return this.hot.get(id) ?? null;
     }
     this.hydrated.add(id);
+    const hot = this.hot.get(id);
+    if (rec && hot) {
+      // Live data (stream messages, list metadata) landed before this
+      // conversation was first focused. Union it with the disk row.
+      rec = mergeRecords(rec, hot);
+    }
     if (rec) {
+      // A stream reconnect during the read applies to the record we're about
+      // to install — the disk row predates the reconnect, so its
+      // needs_refresh cannot reflect it.
+      if (inFlight.staleWhileHydrating && !rec.needsRefresh) {
+        rec.needsRefresh = true;
+        this.track(this._patchMeta(id, { needs_refresh: true })).catch((err) =>
+          cacheDiag("fail", "persist.mark_stale_failed", { error: String(err) }, id),
+        );
+      }
       this.hot.set(id, rec);
       this.notify(id);
+      cacheDiag("hit", hot ? "hydrate.merged" : "hydrate.loaded", {
+        conversation_id: id,
+        messages: rec.messages.length,
+        full: rec.hasFullHistory,
+      });
+    } else {
+      rec = hot ?? null;
     }
     return rec;
   }
@@ -577,6 +813,25 @@ export class MessageStore {
     return !rec || !rec.hasFullHistory;
   }
 
+  // ── clearNeedsRefresh ──────────────────────────────────────────────────────
+
+  /**
+   * Mark a conversation as re-verified against the server. Called after an
+   * incremental tail fetch confirms we're caught up, so the next focus can
+   * serve straight from cache again.
+   */
+  clearNeedsRefresh(id: string): void {
+    const rec = this.hot.get(id);
+    if (!rec || !rec.needsRefresh) return;
+    rec.needsRefresh = false;
+    rec.updatedAt = Date.now();
+    this.hot.set(id, rec);
+    this.notify(id);
+    this.track(this._patchMeta(id, { needs_refresh: false })).catch((err) =>
+      cacheDiag("fail", "persist.clear_needs_refresh_failed", { error: String(err) }, id),
+    );
+  }
+
   // ── upsertMessages ─────────────────────────────────────────────────────────
 
   /** Merge a batch of messages into the per-conv cache (streaming upsert). */
@@ -586,6 +841,36 @@ export class MessageStore {
     const rec = this.hot.get(id) ?? emptyRecord(id);
     const byMsgId = new Map<string, Message>();
     for (const m of rec.messages) byMsgId.set(m.message_id, m);
+    // An append must continue the history we already hold. If the first
+    // genuinely-new message skips past our tail, messages were committed
+    // while we weren't listening (dropped SSE frames, a burst delivered to a
+    // conversation we weren't subscribed to) and the cache now has a hole in
+    // the middle. Crucially, that hole would otherwise be INVISIBLE: local
+    // max jumps to the new tail and typically matches the list's known max,
+    // so every catch-up counter would report "up to date". Clearing
+    // hasFullHistory forces the next focus into a FULL reload — a
+    // ?last_sequence_id= tail fetch can never recover a missing middle.
+    const prevMax = rec.maxSequenceId;
+    let firstNewSeq = Infinity;
+    for (const m of incoming) {
+      if (!byMsgId.has(m.message_id) && m.sequence_id > prevMax && m.sequence_id < firstNewSeq) {
+        firstNewSeq = m.sequence_id;
+      }
+    }
+    if (
+      rec.hasFullHistory &&
+      rec.messages.length > 0 &&
+      firstNewSeq !== Infinity &&
+      firstNewSeq !== prevMax + 1
+    ) {
+      rec.hasFullHistory = false;
+      cacheDiag(
+        "fail",
+        "upsert.sequence_skip",
+        { conversation_id: id, cached_max: prevMax, first_new: firstNewSeq },
+        id,
+      );
+    }
     for (const m of incoming) byMsgId.set(m.message_id, m);
 
     // Rebuild sorted array (dedup by message_id, sort by sequence_id).
@@ -597,7 +882,9 @@ export class MessageStore {
     }
     rec.updatedAt = Date.now();
     this.hot.set(id, rec);
-    this.hydrated.add(id);
+    // NB: no this.hydrated.add(id) — a live stream message for a
+    // conversation we haven't focused yet must not suppress the disk read.
+    // hydrate() merges the two (mergeRecords).
     this.notify(id);
 
     // Snapshot what to persist; do not rely on hot record mutating between now
@@ -608,7 +895,9 @@ export class MessageStore {
     const snapshotCtx = rec.contextWindowSize;
     this.track(
       this._persistUpsert(id, snapshotIncoming, snapshotKnown, snapshotConv, snapshotCtx),
-    ).catch((err) => console.warn("messageStore.upsertMessages: persist failed:", err));
+    ).catch((err) =>
+      cacheDiag("fail", "persist.upsert_failed", { conversation_id: id, error: String(err) }, id),
+    );
   }
 
   private async _persistUpsert(
@@ -656,18 +945,50 @@ export class MessageStore {
     const msgs = tx.objectStore("messages");
     const metaStore = tx.objectStore("conversation_meta");
     const existing = await metaStore.get(id);
-    let maxLocal = existing?.max_sequence_id_local ?? -1;
+    const prevMax = existing?.max_sequence_id_local ?? -1;
+    let maxLocal = prevMax;
+    let stillFull = existing?.has_full_history ?? false;
+    // Expected row count carried forward from whenever has_full_history was
+    // established. It must be RATCHETED by the number of genuinely new
+    // message_ids we add — never reset to the observed count, or a lost row
+    // plus a later append would launder an incomplete cache into one that
+    // claims to be complete (the count would match again while a message is
+    // missing from the middle).
+    const expected = existing?.message_count;
+    if (stillFull && typeof expected === "number") {
+      const observedBefore = await msgs.count(convRange(id));
+      if (observedBefore < expected) {
+        // Rows went missing since we last claimed full history.
+        stillFull = false;
+      }
+    }
+    let added = 0;
+    let firstNewSeq = Infinity;
     const idIdx = msgs.index("by_message_id");
     for (let i = 0; i < encRows.length; i++) {
       const row = encRows[i];
       const m = incoming[i];
       const priorKey = await idIdx.getKey(m.message_id);
-      if (priorKey && (priorKey[0] !== m.conversation_id || priorKey[1] !== m.sequence_id)) {
-        await msgs.delete(priorKey);
+      if (priorKey) {
+        if (priorKey[0] !== m.conversation_id || priorKey[1] !== m.sequence_id) {
+          // Same message re-keyed to a new sequence_id (regenerated turn):
+          // a move, not an addition.
+          await msgs.delete(priorKey);
+        }
+      } else {
+        added++;
+        if (m.sequence_id > prevMax && m.sequence_id < firstNewSeq) firstNewSeq = m.sequence_id;
       }
       await msgs.put(row);
       if (m.sequence_id > maxLocal) maxLocal = m.sequence_id;
     }
+    // A live append must continue the history we already hold. If it skips
+    // ahead, messages were committed while we weren't listening and the
+    // cached set now has a hole — mirror mergeRecords.joinsUp().
+    if (stillFull && firstNewSeq !== Infinity && prevMax >= 0 && firstNewSeq !== prevMax + 1) {
+      stillFull = false;
+    }
+    const observedAfter = await msgs.count(convRange(id));
     const metaRow: ConvMetaRow = {
       conversation_id: id,
       updated_at: Date.now(),
@@ -677,12 +998,68 @@ export class MessageStore {
         maxLocal < 0 ? 0 : maxLocal,
       ),
       max_sequence_id_local: maxLocal,
-      has_full_history: existing?.has_full_history ?? false,
+      has_full_history: stillFull,
+      // Ratchet while we still claim full history; otherwise record reality so
+      // the next applyFullHistory starts from a truthful baseline.
+      message_count: stillFull && typeof expected === "number" ? expected + added : observedAfter,
+      needs_refresh: existing?.needs_refresh ?? false,
       iv,
       ct,
     };
     await metaStore.put(metaRow);
     await tx.done;
+  }
+
+  // ── applyIncrementalTail ─────────────────────────────────────────────────
+
+  /**
+   * Merge the response of an incremental `?last_sequence_id=N` fetch.
+   *
+   * Only valid when the cache already held a contiguous history up to N —
+   * the caller (ChatInterface) checks that. `hasFullHistory` therefore
+   * survives, and `needsRefresh` clears because the server just told us
+   * everything past N.
+   */
+  applyIncrementalTail(id: string, response: StreamResponse, fromSeq: number): void {
+    const rec = this.hot.get(id);
+    if (!rec) {
+      // The record vanished while the fetch was in flight (delete / prune /
+      // cache wipe). The response covers only sequence_ids > fromSeq, so it
+      // is NOT a full history — record it as a partial upsert and let the
+      // next focus do a real backfill rather than marking it complete.
+      cacheDiag("fail", "refresh.record_vanished", { conversation_id: id, from: fromSeq }, id);
+      const incoming = (response.messages ?? []).filter((m) => m.sequence_id > fromSeq);
+      if (incoming.length > 0) this.upsertMessages(id, incoming);
+      return;
+    }
+    const incoming = (response.messages ?? []).filter((m) => m.sequence_id > fromSeq);
+    cacheDiag("hit", "refresh.incremental", {
+      conversation_id: id,
+      from_sequence_id: fromSeq,
+      new_messages: incoming.length,
+    });
+    if (response.conversation) rec.conversation = response.conversation;
+    if (typeof response.context_window_size === "number" && response.context_window_size > 0) {
+      rec.contextWindowSize = response.context_window_size;
+    }
+    rec.needsRefresh = false;
+    this.hot.set(id, rec);
+    if (incoming.length > 0) {
+      // upsertMessages persists the rows, ratchets the sequence bookkeeping
+      // and notifies subscribers.
+      this.upsertMessages(id, incoming);
+    } else {
+      this.notify(id);
+    }
+    this.track(this._patchMeta(id, { needs_refresh: false, conversation: rec.conversation })).catch(
+      (err) =>
+        cacheDiag(
+          "fail",
+          "persist.incremental_failed",
+          { conversation_id: id, error: String(err) },
+          id,
+        ),
+    );
   }
 
   // ── applyFullHistory ───────────────────────────────────────────────────────
@@ -738,14 +1115,22 @@ export class MessageStore {
       maxSequenceId: maxSeq,
       maxSequenceIdKnown: knownAfter,
       hasFullHistory: true,
+      needsRefresh: false,
       updatedAt: Date.now(),
     };
     this.hot.set(id, rec);
+    // Safe to claim hydrated here: _persistFullHistory replaces the whole
+    // conversation's rows, so there is nothing left on disk to read.
     this.hydrated.add(id);
     this.notify(id);
 
     this.track(this._persistFullHistory(id, rec)).catch((err) =>
-      console.warn("messageStore.applyFullHistory: persist failed:", err),
+      cacheDiag(
+        "fail",
+        "persist.full_history_failed",
+        { conversation_id: id, error: String(err) },
+        id,
+      ),
     );
   }
 
@@ -781,6 +1166,7 @@ export class MessageStore {
     for (const r of encMsgs) {
       await msgs.put(r);
     }
+    const rowCount = await msgs.count(convRange(id));
     const row: ConvMetaRow = {
       conversation_id: id,
       updated_at: Date.now(),
@@ -788,6 +1174,10 @@ export class MessageStore {
       // Ratchet against any concurrent writer that pushed local higher.
       max_sequence_id_local: Math.max(existing?.max_sequence_id_local ?? -1, rec.maxSequenceId),
       has_full_history: true,
+      message_count: rowCount,
+      // A full REST snapshot IS the re-verification, so clear any pending
+      // reconnect-driven refresh flag.
+      needs_refresh: false,
       iv,
       ct,
     };
@@ -802,10 +1192,14 @@ export class MessageStore {
     rec.conversation = conv;
     rec.updatedAt = Date.now();
     this.hot.set(id, rec);
-    this.hydrated.add(id);
     this.notify(id);
     this.track(this._patchMeta(id, { conversation: conv })).catch((err) =>
-      console.warn("messageStore.setConversation: persist failed:", err),
+      cacheDiag(
+        "fail",
+        "persist.conversation_failed",
+        { conversation_id: id, error: String(err) },
+        id,
+      ),
     );
   }
 
@@ -817,10 +1211,9 @@ export class MessageStore {
     rec.contextWindowSize = size;
     rec.updatedAt = Date.now();
     this.hot.set(id, rec);
-    this.hydrated.add(id);
     this.notify(id);
     this.track(this._patchMeta(id, { context_window_size: size })).catch((err) =>
-      console.warn("messageStore.setContextWindowSize: persist failed:", err),
+      cacheDiag("fail", "persist.ctx_size_failed", { conversation_id: id, error: String(err) }, id),
     );
   }
 
@@ -838,10 +1231,14 @@ export class MessageStore {
     rec.maxSequenceIdKnown = maxSeq;
     rec.updatedAt = Date.now();
     this.hot.set(id, rec);
-    this.hydrated.add(id);
     this.notify(id);
     this.track(this._patchMeta(id, { max_sequence_id_known: maxSeq })).catch((err) =>
-      console.warn("messageStore.setMaxSequenceIdKnown: persist failed:", err),
+      cacheDiag(
+        "fail",
+        "persist.known_max_failed",
+        { conversation_id: id, error: String(err) },
+        id,
+      ),
     );
   }
 
@@ -871,6 +1268,7 @@ export class MessageStore {
       max_sequence_id_known?: number;
       max_sequence_id_local?: number;
       has_full_history?: boolean;
+      needs_refresh?: boolean;
     },
   ): Promise<void> {
     const material = await this.getKey();
@@ -935,6 +1333,8 @@ export class MessageStore {
       max_sequence_id_known: 0,
       max_sequence_id_local: -1,
       has_full_history: false,
+      message_count: undefined as number | undefined,
+      needs_refresh: false,
     };
     const row: ConvMetaRow = {
       conversation_id: id,
@@ -949,6 +1349,12 @@ export class MessageStore {
           : baseMeta.max_sequence_id_local,
       has_full_history:
         patch.has_full_history !== undefined ? patch.has_full_history : baseMeta.has_full_history,
+      // Carried through verbatim: this is a metadata-only patch, so the
+      // message rows (and therefore their count) are untouched. Dropping it
+      // would silently disable hydrate's damage check.
+      message_count: baseMeta.message_count,
+      needs_refresh:
+        patch.needs_refresh !== undefined ? patch.needs_refresh : !!baseMeta.needs_refresh,
       iv,
       ct,
     };
@@ -1035,26 +1441,42 @@ export class MessageStore {
   // ── markAllStale ───────────────────────────────────────────────────────────
 
   /**
-   * Mark every cached conversation as stale (hasFullHistory=false).
-   * Called after a global-stream reconnect to ensure the next focus
-   * triggers a REST backfill. Messages on disk are preserved.
+   * Mark every cached conversation as needing a server re-check.
+   *
+   * Called after a global-stream reconnect: while we were disconnected any
+   * conversation could have grown, so the next focus must talk to the
+   * server. It sets `needsRefresh` rather than clearing `hasFullHistory`
+   * because the cached prefix is still complete and renderable — the UI can
+   * paint from cache immediately and issue a cheap incremental
+   * `?last_sequence_id=` fetch for the tail instead of re-downloading whole
+   * conversations (which for a long conversation is megabytes).
    */
   markAllStale(): void {
     const dirty: string[] = [];
     for (const rec of this.hot.values()) {
-      if (rec.hasFullHistory) {
-        rec.hasFullHistory = false;
+      if (!rec.needsRefresh) {
+        rec.needsRefresh = true;
         rec.updatedAt = Date.now();
         dirty.push(rec.conversation_id);
         const set = this.listenersById.get(rec.conversation_id);
         if (set) for (const cb of set) cb();
       }
     }
+    // A hydrate() in flight will install a record built from a disk row that
+    // predates this reconnect, which would silently drop the flag. Tell it.
+    for (const state of this.hydrating.values()) {
+      state.staleWhileHydrating = true;
+    }
+    // Conversations not currently in the hot map are handled by hydrate():
+    // a disk row that predates this reconnect is only reachable through
+    // hydrate, which happens on focus, and focus always re-checks the tail
+    // when the list's known-max is ahead of the cache.
     if (dirty.length > 0) {
+      cacheDiag("info", "stale.reconnect", { conversations: dirty.length });
       for (const cb of this.allListeners) cb();
       for (const id of dirty) {
-        this.track(this._patchMeta(id, { has_full_history: false })).catch((err) =>
-          console.warn("messageStore.markAllStale: persist failed:", err),
+        this.track(this._patchMeta(id, { needs_refresh: true })).catch((err) =>
+          cacheDiag("fail", "persist.mark_stale_failed", { error: String(err) }, id),
         );
       }
     }
@@ -1082,7 +1504,7 @@ export class MessageStore {
     try {
       await p;
     } catch (err) {
-      console.warn("messageStore.delete: IDB delete failed:", err);
+      cacheDiag("fail", "delete.idb_failed", { conversation_id: id, error: String(err) }, id);
     }
   }
 
@@ -1112,7 +1534,7 @@ export class MessageStore {
         .filter((m) => !active.has(m.conversation_id) && m.updated_at < cutoff)
         .map((m) => m.conversation_id);
     } catch (err) {
-      console.warn("messageStore.pruneStale: scan failed:", err);
+      cacheDiag("fail", "prune.scan_failed", { error: String(err) });
       return [];
     }
     const pruned: string[] = [];
@@ -1141,7 +1563,7 @@ export class MessageStore {
         this.notify(id);
         pruned.push(id);
       } catch (err) {
-        console.warn("messageStore.pruneStale: delete failed for", id, err);
+        cacheDiag("fail", "prune.delete_failed", { conversation_id: id, error: String(err) }, id);
       }
     }
     return pruned;
@@ -1162,7 +1584,7 @@ export class MessageStore {
       await tx.objectStore("keys_meta").clear();
       await tx.done;
     } catch (err) {
-      console.warn("messageStore.clear: IDB clear failed:", err);
+      cacheDiag("fail", "clear.idb_failed", { error: String(err) });
     }
     for (const cbs of this.listenersById.values()) {
       for (const cb of cbs) cb();

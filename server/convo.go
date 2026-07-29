@@ -853,7 +853,7 @@ func (cm *ConversationManager) RetryLastLLMRequest(ctx context.Context) error {
 		return fmt.Errorf("no active loop to retry")
 	}
 
-	latest, err := database.GetLatestMessage(ctx, conversationID)
+	latest, err := database.GetLatestActionableMessage(ctx, conversationID)
 	if err != nil {
 		return fmt.Errorf("failed to load latest message: %w", err)
 	}
@@ -922,7 +922,7 @@ func (cm *ConversationManager) ContinueAfterRefusal(ctx context.Context, ch Mode
 	database := cm.db
 	cm.mu.Unlock()
 
-	latest, err := database.GetLatestMessage(ctx, conversationID)
+	latest, err := database.GetLatestActionableMessage(ctx, conversationID)
 	if err != nil {
 		return fmt.Errorf("failed to load latest message: %w", err)
 	}
@@ -1524,7 +1524,15 @@ func (cm *ConversationManager) recordWarning(ctx context.Context, text string) e
 	if result.Suppressed {
 		return nil
 	}
-	cm.subpub.Publish(result.Message.SequenceID, StreamResponse{
+	// publishStream, not subpub.Publish: warnings carry a real sequence_id, so
+	// reaching only the per-conversation subpub (legacy
+	// /api/conversation/<id>/stream) would hide them from the web UI, which
+	// listens on /api/stream2 (streamPub). That is not just a display bug: the
+	// client would see seq N missing while N+1 arrives, and its message cache
+	// correctly treats that skip as a hole and discards its cached history. Since
+	// warnings fire on ordinary LLM retries, that would force full conversation
+	// re-downloads on any flaky-LLM day.
+	cm.publishStream(result.Message.SequenceID, StreamResponse{
 		Messages:     toAPIMessages([]generated.Message{*result.Message}),
 		Conversation: &result.Conversation,
 	})
@@ -1677,6 +1685,12 @@ func (cm *ConversationManager) partitionMessages(messages []generated.Message) (
 
 		// Skip modelchange markers - user-visible only, not sent to LLM.
 		if msg.Type == string(db.MessageTypeModelChange) {
+			continue
+		}
+
+		// Skip slug markers - they carry only the slug call's usage, have no
+		// content, and are not part of the conversation.
+		if msg.Type == string(db.MessageTypeSlug) {
 			continue
 		}
 

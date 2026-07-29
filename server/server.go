@@ -44,7 +44,9 @@ type APIMessage struct {
 	UsageData      *string `json:"usage_data,omitempty"`
 	// OtherUsageData is a JSON array of llm.PurposedUsage: usage from indirect
 	// LLM calls affiliated with this message (compaction summarization,
-	// LLM-backed tools, slug generation). Nil when none.
+	// LLM-backed tools). Nil when none. Slug-generation usage rides on its own
+	// appended slug marker message rather than on the message that triggered it,
+	// because message rows are append-only.
 	OtherUsageData *string   `json:"other_usage_data,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	DisplayData    *string   `json:"display_data,omitempty"`

@@ -640,9 +640,9 @@ func TestPiDistillFailureRollsBackGeneration(t *testing.T) {
 		synctest.Wait()
 
 		// A fork taken after the failed compaction must not be empty.
-		latest, err := h.db.GetLatestMessage(ctx, convID)
+		latest, err := h.db.GetLatestActionableMessage(ctx, convID)
 		if err != nil {
-			t.Fatalf("GetLatestMessage: %v", err)
+			t.Fatalf("GetLatestActionableMessage: %v", err)
 		}
 		forked, err := h.db.ForkConversation(ctx, convID, latest.SequenceID)
 		if err != nil {

@@ -1305,7 +1305,14 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		go func() {
 			slugCtx, cancel := context.WithTimeout(ctxNoCancel, 15*time.Second)
 			defer cancel()
-			_, err := slug.GenerateSlug(slugCtx, s.llmManager, s.db, s.logger, conversationID, req.Message, modelID)
+			_, marker, err := slug.GenerateSlug(slugCtx, s.llmManager, s.db, s.logger, conversationID, req.Message, modelID)
+			// Publish the usage marker before anything else. It owns a real
+			// sequence_id, so a client that never sees it observes a hole and
+			// throws away its cached history. Publish even when slug assignment
+			// failed: the row exists regardless.
+			if marker != nil {
+				s.notifySubscribersNewMessage(ctxNoCancel, conversationID, marker)
+			}
 			if err != nil {
 				s.logger.Warn("Failed to generate slug for conversation", "conversationID", conversationID, "error", err)
 			} else {
@@ -1496,7 +1503,14 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			slugCtx, cancel := context.WithTimeout(ctxNoCancel, 15*time.Second)
 			defer cancel()
-			_, err := slug.GenerateSlug(slugCtx, s.llmManager, s.db, s.logger, conversationID, req.Message, modelID)
+			_, marker, err := slug.GenerateSlug(slugCtx, s.llmManager, s.db, s.logger, conversationID, req.Message, modelID)
+			// Publish the usage marker before anything else. It owns a real
+			// sequence_id, so a client that never sees it observes a hole and
+			// throws away its cached history. Publish even when slug assignment
+			// failed: the row exists regardless.
+			if marker != nil {
+				s.notifySubscribersNewMessage(ctxNoCancel, conversationID, marker)
+			}
 			if err != nil {
 				s.logger.Warn("Failed to generate slug for conversation", "conversationID", conversationID, "error", err)
 			} else {
@@ -1570,7 +1584,7 @@ func (s *Server) handleRetryConversation(w http.ResponseWriter, r *http.Request,
 	// Validate that there's actually a retryable error to act on BEFORE
 	// spinning up a fresh loop with tools and a 12-hour context. This keeps
 	// the cold-storage path lightweight when the request is bogus.
-	latest, err := s.db.GetLatestMessage(ctx, conversationID)
+	latest, err := s.db.GetLatestActionableMessage(ctx, conversationID)
 	if err != nil {
 		s.logger.Warn("Retry: failed to load latest message", "conversationID", conversationID, "error", err)
 		http.Error(w, "conversation not found or empty", http.StatusNotFound)
@@ -1677,7 +1691,7 @@ func (s *Server) handleContinueConversation(w http.ResponseWriter, r *http.Reque
 
 	// Validate that the bottom message is a refusal error BEFORE spinning up a
 	// loop with tools and a 12-hour context.
-	latest, err := s.db.GetLatestMessage(ctx, conversationID)
+	latest, err := s.db.GetLatestActionableMessage(ctx, conversationID)
 	if err != nil {
 		s.logger.Warn("Continue: failed to load latest message", "conversationID", conversationID, "error", err)
 		http.Error(w, "conversation not found or empty", http.StatusNotFound)
@@ -3437,7 +3451,7 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, 
 		// No explicit message_id: clamp the cutoff to the conversation's latest
 		// sequence_id. A non-positive (or out-of-range) value forks the whole
 		// conversation. This also rejects forks of empty conversations.
-		latest, err := s.db.GetLatestMessage(ctx, conversationID)
+		latest, err := s.db.GetLatestActionableMessage(ctx, conversationID)
 		if err != nil {
 			http.Error(w, "Conversation has no messages to fork", http.StatusBadRequest)
 			return

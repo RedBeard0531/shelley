@@ -58,13 +58,32 @@ function randomKey(): Uint8Array {
 
 /**
  * The catch-up predicate as evaluated by ChatInterface.loadMessages: the UI
- * issues a REST backfill when the cache lacks full history OR when the
- * server-reported max sequence_id is ahead of what we have locally.
+ * must talk to the server when the cache lacks full history, when the
+ * server-reported max sequence_id is ahead of what we have locally, or when a
+ * stream reconnect flagged the record for re-verification.
+ *
+ * Mirrors ChatInterface's `cacheIsComplete && !needsRefresh` early return.
+ * Keep the two in sync — the tests below encode the safety properties the
+ * store guarantees, and they only hold if the UI reads the record this way.
  */
 function needsBackfill(rec: ConversationCacheRecord | null): boolean {
   if (!rec || !rec.hasFullHistory) return true;
+  if (rec.needsRefresh) return true;
   if (rec.maxSequenceIdKnown <= 0) return false;
   return rec.maxSequenceId < rec.maxSequenceIdKnown;
+}
+
+/**
+ * Whether that server round-trip has to be a FULL re-download rather than a
+ * cheap `?last_sequence_id=` tail fetch. Mirrors ChatInterface's guard on the
+ * incremental branch (`cached.hasFullHistory && cached.messages.length > 0`).
+ *
+ * This is why hasFullHistory is the flag the gap checks clear, and
+ * needsRefresh is not: a tail fetch starts from our cached max and so can
+ * never recover a message missing from the middle.
+ */
+function needsFullReload(rec: ConversationCacheRecord | null): boolean {
+  return !rec || !rec.hasFullHistory || rec.messages.length === 0;
 }
 
 let seq = 0;
@@ -254,6 +273,140 @@ async function main(): Promise<void> {
     assert(kept !== null && kept.messages.length === 1, "other conv preserved");
   });
 
+  // ── Poisoned-hydration regressions ────────────────────────────────────────
+  //
+  // Bookkeeping/metadata mutators used to mark a conversation `hydrated`
+  // even though nothing had been read from IDB. On a page load App calls
+  // setMaxSequenceIdKnown() for EVERY conversation in the list before any
+  // of them is focused, so the disk cache was never read and every focus
+  // did a full REST reload — the cache only ever worked for in-session
+  // conversation switches.
+
+  await run("setMaxSequenceIdKnown before hydrate must not poison the cache", async () => {
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const id = "c-poison-known";
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
+      context_window_size: 42,
+      max_sequence_id: 3,
+    });
+    await s.settle();
+    await s.close();
+
+    // Fresh page load: the conversation-list snapshot lands first.
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    s2.setMaxSequenceIdKnown(id, 3);
+    assert(!s2.isHydrated(id), "list metadata must not count as hydration");
+    const hyd = await s2.hydrate(id);
+    assert(hyd !== null, "hydrate must read the disk cache");
+    assert(hyd!.messages.length === 3, `expected 3 cached messages, got ${hyd!.messages.length}`);
+    assert(hyd!.hasFullHistory, "hasFullHistory preserved through metadata patch");
+    assert(hyd!.maxSequenceIdKnown === 3, `known=${hyd!.maxSequenceIdKnown}`);
+    assert(hyd!.contextWindowSize === 42, `ctx=${hyd!.contextWindowSize}`);
+    assert(!needsBackfill(hyd), "a fully-cached conversation must not need a REST reload");
+    await s2.close();
+  });
+
+  await run("setConversation before hydrate must not poison the cache", async () => {
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const id = "c-poison-conv";
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2)],
+      context_window_size: 7,
+      max_sequence_id: 2,
+    });
+    await s.settle();
+    await s.close();
+
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    s2.setConversation(id, conv(id, false));
+    s2.setContextWindowSize(id, 9);
+    const hyd = await s2.hydrate(id);
+    assert(hyd !== null, "hydrate must read the disk cache");
+    assert(hyd!.messages.length === 2, `expected 2 cached messages, got ${hyd!.messages.length}`);
+    assert(hyd!.hasFullHistory, "hasFullHistory preserved");
+    assert(
+      hyd!.contextWindowSize === 9,
+      `fresher in-memory ctx wins, got ${hyd!.contextWindowSize}`,
+    );
+    await s2.close();
+  });
+
+  await run("hydrate merges live messages that landed before hydration", async () => {
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const id = "c-live-first";
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2)],
+      context_window_size: 0,
+      max_sequence_id: 2,
+    });
+    await s.settle();
+    await s.close();
+
+    // New tab: a live stream event for this conversation arrives before the
+    // user focuses it, then hydration runs. Neither may drop the other's data.
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    s2.upsertMessages(id, [msg(id, 3)]);
+    const hyd = await s2.hydrate(id);
+    assert(hyd !== null, "hydrated");
+    assert(hyd!.messages.length === 3, `expected merged 1..3, got ${hyd!.messages.length}`);
+    assert(hyd!.maxSequenceId === 3, `max=${hyd!.maxSequenceId}`);
+    assert(hyd!.hasFullHistory, "disk full-history flag survives the merge");
+    assert(!needsBackfill(hyd), "merged cache is complete");
+    assert(s2.peek(id)!.messages.length === 3, "hot record updated in place");
+    await s2.close();
+  });
+
+  await run("hydrate is retried after a cache-key outage", async () => {
+    // If the server refuses to release the cache key (auth blip), we must
+    // NOT record the conversation as hydrated: a later hydrate() has to be
+    // able to pick up the disk cache once the key is available again.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const id = "c-key-outage";
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1)],
+      context_window_size: 0,
+      max_sequence_id: 1,
+    });
+    await s.settle();
+    await s.close();
+
+    class FlakyFetcher implements CacheKeyFetcher {
+      fail = true;
+      constructor(
+        private keyId: string,
+        private rawKey: Uint8Array,
+      ) {}
+      async fetch(): Promise<CacheKeyMaterial> {
+        if (this.fail) throw new Error("simulated 503");
+        const buf = new ArrayBuffer(this.rawKey.byteLength);
+        new Uint8Array(buf).set(this.rawKey);
+        const key = await crypto.subtle.importKey("raw", buf, { name: "AES-GCM" }, false, [
+          "encrypt",
+          "decrypt",
+        ]);
+        return { keyId: this.keyId, key, alg: "AES-GCM-256" };
+      }
+      async clear(): Promise<void> {}
+    }
+    const fetcher = new FlakyFetcher(keyId, rawKey);
+    const s2 = new MessageStore({ factory, dbName, keyHolder: new CacheKeyHolder(fetcher) });
+    assert((await s2.hydrate(id)) === null, "no key => no cache");
+    assert(!s2.isHydrated(id), "key outage must stay retryable");
+    fetcher.fail = false;
+    const hyd = await s2.hydrate(id);
+    assert(hyd !== null && hyd.messages.length === 1, "cache readable once the key returns");
+    await s2.close();
+  });
+
   await run(
     "applyFullHistory replace+dedup+sort within snapshot range (cross-instance)",
     async () => {
@@ -336,7 +489,10 @@ async function main(): Promise<void> {
     await s.settle();
   });
 
-  await run("markAllStale preserves messages on disk", async () => {
+  await run("markAllStale flags a refresh without discarding the cache", async () => {
+    // After a stream reconnect we must re-check with the server, but the
+    // cached history is still complete and renderable: keep hasFullHistory
+    // so the UI can paint from cache and fetch only the tail.
     const { factory, dbName, keyId, rawKey } = freshFactory();
     const s = storeFor({ factory, dbName, keyId, rawKey });
     const id = "c-stale";
@@ -348,14 +504,361 @@ async function main(): Promise<void> {
     await s.settle();
     s.markAllStale();
     await s.settle();
-    assert(s.peek(id)!.hasFullHistory === false, "hot cleared");
+    assert(s.peek(id)!.needsRefresh === true, "needsRefresh set");
+    assert(s.peek(id)!.hasFullHistory === true, "cached history still usable");
+    assert(!needsFullReload(s.peek(id)), "tail fetch suffices");
     assert(s.peek(id)!.messages.length === 3, "hot messages preserved");
     await s.close();
 
     const s2 = storeFor({ factory, dbName, keyId, rawKey });
     const hyd = await s2.hydrate(id);
     assert(hyd !== null && hyd.messages.length === 3, "messages preserved on disk");
-    assert(hyd!.hasFullHistory === false, "has_full_history persisted=false");
+    assert(hyd!.needsRefresh === true, "needs_refresh persisted");
+    assert(hyd!.hasFullHistory === true, "has_full_history persisted");
+    // And clearing it (after a successful tail fetch) sticks.
+    s2.clearNeedsRefresh(id);
+    await s2.settle();
+    await s2.close();
+    const s3 = storeFor({ factory, dbName, keyId, rawKey });
+    const hyd3 = await s3.hydrate(id);
+    assert(hyd3!.needsRefresh === false, "needs_refresh cleared on disk");
+    await s3.close();
+  });
+
+  await run("applyIncrementalTail appends only the tail and clears needsRefresh", async () => {
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-tail";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2)],
+      context_window_size: 0,
+      max_sequence_id: 2,
+    });
+    await s.settle();
+    s.markAllStale();
+    s.setMaxSequenceIdKnown(id, 4);
+    await s.settle();
+    // The server answers ?last_sequence_id=2 with just 3 and 4.
+    s.applyIncrementalTail(
+      id,
+      {
+        conversation_id: id,
+        messages: [msg(id, 3), msg(id, 4)],
+        context_window_size: 0,
+      },
+      2,
+    );
+    await s.settle();
+    const rec = s.peek(id)!;
+    assert(rec.messages.length === 4, `expected 4 messages, got ${rec.messages.length}`);
+    assert(rec.maxSequenceId === 4, `max=${rec.maxSequenceId}`);
+    assert(rec.hasFullHistory, "still full history");
+    assert(rec.needsRefresh === false, "needsRefresh cleared");
+    assert(!needsBackfill(rec), "caught up");
+    await s.close();
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    const hyd = await s2.hydrate(id);
+    assert(hyd!.messages.length === 4, `persisted ${hyd!.messages.length} messages`);
+    assert(hyd!.hasFullHistory, "has_full_history persisted");
+    assert(hyd!.needsRefresh === false, "needs_refresh persisted false");
+    await s2.close();
+  });
+
+  await run("a server snapshot with sequence gaps stays fully cached", async () => {
+    // Sequence ids are NOT guaranteed consecutive. db.CopyMessagesForFork
+    // copies only the fork point's generation and PRESERVES the source
+    // sequence_ids, so forking a conversation whose sequence space has
+    // messages from an abandoned generation in the middle (e.g. after a
+    // rolled-back compaction — see server/distill_pi.go
+    // rollbackCompactionFailure) yields a complete history with real holes.
+    // The REST snapshot is authoritative: a hole in it must not be mistaken
+    // for cache damage, or such conversations would re-download forever.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-forked-gap";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2), msg(id, 7), msg(id, 8)],
+      context_window_size: 0,
+      max_sequence_id: 8,
+    });
+    await s.settle();
+    assert(!needsBackfill(s.peek(id)), "complete in memory");
+    await s.close();
+
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    const hyd = await s2.hydrate(id);
+    assert(hyd !== null, "hydrated");
+    assert(hyd!.messages.length === 4, `got ${hyd!.messages.length}`);
+    assert(hyd!.hasFullHistory, "a gappy but authoritative snapshot is still full");
+    assert(!needsBackfill(hyd), "must serve from cache, not reload forever");
+    await s2.close();
+  });
+
+  await run("a redelivered message replaces the cached copy, not duplicates it", async () => {
+    // Redelivery is normal: a stream reconnect can resend rows we already
+    // hold, and subpub replays from a cursor. Upserting by message_id must be
+    // idempotent — same count, newest copy wins — and must not look like a gap.
+    //
+    // (Messages are append-only in the database; nothing rewrites a row's
+    // content in place. Data that arrives later, such as the cost of the LLM
+    // call that named the conversation, is recorded by appending a new row.)
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-mutated";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2)],
+      context_window_size: 0,
+      max_sequence_id: 2,
+    });
+    await s.settle();
+
+    const updated: Message = { ...msg(id, 1), other_usage_data: '[{"purpose":"slug"}]' };
+    s.upsertMessages(id, [updated]);
+    await s.settle();
+    const rec = s.peek(id)!;
+    assert(rec.messages.length === 2, `re-publish must not duplicate, got ${rec.messages.length}`);
+    assert(rec.messages[0].other_usage_data !== null, "in-memory copy updated");
+    assert(rec.hasFullHistory, "redelivery of a known message is not a gap");
+    await s.close();
+
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    const hyd = await s2.hydrate(id);
+    assert(hyd!.messages.length === 2, `persisted ${hyd!.messages.length} rows, want 2`);
+    assert(
+      hyd!.messages[0].other_usage_data === updated.other_usage_data,
+      "persisted copy updated",
+    );
+    assert(hyd!.hasFullHistory, "hasFullHistory survives a redelivery");
+    await s2.close();
+  });
+
+  await run("a hole opened by a live upsert forces a full reload, not a tail fetch", async () => {
+    // Full history for 1..3, then a live event delivers 7 (4..6 happened while
+    // we weren't listening). The store must not report "caught up" just
+    // because local max (7) now equals known max (7) — the 4..6 hole has to be
+    // repaired, and repaired with a FULL reload, since a ?last_sequence_id=7
+    // tail fetch would never return the missing middle.
+    const s = freshStore();
+    const id = "c-hole-then-caught-up";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
+      context_window_size: 0,
+      max_sequence_id: 3,
+    });
+    s.setMaxSequenceIdKnown(id, 7);
+    s.upsertMessages(id, [msg(id, 7)]);
+    const rec = s.peek(id)!;
+    assert(rec.maxSequenceId === 7, `local=${rec.maxSequenceId}`);
+    assert(rec.maxSequenceIdKnown === 7, `known=${rec.maxSequenceIdKnown}`);
+    assert(rec.hasFullHistory === false, "the hole must clear hasFullHistory");
+    assert(needsBackfill(rec), "sequence counters agreeing must not mask the hole");
+    assert(needsFullReload(rec), "a tail fetch cannot recover a missing middle");
+    await s.settle();
+    // The hole must also be recorded on disk, or the next page load would
+    // hydrate a record that claims to be complete.
+    const hyd = await s.hydrate(id);
+    assert(hyd!.hasFullHistory === false, "hole persisted");
+    await s.close();
+  });
+
+  await run("a pre-hydration live append cannot launder an incomplete cache", async () => {
+    // The dangerous ordering: a live message for a not-yet-focused
+    // conversation is PERSISTED (settled) before hydration runs, so hydrate
+    // reads the merged set off disk and mergeRecords never sees a hot-only
+    // message to check. _persistUpsert must therefore do the join check
+    // itself and clear has_full_history, or the hole becomes invisible.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-launder";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
+      context_window_size: 0,
+      max_sequence_id: 3,
+    });
+    await s.settle();
+    await s.close();
+
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    s2.upsertMessages(id, [msg(id, 7)]);
+    await s2.settle(); // persisted BEFORE hydrate — the production ordering
+    await s2.close();
+
+    const s3 = storeFor({ factory, dbName, keyId, rawKey });
+    const hyd = await s3.hydrate(id);
+    assert(hyd !== null, "hydrated");
+    assert(hyd!.messages.length === 4, `got ${hyd!.messages.length}`);
+    assert(hyd!.hasFullHistory === false, "a skipped range must not survive persistence");
+    assert(needsBackfill(hyd), "must repair");
+    await s3.close();
+  });
+
+  await run("a lost row plus a later append still forfeits hasFullHistory", async () => {
+    // message_count must be RATCHETED, not reset to the observed row count:
+    // losing one row and then appending one would otherwise restore the
+    // count and re-certify a cache that is missing a message.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-launder2";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
+      context_window_size: 0,
+      max_sequence_id: 3,
+    });
+    await s.settle();
+    await s.close();
+
+    // Lose the middle row behind the store's back.
+    const req = factory.open(dbName, 4);
+    const raw: IDBDatabase = await new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const r = raw.transaction("messages", "readwrite").objectStore("messages").delete([id, 2]);
+      r.onsuccess = () => resolve();
+      r.onerror = () => reject(r.error);
+    });
+    raw.close();
+
+    // Now a legitimate live append restores the row count to 3.
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    s2.upsertMessages(id, [msg(id, 4)]);
+    await s2.settle();
+    await s2.close();
+
+    const s3 = storeFor({ factory, dbName, keyId, rawKey });
+    const hyd = await s3.hydrate(id);
+    assert(hyd !== null, "hydrated");
+    assert(hyd!.messages.length === 3, `got ${hyd!.messages.length}`);
+    assert(hyd!.hasFullHistory === false, "count must not be launderable");
+    assert(needsBackfill(hyd), "must repair");
+    await s3.close();
+  });
+
+  await run("markAllStale during an in-flight hydrate is not lost", async () => {
+    // A reconnect landing mid-hydrate applies to the record about to be
+    // installed: the disk row predates the reconnect, so its needs_refresh
+    // cannot reflect it. Losing the flag would leave the conversation
+    // serving stale cache with no server re-check.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-stale-race";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2)],
+      context_window_size: 0,
+      max_sequence_id: 2,
+    });
+    await s.settle();
+    await s.close();
+
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    const pending = s2.hydrate(id);
+    // Fire the reconnect while the read is in flight. The hot map is still
+    // empty here, so the loop over hot records has nothing to flag.
+    s2.markAllStale();
+    const hyd = await pending;
+    assert(hyd !== null, "hydrated");
+    assert(hyd!.needsRefresh === true, "reconnect flag survived the hydrate");
+    assert(needsBackfill(hyd), "still re-checks with the server");
+    await s2.settle();
+    await s2.close();
+    // And it was persisted, so a later tab also re-checks.
+    const s3 = storeFor({ factory, dbName, keyId, rawKey });
+    assert((await s3.hydrate(id))!.needsRefresh === true, "needs_refresh persisted");
+    await s3.close();
+  });
+
+  await run("applyIncrementalTail on a vanished record does not claim full history", async () => {
+    // The record can be deleted (archive / prune / cache wipe) while the
+    // tail fetch is in flight. The response covers only sequence_ids > N, so
+    // treating it as a full snapshot would cache a headless conversation.
+    const s = freshStore();
+    const id = "c-vanished";
+    s.applyIncrementalTail(
+      id,
+      { conversation_id: id, messages: [msg(id, 9)], context_window_size: 0 },
+      8,
+    );
+    await s.settle();
+    const rec = s.peek(id);
+    assert(rec !== null, "tail still cached for the live view");
+    assert(rec!.hasFullHistory === false, "a tail is not a full history");
+    assert(needsBackfill(rec), "next focus must do a real backfill");
+    await s.close();
+  });
+
+  await run("lost message rows forfeit hasFullHistory", async () => {
+    // Rows can go missing (undecryptable, partial wipe, prune race). A short
+    // read means the cached history has a hole, so it must be repaired
+    // rather than rendered as if it were complete. Detected by row COUNT
+    // (message_count), not sequence contiguity — see the fork case above.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-gap";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
+      context_window_size: 0,
+      max_sequence_id: 3,
+    });
+    await s.settle();
+    await s.close();
+
+    // Delete the middle row behind the store's back.
+    const req = factory.open(dbName, 4);
+    const raw: IDBDatabase = await new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const r = raw.transaction("messages", "readwrite").objectStore("messages").delete([id, 2]);
+      r.onsuccess = () => resolve();
+      r.onerror = () => reject(r.error);
+    });
+    raw.close();
+
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    const hyd = await s2.hydrate(id);
+    assert(hyd !== null, "hydrated");
+    assert(hyd!.messages.length === 2, `got ${hyd!.messages.length}`);
+    assert(hyd!.hasFullHistory === false, "lost rows must clear hasFullHistory");
+    assert(needsBackfill(hyd), "lost rows force a REST backfill");
+    await s2.close();
+  });
+
+  await run("live messages that skip past the cached tail are not trusted", async () => {
+    // Previous session cached 1..3; messages 4..6 were added while no tab
+    // was open; now a live stream event delivers 7 before the conversation
+    // is focused. Merging blindly would leave a hole in the middle while
+    // every counter says we're caught up, so the user would silently see a
+    // conversation missing messages.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-skip";
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
+      context_window_size: 0,
+      max_sequence_id: 3,
+    });
+    await s.settle();
+    await s.close();
+
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    s2.upsertMessages(id, [msg(id, 7)]);
+    const hyd = await s2.hydrate(id);
+    assert(hyd !== null, "hydrated");
+    assert(hyd!.messages.length === 4, "both sets kept for a fast paint");
+    assert(hyd!.hasFullHistory === false, "a skipped range must clear hasFullHistory");
+    assert(needsBackfill(hyd), "a skipped range forces a repair");
+    await s2.close();
   });
 
   await run("setConversation does not disturb max_sequence_id_local", async () => {
@@ -557,7 +1060,7 @@ async function main(): Promise<void> {
     await s.settle();
   });
 
-  await run("markAllStale forces needsBackfill but preserves messages", async () => {
+  await run("markAllStale forces a server re-check but not a full re-download", async () => {
     const { factory, dbName, keyId, rawKey } = freshFactory();
     const s = storeFor({ factory, dbName, keyId, rawKey });
     const id = "c-reconnect";
@@ -572,15 +1075,17 @@ async function main(): Promise<void> {
     assert(!needsBackfill(s.peek(id)), "caught up before stale");
     s.markAllStale();
     const rec = s.peek(id)!;
-    assert(!rec.hasFullHistory, "hasFullHistory cleared");
-    assert(needsBackfill(rec), "needsBackfill after stale");
+    assert(rec.needsRefresh, "flagged for re-verification");
+    assert(needsBackfill(rec), "must talk to the server after a reconnect");
+    assert(!needsFullReload(rec), "but a tail fetch suffices");
     assert(rec.messages.length === 3, "hot messages preserved for fast paint");
     await s.settle();
     await s.close();
     const s2 = storeFor({ factory, dbName, keyId, rawKey });
     const hyd = (await s2.hydrate(id))!;
     assert(hyd.messages.length === 3, "persisted messages preserved");
-    assert(needsBackfill(hyd), "persisted stale=>needsBackfill");
+    assert(needsBackfill(hyd), "persisted stale => still re-checks");
+    assert(!needsFullReload(hyd), "persisted stale => tail fetch suffices");
   });
 
   await run("per-conversation isolation: A's known does not bleed into B", async () => {

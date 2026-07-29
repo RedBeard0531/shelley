@@ -262,6 +262,27 @@ class ApiService {
     }
   }
 
+  /**
+   * Fetch only the messages after `sinceSequenceId`.
+   *
+   * Used when the local cache already holds a contiguous history and just
+   * needs to re-check the tail (e.g. after a stream reconnect). Costs a few
+   * hundred bytes instead of re-downloading a whole conversation, which for
+   * a long one is megabytes of JSON.
+   */
+  async getConversationSince(
+    conversationId: string,
+    sinceSequenceId: number,
+  ): Promise<StreamResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${conversationId}?last_sequence_id=${sinceSequenceId}`,
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to get messages since ${sinceSequenceId}: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
   async sendMessage(conversationId: string, request: ChatRequest): Promise<void> {
     const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/chat`, {
       method: "POST",

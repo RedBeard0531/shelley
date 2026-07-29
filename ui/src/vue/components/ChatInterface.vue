@@ -393,6 +393,7 @@ import {
 } from "../../types";
 import { api } from "../../services/api";
 import { messageStore } from "../../services/messageStore";
+import { cacheDiag } from "../../services/cacheDiag";
 import {
   loadCachedDraft,
   saveCachedDraft,
@@ -529,9 +530,18 @@ const messages = ref<Message[]>([]);
 // an error message can show its Retry button only when it is last: once a
 // retry (or any new turn) appends a message, the error is no longer at the
 // bottom and retrying it would be a server-side no-op.
-const lastMessageId = computed(() =>
-  messages.value.length > 0 ? messages.value[messages.value.length - 1].message_id : null,
-);
+//
+// Slug markers don't count. They render as nothing, carry only the usage of the
+// LLM call that named the conversation, and land at an arbitrary point (that
+// call races the first turn), so treating one as "last" would hide the Retry
+// button on a genuinely retryable error. The server's GetLatestMessage skips
+// them for the same reason.
+const lastMessageId = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].type !== "slug") return messages.value[i].message_id;
+  }
+  return null;
+});
 provide("lastMessageId", lastMessageId);
 
 // When more than one distinct human user (by exe.dev email) has participated in
@@ -1491,20 +1501,80 @@ async function loadMessages(focusedId: string) {
     }
   }
 
-  if (
-    cached &&
+  const cacheIsComplete =
+    !!cached &&
     cached.hasFullHistory &&
-    (cached.maxSequenceIdKnown <= 0 || cached.maxSequenceId >= cached.maxSequenceIdKnown)
-  ) {
+    (cached.maxSequenceIdKnown <= 0 || cached.maxSequenceId >= cached.maxSequenceIdKnown);
+
+  if (cacheIsComplete && !cached!.needsRefresh) {
     // We have the full history (even if it's legitimately empty). Clear the
     // loading state so a genuinely empty conversation shows its empty-state
     // rather than an indefinite spinner.
+    cacheDiag("hit", "load.served_from_cache", {
+      conversation_id: focusedId,
+      messages: cached!.messages.length,
+    });
     loadingFlag = false;
     loading.value = false;
     showLoadingProgressUI.value = false;
     loadingProgress.value = null;
     return;
   }
+
+  // Incremental path: the cache holds a complete contiguous history, we just
+  // don't know whether the server has grown past it (stream reconnect, or the
+  // list's known-max is ahead of us). Ask only for the tail — a few hundred
+  // bytes instead of re-downloading the whole conversation. The messages
+  // already on screen stay on screen while this runs.
+  if (cached && cached.hasFullHistory && cached.messages.length > 0) {
+    const fromSeq = cached.maxSequenceId;
+    try {
+      const tail = await api.getConversationSince(focusedId, fromSeq);
+      if (!isCurrent()) return;
+      messageStore.applyIncrementalTail(focusedId, tail, fromSeq);
+      cached = messageStore.peek(focusedId);
+      pendingScroll = loadScroll();
+      const merged = cached?.messages ?? [];
+      messages.value = merged;
+      lastKnownMessageCount.value = merged.length;
+      saveMsgCount(merged.length);
+      loadingFlag = false;
+      loading.value = false;
+      if (loadingProgressDelay) {
+        clearTimeout(loadingProgressDelay);
+        loadingProgressDelay = null;
+      }
+      showLoadingProgressUI.value = false;
+      loadingProgress.value = null;
+      if (props.onConversationUpdate && tail.conversation) {
+        props.onConversationUpdate(tail.conversation);
+      }
+      return;
+    } catch (err) {
+      // Fall through to the full load below; the cached view stays on screen.
+      cacheDiag(
+        "fail",
+        "refresh.incremental_failed",
+        { conversation_id: focusedId, error: String(err) },
+        focusedId,
+      );
+      if (!isCurrent()) return;
+    }
+  }
+
+  cacheDiag("info", "load.full_rest", {
+    conversation_id: focusedId,
+    reason: !cached
+      ? "cold"
+      : !cached.hasFullHistory
+        ? "partial-history"
+        : cached.needsRefresh
+          ? "reconnect"
+          : "server-ahead",
+    cached_messages: cached?.messages.length ?? 0,
+    cached_max: cached?.maxSequenceId ?? -1,
+    known_max: cached?.maxSequenceIdKnown ?? 0,
+  });
 
   try {
     loadingFlag = true;

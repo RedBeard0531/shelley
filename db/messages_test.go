@@ -372,7 +372,7 @@ func TestMessageService_GetLatest(t *testing.T) {
 	}
 
 	// Test getting latest from empty conversation
-	_, err = db.GetLatestMessage(ctx, conv.ConversationID)
+	_, err = db.GetLatestActionableMessage(ctx, conv.ConversationID)
 	if err == nil {
 		t.Error("Expected error for conversation with no messages")
 	}
@@ -392,7 +392,7 @@ func TestMessageService_GetLatest(t *testing.T) {
 	}
 
 	// Get the latest message
-	latest, err := db.GetLatestMessage(ctx, conv.ConversationID)
+	latest, err := db.GetLatestActionableMessage(ctx, conv.ConversationID)
 	if err != nil {
 		t.Errorf("GetLatest() error = %v", err)
 		return

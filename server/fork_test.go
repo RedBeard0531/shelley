@@ -194,7 +194,7 @@ func TestForkConversationOnlyCopiesCurrentGeneration(t *testing.T) {
 	}
 
 	// Fork the whole conversation.
-	latest, err := database.GetLatestMessage(ctx, sourceID)
+	latest, err := database.GetLatestActionableMessage(ctx, sourceID)
 	if err != nil {
 		t.Fatalf("get latest: %v", err)
 	}
