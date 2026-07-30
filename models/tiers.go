@@ -59,7 +59,6 @@ var shadowPairs = []shadowPair{
 	{Better: "glm-5.2-fireworks", Worse: "deepseek-v4-flash-fireworks"},
 	{Better: "gpt-5.6-luna", Worse: "claude-haiku-4.5"},
 	{Better: "gpt-5.6-luna", Worse: "gpt-5.3-codex"},
-	{Better: "gpt-5.6-luna", Worse: "gpt-5.2-codex"},
 }
 
 // AssignTiers computes the tier (Tier1 or Tier2) for each of the given model

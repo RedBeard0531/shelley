@@ -45,12 +45,12 @@ func TestAssignTiers(t *testing.T) {
 	})
 
 	t.Run("multiple shadows demote several models", func(t *testing.T) {
-		avail := []string{"gpt-5.6-luna", "gpt-5.3-codex", "gpt-5.2-codex", "claude-haiku-4.5"}
+		avail := []string{"gpt-5.6-luna", "gpt-5.3-codex", "claude-haiku-4.5"}
 		tiers := AssignTiers(avail)
 		if tiers["gpt-5.6-luna"] != Tier1 {
 			t.Errorf("luna tier = %d, want %d", tiers["gpt-5.6-luna"], Tier1)
 		}
-		for _, worse := range []string{"gpt-5.3-codex", "gpt-5.2-codex", "claude-haiku-4.5"} {
+		for _, worse := range []string{"gpt-5.3-codex", "claude-haiku-4.5"} {
 			if tiers[worse] != Tier2 {
 				t.Errorf("%s tier = %d, want %d", worse, tiers[worse], Tier2)
 			}

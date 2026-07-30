@@ -363,12 +363,6 @@ func All() []Model {
 			Build: oaiResponsesSvc(oai.GPT53Codex),
 		},
 		{
-			ID: "gpt-5.2-codex", Provider: ProviderOpenAI,
-			Description: "GPT-5.2 Codex", APIModelName: oai.GPT52Codex.ModelName,
-			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
-			Build: oaiResponsesSvc(oai.GPT52Codex),
-		},
-		{
 			ID: "gemini-3-flash", Provider: ProviderGemini,
 			Description: "Gemini 3 Flash", APIModelName: "gemini-3-flash-preview",
 			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,

@@ -336,7 +336,7 @@ func TestToLLMResponseFromResponses(t *testing.T) {
 			name: "simple text response",
 			resp: &responsesResponse{
 				ID:    "resp_123",
-				Model: "gpt-5.1-codex",
+				Model: "gpt-5.3-codex",
 				Output: []responsesOutputItem{
 					{
 						Type: "message",
@@ -354,7 +354,7 @@ func TestToLLMResponseFromResponses(t *testing.T) {
 			name: "response with function call",
 			resp: &responsesResponse{
 				ID:    "resp_123",
-				Model: "gpt-5.1-codex",
+				Model: "gpt-5.3-codex",
 				Output: []responsesOutputItem{
 					{
 						Type:      "function_call",
@@ -371,7 +371,7 @@ func TestToLLMResponseFromResponses(t *testing.T) {
 			name: "response with reasoning and message",
 			resp: &responsesResponse{
 				ID:    "resp_123",
-				Model: "gpt-5.1-codex",
+				Model: "gpt-5.3-codex",
 				Output: []responsesOutputItem{
 					{
 						Type: "reasoning",
@@ -422,7 +422,7 @@ func TestResponsesReasoningSummaryUnmarshal(t *testing.T) {
 		"id": "resp_1",
 		"object": "response",
 		"status": "completed",
-		"model": "gpt-5.1-codex",
+		"model": "gpt-5.3-codex",
 		"output": [
 			{
 				"id": "rs_1",
@@ -502,8 +502,6 @@ func TestResponsesServiceTokenContextWindow(t *testing.T) {
 			SupportsImages:     false,
 		}, expected: 272000},
 		{model: GPT53Codex, expected: 288000},
-		{model: GPT52Codex, expected: 272000},
-		{model: GPT5Codex, expected: 256000},
 		{model: GPT41, expected: 200000},
 		{model: GPT4o, expected: 128000},
 	}
@@ -521,14 +519,14 @@ func TestResponsesServiceTokenContextWindow(t *testing.T) {
 
 func TestResponsesServiceConfigDetails(t *testing.T) {
 	svc := &ResponsesService{
-		Model:  GPT5Codex,
+		Model:  GPT53Codex,
 		APIKey: "test-key",
 	}
 
 	details := svc.ConfigDetails()
 
-	if details["model_name"] != "gpt-5.1-codex" {
-		t.Errorf("expected model_name 'gpt-5.1-codex', got %s", details["model_name"])
+	if details["model_name"] != "gpt-5.3-codex" {
+		t.Errorf("expected model_name 'gpt-5.3-codex', got %s", details["model_name"])
 	}
 	if details["full_url"] != "https://api.openai.com/v1/responses" {
 		t.Errorf("unexpected full_url: %s", details["full_url"])
@@ -552,7 +550,7 @@ func TestResponsesServiceIntegration(t *testing.T) {
 
 	svc := &ResponsesService{
 		APIKey: apiKey,
-		Model:  GPT5Codex,
+		Model:  GPT53Codex,
 	}
 
 	ctx := context.Background()
@@ -577,8 +575,8 @@ func TestResponsesServiceIntegration(t *testing.T) {
 		if resp.ID == "" {
 			t.Error("expected response ID to be set")
 		}
-		if resp.Model != "gpt-5.1-codex" {
-			t.Errorf("expected model gpt-5.1-codex, got %s", resp.Model)
+		if resp.Model != "gpt-5.3-codex" {
+			t.Errorf("expected model gpt-5.3-codex, got %s", resp.Model)
 		}
 		if len(resp.Content) == 0 {
 			t.Error("expected response to have content")

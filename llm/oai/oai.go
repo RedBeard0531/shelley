@@ -419,28 +419,6 @@ var (
 		SupportsImages:     true,
 	}
 
-	GPT5Codex = Model{
-		UserName:           "gpt-5.1-codex",
-		ModelName:          "gpt-5.1-codex",
-		TextVerbosity:      "low",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
-	}
-
-	GPT52Codex = Model{
-		UserName:           "gpt-5.2-codex",
-		ModelName:          "gpt-5.2-codex",
-		TextVerbosity:      "low",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
-	}
-
 	GPT56Sol = Model{
 		UserName:           "gpt-5.6-sol",
 		ModelName:          "gpt-5.6-sol",
@@ -608,8 +586,6 @@ var ModelsRegistry = []Model{
 	O4Mini,
 	O3,
 	// Codex
-	GPT5Codex,
-	GPT52Codex,
 	GPT53Codex,
 	// Gemini
 	Gemini25Flash,

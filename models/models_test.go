@@ -59,7 +59,7 @@ func TestByID(t *testing.T) {
 		{id: "gpt-5.5-pro", wantNil: true},
 		{id: "deepseek-v4-pro-fireworks", wantID: "deepseek-v4-pro-fireworks"},
 		{id: "gpt-oss-20b-fireworks", wantID: "gpt-oss-20b-fireworks"},
-		{id: "gpt-5.2-codex", wantID: "gpt-5.2-codex"},
+		{id: "gpt-5.3-codex", wantID: "gpt-5.3-codex"},
 		{id: "claude-opus-5", wantID: "claude-opus-5"},
 		{id: "claude-sonnet-5", wantID: "claude-sonnet-5"},
 		{id: "claude-sonnet-4.5", wantID: "claude-sonnet-4.5"},
