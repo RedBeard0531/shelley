@@ -25,7 +25,7 @@ export const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: st
     { name: "Claude Haiku 4.5", model_name: "claude-haiku-4-5" },
   ],
   openai: [
-    { name: "GPT-5.3 Chat", model_name: "gpt-5.3-chat-latest" },
+    { name: "GPT-5.6 Sol", model_name: "gpt-5.6-sol" },
     { name: "GPT-5.5", model_name: "gpt-5.5" },
     { name: "GPT-5.4", model_name: "gpt-5.4" },
   ],
@@ -36,6 +36,8 @@ export const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: st
     { name: "GPT-5.3 Codex", model_name: "gpt-5.3-codex" },
   ],
   gemini: [
+    { name: "Gemini 3.1 Pro", model_name: "gemini-3.1-pro-preview" },
+    { name: "Gemini 3.6 Flash", model_name: "gemini-3.6-flash" },
     { name: "Gemini 3 Flash", model_name: "gemini-3-flash-preview" },
   ],
 };
