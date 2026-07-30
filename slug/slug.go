@@ -101,6 +101,7 @@ var preferredModelSubstrings = []string{
 	"gpt-oss-20b",
 	"gpt-5.6-luna",
 	"haiku",
+	"gemini-3.6-flash",
 	"gemini-3-flash",
 	"-nano",
 	"-mini",

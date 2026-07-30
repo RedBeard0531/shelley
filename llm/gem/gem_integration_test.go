@@ -247,8 +247,9 @@ func TestGemini3ModelsIntegration(t *testing.T) {
 	}
 
 	models := []string{
-		"gemini-3-flash-preview",
+		"gemini-3.6-flash",
 		"gemini-3.1-pro-preview",
+		"gemini-3-flash-preview",
 	}
 
 	for _, model := range models {

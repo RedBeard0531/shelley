@@ -261,6 +261,12 @@ func All() []Model {
 			Build: oaiChatSvc(oai.GLM52Fireworks, "fireworks"),
 		},
 		{
+			ID: "gemini-3.1-pro", Provider: ProviderGemini,
+			Description: "Gemini 3.1 Pro", APIModelName: "gemini-3.1-pro-preview",
+			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,
+			Build: gemSvc("gemini-3.1-pro-preview"),
+		},
+		{
 			ID: "grok-4.5", Provider: ProviderXAI,
 			Description: "Grok 4.5", APIModelName: oai.Grok45.ModelName,
 			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultXAIBaseURL,
@@ -355,6 +361,12 @@ func All() []Model {
 			Description: "GPT-5.3 Codex", APIModelName: oai.GPT53Codex.ModelName,
 			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
 			Build: oaiResponsesSvc(oai.GPT53Codex),
+		},
+		{
+			ID: "gemini-3.6-flash", Provider: ProviderGemini,
+			Description: "Gemini 3.6 Flash", APIModelName: "gemini-3.6-flash",
+			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,
+			Build: gemSvc("gemini-3.6-flash"),
 		},
 		{
 			ID: "gemini-3-flash", Provider: ProviderGemini,
