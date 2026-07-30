@@ -66,7 +66,7 @@ func TestEnvSourceLabels(t *testing.T) {
 	}{
 		{"claude-opus-4.6", "$ANTHROPIC_API_KEY"},
 		{"gpt-5.5", "$OPENAI_API_KEY"},
-		{"gemini-3-pro", "$GEMINI_API_KEY"},
+		{"gemini-3-flash", "$GEMINI_API_KEY"},
 		{"gpt-oss-20b-fireworks", "$FIREWORKS_API_KEY"},
 	} {
 		b := findBuilt(bs, tt.id)
@@ -86,8 +86,8 @@ func TestGatewaySourceLabels(t *testing.T) {
 	if b := findBuilt(bs, "claude-opus-4.6"); b == nil || b.Source != "exe.dev gateway" {
 		t.Errorf("claude-opus-4.6 with plain gateway: %+v", b)
 	}
-	if b := findBuilt(bs, "gemini-3-pro"); b != nil {
-		t.Errorf("gemini-3-pro should not be built by gateway, got %+v", b)
+	if b := findBuilt(bs, "gemini-3-flash"); b != nil {
+		t.Errorf("gemini-3-flash should not be built by gateway, got %+v", b)
 	}
 	if b := findBuilt(bs, "grok-4.5"); b == nil || b.Source != "exe.dev gateway" {
 		t.Errorf("grok-4.5 with plain gateway: %+v", b)
@@ -157,7 +157,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"deepseek-v4-pro",
 		"deepseek-v4-flash",
 		"gpt-oss-20b",
-		"gemini-3-pro",
+		"gemini-3-flash",
 	} {
 		if b := findBuilt(bs, id); b != nil {
 			t.Errorf("%q should NOT be built, got %+v", id, b)
@@ -568,7 +568,7 @@ func TestIntegrationModelsFromCatalogUsesNativeIDsForSupportedAPIs(t *testing.T)
 			{ID: "mistral/upstream-chat", Provider: "mistral", NativeID: "upstream-chat", APIs: []string{"openai_chat"}},
 			{Provider: "openai", NativeID: "missing-integration-id", APIs: []string{"openai_responses"}},
 			{ID: "openai/text-embedding-3-small", Provider: "openai", NativeID: "text-embedding-3-small", APIs: []string{"openai_embeddings"}},
-			{ID: "gemini/gemini-3-pro", Provider: "gemini", NativeID: "gemini-3-pro-preview", APIs: []string{"gemini"}},
+			{ID: "gemini/gemini-3-flash", Provider: "gemini", NativeID: "gemini-3-flash-preview", APIs: []string{"gemini"}},
 		},
 	})
 
@@ -938,7 +938,7 @@ func TestBuiltBaseURLResolution(t *testing.T) {
 		{"claude-opus-4.6", "https://api.anthropic.com"},
 		{"gpt-5.5", "https://api.openai.com"},
 		{"gpt-oss-20b-fireworks", "https://api.fireworks.ai/inference"},
-		{"gemini-3-pro", "https://generativelanguage.googleapis.com"},
+		{"gemini-3-flash", "https://generativelanguage.googleapis.com"},
 	} {
 		b := findBuilt(bs, tt.id)
 		if b == nil {
@@ -976,7 +976,7 @@ func TestBuiltAPITypePopulated(t *testing.T) {
 		{"claude-opus-4.6", models.APITypeAnthropicMessages},
 		{"gpt-5.5", models.APITypeOpenAIResponses},
 		{"gpt-oss-20b-fireworks", models.APITypeOpenAIChat},
-		{"gemini-3-pro", models.APITypeGemini},
+		{"gemini-3-flash", models.APITypeGemini},
 		{"predictable", models.APITypeBuiltIn},
 	} {
 		b := findBuilt(bs, tt.id)

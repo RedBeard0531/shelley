@@ -261,12 +261,6 @@ func All() []Model {
 			Build: oaiChatSvc(oai.GLM52Fireworks, "fireworks"),
 		},
 		{
-			ID: "gemini-3-pro", Provider: ProviderGemini,
-			Description: "Gemini 3 Pro", APIModelName: "gemini-3-pro-preview",
-			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,
-			Build: gemSvc("gemini-3-pro-preview"),
-		},
-		{
 			ID: "grok-4.5", Provider: ProviderXAI,
 			Description: "Grok 4.5", APIModelName: oai.Grok45.ModelName,
 			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultXAIBaseURL,

@@ -36,7 +36,6 @@ export const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: st
     { name: "GPT-5.3 Codex", model_name: "gpt-5.3-codex" },
   ],
   gemini: [
-    { name: "Gemini 3 Pro", model_name: "gemini-3-pro-preview" },
     { name: "Gemini 3 Flash", model_name: "gemini-3-flash-preview" },
   ],
 };

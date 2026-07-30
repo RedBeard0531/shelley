@@ -21,7 +21,7 @@ func TestGeminiThinkingIntegration(t *testing.T) {
 
 	service := &Service{
 		APIKey: apiKey,
-		Model:  "gemini-3-pro-preview", // Gemini 3 supports thinking with tools
+		Model:  "gemini-3-flash-preview", // Gemini 3 supports thinking with tools
 	}
 
 	// Define a simple bash tool to trigger thinking with ThoughtSignature
@@ -247,7 +247,6 @@ func TestGemini3ModelsIntegration(t *testing.T) {
 	}
 
 	models := []string{
-		"gemini-3-pro-preview",
 		"gemini-3-flash-preview",
 		"gemini-3.1-pro-preview",
 	}
