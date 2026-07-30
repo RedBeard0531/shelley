@@ -9,7 +9,7 @@ import (
 func TestGenerateContent(t *testing.T) {
 	// TODO replace with local replay endpoint
 	m := Model{
-		Model:  "models/gemini-1.5-flash",
+		Model:  "models/gemini-3.6-flash",
 		APIKey: os.Getenv("GEMINI_API_KEY"),
 	}
 	if testing.Short() {
