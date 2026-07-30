@@ -93,7 +93,7 @@ test: test-go test-e2e
 # Serve Shelley with predictable model for testing
 serve-test: ui
 	@echo "Starting Shelley with predictable model..."
-	go run ./cmd/shelley --model predictable --db test.db serve
+	go run ./cmd/shelley --predictable-only --db test.db serve
 
 # Serve Shelley normally
 serve: ui
