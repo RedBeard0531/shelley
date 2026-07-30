@@ -404,15 +404,6 @@ func (s *Service) thinkingConfig(req *llm.Request) *gemini.ThinkingConfig {
 		if effort == "xhigh" {
 			effort = "high"
 		}
-		// gemini-3-pro-preview accepts only "low" and "high"; collapse minimal/medium.
-		if model == "gemini-3-pro-preview" {
-			switch effort {
-			case "minimal", "low":
-				effort = "low"
-			case "medium", "high":
-				effort = "high"
-			}
-		}
 		return &gemini.ThinkingConfig{ThinkingLevel: effort, IncludeThoughts: true}
 	}
 

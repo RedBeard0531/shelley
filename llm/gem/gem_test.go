@@ -372,8 +372,8 @@ func TestTokenContextWindow(t *testing.T) {
 		expected int
 	}{
 		{
-			name:     "gemini-3-pro-preview",
-			model:    "gemini-3-pro-preview",
+			name:     "gemini-3.6-flash",
+			model:    "gemini-3.6-flash",
 			expected: 1000000,
 		},
 		{
@@ -1235,16 +1235,6 @@ func TestThinkingConfig(t *testing.T) {
 			wantLevel: "medium",
 		},
 		{
-			name:      "gemini-3-pro clamps medium to high",
-			svc:       &Service{Model: "gemini-3-pro-preview", APIKey: "x", ThinkingLevel: llm.ThinkingLevelMedium},
-			wantLevel: "high",
-		},
-		{
-			name:      "gemini-3-pro clamps minimal to low",
-			svc:       &Service{Model: "gemini-3-pro-preview", APIKey: "x", ThinkingLevel: llm.ThinkingLevelMinimal},
-			wantLevel: "low",
-		},
-		{
 			name:      "gemini-3.1-pro accepts medium",
 			svc:       &Service{Model: "gemini-3.1-pro-preview", APIKey: "x", ThinkingLevel: llm.ThinkingLevelMedium},
 			wantLevel: "medium",
@@ -1389,8 +1379,8 @@ func TestThinkingConfigRequestOverride(t *testing.T) {
 	}{
 		{name: "req high beats svc medium on 3-flash", svc: &Service{Model: "gemini-3-flash-preview", APIKey: "x", ThinkingLevel: llm.ThinkingLevelMedium}, reqLevel: llm.ThinkingLevelHigh, wantLevel: "high"},
 		{name: "req xhigh on 3-flash clamps to high", svc: &Service{Model: "gemini-3-flash-preview", APIKey: "x"}, reqLevel: llm.ThinkingLevelXHigh, wantLevel: "high"},
-		{name: "req high on 3-pro", svc: &Service{Model: "gemini-3-pro-preview", APIKey: "x"}, reqLevel: llm.ThinkingLevelHigh, wantLevel: "high"},
-		{name: "req medium clamps to high on 3-pro", svc: &Service{Model: "gemini-3-pro-preview", APIKey: "x"}, reqLevel: llm.ThinkingLevelMedium, wantLevel: "high"},
+		{name: "req high on 3.1-pro", svc: &Service{Model: "gemini-3.1-pro-preview", APIKey: "x"}, reqLevel: llm.ThinkingLevelHigh, wantLevel: "high"},
+		{name: "req medium on 3.1-pro", svc: &Service{Model: "gemini-3.1-pro-preview", APIKey: "x"}, reqLevel: llm.ThinkingLevelMedium, wantLevel: "medium"},
 		{name: "req off on 3-flash uses low", svc: &Service{Model: "gemini-3-flash-preview", APIKey: "x", ThinkingLevel: llm.ThinkingLevelMedium}, reqLevel: llm.ThinkingLevelOff, wantLevel: "low"},
 		{name: "req beats verbatim", svc: &Service{Model: "gemini-3-flash-preview", APIKey: "x", ReasoningEffort: "medium"}, reqLevel: llm.ThinkingLevelHigh, wantLevel: "high"},
 		{name: "req low on 2.5", svc: &Service{Model: "gemini-2.5-pro", APIKey: "x"}, reqLevel: llm.ThinkingLevelLow, wantBudget: ptr(2048)},

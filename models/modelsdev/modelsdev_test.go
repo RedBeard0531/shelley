@@ -14,7 +14,7 @@ func TestLookupImageSupport(t *testing.T) {
 		// knownHosts).
 		{"anthropic", "https://api.anthropic.com", "claude-opus-4-1-20250805", true, true},
 		{"openai", "https://api.openai.com/v1", "gpt-5.4", true, true},
-		{"gemini", "https://generativelanguage.googleapis.com", "gemini-3-pro-preview", true, true},
+		{"gemini", "https://generativelanguage.googleapis.com", "gemini-3.1-pro-preview", true, true},
 
 		// Hosts that carry an explicit "api" field in models.dev.
 		{"fireworks text-only", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p2", true, false},
