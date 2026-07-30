@@ -45,7 +45,7 @@ eq("codex-mini-latest", "codex-mini-latest");
 
 // Other families
 eq("glm-5.2-fireworks", "GLM 5.2");
-eq("glm-5p1", "GLM 5.1");
+eq("glm-5p2", "GLM 5.2");
 eq("deepseek-v4-pro-fireworks", "DeepSeek V4 Pro");
 eq("deepseek-v4-flash-fireworks", "DeepSeek V4 Flash");
 eq("grok-4.5", "Grok 4.5");
