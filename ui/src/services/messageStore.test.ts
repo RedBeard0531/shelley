@@ -86,6 +86,15 @@ function needsFullReload(rec: ConversationCacheRecord | null): boolean {
   return !rec || !rec.hasFullHistory || rec.messages.length === 0;
 }
 
+/**
+ * Deadlines used by the multi-tab liveness tests. Short enough to keep the
+ * suite fast, long enough not to race the event loop.
+ */
+const SHORT_TIMEOUT_MS = 80;
+/** Must match IDB_OPEN_COOLDOWN_MS's role: how long a timeout suppresses retries. */
+const SHORT_COOLDOWN_MS = 80;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 let seq = 0;
 /**
  * Per-test factory + dbName + cache key so each case is fully isolated.
@@ -110,12 +119,16 @@ function storeFor(fixture: {
   dbName: string;
   keyId: string;
   rawKey: Uint8Array;
+  openTimeoutMs?: number;
+  openCooldownMs?: number;
 }): MessageStore {
   const fetcher = new StaticFetcher(fixture.keyId, fixture.rawKey);
   return new MessageStore({
     factory: fixture.factory,
     dbName: fixture.dbName,
     keyHolder: new CacheKeyHolder(fetcher),
+    openTimeoutMs: fixture.openTimeoutMs,
+    openCooldownMs: fixture.openCooldownMs,
   });
 }
 function freshStore(): MessageStore {
@@ -1525,6 +1538,127 @@ async function main(): Promise<void> {
     assert(t.agentWorking === true, "agentWorking should still be preserved");
     assert(Object.keys(t.toolProgress).length === 0, "toolProgress should be wiped on reset");
     assert(t.streamingText === "", "streamingText should be wiped on reset");
+  });
+
+  // ── Multi-tab liveness ──────────────────────────────────────────────────────
+  //
+  // Everything below is the same failure shape: hydrate() is the only thing
+  // between a tab and its rendered conversation, so any await inside it that
+  // can block forever becomes a permanently spinning tab. Multiple Safari tabs
+  // on one origin are what make these waits real (shared IDB, shared socket
+  // pool, shared cookie jar).
+  //
+  // Deadlines are injected (tens of ms) so the give-up behaviour is asserted
+  // without sleeping for the production timeout.
+
+  /** Hold a connection at an older version, like a tab open across a deploy. */
+  async function holdOldVersion(factory: IDBFactory, dbName: string): Promise<IDBDatabase> {
+    const db = await new Promise<IDBDatabase>((res, rej) => {
+      const req = factory.open(dbName, 1);
+      req.onupgradeneeded = () => void req.result.createObjectStore("legacy");
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+    // An old build with no versionchange handler never closes on request,
+    // which is what makes the block indefinite rather than momentary.
+    db.onversionchange = () => {};
+    return db;
+  }
+
+  await run("hydrate() gives up instead of hanging when the cache key never arrives", async () => {
+    // With several tabs open on the HTTP/1.1 path, every tab holds an SSE
+    // connection and the six-per-origin socket cap leaves later tabs'
+    // /api/cache-key request queued indefinitely. hydrate() must degrade to
+    // "no cache" so the UI falls back to the network and renders, instead of
+    // awaiting a promise that never settles.
+    const { factory, dbName } = freshFactory();
+    const s = new MessageStore({
+      factory,
+      dbName,
+      keyHolder: new CacheKeyHolder(
+        { fetch: () => new Promise(() => {}), clear: async () => {} }, // never settles
+        SHORT_TIMEOUT_MS,
+      ),
+    });
+    try {
+      const rec = await Promise.race([
+        s.hydrate("c-no-key"),
+        sleep(SHORT_TIMEOUT_MS * 20).then(() => "hung" as const),
+      ]);
+      assert(rec !== "hung", "hydrate must settle even when the key fetch never does");
+      assert(rec === null, "and report a cache miss so the UI reloads from the server");
+      assert(!s.isHydrated("c-no-key"), "a give-up must stay retryable, not count as hydrated");
+    } finally {
+      await s.close();
+    }
+  });
+
+  await run("hydrate() gives up when another tab blocks the IDB upgrade", async () => {
+    // A tab left open from before a deploy that bumped DB_VERSION holds the
+    // old connection. openDB() at the new version fires 'blocked' and stays
+    // pending for as long as that tab lives, so the new tab's spinner never
+    // clears.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const held = await holdOldVersion(factory, dbName);
+    const s = storeFor({
+      factory,
+      dbName,
+      keyId,
+      rawKey,
+      openTimeoutMs: SHORT_TIMEOUT_MS,
+      openCooldownMs: SHORT_COOLDOWN_MS,
+    });
+    try {
+      const rec = await Promise.race([
+        s.hydrate("c-blocked"),
+        sleep(SHORT_TIMEOUT_MS * 20).then(() => "hung" as const),
+      ]);
+      assert(rec !== "hung", "hydrate must settle even while the upgrade is blocked");
+      assert(rec === null, "and report a miss so the conversation still renders from REST");
+      assert(!s.isHydrated("c-blocked"), "a give-up must not be recorded as hydrated");
+    } finally {
+      held.close();
+      await s.close();
+    }
+  });
+
+  await run("a blocked open is retried once the blocking tab goes away", async () => {
+    // Giving up must not be permanent: when the old tab closes, the cache has
+    // to come back rather than running network-only for the rest of the
+    // session.
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const held = await holdOldVersion(factory, dbName);
+    const s = storeFor({
+      factory,
+      dbName,
+      keyId,
+      rawKey,
+      openTimeoutMs: SHORT_TIMEOUT_MS,
+      openCooldownMs: SHORT_COOLDOWN_MS,
+    });
+    try {
+      assert((await s.hydrate("c-retry")) === null, "blocked hydrate reports a miss");
+      held.close();
+      // Wait out the post-timeout cooldown, then prove a real write lands and
+      // reads back from a second store — i.e. the DB handle recovered rather
+      // than latching into a failed state.
+      await sleep(SHORT_COOLDOWN_MS + 20);
+      s.upsertMessages("c-retry", [msg("c-retry", 1)]);
+      await s.settle();
+      const s2 = storeFor({ factory, dbName, keyId, rawKey });
+      try {
+        const rec = await s2.hydrate("c-retry");
+        assert(
+          rec !== null && rec.messages.length === 1,
+          "the cache works again once the blocker closes",
+        );
+      } finally {
+        await s2.close();
+      }
+    } finally {
+      held.close();
+      await s.close();
+    }
   });
 
   console.log("\nmessageStore tests passed");

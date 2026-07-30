@@ -75,6 +75,7 @@ import {
 } from "./cryptoKey";
 import { perfCount } from "../utils/perf";
 import { cacheDiag } from "./cacheDiag";
+import { withDeadline, isDeadlineExceeded } from "./deadline";
 
 // Cross-tab notification channel for key rotation. When one tab runs
 // wipeAndRotateKey() the others must drop their cached CryptoKey and
@@ -86,6 +87,34 @@ type RotateMsg = { type: "rotated" };
 
 const DEFAULT_DB_NAME = "shelley-messages";
 const DB_VERSION = 4;
+
+/**
+ * How long to wait for indexedDB.open() before giving up on the cache for
+ * this attempt.
+ *
+ * IndexedDB has no timeout of its own: if another tab still holds a
+ * connection at a lower version, our open fires `blocked` and then waits —
+ * indefinitely if that tab never closes its connection. A Safari window left
+ * open across a deploy that bumped DB_VERSION is exactly that tab, and because
+ * hydrate() awaits the open (and ChatInterface holds its spinner until hydrate
+ * returns), the new tab sits on "Loading conversation…" forever with no error
+ * anywhere.
+ *
+ * Bounding the wait turns an indefinite hang into a cache miss: the
+ * conversation loads from the server instead.
+ */
+const IDB_OPEN_TIMEOUT_MS = 5_000;
+
+/**
+ * How long to stop trying after an open times out.
+ *
+ * An IDB open request cannot be cancelled, so every timed-out attempt leaves
+ * a live request queued against a database we already gave up on. Without a
+ * cooldown, a blocking tab means every hydrate and every write-behind task
+ * piles on another one — a stampede that all wakes at once when the blocker
+ * finally closes, and a flood of duplicate diagnostics in the meantime.
+ */
+const IDB_OPEN_COOLDOWN_MS = 30_000;
 
 // ─── IDB schema ─────────────────────────────────────────────────────────────
 //
@@ -332,13 +361,28 @@ export interface MessageStoreOptions {
    * /api/cache-key. Tests inject a deterministic in-memory holder.
    */
   keyHolder?: CacheKeyHolder;
+  /**
+   * Override the indexedDB.open deadline. Tests use it to assert the give-up
+   * behaviour without sleeping for the production timeout; production callers
+   * omit it.
+   */
+  openTimeoutMs?: number;
+  /** Override IDB_OPEN_COOLDOWN_MS. Tests only. */
+  openCooldownMs?: number;
 }
 
 export class MessageStore {
   private readonly dbName: string;
   private readonly factory: IDBFactory | undefined;
   private readonly keyHolder: CacheKeyHolder;
+  private readonly openTimeoutMs: number;
+  private readonly openCooldownMs: number;
   private dbPromise: Promise<IDBPDatabase<ShelleyDB>> | null = null;
+  /**
+   * When indexedDB.open() last blew its deadline; 0 if it hasn't. Drives the
+   * IDB_OPEN_COOLDOWN_MS backoff.
+   */
+  private openTimedOutAt = 0;
   private hot = new Map<string, ConversationCacheRecord>();
   private transient = new Map<string, TransientState>();
   /**
@@ -371,6 +415,8 @@ export class MessageStore {
     this.dbName = opts.dbName ?? DEFAULT_DB_NAME;
     this.factory = opts.factory ?? (typeof indexedDB !== "undefined" ? indexedDB : undefined);
     this.keyHolder = opts.keyHolder ?? new CacheKeyHolder(new HttpCacheKeyFetcher());
+    this.openTimeoutMs = opts.openTimeoutMs ?? IDB_OPEN_TIMEOUT_MS;
+    this.openCooldownMs = opts.openCooldownMs ?? IDB_OPEN_COOLDOWN_MS;
     if (typeof BroadcastChannel !== "undefined") {
       this.rotateChannel = new BroadcastChannel(ROTATE_CHANNEL);
       // Node implements BroadcastChannel via libuv and keeps the event
@@ -489,10 +535,25 @@ export class MessageStore {
         if (target) target.close();
         this.dbPromise = null;
       },
+      // We are the one being blocked: an older tab still holds a lower-version
+      // connection. Transient in the common case (the other tab closes), so
+      // not a "fail" — the timeout below is what we alarm on.
+      blocked: (currentVersion, blockedVersion) => {
+        cacheDiag("info", "idb.open_blocked", {
+          current_version: currentVersion,
+          wanted_version: blockedVersion,
+        });
+      },
     };
+    if (this.openTimedOutAt !== 0 && Date.now() - this.openTimedOutAt < this.openCooldownMs) {
+      // Still inside the cooldown from a previous timeout. Fail immediately
+      // rather than queueing yet another uncancellable open request against a
+      // database we already know is blocked.
+      throw new Error("messageStore: indexedDB open is blocked (cooling down)");
+    }
     const globalFactory = typeof indexedDB !== "undefined" ? indexedDB : undefined;
     if (this.factory === globalFactory) {
-      return openDB<ShelleyDB>(this.dbName, DB_VERSION, callbacks);
+      return this.openWithDeadline(() => openDB<ShelleyDB>(this.dbName, DB_VERSION, callbacks));
     }
     // Test path: a custom factory was injected. `idb` reads
     // `globalThis.indexedDB` directly, so temporarily swap it.
@@ -500,9 +561,56 @@ export class MessageStore {
     const prev = g.indexedDB;
     g.indexedDB = this.factory;
     try {
-      return await openDB<ShelleyDB>(this.dbName, DB_VERSION, callbacks);
+      return await this.openWithDeadline(() =>
+        openDB<ShelleyDB>(this.dbName, DB_VERSION, callbacks),
+      );
     } finally {
       g.indexedDB = prev;
+    }
+  }
+
+  /**
+   * Open with a deadline, disposing of a connection that arrives after we gave
+   * up.
+   *
+   * The late close matters for more than tidiness: an abandoned connection at
+   * the current version would itself block the NEXT version bump, turning one
+   * stale tab into a permanently stuck origin.
+   */
+  private async openWithDeadline(
+    open: () => Promise<IDBPDatabase<ShelleyDB>>,
+  ): Promise<IDBPDatabase<ShelleyDB>> {
+    try {
+      const db = await withDeadline(open(), this.openTimeoutMs, {
+        what: "indexedDB.open",
+        onLate: (late) => {
+          cacheDiag("info", "idb.open_late", { closed: true });
+          try {
+            late.close();
+          } catch {
+            /* already closed */
+          }
+          // It opened, so whatever was blocking us has gone. Ending the
+          // cooldown early lets the next hydrate pick the cache back up
+          // instead of staying network-only for the rest of the window.
+          this.openTimedOutAt = 0;
+        },
+        // A genuine failure (quota, corruption, VersionError) that lands after
+        // the deadline must not vanish: "the cache stopped working and nothing
+        // said why" is the exact failure mode this file works to prevent.
+        onLateError: (err) => cacheDiag("fail", "idb.open_late_error", { error: String(err) }),
+      });
+      this.openTimedOutAt = 0;
+      return db;
+    } catch (err) {
+      if (isDeadlineExceeded(err)) {
+        this.openTimedOutAt = Date.now();
+        cacheDiag("fail", "idb.open_timeout", {
+          timeout_ms: this.openTimeoutMs,
+          cooldown_ms: this.openCooldownMs,
+        });
+      }
+      throw err;
     }
   }
 

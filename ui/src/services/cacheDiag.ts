@@ -20,9 +20,13 @@
 //   __shelleyCache.log()            -> console.table of the same
 //   __shelleyCache.verbose(true)    -> per-decision logging, persisted
 //   __shelleyCache.events()         -> recent decisions with details
+//   __shelleyCache.waiting()        -> what this tab is blocked on RIGHT NOW
+//   __shelleyCache.why()            -> one-shot triage: waits + failures
 //
 // Verbose mode is also enabled by ?cache_debug=1 or localStorage
 // shelley_cache_debug=1, so it can be turned on before the first frame.
+
+import { pendingWaits } from "./deadline";
 
 export type CacheDiagLevel = "hit" | "info" | "fail";
 
@@ -106,6 +110,37 @@ export function cacheDiagVerbose(on?: boolean): boolean {
   return verboseEnabled;
 }
 
+/**
+ * One-shot triage for "a tab is stuck and I don't know why".
+ *
+ * Deliberately prints in-flight waits FIRST. A hung tab has completed no
+ * decisions, so stats() is empty and the counters answer the wrong question;
+ * the useful signal is what it is blocked on at this instant. Failure events
+ * follow, for the case where the cache gave up rather than hung.
+ */
+function cacheDiagWhy(): void {
+  const waits = pendingWaits();
+  if (waits.length === 0) {
+    console.log("[shelley-cache] not waiting on anything");
+  } else {
+    console.log("[shelley-cache] currently waiting on:");
+    console.table(waits);
+  }
+  const failures = cacheDiagEvents().filter((e) => e.level === "fail");
+  if (failures.length > 0) {
+    console.log("[shelley-cache] recent failures:");
+    console.table(
+      failures.map((e) => ({
+        event: e.event,
+        detail: JSON.stringify(e.detail ?? {}),
+        agoMs: Date.now() - e.at,
+      })),
+    );
+  }
+  const stats = cacheDiagStats();
+  if (Object.keys(stats).length > 0) console.table(stats);
+}
+
 declare global {
   interface Window {
     __shelleyCache?: {
@@ -113,6 +148,8 @@ declare global {
       events: typeof cacheDiagEvents;
       reset: typeof cacheDiagReset;
       verbose: typeof cacheDiagVerbose;
+      waiting: typeof pendingWaits;
+      why: typeof cacheDiagWhy;
       log: () => void;
     };
   }
@@ -124,6 +161,8 @@ if (typeof window !== "undefined") {
     events: cacheDiagEvents,
     reset: cacheDiagReset,
     verbose: cacheDiagVerbose,
+    waiting: pendingWaits,
+    why: cacheDiagWhy,
     log: () => {
       const rows = Object.entries(cacheDiagStats()).map(([event, count]) => ({ event, count }));
       console.table(rows);
