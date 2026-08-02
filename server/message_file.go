@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,10 +23,18 @@ import (
 //
 //   - the requested path is actually referenced in the message's text (a
 //     capability check: we never serve arbitrary files, only ones the model
-//     itself surfaced in this specific message),
-//   - the resolved path stays within the conversation's working directory
-//     (no path traversal outside the workspace), and
+//     itself surfaced in this specific message), and
 //   - the file sniffs as an image.
+//
+// Those two together are the whole boundary, and the first is the load-bearing
+// one. There is deliberately no workspace-containment check: screenshots live
+// in /tmp/shelley-screenshots, outside every workspace, and models routinely
+// surface them as ![shot](/tmp/shelley-screenshots/<uuid>.png). Judging paths
+// against the conversation's directory rejected every one of those, which is
+// the bug this shape fixes. Confining it further would not buy security
+// anyway: the agent runs with the user's own privileges and can read these
+// files directly, so a path it already printed in its own transcript is not a
+// secret this endpoint can keep.
 //
 // Remote (http/https) and data: URIs are handled entirely on the frontend and
 // never reach this endpoint.
@@ -64,16 +73,23 @@ func (s *Server) handleMessageFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the requested path against the conversation's working directory
-	// and confirm it stays inside that directory.
-	cwd := s.conversationCwd(r, msg.ConversationID)
-	if cwd == "" {
-		http.Error(w, "conversation working directory unknown", http.StatusNotFound)
-		return
+	resolved := reqPath
+	if !filepath.IsAbs(resolved) {
+		// A relative path is relative to where the agent was working.
+		cwd := s.conversationCwd(r, msg.ConversationID)
+		if cwd == "" {
+			http.Error(w, "conversation working directory unknown", http.StatusNotFound)
+			return
+		}
+		resolved = filepath.Join(cwd, resolved)
 	}
-	resolved, ok := resolveWithinDir(cwd, reqPath)
-	if !ok {
-		http.Error(w, "path escapes working directory", http.StatusForbidden)
+	resolved = filepath.Clean(resolved)
+
+	// Check the type before opening: opening a FIFO blocks until a writer
+	// appears, which would hang this request goroutine, and a path can now name
+	// anything on the machine. Nothing we want to serve is a non-regular file.
+	if fi, err := os.Stat(resolved); err != nil || !fi.Mode().IsRegular() {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
@@ -84,16 +100,10 @@ func (s *Server) handleMessageFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	fi, err := f.Stat()
-	if err != nil || fi.IsDir() {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-
 	// Sniff the content and require an image.
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
-	contentType, ok := servableImageType(http.DetectContentType(buf[:n]), resolved)
+	head := make([]byte, sniffLen)
+	n, _ := f.Read(head)
+	contentType, ok := servableImageType(head[:n], resolved)
 	if !ok {
 		http.Error(w, "file is not an image", http.StatusForbidden)
 		return
@@ -188,60 +198,27 @@ func isPathChar(c byte) bool {
 	return false
 }
 
-// resolveWithinDir resolves reqPath (absolute or relative to dir) and returns
-// the cleaned absolute path together with whether it stays within dir. It
-// first performs a lexical containment check, then resolves symlinks on both
-// the directory and the path and re-checks, so a symlink inside dir cannot be
-// used to escape the workspace boundary.
-func resolveWithinDir(dir, reqPath string) (string, bool) {
-	var abs string
-	if filepath.IsAbs(reqPath) {
-		abs = filepath.Clean(reqPath)
-	} else {
-		abs = filepath.Clean(filepath.Join(dir, reqPath))
-	}
-	cleanDir := filepath.Clean(dir)
-	if !lexicallyWithin(abs, cleanDir) {
-		return abs, false
-	}
+// sniffLen is how much of a file we read to identify it. http.DetectContentType
+// looks at 512 bytes; SVG needs a little more, since its root element can sit
+// behind an XML declaration, a DOCTYPE, and a comment.
+const sniffLen = 1024
 
-	// Defense in depth: resolve symlinks and confirm the real path is still
-	// inside the real working directory. EvalSymlinks fails for not-yet-
-	// existing paths; a missing file is handled (404) by the caller's Open, so
-	// treat an unresolvable path as lexically-contained-only.
-	realDir, err := filepath.EvalSymlinks(cleanDir)
-	if err != nil {
-		return abs, true
-	}
-	realAbs, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return abs, true
-	}
-	if !lexicallyWithin(realAbs, realDir) {
-		return abs, false
-	}
-	return abs, true
-}
-
-// lexicallyWithin reports whether abs is a path strictly inside dir (not dir
-// itself).
-func lexicallyWithin(abs, dir string) bool {
-	if abs == dir {
-		return false
-	}
-	return strings.HasPrefix(abs, dir+string(os.PathSeparator))
-}
-
-// servableImageType reports whether the sniffed content type (or, for SVG, the
-// file extension) is an image we are willing to serve inline, returning the
-// Content-Type to use.
-func servableImageType(sniffed, path string) (string, bool) {
-	if strings.HasPrefix(sniffed, "image/") {
+// servableImageType reports whether head is the start of an image we are
+// willing to serve inline, returning the Content-Type to use.
+//
+// It must actually confirm the content. This endpoint reaches any path the
+// model named, so "is an image" is the only thing separating it from a general
+// file reader, and a check that trusted the name would not be a check: any
+// secret could be served by pointing at it with the right extension.
+func servableImageType(head []byte, path string) (string, bool) {
+	if sniffed := http.DetectContentType(head); strings.HasPrefix(sniffed, "image/") {
 		return sniffed, true
 	}
-	// http.DetectContentType reports SVG as text/xml or text/plain; trust the
-	// extension for it and serve with the correct image type.
-	if strings.EqualFold(filepath.Ext(path), ".svg") {
+	// http.DetectContentType reports SVG as text/xml or text/plain, so it can
+	// only be recognized by its root element. Require both that and the
+	// extension: the extension alone would serve any text file, and the element
+	// alone would serve an HTML page that happens to embed inline SVG.
+	if strings.EqualFold(filepath.Ext(path), ".svg") && bytes.Contains(head, []byte("<svg")) {
 		return "image/svg+xml", true
 	}
 	return "", false

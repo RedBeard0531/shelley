@@ -6,10 +6,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
+	"shelley.exe.dev/claudetool/browse"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
 )
@@ -45,61 +50,42 @@ func TestMessageReferencesPath(t *testing.T) {
 	}
 }
 
-func TestResolveWithinDir(t *testing.T) {
+func TestServableImageType(t *testing.T) {
 	t.Parallel()
-	dir := "/home/u/work"
+	svg := []byte(`<?xml version="1.0"?>` + "\n" + `<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>`)
 	tests := []struct {
-		name    string
-		reqPath string
-		wantOK  bool
-		wantAbs string
+		name   string
+		head   []byte
+		path   string
+		wantCT string
+		wantOK bool
 	}{
-		{"relative inside", "out/a.png", true, "/home/u/work/out/a.png"},
-		{"dot relative inside", "./a.png", true, "/home/u/work/a.png"},
-		{"absolute inside", "/home/u/work/a.png", true, "/home/u/work/a.png"},
-		{"traversal escape", "../secret.png", false, ""},
-		{"absolute escape", "/etc/passwd", false, ""},
-		{"deep traversal", "out/../../secret.png", false, ""},
-		{"the dir itself", ".", false, ""},
-		{"sneaky prefix", "/home/u/work-other/a.png", false, ""},
+		{"png", pngBytes, "a.png", "image/png", true},
+		{"gif", gifBytes, "a.gif", "image/gif", true},
+		{"svg", svg, "a.svg", "image/svg+xml", true},
+		{"svg after a comment", append([]byte("<!-- "+strings.Repeat("x", 400)+" -->\n"), svg...), "a.svg", "image/svg+xml", true},
+		// The extension alone must not be enough: this is the case that let
+		// any file be served by naming it .svg.
+		{"text named .svg", []byte("TOP SECRET\n"), "a.svg", "", false},
+		{"empty named .svg", nil, "a.svg", "", false},
+		// Nor is SVG content alone enough, or an HTML page embedding one
+		// would be served as an image.
+		{"html containing svg", []byte("<html><body><svg></svg></body></html>"), "a.html", "", false},
+		{"text", []byte("hello there, this is plain text"), "a.txt", "", false},
+		{"pdf", []byte("%PDF-1.7\n%\xe2\xe3\xcf\xd3\n"), "a.pdf", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			abs, ok := resolveWithinDir(dir, tt.reqPath)
-			if ok != tt.wantOK {
-				t.Fatalf("resolveWithinDir(%q, %q) ok = %v, want %v (abs=%q)", dir, tt.reqPath, ok, tt.wantOK, abs)
-			}
-			if ok && abs != tt.wantAbs {
-				t.Errorf("resolveWithinDir(%q, %q) abs = %q, want %q", dir, tt.reqPath, abs, tt.wantAbs)
+			ct, ok := servableImageType(tt.head, tt.path)
+			if ok != tt.wantOK || ct != tt.wantCT {
+				t.Errorf("servableImageType(%q) = (%q,%v), want (%q,%v)", tt.path, ct, ok, tt.wantCT, tt.wantOK)
 			}
 		})
 	}
 }
 
-func TestServableImageType(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		sniffed string
-		path    string
-		wantCT  string
-		wantOK  bool
-	}{
-		{"image/png", "a.png", "image/png", true},
-		{"image/jpeg", "a.jpg", "image/jpeg", true},
-		{"text/xml; charset=utf-8", "a.svg", "image/svg+xml", true},
-		{"text/plain; charset=utf-8", "a.svg", "image/svg+xml", true},
-		{"text/plain; charset=utf-8", "a.txt", "", false},
-		{"application/pdf", "a.pdf", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.sniffed+"|"+tt.path, func(t *testing.T) {
-			ct, ok := servableImageType(tt.sniffed, tt.path)
-			if ok != tt.wantOK || ct != tt.wantCT {
-				t.Errorf("servableImageType(%q,%q) = (%q,%v), want (%q,%v)", tt.sniffed, tt.path, ct, ok, tt.wantCT, tt.wantOK)
-			}
-		})
-	}
-}
+// gifBytes is a minimal GIF, for checking a second sniffed type.
+var gifBytes = []byte("GIF89a\x01\x00\x01\x00\x00\xff\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00;")
 
 // pngBytes is a minimal valid PNG (1x1) so http.DetectContentType sees image/png.
 var pngBytes = []byte{
@@ -182,56 +168,125 @@ func TestHandleMessageFile_NotReferenced(t *testing.T) {
 	}
 }
 
-func TestHandleMessageFile_SymlinkEscape(t *testing.T) {
+// An image outside the workspace is served. This is the point of the endpoint:
+// screenshots live in /tmp/shelley-screenshots, which is outside every
+// workspace, so a containment rule rejected the very case this exists for.
+// Confining it bought nothing anyway -- the agent reads these files with the
+// user's own privileges -- so the reference and the image sniff are the boundary.
+func TestHandleMessageFile_ImageOutsideWorkspace(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	cwd := filepath.Join(parent, "work")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A secret image outside the workspace.
-	if err := os.WriteFile(filepath.Join(parent, "secret.png"), pngBytes, 0o644); err != nil {
+	outside := filepath.Join(parent, "shot.png")
+	if err := os.WriteFile(outside, pngBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A symlink inside the workspace pointing at it.
-	link := filepath.Join(cwd, "link.png")
-	if err := os.Symlink(filepath.Join(parent, "secret.png"), link); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-	// The message references the in-workspace symlink name (lexically contained).
-	srv, msgID := setupFileServer(t, cwd, "![x](link.png)")
+	srv, msgID := setupFileServer(t, cwd, "![x]("+outside+")")
 
-	resp, err := http.Get(srv.URL + "/api/message/" + msgID + "/file?path=link.png")
+	resp, err := http.Get(srv.URL + "/api/message/" + msgID + "/file?path=" + url.QueryEscape(outside))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for symlink escape, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for a referenced image outside the workspace, got %d", resp.StatusCode)
 	}
 }
 
-func TestHandleMessageFile_Traversal(t *testing.T) {
+// Reaching outside the workspace is allowed, but only for images. With
+// containment gone the sniff is the whole boundary, so exercise it on the real
+// files an attacker would actually want rather than only on a temp fixture: a
+// model that writes ![pwn](/etc/passwd) satisfies the reference check, and
+// must still get nothing.
+func TestHandleMessageFile_ReferencedSecretIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/etc/passwd", "/etc/hostname", "/etc/shadow"} {
+		if _, err := os.Stat(path); err != nil {
+			continue // not on this platform
+		}
+		srv, msgID := setupFileServer(t, t.TempDir(), "Look at this: ![pwn]("+path+")")
+		resp, err := http.Get(srv.URL + "/api/message/" + msgID + "/file?path=" + url.QueryEscape(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Errorf("%s: served %d bytes of a non-image", path, len(body))
+		}
+	}
+}
+
+// Naming a secret "shot.svg" must not serve it. The extension used to be
+// enough on its own, which meant the image requirement could be satisfied by
+// choosing a filename -- no protection at all once any absolute path is
+// reachable.
+func TestHandleMessageFile_TextNamedSVGIsRefused(t *testing.T) {
+	t.Parallel()
+	secret := filepath.Join(t.TempDir(), "shot.svg")
+	if err := os.WriteFile(secret, []byte("BEGIN OPENSSH PRIVATE KEY\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv, msgID := setupFileServer(t, t.TempDir(), "![x]("+secret+")")
+
+	resp, err := http.Get(srv.URL + "/api/message/" + msgID + "/file?path=" + url.QueryEscape(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 403, got %d serving %q", resp.StatusCode, body)
+	}
+}
+
+// Reading a FIFO blocks until someone writes to it, which would pin this
+// request goroutine indefinitely. Since any path is now reachable, the handler
+// has to reject non-regular files before it opens them.
+func TestHandleMessageFile_FifoIsRefused(t *testing.T) {
+	t.Parallel()
+	fifo := filepath.Join(t.TempDir(), "pipe.png")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+	srv, msgID := setupFileServer(t, t.TempDir(), "![x]("+fifo+")")
+
+	// The bug this guards against is a hang, so bound the request: without the
+	// regular-file check this never returns.
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(srv.URL + "/api/message/" + msgID + "/file?path=" + url.QueryEscape(fifo))
+	if err != nil {
+		t.Fatalf("request did not complete (handler blocked on the fifo?): %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for a fifo, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleMessageFile_NonImageOutsideWorkspace(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	cwd := filepath.Join(parent, "work")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Secret lives outside the working directory.
-	if err := os.WriteFile(filepath.Join(parent, "secret.png"), pngBytes, 0o644); err != nil {
+	secret := filepath.Join(parent, "secret.txt")
+	if err := os.WriteFile(secret, []byte("root:x:0:0:root:/root:/bin/sh\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// The message references it (e.g. a malicious model), but it escapes cwd.
-	srv, msgID := setupFileServer(t, cwd, "![x](../secret.png)")
+	srv, msgID := setupFileServer(t, cwd, "![x](../secret.txt)")
 
-	resp, err := http.Get(srv.URL + "/api/message/" + msgID + "/file?path=../secret.png")
+	resp, err := http.Get(srv.URL + "/api/message/" + msgID + "/file?path=../secret.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for traversal, got %d", resp.StatusCode)
+		t.Fatalf("expected 403 for a non-image, got %d", resp.StatusCode)
 	}
 }
 
@@ -304,5 +359,58 @@ func TestHandleMessageFile_PathRequired(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 when path missing, got %d", resp.StatusCode)
+	}
+}
+
+// The reported bug, end to end: a model answers with a markdown link to a
+// screenshot it just took. Those land in browse.ScreenshotDir, which is
+// outside every workspace, so this is the exact request that used to 403.
+func TestHandleMessageFile_ScreenshotDir(t *testing.T) {
+	t.Parallel()
+	if err := os.MkdirAll(browse.ScreenshotDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shot := filepath.Join(browse.ScreenshotDir, "markdown-link-"+t.Name()+".png")
+	if err := os.WriteFile(shot, pngBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(shot) })
+
+	srv, msgID := setupFileServer(t, t.TempDir(), "Verified against the real product:\n\n![shot]("+shot+")")
+
+	resp, err := http.Get(srv.URL + "/api/message/" + msgID + "/file?path=" + url.QueryEscape(shot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for a screenshot the model linked, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", ct)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(body, pngBytes) {
+		t.Errorf("served %d bytes, want the screenshot", len(body))
+	}
+}
+
+// A conversation with no recorded workspace can still show absolute paths;
+// only relative ones need a directory to resolve against.
+func TestHandleMessageFile_AbsolutePathWithoutCwd(t *testing.T) {
+	t.Parallel()
+	shot := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(shot, pngBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv, msgID := setupFileServer(t, "", "![shot]("+shot+")")
+
+	resp, err := http.Get(srv.URL + "/api/message/" + msgID + "/file?path=" + url.QueryEscape(shot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 }

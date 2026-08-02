@@ -25,6 +25,22 @@ const (
 	inlineImagePNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAAS0lEQVR42u3OMQ0AIAwAsMlBxEQgBznImQiUcGFiH00qoHEyW+Q+LUJISEhISEhISEhISOiz0K3RYtZqISQkJCQkJCQkJCQk9FnoAQiSrlPnJLTeAAAAAElFTkSuQmCC"
 )
 
+// Constants for the "screenshot image" demo pattern, the same idea one
+// directory over: the file is written where the real screenshot tool writes and
+// referenced by absolute path, which is outside every conversation's working
+// directory -- the case that used to be refused, so it is the one worth holding
+// down in the browser.
+//
+// The directory is spelled out rather than taken from claudetool/browse: this
+// package is reachable from the root module (cmd/e3e -> loop), whose go.sum
+// does not carry browse's chromedp dependencies, so importing it there breaks
+// the build for a test fixture's benefit.
+const (
+	screenshotImageDir      = "/tmp/shelley-screenshots"
+	screenshotImagePath     = screenshotImageDir + "/shelley-screenshot-demo.png"
+	screenshotImageSentinel = "SHELLEY_SCREENSHOT_IMAGE_DEMO"
+)
+
 // requestMentions reports whether any message in the request contains the given
 // substring (across text and tool-result content).
 func requestMentions(req *llm.Request, needle string) bool {
@@ -153,6 +169,12 @@ func (s *PredictableService) Do(ctx context.Context, req *llm.Request) (*llm.Res
 				inputTokens,
 			), nil
 		}
+		if requestMentions(req, screenshotImageSentinel) {
+			return s.makeResponse(
+				"Verified against the real product:\n\n![demo screenshot]("+screenshotImagePath+")\n\nServed from the screenshot directory, outside the working directory.",
+				inputTokens,
+			), nil
+		}
 		return s.makeResponse("Done.", inputTokens), nil
 	}
 
@@ -275,6 +297,17 @@ func (s *PredictableService) Do(ctx context.Context, req *llm.Request) (*llm.Res
 			cmd := fmt.Sprintf(
 				"printf %%s %q | base64 -d > %s && echo %s",
 				inlineImagePNGBase64, inlineImagePath, inlineImageSentinel,
+			)
+			return s.makeBashToolResponse(cmd, inputTokens), nil
+		}
+
+		if inputText == "screenshot image" {
+			// Same as "inline image", but written where the screenshot tool
+			// writes and referenced absolutely, so the follow-up turn exercises
+			// serving a file from outside the conversation's directory.
+			cmd := fmt.Sprintf(
+				"mkdir -p %s && printf %%s %q | base64 -d > %s && echo %s",
+				screenshotImageDir, inlineImagePNGBase64, screenshotImagePath, screenshotImageSentinel,
 			)
 			return s.makeBashToolResponse(cmd, inputTokens), nil
 		}

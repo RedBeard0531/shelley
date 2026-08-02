@@ -465,6 +465,17 @@ func TestNewPageMarkdownLocalImage(t *testing.T) {
 	lazyTest(t, `Navigate to /new. Type "inline image" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait (up to 60 seconds) for an <img> element to appear inside an agent message (selector ".message-agent img"). That image's src attribute should match the pattern of starting with "/api/message/" and containing "/file?path=". The image should actually load: its naturalWidth (read via eval on the img element) should be greater than 0.`)
 }
 
+func TestNewPageMarkdownScreenshotImage(t *testing.T) {
+	// The "screenshot image" predictable pattern is the reported bug: the file
+	// is written to /tmp/shelley-screenshots (where the real screenshot tool
+	// puts it) and referenced by absolute path, so it sits outside the
+	// conversation's working directory. That is what the server used to refuse
+	// with a 403, leaving a broken image icon. naturalWidth > 0 is the
+	// assertion that matters: it is the difference between an <img> being
+	// present and the picture actually rendering.
+	lazyTest(t, `Navigate to /new. Type "screenshot image" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait (up to 60 seconds) for an <img> element to appear inside an agent message (selector ".message-agent img"). That image's src attribute should start with "/api/message/" and contain "/file?path=" and contain "shelley-screenshots". The image should actually load: its naturalWidth (read via eval on the img element) should be greater than 0.`)
+}
+
 // --- Remaining queue-message flows (ported from ui/e2e/queue-messages.spec.ts). ---
 
 func TestNewPageQueueCancel(t *testing.T) {
