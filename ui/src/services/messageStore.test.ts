@@ -15,6 +15,7 @@ import { MessageStore } from "./messageStore";
 import type { ConversationCacheRecord } from "./messageStore";
 import type { Conversation, Message, StreamResponse } from "../types";
 import { CacheKeyHolder, type CacheKeyFetcher, type CacheKeyMaterial } from "./cryptoKey";
+import { cacheDiagStats } from "./cacheDiag";
 
 // Node 20 lacks a global `crypto.subtle`; expose webcrypto so messageStore's
 // AES-GCM helpers work in tests.
@@ -121,6 +122,7 @@ function storeFor(fixture: {
   rawKey: Uint8Array;
   openTimeoutMs?: number;
   openCooldownMs?: number;
+  txTimeoutMs?: number;
 }): MessageStore {
   const fetcher = new StaticFetcher(fixture.keyId, fixture.rawKey);
   return new MessageStore({
@@ -129,6 +131,7 @@ function storeFor(fixture: {
     keyHolder: new CacheKeyHolder(fetcher),
     openTimeoutMs: fixture.openTimeoutMs,
     openCooldownMs: fixture.openCooldownMs,
+    txTimeoutMs: fixture.txTimeoutMs,
   });
 }
 function freshStore(): MessageStore {
@@ -176,13 +179,32 @@ function assert(cond: boolean, message: string): void {
   if (!cond) throw new Error(`Assertion failed: ${message}`);
 }
 
+/**
+ * Cap every case so a regression that reintroduces an unbounded wait FAILS
+ * rather than hanging. This file exists to pin liveness properties, and a
+ * suite that hangs reports nothing at all — the same "no evidence" failure
+ * mode as the bug being tested.
+ */
+const CASE_TIMEOUT_MS = 20_000;
+
 async function run(name: string, fn: () => Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await fn();
+    await Promise.race([
+      fn(),
+      new Promise<never>((_res, rej) => {
+        timer = setTimeout(
+          () => rej(new Error(`case exceeded ${CASE_TIMEOUT_MS}ms (likely an unbounded wait)`)),
+          CASE_TIMEOUT_MS,
+        );
+      }),
+    ]);
     console.log(`✓ ${name}`);
   } catch (err) {
     console.error(`✗ ${name}`);
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1073,6 +1095,43 @@ async function main(): Promise<void> {
     await s.settle();
   });
 
+  await run("regenerated turn survives a reload: the moved row is not duplicated", async () => {
+    // Pins the ordering constraint inside the incremental write: each row's
+    // by_message_id lookup must see the state BEFORE that row's own put, or a
+    // message that moved to a new sequence_id gets written twice (once at the
+    // old key, once at the new). The in-memory test above can't catch that --
+    // only what actually landed on disk can.
+    const f = freshFactory();
+    const s = storeFor(f);
+    const id = "c-regen-disk";
+    s.upsertMessages(id, [msg(id, 3, "x"), msg(id, 4, "y")]);
+    await s.settle();
+    // "x" is regenerated at a later sequence_id; "y" is untouched.
+    s.upsertMessages(id, [msg(id, 9, "x")]);
+    await s.settle();
+    await s.close();
+
+    // The persist path reports failures through cacheDiag rather than
+    // throwing, so a botched write would otherwise look like a silent pass.
+    assert(
+      !cacheDiagStats()["persist.upsert_failed"],
+      `the write itself must succeed: ${JSON.stringify(cacheDiagStats())}`,
+    );
+
+    const s2 = storeFor(f);
+    const hyd = await s2.hydrate(id);
+    assert(hyd !== null, "hydrated from disk");
+    const ids = hyd!.messages.map((m) => m.message_id).sort();
+    assert(
+      hyd!.messages.length === 2,
+      `expected 2 rows on disk, got ${hyd!.messages.length} (${ids.join(",")})`,
+    );
+    const x = hyd!.messages.find((m) => m.message_id === "x");
+    assert(x !== undefined, "the regenerated message is present");
+    assert(x!.sequence_id === 9, `it must live at its NEW seq, got ${x!.sequence_id}`);
+    await s2.close();
+  });
+
   await run("markAllStale forces a server re-check but not a full re-download", async () => {
     const { factory, dbName, keyId, rawKey } = freshFactory();
     const s = storeFor({ factory, dbName, keyId, rawKey });
@@ -1659,6 +1718,213 @@ async function main(): Promise<void> {
       held.close();
       await s.close();
     }
+  });
+
+  await run("hydrate survives a sibling tab holding the stores locked", async () => {
+    // The hang this pins: openAndSyncKey bounds the key fetch and the DB open,
+    // then takes an exclusive readwrite tx on all three stores. IDB locks are
+    // origin-wide, so ANOTHER TAB mid-write blocks that tx — and because db()
+    // caches its promise, the stall is permanent and tab-wide. Worse, it
+    // happens before any cacheDiag call, so the tab reports stats={} and
+    // waiting=[] while spinning: no evidence at all. Real Safari reproduced
+    // exactly that, recovering only when the other tab's tx was released.
+    const f = freshFactory();
+    // Populate through a normal store so the DB exists at the right version.
+    const seed = storeFor(f);
+    seed.applyFullHistory("c1", {
+      conversation_id: "c1",
+      messages: [msg("c1", 0, "hello")],
+      context_window_size: 100,
+      max_sequence_id: 0,
+    });
+    await seed.settle();
+    await seed.close();
+
+    // A sibling holds an exclusive readwrite tx on the stores that
+    // openAndSyncKey needs, and does not let go.
+    const raw = await new Promise<IDBDatabase>((res, rej) => {
+      const r = f.factory.open(f.dbName);
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    const held = raw.transaction(["keys_meta", "messages", "conversation_meta"], "readwrite");
+    // Keep the tx alive: chain each request inside the previous onsuccess, with
+    // no macrotask gap (a setTimeout would let it auto-commit).
+    let holding = true;
+    const store = held.objectStore("keys_meta");
+    (function spin() {
+      if (!holding) return;
+      const q = store.get("current");
+      q.onsuccess = spin;
+      q.onerror = spin;
+    })();
+
+    const s2 = storeFor({ ...f, txTimeoutMs: SHORT_TIMEOUT_MS });
+    try {
+      // Must not hang: the deadline turns a blocked lock into a cache miss.
+      const rec = await s2.hydrate("c1");
+      assert(rec === null || rec.messages.length === 0, "degrades to a miss, not a hang");
+      assert(
+        cacheDiagStats()["idb.tx_timeout"] > 0,
+        `the give-up must be reported: ${JSON.stringify(cacheDiagStats())}`,
+      );
+    } finally {
+      holding = false;
+      try {
+        held.abort();
+      } catch {
+        /* already ended */
+      }
+      raw.close();
+      await s2.close();
+    }
+  });
+
+  await run("the cache recovers once the sibling releases the lock", async () => {
+    // A blocked open must not poison the tab: db() caches its promise, so if a
+    // timed-out attempt stayed installed the cache would be dead until reload.
+    const f = freshFactory();
+    const seed = storeFor(f);
+    seed.applyFullHistory("c1", {
+      conversation_id: "c1",
+      messages: [msg("c1", 0, "hello")],
+      context_window_size: 100,
+      max_sequence_id: 0,
+    });
+    await seed.settle();
+    await seed.close();
+
+    const raw = await new Promise<IDBDatabase>((res, rej) => {
+      const r = f.factory.open(f.dbName);
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    const held = raw.transaction(["keys_meta", "messages", "conversation_meta"], "readwrite");
+    let holding = true;
+    const store = held.objectStore("keys_meta");
+    (function spin() {
+      if (!holding) return;
+      const q = store.get("current");
+      q.onsuccess = spin;
+      q.onerror = spin;
+    })();
+
+    const s2 = storeFor({ ...f, txTimeoutMs: SHORT_TIMEOUT_MS, openCooldownMs: 1 });
+    await s2.hydrate("c1"); // blocked -> miss
+    holding = false;
+    try {
+      held.abort();
+    } catch {
+      /* already ended */
+    }
+    raw.close();
+    // Give the abort a turn to land, then the cache must work again.
+    await sleep(SHORT_TIMEOUT_MS);
+    const rec = await s2.hydrate("c1");
+    assert(rec !== null, "hydrate works again once the lock is free");
+    assert(rec!.messages.length === 1, `expected the cached message, got ${rec!.messages.length}`);
+    await s2.close();
+  });
+
+  await run("startup is not blocked by a sibling writing a DIFFERENT conversation", async () => {
+    // The real-world hang: tab A bulk-writes one conversation while tab B
+    // starts up. Startup only needs to CHECK keys_meta - in the common case it
+    // mutates nothing - so it must not demand a write lock spanning the data
+    // stores. With the old readwrite scope, B's startup queued behind A's
+    // write of an unrelated conversation and (per db()'s cached promise) stayed
+    // broken for the life of the tab.
+    //
+    // Scoped to keys_meta only: a readonly read of `messages` would still
+    // legitimately queue behind an exclusive writer on `messages`. What the fix
+    // buys is that startup no longer JOINS that queue.
+    const f = freshFactory();
+    const seed = storeFor(f);
+    seed.applyFullHistory("c1", {
+      conversation_id: "c1",
+      messages: [msg("c1", 0, "hello")],
+      context_window_size: 100,
+      max_sequence_id: 0,
+    });
+    await seed.settle();
+    await seed.close();
+
+    const raw = await new Promise<IDBDatabase>((res, rej) => {
+      const r = f.factory.open(f.dbName);
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    // Exactly the scope a bulk write takes: the data stores, held open.
+    const held = raw.transaction(["messages", "conversation_meta"], "readwrite");
+    let holding = true;
+    const store = held.objectStore("conversation_meta");
+    (function spin() {
+      if (!holding) return;
+      const q = store.get("c1");
+      q.onsuccess = spin;
+      q.onerror = spin;
+    })();
+
+    const s2 = storeFor({ ...f, txTimeoutMs: SHORT_TIMEOUT_MS });
+    try {
+      // hydrate() goes on to read `messages`, which legitimately queues behind
+      // the sibling's exclusive lock on that store - IDB working as specified,
+      // not the defect. So assert on WHICH wait we gave up on: startup getting
+      // a usable connection must succeed; only the data read may time out.
+      const before = cacheDiagStats()["idb.tx_timeout"] ?? 0;
+      await s2.hydrate("c1");
+      const after = cacheDiagStats()["idb.tx_timeout"] ?? 0;
+      assert(
+        after === before,
+        `startup must not block on the sibling's write (idb.tx_timeout ${before} -> ${after})`,
+      );
+    } finally {
+      holding = false;
+      try {
+        held.abort();
+      } catch {
+        /* already ended */
+      }
+      raw.close();
+      await s2.close();
+    }
+  });
+
+  await run("startup still wipes when the server rotated the key", async () => {
+    // The readonly fast path must not cost us the wipe: rows encrypted under
+    // the old key are unreadable, and leaving them would let a later read
+    // surface undecryptable rows instead of a clean miss.
+    const f = freshFactory();
+    const seed = storeFor(f);
+    seed.applyFullHistory("c1", {
+      conversation_id: "c1",
+      messages: [msg("c1", 0, "hello")],
+      context_window_size: 100,
+      max_sequence_id: 0,
+    });
+    await seed.settle();
+    await seed.close();
+
+    // Same DB, different key id: the server rotated.
+    const rotated = new MessageStore({
+      factory: f.factory,
+      dbName: f.dbName,
+      keyHolder: new CacheKeyHolder(new StaticFetcher("kid-rotated", randomKey())),
+    });
+    const rec = await rotated.hydrate("c1");
+    assert(rec === null || rec.messages.length === 0, "stale rows are gone after rotation");
+    const raw = await new Promise<IDBDatabase>((res, rej) => {
+      const r = f.factory.open(f.dbName);
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    const km = await new Promise<{ key_id: string } | undefined>((res, rej) => {
+      const q = raw.transaction(["keys_meta"], "readonly").objectStore("keys_meta").get("current");
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => rej(q.error);
+    });
+    assert(km?.key_id === "kid-rotated", `keys_meta must record the new key, got ${km?.key_id}`);
+    raw.close();
+    await rotated.close();
   });
 
   console.log("\nmessageStore tests passed");

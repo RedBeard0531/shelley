@@ -116,6 +116,39 @@ const IDB_OPEN_TIMEOUT_MS = 5_000;
  */
 const IDB_OPEN_COOLDOWN_MS = 30_000;
 
+/**
+ * Deadline for the startup readwrite transaction in openAndSyncKey.
+ *
+ * IndexedDB locks are ORIGIN-wide, not tab-wide: an exclusive readwrite tx on
+ * these stores blocks every other tab's tx on them. A sibling that is slow, or
+ * suspended by the OS mid-transaction, therefore stalls this tab's startup —
+ * and since db() caches its promise, that stall is permanent and poisons every
+ * later cache read. Observed in real Safari: a tab spinning forever with
+ * stats={} and no in-flight waits, recovering only when the other tab let go.
+ *
+ * Shorter than the open deadline: waiting on a lock some other tab holds is
+ * less likely to resolve than waiting on our own open, and the fallback (skip
+ * the cache, use the network) is cheap.
+ */
+const IDB_TX_TIMEOUT_MS = 3_000;
+
+/**
+ * Deadline options for a cache READ.
+ *
+ * Reads take shared locks, but still queue behind another tab's exclusive
+ * writer, so they need the same bound as the startup transaction. A late
+ * result is just discarded: hydrate has already returned, and the caller has
+ * gone to the network.
+ */
+function readDeadlineOpts(store: string) {
+  return {
+    what: `indexedDB.read ${store}`,
+    onLate: () => cacheDiag("info", "idb.read_late", { store }),
+    onLateError: (err: unknown) =>
+      cacheDiag("fail", "idb.read_late_error", { store, error: String(err) }),
+  };
+}
+
 // ─── IDB schema ─────────────────────────────────────────────────────────────
 //
 // Persisted rows are encrypted-at-rest. Plaintext fields are limited to
@@ -369,6 +402,8 @@ export interface MessageStoreOptions {
   openTimeoutMs?: number;
   /** Override IDB_OPEN_COOLDOWN_MS. Tests only. */
   openCooldownMs?: number;
+  /** Override IDB_TX_TIMEOUT_MS. Tests only. */
+  txTimeoutMs?: number;
 }
 
 export class MessageStore {
@@ -377,6 +412,7 @@ export class MessageStore {
   private readonly keyHolder: CacheKeyHolder;
   private readonly openTimeoutMs: number;
   private readonly openCooldownMs: number;
+  private readonly txTimeoutMs: number;
   private dbPromise: Promise<IDBPDatabase<ShelleyDB>> | null = null;
   /**
    * When indexedDB.open() last blew its deadline; 0 if it hasn't. Drives the
@@ -417,6 +453,7 @@ export class MessageStore {
     this.keyHolder = opts.keyHolder ?? new CacheKeyHolder(new HttpCacheKeyFetcher());
     this.openTimeoutMs = opts.openTimeoutMs ?? IDB_OPEN_TIMEOUT_MS;
     this.openCooldownMs = opts.openCooldownMs ?? IDB_OPEN_COOLDOWN_MS;
+    this.txTimeoutMs = opts.txTimeoutMs ?? IDB_TX_TIMEOUT_MS;
     if (typeof BroadcastChannel !== "undefined") {
       this.rotateChannel = new BroadcastChannel(ROTATE_CHANNEL);
       // Node implements BroadcastChannel via libuv and keeps the event
@@ -472,33 +509,80 @@ export class MessageStore {
     if (!material) throw new Error("messageStore: cache key unavailable");
     const db = await this.openWithFactory();
     try {
-      const tx = db.transaction(["keys_meta", "messages", "conversation_meta"], "readwrite");
-      const km = tx.objectStore("keys_meta");
-      const existing = await km.get("current");
-      if (!existing) {
-        // No recorded key. Defensive: if there are pre-existing rows
-        // (from a process that crashed mid-rotation, a stale upgrade,
-        // or a malicious write), they cannot belong to the current key
-        // — wipe before claiming ownership. Otherwise just record.
-        const msgsCount = await tx.objectStore("messages").count();
-        const metaCount = await tx.objectStore("conversation_meta").count();
-        if (msgsCount > 0 || metaCount > 0) {
-          await tx.objectStore("messages").clear();
-          await tx.objectStore("conversation_meta").clear();
-        }
-        await km.put({ id: "current", key_id: material.keyId });
-      } else if (existing.key_id !== material.keyId) {
-        // Server rotated; old rows are useless. Wipe.
-        await tx.objectStore("messages").clear();
-        await tx.objectStore("conversation_meta").clear();
-        await km.put({ id: "current", key_id: material.keyId });
-      }
-      await tx.done;
+      // Bounded: this tx takes an EXCLUSIVE lock on all three stores, and IDB
+      // locks are origin-wide. A sibling tab mid-write (or suspended by the OS
+      // holding a tx open) blocks us here indefinitely, before any cacheDiag
+      // call has run — the tab spins with stats={} and nothing to explain it.
+      // Give up and let the caller fall back to the network instead.
+      await withDeadline(this.syncKeyInTx(db, material), this.txTimeoutMs, {
+        what: "indexedDB.startup transaction",
+        // The tx is uncancellable, so it may still commit after we walk away.
+        // That is harmless: it only records/wipes for a key we did fetch, and
+        // the next db() re-reads whatever it settled on.
+        onLate: () => cacheDiag("info", "idb.tx_late", {}),
+        onLateError: (err) => cacheDiag("fail", "idb.tx_late_error", { error: String(err) }),
+      });
     } catch (err) {
+      // Close so we don't strand a connection that would block the next
+      // version bump, and so the retry starts from a clean handle.
       db.close();
+      if (isDeadlineExceeded(err)) {
+        cacheDiag("fail", "idb.tx_timeout", { timeout_ms: this.txTimeoutMs });
+      }
       throw err;
     }
     return db;
+  }
+
+  /**
+   * Reconcile the DB's recorded key_id against the one the server just gave
+   * us, wiping unreadable rows. Split out of openAndSyncKey so the whole
+   * transaction can be raced against a deadline as one unit.
+   */
+  private async syncKeyInTx(
+    db: IDBPDatabase<ShelleyDB>,
+    material: CacheKeyMaterial,
+  ): Promise<void> {
+    // Fast path: just CHECK the recorded key. In the overwhelmingly common
+    // case (nothing rotated) startup mutates nothing, so demanding a write
+    // lock over messages + conversation_meta would serialize every tab's
+    // startup behind any sibling that happens to be bulk-writing. A readonly
+    // tx takes a SHARED lock, so concurrent readers don't block each other,
+    // and it doesn't overlap the data stores at all.
+    const existing = await db.get("keys_meta", "current");
+    if (existing?.key_id === material.keyId) return;
+
+    // Slow path: we must actually mutate, so take the exclusive lock. Re-read
+    // inside the tx rather than trusting the readonly result — another tab may
+    // have claimed the key in between, and acting on the stale read would wipe
+    // rows that tab just wrote under the very same key.
+    const tx = db.transaction(["keys_meta", "messages", "conversation_meta"], "readwrite");
+    const km = tx.objectStore("keys_meta");
+    const current = await km.get("current");
+    if (current?.key_id === material.keyId) {
+      // Someone else recorded our key while we were escalating. Nothing to do.
+      await tx.done;
+      return;
+    }
+    if (!current) {
+      // No recorded key. Defensive: if there are pre-existing rows
+      // (from a process that crashed mid-rotation, a stale upgrade,
+      // or a malicious write), they cannot belong to the current key
+      // — wipe before claiming ownership. Otherwise just record.
+      const msgsCount = await tx.objectStore("messages").count();
+      const metaCount = await tx.objectStore("conversation_meta").count();
+      if (msgsCount > 0 || metaCount > 0) {
+        await tx.objectStore("messages").clear();
+        await tx.objectStore("conversation_meta").clear();
+      }
+      await km.put({ id: "current", key_id: material.keyId });
+    } else {
+      // Server rotated; old rows are useless. Wipe.
+      await tx.objectStore("messages").clear();
+      await tx.objectStore("conversation_meta").clear();
+      await km.put({ id: "current", key_id: material.keyId });
+    }
+    await tx.done;
   }
 
   private async openWithFactory(): Promise<IDBPDatabase<ShelleyDB>> {
@@ -797,13 +881,25 @@ export class MessageStore {
         return this.hot.get(id) ?? null;
       }
       const db = await this.db();
-      const meta = await db.get("conversation_meta", id);
+      // Bounded: these are readonly (shared) locks, but a sibling tab holding
+      // an EXCLUSIVE lock on the same store still blocks them for as long as
+      // it likes — including forever, if that tab was suspended mid-write.
+      // Reading the cache must never outlast just fetching from the network.
+      const meta = await withDeadline(
+        db.get("conversation_meta", id),
+        this.txTimeoutMs,
+        readDeadlineOpts("conversation_meta"),
+      );
       if (meta) {
         const payload = await this.decryptMetaRow(material.key, meta);
         if (payload) {
           // getAll on the compound key range returns rows in ascending
           // (conv, seq) order — no JS sort needed.
-          const rows = await db.getAll("messages", convRange(id));
+          const rows = await withDeadline(
+            db.getAll("messages", convRange(id)),
+            this.txTimeoutMs,
+            readDeadlineOpts("messages"),
+          );
           const decrypted: Message[] = [];
           for (const r of rows) {
             const m = await this.decryptMessageRow(material.key, r);
@@ -1073,23 +1169,36 @@ export class MessageStore {
     let added = 0;
     let firstNewSeq = Infinity;
     const idIdx = msgs.index("by_message_id");
-    for (let i = 0; i < encRows.length; i++) {
-      const row = encRows[i];
+    // Three phases instead of one interleaved loop, so the exclusive lock is
+    // held across a handful of event-loop turns rather than one per message.
+    // Awaiting per row makes the transaction advance only as fast as this tab
+    // is scheduled; a tab the OS suspends mid-loop keeps its origin-wide lock
+    // and stalls every sibling.
+    //
+    // The phases must stay ordered: every lookup reads the state BEFORE any of
+    // this batch's puts, which is what makes a regenerated turn (same
+    // message_id at a new sequence_id) a move rather than a duplicate.
+    const priorKeys = await Promise.all(incoming.map((m) => idIdx.getKey(m.message_id)));
+    const moved: [string, number][] = [];
+    for (let i = 0; i < incoming.length; i++) {
       const m = incoming[i];
-      const priorKey = await idIdx.getKey(m.message_id);
+      const priorKey = priorKeys[i];
       if (priorKey) {
         if (priorKey[0] !== m.conversation_id || priorKey[1] !== m.sequence_id) {
           // Same message re-keyed to a new sequence_id (regenerated turn):
           // a move, not an addition.
-          await msgs.delete(priorKey);
+          moved.push(priorKey);
         }
       } else {
         added++;
         if (m.sequence_id > prevMax && m.sequence_id < firstNewSeq) firstNewSeq = m.sequence_id;
       }
-      await msgs.put(row);
       if (m.sequence_id > maxLocal) maxLocal = m.sequence_id;
     }
+    // Deletes before puts: a moved row's old key must go before its new one
+    // lands, or the unique by_message_id index would see both at once.
+    await Promise.all(moved.map((k) => msgs.delete(k)));
+    await Promise.all(encRows.map((r) => msgs.put(r)));
     // A live append must continue the history we already hold. If it skips
     // ahead, messages were committed while we weren't listening and the
     // cached set now has a hole — mirror mergeRecords.joinsUp().
@@ -1271,9 +1380,15 @@ export class MessageStore {
     const existing = await metaStore.get(id);
     // Replace semantics: drop everything for this conversation, then bulk put.
     await msgs.delete(convRange(id));
-    for (const r of encMsgs) {
-      await msgs.put(r);
-    }
+    // Issue every put in ONE turn and await them together, rather than
+    // awaiting each in sequence. Awaiting per row makes the transaction
+    // advance only as fast as this tab is scheduled, so it holds its
+    // exclusive lock across thousands of event-loop turns — and a tab the OS
+    // suspends mid-loop keeps that lock, which is origin-wide, stalling every
+    // sibling. Measured ~3.5x less lock time on a busy main thread in Safari.
+    // Safe because the rows are independent: no put depends on another's
+    // result, and the tx still commits (or aborts) atomically.
+    await Promise.all(encMsgs.map((r) => msgs.put(r)));
     const rowCount = await msgs.count(convRange(id));
     const row: ConvMetaRow = {
       conversation_id: id,
