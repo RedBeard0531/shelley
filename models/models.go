@@ -187,9 +187,9 @@ func gemSvc(modelName string) func(baseURL, apiKey string, httpc *http.Client) l
 
 // All returns all available models in Shelley.
 //
-// Order is significant: it is the display order in the model picker, not a
-// statement about which model is the default. Default() is chosen separately,
-// so do not assume All()[0] is the default.
+// Order is significant: it is the display order in the model picker and, when
+// no default is configured, the first ready model is the default. Integrations
+// supply their own ordered catalogs instead of using this order.
 //
 // Models are organized by "family" — the usual notion of a model lineage from
 // one provider/trainer (the "Opus" line, the "GPT-5" line, and so on).

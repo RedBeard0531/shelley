@@ -22,7 +22,8 @@ type LLMConfig struct {
 	// registers them as-is; custom models are loaded separately from DB.
 	Models []models.Built
 
-	// DefaultModel is the default model to use (optional, defaults to models.Default()).
+	// DefaultModel is an optional process or shelley.json override. When empty,
+	// model order is authoritative and the first ready model is the default.
 	DefaultModel string
 
 	// DB is the database for custom models (optional).

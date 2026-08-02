@@ -35,22 +35,21 @@ func TestEffectiveDefaultModelFallsBackWhenConfiguredNotReady(t *testing.T) {
 	}
 }
 
-func TestEffectiveDefaultModelEmptyConfiguredUsesProcessDefault(t *testing.T) {
+func TestEffectiveDefaultModelUsesFirstReadyWhenNotConfigured(t *testing.T) {
 	s := &Server{defaultModel: ""}
 	got := s.effectiveDefaultModel([]ModelInfo{
-		{ID: models.Default().ID, Ready: true},
 		{ID: "some-other-model", Ready: true},
+		{ID: models.Default().ID, Ready: true},
 	})
-	if got != models.Default().ID {
-		t.Errorf("got %q, want %q", got, models.Default().ID)
+	if got != "some-other-model" {
+		t.Errorf("got %q, want some-other-model", got)
 	}
 }
 
-func TestEffectiveDefaultModelEmptyConfiguredProcessDefaultNotInCatalog(t *testing.T) {
-	// When s.defaultModel is "" and models.Default().ID isn't in
-	// the catalog, fall through to first ready.
+func TestEffectiveDefaultModelSkipsFirstModelWhenNotReady(t *testing.T) {
 	s := &Server{defaultModel: ""}
 	got := s.effectiveDefaultModel([]ModelInfo{
+		{ID: "not-ready", Ready: false},
 		{ID: "some-fake-id", Ready: true},
 	})
 	if got != "some-fake-id" {
@@ -58,17 +57,15 @@ func TestEffectiveDefaultModelEmptyConfiguredProcessDefaultNotInCatalog(t *testi
 	}
 }
 
-func TestEffectiveDefaultModelConfiguredNotReadyFallsBackToProcessDefault(t *testing.T) {
-	// Configured default isn't ready, but the process default is —
-	// prefer the process default over arbitrary first-ready.
+func TestEffectiveDefaultModelConfiguredNotReadyUsesFirstReady(t *testing.T) {
 	s := &Server{defaultModel: "configured-not-ready"}
 	got := s.effectiveDefaultModel([]ModelInfo{
 		{ID: "configured-not-ready", Ready: false},
 		{ID: "first-ready", Ready: true},
 		{ID: models.Default().ID, Ready: true},
 	})
-	if got != models.Default().ID {
-		t.Errorf("got %q, want %q", got, models.Default().ID)
+	if got != "first-ready" {
+		t.Errorf("got %q, want first-ready", got)
 	}
 }
 

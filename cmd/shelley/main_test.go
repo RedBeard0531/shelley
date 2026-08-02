@@ -232,6 +232,32 @@ func TestBuildLLMConfigDefaultModelPrecedence(t *testing.T) {
 	}
 }
 
+func TestModelsCommandDefaultIDMatchesServerVisibility(t *testing.T) {
+	modelList := []models.Built{
+		{ID: "first-ready"},
+		{ID: "configured"},
+		{ID: "predictable"},
+	}
+	tests := []struct {
+		name            string
+		configured      string
+		predictableOnly bool
+		want            string
+	}{
+		{name: "configured model", configured: "configured", want: "configured"},
+		{name: "missing configured model", configured: "missing", want: "first-ready"},
+		{name: "predictable hidden normally", configured: "predictable", want: "first-ready"},
+		{name: "predictable only", configured: "configured", predictableOnly: true, want: "predictable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := modelsCommandDefaultID(tt.configured, modelList, tt.predictableOnly); got != tt.want {
+				t.Fatalf("modelsCommandDefaultID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildLLMConfigRejectsInvalidExeEnvironmentBeforeDiscovery(t *testing.T) {
 	oldDiscover := discoverLLMIntegrations
 	discoveryCalls := 0

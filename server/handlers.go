@@ -2642,24 +2642,17 @@ func assignModelTiers(modelList []ModelInfo) {
 	}
 }
 
-// effectiveDefaultModel returns the model id to use when the client
-// hasn't picked one. It tries `s.defaultModel`, then the process-wide
-// default from package models, then the first ready model in
-// `modelList`. Returns "" only when no model is ready, which is the
-// same signal `getModelList` produces when the host has no working
-// LLM service at all.
+// effectiveDefaultModel returns the model id to use when the client hasn't
+// picked one. A configured override wins; otherwise modelList order is
+// authoritative. Returns "" only when no model is ready.
 func (s *Server) effectiveDefaultModel(modelList []ModelInfo) string {
 	if len(modelList) == 0 {
 		return ""
 	}
-	candidates := []string{s.defaultModel, models.Default().ID}
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
+	if s.defaultModel != "" {
 		for _, m := range modelList {
-			if m.ID == c && m.Ready {
-				return c
+			if m.ID == s.defaultModel && m.Ready {
+				return s.defaultModel
 			}
 		}
 	}

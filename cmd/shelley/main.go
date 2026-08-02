@@ -58,7 +58,7 @@ func registerGlobalFlags(fs *flag.FlagSet, global *GlobalConfig) {
 	fs.BoolVar(&global.Debug, "debug", false, "Enable debug logging")
 	fs.BoolVar(&global.PredictableOnly, "predictable-only", false, "Use only the predictable service, ignoring all other models")
 	fs.StringVar(&global.ConfigPath, "config", "", "Path to shelley.json configuration file (optional)")
-	fs.StringVar(&global.DefaultModel, "default-model", "", "Default model for web UI (overrides shelley.json default_model; falls back to the built-in default when unset)")
+	fs.StringVar(&global.DefaultModel, "default-model", "", "Default model for web UI (overrides shelley.json default_model; falls back to the first ready model when unset)")
 	fs.BoolVar(&global.DisableLLMIntegration, "disable-llm-integration", false, "Ignore any discovered exe.dev llm integration")
 	fs.BoolVar(&global.DisableGateway, "disable-gateway", false, "Ignore llm_gateway from shelley.json")
 }
@@ -529,6 +529,23 @@ func buildLLMModelSources(ctx context.Context, global GlobalConfig, config shell
 	return defaultModel, sources
 }
 
+func modelsCommandDefaultID(configured string, modelList []models.Built, predictableOnly bool) string {
+	visible := func(model models.Built) bool {
+		return (model.ID == "predictable") == predictableOnly
+	}
+	for _, model := range modelList {
+		if visible(model) && model.ID == configured {
+			return model.ID
+		}
+	}
+	for _, model := range modelList {
+		if visible(model) {
+			return model.ID
+		}
+	}
+	return ""
+}
+
 // runModels prints the materialized list of built-in models the server
 // would expose, without starting the server. Useful for confirming that
 // integrations/gateway/env-var precedence and discovery are configured
@@ -553,10 +570,7 @@ func runModels(global GlobalConfig, args []string) {
 		os.Exit(1)
 	}
 
-	defaultID := llmCfg.DefaultModel
-	if defaultID == "" {
-		defaultID = models.Default().ID
-	}
+	defaultID := modelsCommandDefaultID(llmCfg.DefaultModel, llmCfg.Models, global.PredictableOnly)
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tPROVIDER\tAPI TYPE\tBASE URL\tSOURCE\tDEFAULT")

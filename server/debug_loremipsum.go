@@ -84,10 +84,7 @@ func (s *Server) handleDebugLoremIpsum(w http.ResponseWriter, r *http.Request) {
 
 	model := strings.TrimSpace(r.FormValue("model"))
 	if model == "" {
-		model = s.defaultModel
-	}
-	if model == "" {
-		model = "claude-opus-4-5-20251101"
+		model = s.effectiveDefaultModel(s.getModelList())
 	}
 
 	// Detach from the request context so a client disconnect mid-generation

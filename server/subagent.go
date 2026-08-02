@@ -807,7 +807,7 @@ func (s *Server) notifyParentSubagentDone(subagentConversationID, response strin
 
 	modelID := parentModelID
 	if modelID == "" {
-		modelID = s.defaultModel
+		modelID = s.effectiveDefaultModel(s.getModelList())
 	}
 
 	// Enqueue onto the parent's pending-batch queue. Mid-turn injection /

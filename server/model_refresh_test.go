@@ -38,6 +38,12 @@ func TestHandleModelRefreshReturnsRefreshedModels(t *testing.T) {
 					Source:   "new source",
 					Service:  loop.NewPredictableService(),
 				},
+				{
+					ID:       models.Default().ID,
+					Provider: models.ProviderAnthropic,
+					Source:   "new source",
+					Service:  loop.NewPredictableService(),
+				},
 			}, nil
 		},
 	}
@@ -53,8 +59,11 @@ func TestHandleModelRefreshReturnsRefreshedModels(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(got) != 1 || got[0].ID != "new-built" || got[0].Source != "new source" {
-		t.Fatalf("models = %+v, want only new-built from new source", got)
+	if len(got) != 2 || got[0].ID != "new-built" || got[0].Source != "new source" {
+		t.Fatalf("models = %+v, want new-built first", got)
+	}
+	if !got[0].IsDefault || got[1].IsDefault {
+		t.Fatalf("models = %+v, want first refreshed model marked default", got)
 	}
 	if mgr.HasModel("old-built") {
 		t.Fatal("old built model was not removed")
