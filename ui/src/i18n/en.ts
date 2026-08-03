@@ -136,6 +136,7 @@ export const en: TranslationKeys = {
   manageModelsAction: "Manage models…",
   effortLabel: "Reasoning effort",
   effortAuto: "auto",
+  modelSwitchBusy: "Finish or stop the current turn to switch models",
   customModelsGroup: "Custom models",
   editModel: "Edit Model",
   loadingModels: "Loading models...",

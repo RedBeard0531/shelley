@@ -1,6 +1,6 @@
-// Pure math for the token-cost-graph feature flag: turns a conversation's
-// per-LLM-call usage records into a stacked cumulative series, weighting each
-// token type by its models.dev price for the model that served the call.
+// Pure math for the token cost graph: turns a conversation's per-LLM-call
+// usage records into a stacked cumulative series, weighting each token type by
+// its models.dev price for the model that served the call.
 //
 // When no model in the conversation has known pricing, the series falls back
 // to raw token counts (weighted=false) so the graph still shows something.

@@ -16,16 +16,6 @@ var FlagToolPills = featureflags.Register(featureflags.Flag{
 	Default:     false,
 })
 
-// FlagTokenCostGraph adds a stacked area graph to the context usage popup:
-// the x axis is LLM calls (messages with usage data), the y axis is
-// cumulative tokens of each type (input, cache write, cache read, output)
-// weighted by models.dev pricing for the model that served each call.
-var FlagTokenCostGraph = featureflags.Register(featureflags.Flag{
-	Name:        "token-cost-graph",
-	Description: "Show a stacked cumulative token-cost graph (models.dev pricing) in the context usage popup.",
-	Default:     false,
-})
-
 // FlagPerformanceHUD overlays a small heads-up display in the web UI showing
 // live counters of hot reactive recomputations (message coalescing, render
 // model rebuilds, markdown parses, scroll/resize handler fires, store

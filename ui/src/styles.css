@@ -3191,7 +3191,14 @@ select:disabled {
   min-width: 0;
 }
 
+/* "Ready on <hostname>" is a readout like the cwd/tokens/model group on the
+   other end of the bar, not prose — same mono type, so the bar reads as one
+   thing. The other .status-message variants (error, disconnected, no-models)
+   are sentences and stay in the default sans. */
 .status-message.status-ready {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.2;
   color: var(--text-tertiary);
 }
 
@@ -4625,20 +4632,57 @@ svg {
   gap: 0.5rem;
 }
 
-.status-cwd-readonly {
+/* Right-hand status readout: "~/dir · 15k · model-name", dot-separated. One
+   type style for every segment (the cwd used to be mono at a different size,
+   which read as three unrelated widgets sitting next to each other) — set
+   here on the container and inherited, so the segments can't drift apart.
+
+   min-width: 0 here and on every descendant down to the model name is what
+   lets the readout shrink by ellipsizing instead of overflowing the bar; a
+   single default min-width: auto anywhere in that chain floors the whole
+   subtree at its content width. This holds on mobile too (where the cwd
+   segment is hidden), so the media query needs no override. */
+.status-readout {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
   margin-left: auto;
-  margin-right: 0.75rem;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  line-height: 1.2;
   color: var(--text-secondary);
+}
+
+/* Shrink order under pressure is cwd first, then the model name; the token
+   count never gives (a clipped "1" reads as a different number, so it stays
+   flex-shrink: 0). flex-shrink is weighted by base size, so the long cwd
+   already absorbs most of any deficit — the explicit 3 states the intent
+   rather than leaving it emergent, and keeps the model name legible longer.
+   direction: rtl ellipsizes the root, keeping the leaf directory visible. */
+.status-readout-cwd {
+  flex-shrink: 3;
+  min-width: 0;
+  max-width: 60ch;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
-  max-width: 60ch;
   direction: rtl;
   text-align: left;
   unicode-bidi: plaintext;
+}
+
+.status-readout-sep {
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+/* The model segment wraps the inline ModelPicker so a tooltip has something to
+   attach to while the picker itself is disabled (a disabled control emits no
+   pointer events, so v-tooltip on it would never fire). */
+.status-readout-model {
+  display: flex;
+  min-width: 0;
 }
 
 .status-stop-button {
@@ -4686,33 +4730,75 @@ svg {
   }
 }
 
-.context-usage-bar-container {
+/* Wrapper holding the popover and its anchor. min-width: 0 because a block-level
+   flex item defaults to min-width: auto, which floors it at its content width;
+   the token count itself never shrinks (see .context-usage-label-tokens), but a
+   floored segment steals width the model name beside it needs to ellipsize. */
+.context-usage-root {
+  min-width: 0;
+}
+
+.context-usage-container {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0.375rem;
+  min-width: 0;
 }
 
 .context-warning-icon {
+  flex-shrink: 0;
   font-size: 0.875rem;
   line-height: 1;
   cursor: help;
 }
 
-.context-usage-bar {
-  width: 60px;
-  height: 6px;
-  background: var(--bg-tertiary);
-  border-radius: 3px;
-  overflow: hidden;
+/* Context usage readout: "132k · model-name", opens the context usage popup.
+   Type is inherited from .status-readout so this matches the cwd segment. */
+.context-usage-label {
+  display: flex;
+  /* center, not baseline: the model-name span has overflow:hidden for its
+     ellipsis, and baseline synthesis for a non-visible-overflow box varies
+     across engines. Visually identical here — one line, one font size. */
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  /* Vertical padding cancelled by an equal negative margin: the 14px-tall text
+     alone is under the 24px minimum touch target, and on mobile this is the
+     only way to open the popup. The hit area grows; the layout doesn't move.
+     Vertical only — negative horizontal margin would eat into the flex gap
+     that separates this from the cwd/hostname readouts. */
+  padding: 5px 0;
+  margin: -5px 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
   cursor: pointer;
 }
 
-.context-usage-fill {
-  height: 100%;
+.context-usage-label:hover {
+  color: var(--text-primary);
+}
+
+.context-usage-label:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: 1px;
   border-radius: 3px;
-  transition:
-    width 0.3s ease,
-    background-color 0.3s ease;
+}
+
+.context-usage-label-tokens {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s ease;
+}
+
+.context-usage-label-tokens-warn {
+  color: var(--warning-text, #f59e0b);
+}
+
+.context-usage-label-tokens-error {
+  color: var(--error-text);
 }
 
 /* Inline status slot in message controls — hidden on desktop, shown on mobile */
@@ -4753,8 +4839,15 @@ svg {
     gap: 0.375rem;
   }
 
-  .message-controls-status-slot .context-usage-bar-container {
-    flex-shrink: 0;
+  /* The hostname readout yields room to the context usage label rather than
+     wrapping to a second line. Scoped to .status-ready: error and
+     no-models messages are the whole point of the status bar when they
+     appear, and must keep wrapping rather than be clipped. */
+  .message-controls-status-slot .status-message.status-ready {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* Let new-conversation fields share a row when they fit and wrap naturally
@@ -8464,18 +8557,12 @@ kbd {
   padding: 6px 10px;
 }
 
-.chat-popup-model-name {
-  font-weight: 500;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
 .chat-popup-warning {
   margin-top: 6px;
   color: var(--warning-text, #f59e0b);
 }
 
-/* Token cost graph (token-cost-graph feature flag) */
+/* Token cost graph in the context usage popup */
 .token-cost-graph {
   margin-top: 8px;
   width: 280px;
@@ -11619,13 +11706,105 @@ kbd {
   color: var(--text-secondary);
 }
 
+/* Inline variant: the status-bar readout renders the model as one dot-separated
+   segment beside the cwd and token count, so the trigger has to be bare text —
+   no box, no chevron, inheriting the readout's type. PrimeVue's chrome lives on
+   .p-select/.p-select-label, hence the !important-free but specific overrides
+   below (the :dt tokens set background/border as inline custom properties on
+   the root, which a plain class can't outrank without matching specificity). */
+
+/* No chevron: the segment reads as text, and the dot separators already imply
+   the readout is a row of distinct things. Hidden in CSS with the rest of the
+   inline chrome rather than via a pt style, so it's all in one place. */
+.p-select.model-picker-inline .p-select-dropdown {
+  display: none;
+}
+
+.p-select.model-picker-inline {
+  background: none;
+  border: none;
+  border-radius: 3px;
+  box-shadow: none;
+  font: inherit;
+  color: inherit;
+  /* PrimeVue's Select is width:100% via fluid; inline it should be exactly as
+     wide as the model name, and shrinkable to less (min-width: 0) so the name
+     ellipsizes instead of pushing the readout past the edge of the bar. */
+  width: auto;
+  min-width: 0;
+}
+
+/* Padding/margin make the whole segment a 24px-tall hit target like the sibling
+   usage label. Vertical only: horizontal padding would widen the segment (and a
+   negative margin to cancel it would make the box wider than its flex parent,
+   overflowing the status bar under width pressure). The focus ring gets its
+   clearance from outline-offset below, which costs no layout. */
+.p-select.model-picker-inline .p-select-label {
+  padding: 5px 0;
+  margin: -5px 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.p-select.model-picker-inline:hover:not(.p-disabled),
+.p-select.model-picker-inline.p-focus {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: var(--text-primary);
+}
+
+/* Disabled while the agent works (switching model would cancel the turn). The
+   segment still has to read as the model name — it's the readout, not just a
+   control — so dim it slightly rather than greying it out, and drop the pointer
+   cursor so it doesn't invite a click that does nothing. The wrapper carries a
+   tooltip explaining why (a .p-disabled element gets pointer-events: none, so
+   the tooltip can't live here). */
+.p-select.model-picker-inline.p-disabled {
+  background: none;
+  border: none;
+  box-shadow: none;
+  opacity: 0.65;
+}
+
+.p-select.model-picker-inline.p-disabled .p-select-label {
+  cursor: default;
+}
+
+/* PrimeVue's .p-select-label is the focusable combobox. Its box is 5px taller
+   than the text (the hit-target padding above) but flush with it horizontally,
+   so a single outline-offset can't clear the glyphs on both axes: negative
+   values cut into the first and last character, and positive ones push the ring
+   well outside the segment vertically. Draw the ring with an inset box-shadow
+   sized per-axis instead — 0 vertical (the padding already provides the gap),
+   2px horizontal — which costs no layout and so can't widen the segment. */
+.p-select.model-picker-inline .p-select-label:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--blue-text);
+  border-radius: 3px;
+}
+
+/* box-shadow is dropped in forced-colors mode, which would leave this control
+   with no focus indicator at all; fall back to a plain outline there. Cutting a
+   few pixels into the glyphs is a fine trade for having a ring. */
+@media (forced-colors: active) {
+  .p-select.model-picker-inline .p-select-label:focus-visible {
+    outline: 2px solid;
+    outline-offset: -2px;
+  }
+}
+
 /* Let the overlay grow to its widest option (PrimeVue only guarantees
    min-width:100% of the trigger) so long model names aren't clipped, while
    staying within the viewport. */
 .p-select-overlay.model-picker-panel {
   width: max-content;
-  min-width: 16rem;
-  max-width: min(22rem, 90vw);
+  /* min-width has to yield to the viewport too, not just max-width: it wins over
+     max-width in CSS, so a flat 16rem floor overflows a narrow screen however
+     tight the cap is. */
+  min-width: min(16rem, 92vw);
+  max-width: min(22rem, 92vw);
   /* size="small" only shrinks the trigger label; PrimeVue has no overlay
      font-size token, so match the compact status-bar scale here (options
      inherit). */

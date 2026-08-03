@@ -930,6 +930,26 @@ async function main(): Promise<void> {
     assert(hyd!.contextWindowSize === 4321, "ctx persisted");
   });
 
+  // globalStream.handleEvent calls upsertMessages() and then
+  // setContextWindowSize() for the same stream frame, without awaiting in
+  // between. Both persist the encrypted meta payload with a read-modify-write
+  // whose snapshot is taken before the write, so the slower writer
+  // (_persistUpsert, which also encrypts every message row) must not stomp the
+  // context size the faster one committed meanwhile — otherwise the next page
+  // load hydrates contextWindowSize 0 and the status bar reads "0".
+  await run("upsertMessages then setContextWindowSize in one tick persists ctx", async () => {
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    const id = "c-ctx-race";
+    s.upsertMessages(id, [msg(id, 1), msg(id, 2)]);
+    s.setContextWindowSize(id, 14921);
+    await s.settle();
+    await s.close();
+    const s2 = storeFor({ factory, dbName, keyId, rawKey });
+    const hyd = await s2.hydrate(id);
+    assert(hyd!.contextWindowSize === 14921, `ctx persisted, got ${hyd!.contextWindowSize}`);
+  });
+
   await run(
     "applyFullHistory ratchets maxSequenceIdKnown against response.max_sequence_id",
     async () => {

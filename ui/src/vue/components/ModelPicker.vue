@@ -15,7 +15,15 @@
        spans all models so nothing is unfindable.
      PrimeVue owns open/close, outside-click, Escape and viewport-aware flip
      placement; styling uses size="small" + the shared statusPickerDt token
-     map. -->
+     map.
+
+     The overlay is appended to the trigger for the boxed variant and to <body>
+     for the inline one. append-to="self" positions with relativePosition(),
+     which aligns left edges and never clamps to the viewport — fine for the
+     composer's full-width trigger, but the inline trigger sits at the right edge
+     of the status bar, from where the panel hung off the left of the screen on a
+     narrow viewport. The body portal takes absolutePosition(), which does clamp
+     and flip. -->
 <template>
   <Select
     ref="selectRef"
@@ -29,10 +37,13 @@
     size="small"
     :dt="statusPickerDt"
     scroll-height="22rem"
-    class="model-picker"
+    :class="['model-picker', { 'model-picker-inline': inline }]"
     :aria-label="ariaLabel"
-    append-to="self"
-    :pt="{ overlay: { class: 'model-picker-panel' } }"
+    :append-to="inline ? 'body' : 'self'"
+    :pt="{
+      overlay: { class: 'model-picker-panel' },
+      label: disabledReason ? { 'aria-description': disabledReason } : {},
+    }"
     filter
     :filter-fields="['label', 'id', 'source']"
     :filter-placeholder="t('searchModels')"
@@ -46,7 +57,9 @@
     <template #value>
       <span class="model-picker-value">
         <span class="model-picker-value-name">{{ selectedLabel }}</span>
-        <span v-if="effortText" class="model-picker-value-effort">· {{ effortText }}</span>
+        <span v-if="effortText && !inline" class="model-picker-value-effort"
+          >· {{ effortText }}</span
+        >
       </span>
     </template>
     <template #option="{ option }">
@@ -166,8 +179,17 @@ const props = withDefaults(
     thinkingLevel: ThinkingLevel;
     disabled?: boolean;
     refreshing?: boolean;
+    /** Render as bare text (no box, no chevron) for the status-bar readout,
+     *  where the picker sits among plain dot-separated segments. The overlay
+     *  and behavior are unchanged; only the trigger's chrome differs. */
+    inline?: boolean;
+    /** Why the picker is disabled, put on the combobox itself so a screen
+     *  reader that lands on it is told. Pointer users get the caller's tooltip;
+     *  ARIA has to come from here because the disabled element is the thing
+     *  assistive tech actually focuses. */
+    disabledReason?: string;
   }>(),
-  { disabled: false, refreshing: false },
+  { disabled: false, refreshing: false, inline: false },
 );
 const emit = defineEmits<{
   (e: "selectModel", modelId: string): void;
@@ -296,6 +318,7 @@ const effortText = computed(() => {
   return effectiveEffort.value;
 });
 
+// Names the effort even in the inline variant, whose trigger doesn't show it.
 const ariaLabel = computed(() =>
   effortText.value
     ? `Model: ${selectedLabel.value}, reasoning effort: ${effortText.value}`

@@ -1,14 +1,15 @@
-<!-- Stacked cumulative token-cost graph shown in the context usage popup
-     behind the token-cost-graph feature flag. X axis: LLM calls or wall-clock
-     time (toggle); in time mode, idle time between turns is collapsed into
-     fixed-width gaps. Y axis: cumulative dollars per (model, token-band)
-     segment — every segment has its own color — falling back to raw token
-     counts when no model in the conversation has known pricing. Subagent cost
-     and "other" (indirect) LLM usage — compaction summarization, LLM-backed
-     tools, slug generation, … — are not part of the graph; other-usage rows
-     arrive via the otherUsageRows prop (aggregated client-side from message
-     other_usage_data), subagent cost is fetched separately, and both show as
-     an "Other (indirect)" breakdown section and
+<!-- Stacked cumulative token-cost graph shown in the context usage popup.
+     X axis: LLM calls or wall-clock time (toggle); in time mode, idle time
+     between turns is collapsed into fixed-width gaps. Y axis: cumulative
+     dollars per (model, token-band) segment — every segment has its own color
+     — falling back to raw token counts when no model in the conversation has
+     known pricing.
+
+     Subagent cost and "other" (indirect) LLM usage — compaction
+     summarization, LLM-backed tools, slug generation, … — are not part of the
+     graph. Other-usage rows arrive via the otherUsageRows prop (aggregated
+     client-side from message other_usage_data) and subagent cost is fetched
+     separately; both show up as an "Other (indirect)" breakdown section and
      "plus ≈$Y other, plus ≈$Z for subagents" note segments. -->
 <template>
   <div class="token-cost-graph">

@@ -136,6 +136,7 @@ export const zhTW: TranslationKeys = {
   manageModelsAction: "管理模型…",
   effortLabel: "思考強度",
   effortAuto: "自動",
+  modelSwitchBusy: "完成或停止目前回合以切換模型",
   customModelsGroup: "自訂模型",
   editModel: "編輯模型",
   loadingModels: "載入模型中...",

@@ -136,6 +136,7 @@ export interface TranslationKeys {
   manageModelsAction: string;
   effortLabel: string;
   effortAuto: string;
+  modelSwitchBusy: string;
   customModelsGroup: string;
   editModel: string;
   loadingModels: string;

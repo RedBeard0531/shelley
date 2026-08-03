@@ -136,6 +136,7 @@ export const upgoer5: TranslationKeys = {
   manageModelsAction: "Set up brains…",
   effortLabel: "How hard to think",
   effortAuto: "brain picks",
+  modelSwitchBusy: "Let the computer finish, or stop it, before you pick a new brain",
   customModelsGroup: "Your own brains",
   editModel: "Change Brain",
   loadingModels: "Getting brains...",

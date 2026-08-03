@@ -136,6 +136,7 @@ export const ru: TranslationKeys = {
   manageModelsAction: "Управление моделями…",
   effortLabel: "Усилие рассуждения",
   effortAuto: "авто",
+  modelSwitchBusy: "Завершите или остановите текущий ход, чтобы сменить модель",
   customModelsGroup: "Пользовательские модели",
   editModel: "Редактировать модель",
   loadingModels: "Загрузка моделей...",

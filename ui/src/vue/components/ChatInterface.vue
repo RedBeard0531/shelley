@@ -418,7 +418,6 @@ import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import { buildMessageQuote } from "../../utils/messageQuote";
 import { hasMultipleUsers } from "../../utils/messageAuthors";
 import { tildifyPath } from "../../utils/tildify";
-import { prettyModelLabels } from "../../utils/modelNames";
 import { handleModifiedNavClick } from "../utils/openInNewTab";
 import { isAutoExpandTool } from "../../utils/toolMeta";
 import { formatDay } from "../../utils/messageTime";
@@ -433,7 +432,7 @@ import {
 import { coalesceMessages, type CoalescedItem } from "./coalesce";
 import type { RenderNode, RenderChunk, GenerationBlock } from "./renderNode";
 import type { EphemeralTerminal } from "./terminalTypes";
-import { DEFAULT_THINKING_LEVEL, type ThinkingLevel } from "./thinkingLevel";
+import { DEFAULT_THINKING_LEVEL, THINKING_LEVELS, type ThinkingLevel } from "./thinkingLevel";
 
 import MessageInput from "./MessageInput.vue";
 import ConversationTOC from "./ConversationTOC.vue";
@@ -512,7 +511,6 @@ const props = withDefaults(
 const { t } = useI18n();
 const { markdownMode } = useMarkdownMode();
 const toolPillsEnabled = useFeatureFlag("tool-pills");
-const tokenCostGraphEnabled = useFeatureFlag("token-cost-graph");
 const {
   hasUpdate,
   versionInfo,
@@ -693,12 +691,60 @@ function putDraftModel(draftId: string, model: string) {
       if (modelPutsInFlight === 0) modelPutDraftId = null;
     });
 }
-// setSelectedModel is the USER-pick path (composer picker). Server-driven
-// updates (conversation switch, /model echo) go through applyModel instead
-// — that split, not a value-equality guard, is what keeps echoes from
-// looping back into PUTs: an equality check against the (stale until the
-// echo lands) conversation row would drop a legitimate re-pick of the
-// original model made while a previous pick's PUT was still in flight.
+// Changing the model or reasoning level of a conversation that is already under
+// way. Both are server state at this point: they are baked into the agent loop
+// at build time, and conversation_options are locked once a conversation is
+// promoted (see the send path's `promoting` guard) — so a purely local change
+// would silently do nothing. /model already does the whole job for both:
+// validates the argument, rebuilds the loop, records a modelchange marker in the
+// log, and broadcasts the updated conversation, which the currentConversation
+// watch applies. So route through it rather than duplicating any of that, and
+// don't apply locally first: a rejected switch would visibly snap back.
+async function sendModelCommand(arg: string) {
+  const id = props.conversationId;
+  if (!id) return;
+  try {
+    await api.sendMessage(id, { message: `/model ${arg}`, model: selectedModel.value });
+  } catch (err) {
+    console.error("Failed to run /model:", err);
+    error.value = err instanceof Error ? err.message : "Failed to change model settings";
+  }
+}
+
+function switchConversationModel(model: string) {
+  if (model === selectedModel.value) return;
+  return sendModelCommand(model);
+}
+
+// Reasoning pills in the status readout's picker. Same policy as the model
+// above: don't touch local state, let the server's echo drive the pill, so a
+// rejected level doesn't leave the UI (and the stored default) claiming a
+// setting the conversation doesn't have.
+//
+// The "auto" sentinel is the exception. It means "defer to the model's own
+// default", which has no /model spelling ("default" there selects the default
+// MODEL), so it can only be applied locally. It's only offered when the model's
+// concrete default is unknown, in which case there's no level to send anyway.
+function switchConversationThinkingLevel(level: ThinkingLevel) {
+  // The pills are radios and re-emit on a click on the current one; without this
+  // guard that rebuilds the agent loop and appends a marker for a no-op.
+  if (level === thinkingLevel.value) return;
+  if (level === "default") {
+    setThinkingLevel(level);
+    return;
+  }
+  void sendModelCommand(level);
+}
+
+// Model pick from the composer's picker (new/draft conversations), where the
+// model is still purely client state until the first send.
+//
+// setSelectedModel is the USER-pick path. Server-driven updates (conversation
+// switch, /model echo) go through applyModel instead — that split, not a
+// value-equality guard, is what keeps echoes from looping back into PUTs: an
+// equality check against the (stale until the echo lands) conversation row
+// would drop a legitimate re-pick of the original model made while a previous
+// pick's PUT was still in flight.
 function setSelectedModel(model: string) {
   applyModel(model);
   // Keep the server-side draft row in sync with the picker. Without this,
@@ -915,10 +961,6 @@ const isDistilling = computed(() => {
   return inProgress;
 });
 
-const selectedModelDisplayName = computed(() => {
-  return prettyModelLabels(models.value).get(selectedModel.value) || selectedModel.value;
-});
-
 const selectedModelInfo = computed(() => models.value.find((m) => m.id === selectedModel.value));
 const maxContextTokens = computed(() => selectedModelInfo.value?.max_context_tokens || 200000);
 
@@ -927,7 +969,7 @@ const LLM_TYPE_TEXT = 2;
 const LLM_TYPE_TOOL_USE = 5;
 const LLM_TYPE_TOOL_RESULT = 6;
 
-// Short excerpt of an agent message for the token-cost-graph hover readout:
+// Short excerpt of an agent message for the token cost graph hover readout:
 // first text block, or the first tool call when the message is tools-only.
 // Cached by message_id: llm_data can be large and messages with usage data
 // are complete, so their snippet never changes.
@@ -984,11 +1026,69 @@ function isHumanUserMessage(m: Message): boolean {
   return human;
 }
 
-// Per-LLM-call usage entries (in order) for the token-cost-graph feature
-// flag. Includes every generation: the graph shows cumulative conversation
-// cost, not just the live context window. All-zero records (e.g. error
-// placeholders) are skipped. Empty while the flag is off so the default path
-// doesn't JSON.parse usage for every message on each stream update.
+// Parsed usage_data / other_usage_data, cached by message_id like
+// snippetCache/humanUserCache above. The usage walk below runs on every stream
+// update — `messages` is replaced wholesale — so re-parsing would be
+// O(conversation) JSON.parse per streamed token. All four caches are dropped
+// on conversation switch (see the conversationId watch) so they stay bounded
+// by one conversation's message count rather than the session's.
+//
+// Only messages that ALREADY carry the field are cached: a row is written once,
+// complete, with its usage (there is no UPDATE ... SET usage_data), so a cached
+// parse can't go stale — but caching "field absent" would be a bet on that
+// invariant rather than a consequence of it, and would silently ignore usage
+// that arrived later for the same message_id. Absent is a cheap early return
+// anyway; malformed-but-present is cached so bad JSON is parsed at most once.
+const usageParseCache = new Map<string, Usage | null>();
+function parseUsage(m: Message): Usage | null {
+  if (!m.usage_data) return null;
+  const cached = usageParseCache.get(m.message_id);
+  if (cached !== undefined) return cached;
+  let u: Usage | null = null;
+  try {
+    u = typeof m.usage_data === "string" ? JSON.parse(m.usage_data) : m.usage_data;
+  } catch {
+    /* ignore malformed usage */
+  }
+  usageParseCache.set(m.message_id, u);
+  return u;
+}
+
+// Shared cache-miss result. Readonly so a caller can't mutate every message's
+// "no other usage" answer at once; the cached parses are handed out the same
+// way, since callers only ever read them.
+const NO_OTHER_USAGE: readonly OtherUsageEntry[] = Object.freeze([]);
+const otherUsageParseCache = new Map<string, readonly OtherUsageEntry[]>();
+function parseOtherUsage(m: Message): readonly OtherUsageEntry[] {
+  if (!m.other_usage_data) return NO_OTHER_USAGE;
+  const cached = otherUsageParseCache.get(m.message_id);
+  if (cached !== undefined) return cached;
+  let entries: readonly OtherUsageEntry[] = NO_OTHER_USAGE;
+  try {
+    const parsed = JSON.parse(m.other_usage_data);
+    if (Array.isArray(parsed)) entries = parsed;
+  } catch {
+    /* ignore malformed other usage */
+  }
+  otherUsageParseCache.set(m.message_id, entries);
+  return entries;
+}
+
+// The usage walk below is only consumed by the context usage popup's cost
+// graph, which isn't mounted until the popup is first opened. Until then this
+// stays false and the computed returns empty, so a conversation whose cost the
+// user never asks about pays nothing on the streaming path. ContextUsageBar
+// flips it via onUsageNeeded — on hover/focus as a head start, and on the
+// popover's show event as the guarantee — and it stays flipped for the rest of
+// the conversation: the popup can be reopened, and a stale graph would be worse
+// than the walk. This is what the token-cost-graph feature flag used to gate;
+// it is reset per conversation with the memo caches below.
+const usageWanted = ref(false);
+
+// Per-LLM-call usage entries (in order) for the token cost graph in the
+// context usage popup. Includes every generation: the graph shows cumulative
+// conversation cost, not just the live context window. All-zero records
+// (e.g. error placeholders) are skipped.
 //
 // The same single walk also collects "other" (indirect) LLM usage —
 // compaction summarization, LLM-backed tools, slug generation, … — from any
@@ -996,7 +1096,8 @@ function isHumanUserMessage(m: Message): boolean {
 // (purpose, model, url) rows. Inclusion semantics are identical to
 // usage_data: forked copies carry both fields and both are counted.
 const usageData = computed<{ entries: UsageEntry[]; otherRows: OtherUsageRow[] }>(() => {
-  if (!tokenCostGraphEnabled.value) return { entries: [], otherRows: [] };
+  if (!usageWanted.value) return { entries: [], otherRows: [] };
+  perfCount("chat.usageEntries");
   const out: UsageEntry[] = [];
   const otherEntries: OtherUsageEntry[] = [];
   // A turn starts at the first call, after a human user message, or after an
@@ -1007,14 +1108,7 @@ const usageData = computed<{ entries: UsageEntry[]; otherRows: OtherUsageRow[] }
   // first call's duration (created_at only marks call completion).
   let turnStartTs = 0;
   for (const m of messages.value) {
-    if (m.other_usage_data) {
-      try {
-        const parsed = JSON.parse(m.other_usage_data);
-        if (Array.isArray(parsed)) otherEntries.push(...parsed);
-      } catch {
-        /* ignore malformed other usage */
-      }
-    }
+    otherEntries.push(...parseOtherUsage(m));
     if (isHumanUserMessage(m)) {
       nextStartsTurn = true;
       turnStartTs = Date.parse(m.created_at) || 0;
@@ -1025,29 +1119,24 @@ const usageData = computed<{ entries: UsageEntry[]; otherRows: OtherUsageRow[] }
     // without (or with malformed) usage data. Read it up front, but apply it
     // after this call so the call itself stays in its own turn.
     const endsTurn = !!m.end_of_turn;
-    if (m.usage_data) {
-      try {
-        const u: Usage = typeof m.usage_data === "string" ? JSON.parse(m.usage_data) : m.usage_data;
-        if (
-          (u.input_tokens || 0) +
-            (u.cache_creation_input_tokens || 0) +
-            (u.cache_read_input_tokens || 0) +
-            (u.output_tokens || 0) >
-          0
-        ) {
-          out.push({
-            ...u,
-            snippet: messageSnippet(m),
-            generation: m.generation,
-            timestamp: Date.parse(m.created_at) || 0,
-            startsTurn: nextStartsTurn,
-            turnStartTimestamp: nextStartsTurn && turnStartTs ? turnStartTs : undefined,
-          });
-          nextStartsTurn = false;
-        }
-      } catch {
-        /* ignore malformed usage */
-      }
+    const u = parseUsage(m);
+    if (
+      u &&
+      (u.input_tokens || 0) +
+        (u.cache_creation_input_tokens || 0) +
+        (u.cache_read_input_tokens || 0) +
+        (u.output_tokens || 0) >
+        0
+    ) {
+      out.push({
+        ...u,
+        snippet: messageSnippet(m),
+        generation: m.generation,
+        timestamp: Date.parse(m.created_at) || 0,
+        startsTurn: nextStartsTurn,
+        turnStartTimestamp: nextStartsTurn && turnStartTs ? turnStartTs : undefined,
+      });
+      nextStartsTurn = false;
     }
     if (endsTurn) {
       nextStartsTurn = true;
@@ -2241,7 +2330,6 @@ const statusContentProps = computed(() => {
     maxContextTokens: maxContextTokens.value,
     usageEntries: usageEntries.value,
     otherUsageRows: otherUsageRows.value,
-    selectedModelDisplayName: selectedModelDisplayName.value,
     hostname,
     models: models.value,
     selectedModel: selectedModel.value,
@@ -2258,12 +2346,19 @@ const statusContentProps = computed(() => {
     onDistillNewGeneration: contextBarDistill.value,
     onStartNewGeneration: handleStartNewGeneration,
     onSelectModel: setSelectedModel,
+    // The status readout's inline picker only renders for a conversation that
+    // already exists, where the model and reasoning level are server state (see
+    // sendModelCommand); the composer's picker only renders before the first
+    // send, where they are not. Separate handlers, not shared ones.
+    onSwitchConversationModel: switchConversationModel,
+    onSwitchConversationThinkingLevel: switchConversationThinkingLevel,
     onManageModels: () => props.onOpenModelsModal?.(),
     onRefreshModels: handleRefreshModels,
     onThinkingChange: setThinkingLevel,
     onSetToolOverride: setToolOverride,
     onResetToolOverrides: resetToolOverrides,
     onOpenDirectoryPicker: () => (showDirectoryPicker.value = true),
+    onUsageNeeded: () => (usageWanted.value = true),
   };
 });
 
@@ -2285,6 +2380,23 @@ watch(
     }
     applyModel(props.currentConversation.model);
   },
+);
+
+// Sync the reasoning level from the conversation, the counterpart of the model
+// watch above. /model can change the level mid-conversation (from the status
+// readout's picker or a typed command), and the conversation's stored options
+// are then the truth — without this the pills would keep showing the level the
+// composer last chose locally, i.e. the switch the user just made wouldn't
+// appear. Only follows a conversation that actually recorded a level: a null
+// means "never set", which must not clobber the local default.
+watch(
+  () => [props.currentConversation?.conversation_id, conversationThinkingLevel.value] as const,
+  ([, level]) => {
+    if (!level || level === thinkingLevel.value) return;
+    if (!THINKING_LEVELS.some((l) => l.value === level)) return;
+    setThinkingLevel(level as ThinkingLevel);
+  },
+  { immediate: true },
 );
 
 // Reset cwdInitialized when switching to new conversation.
@@ -2473,6 +2585,14 @@ watch(
     inferredScrollUpAt = -Infinity;
     inferredScrollUpDelta = 0;
     atBottom = true;
+    // Per-message memo caches are keyed by message_id, which is globally
+    // unique, so stale entries are never *wrong* — they'd just accumulate for
+    // every conversation visited in the session. Drop them on the switch.
+    snippetCache.clear();
+    humanUserCache.clear();
+    usageParseCache.clear();
+    otherUsageParseCache.clear();
+    usageWanted.value = false;
     if (!id) {
       messages.value = [];
       contextWindowSize.value = 0;

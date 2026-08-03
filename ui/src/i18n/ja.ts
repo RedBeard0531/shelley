@@ -136,6 +136,7 @@ export const ja: TranslationKeys = {
   manageModelsAction: "モデルの管理…",
   effortLabel: "思考量",
   effortAuto: "自動",
+  modelSwitchBusy: "モデルを切り替えるには、現在のターンを終了または停止してください",
   customModelsGroup: "カスタムモデル",
   editModel: "モデルの編集",
   loadingModels: "モデルを読み込み中...",

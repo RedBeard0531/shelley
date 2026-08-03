@@ -437,6 +437,29 @@ export class MessageStore {
   /** Pending write-behind operations. `settle()` awaits these. */
   private inflight = new Set<Promise<unknown>>();
   /**
+   * Tail of the serialized write-behind chain per conversation, keyed by
+   * conversation_id. Every persister that read-modify-writes the encrypted
+   * meta payload has to snapshot the on-disk row, decrypt it, merge, and
+   * re-encrypt OUTSIDE the IDB transaction (awaiting crypto.subtle inside a tx
+   * lets the tx auto-commit), so concurrent persisters each read the same
+   * pre-write snapshot and the last one to commit silently drops the other's
+   * field. globalStream fires upsertMessages() + setContextWindowSize() back
+   * to back for a single stream frame, which hit exactly that: the slower
+   * upsert (it also encrypts every message row) overwrote the just-committed
+   * context window size with 0, so the next page load hydrated 0. Chaining the
+   * writes makes each RMW observe the previous one.
+   *
+   * ALL write-behind persisters go through queueWrite() — not just the
+   * payload-touching ones — so writes are totally ordered per conversation and
+   * a new persister can't reintroduce the race by forgetting to opt in. Reads
+   * (hydrate) are deliberately NOT chained: they must not wait behind a slow
+   * encrypt, and a read that misses a still-queued write still sees the value
+   * through the hot record, which is updated synchronously. Entries are removed
+   * when the chain drains (see queueWrite), so the map holds at most one entry
+   * per conversation with a write in flight.
+   */
+  private writeChains = new Map<string, Promise<unknown>>();
+  /**
    * Conversations with a hydrate() in flight, and whether markAllStale ran
    * while it was in flight. A cold hydrate builds its record from the disk
    * row, so a reconnect landing mid-read would otherwise be overwritten by
@@ -736,6 +759,25 @@ export class MessageStore {
     return p;
   }
 
+  /**
+   * Run a write-behind operation after all previously queued writes for the
+   * same conversation have finished, and track it so `settle()` awaits it.
+   * A failed write does not break the chain: successors still run (the
+   * rejection handler is the op itself, so `then(op, op)` runs it either way).
+   *
+   * Only the tail is retained, and only until it settles — an op that never
+   * settles pins its entry, which is also what would keep `settle()` hanging.
+   */
+  private queueWrite(id: string, op: () => Promise<void>): Promise<void> {
+    const prev = this.writeChains.get(id);
+    const p = (prev ? prev.then(op, op) : op()).finally(() => {
+      // Only clear the chain if nothing was queued behind us.
+      if (this.writeChains.get(id) === p) this.writeChains.delete(id);
+    });
+    this.writeChains.set(id, p);
+    return this.track(p);
+  }
+
   // ── Encrypted row helpers ──────────────────────────────────────────────
   //
   // wrapXxx is sync-ish (awaits subtle.encrypt); unwrapXxx never throws
@@ -972,7 +1014,7 @@ export class MessageStore {
       // needs_refresh cannot reflect it.
       if (inFlight.staleWhileHydrating && !rec.needsRefresh) {
         rec.needsRefresh = true;
-        this.track(this._patchMeta(id, { needs_refresh: true })).catch((err) =>
+        this.queueWrite(id, () => this._patchMeta(id, { needs_refresh: true })).catch((err) =>
           cacheDiag("fail", "persist.mark_stale_failed", { error: String(err) }, id),
         );
       }
@@ -1031,7 +1073,7 @@ export class MessageStore {
     rec.updatedAt = Date.now();
     this.hot.set(id, rec);
     this.notify(id);
-    this.track(this._patchMeta(id, { needs_refresh: false })).catch((err) =>
+    this.queueWrite(id, () => this._patchMeta(id, { needs_refresh: false })).catch((err) =>
       cacheDiag("fail", "persist.clear_needs_refresh_failed", { error: String(err) }, id),
     );
   }
@@ -1097,7 +1139,7 @@ export class MessageStore {
     const snapshotKnown = rec.maxSequenceIdKnown;
     const snapshotConv = rec.conversation;
     const snapshotCtx = rec.contextWindowSize;
-    this.track(
+    this.queueWrite(id, () =>
       this._persistUpsert(id, snapshotIncoming, snapshotKnown, snapshotConv, snapshotCtx),
     ).catch((err) =>
       cacheDiag("fail", "persist.upsert_failed", { conversation_id: id, error: String(err) }, id),
@@ -1268,14 +1310,15 @@ export class MessageStore {
     } else {
       this.notify(id);
     }
-    this.track(this._patchMeta(id, { needs_refresh: false, conversation: rec.conversation })).catch(
-      (err) =>
-        cacheDiag(
-          "fail",
-          "persist.incremental_failed",
-          { conversation_id: id, error: String(err) },
-          id,
-        ),
+    this.queueWrite(id, () =>
+      this._patchMeta(id, { needs_refresh: false, conversation: rec.conversation }),
+    ).catch((err) =>
+      cacheDiag(
+        "fail",
+        "persist.incremental_failed",
+        { conversation_id: id, error: String(err) },
+        id,
+      ),
     );
   }
 
@@ -1341,7 +1384,7 @@ export class MessageStore {
     this.hydrated.add(id);
     this.notify(id);
 
-    this.track(this._persistFullHistory(id, rec)).catch((err) =>
+    this.queueWrite(id, () => this._persistFullHistory(id, rec)).catch((err) =>
       cacheDiag(
         "fail",
         "persist.full_history_failed",
@@ -1416,7 +1459,7 @@ export class MessageStore {
     rec.updatedAt = Date.now();
     this.hot.set(id, rec);
     this.notify(id);
-    this.track(this._patchMeta(id, { conversation: conv })).catch((err) =>
+    this.queueWrite(id, () => this._patchMeta(id, { conversation: conv })).catch((err) =>
       cacheDiag(
         "fail",
         "persist.conversation_failed",
@@ -1435,7 +1478,7 @@ export class MessageStore {
     rec.updatedAt = Date.now();
     this.hot.set(id, rec);
     this.notify(id);
-    this.track(this._patchMeta(id, { context_window_size: size })).catch((err) =>
+    this.queueWrite(id, () => this._patchMeta(id, { context_window_size: size })).catch((err) =>
       cacheDiag("fail", "persist.ctx_size_failed", { conversation_id: id, error: String(err) }, id),
     );
   }
@@ -1455,7 +1498,7 @@ export class MessageStore {
     rec.updatedAt = Date.now();
     this.hot.set(id, rec);
     this.notify(id);
-    this.track(this._patchMeta(id, { max_sequence_id_known: maxSeq })).catch((err) =>
+    this.queueWrite(id, () => this._patchMeta(id, { max_sequence_id_known: maxSeq })).catch((err) =>
       cacheDiag(
         "fail",
         "persist.known_max_failed",
@@ -1698,7 +1741,7 @@ export class MessageStore {
       cacheDiag("info", "stale.reconnect", { conversations: dirty.length });
       for (const cb of this.allListeners) cb();
       for (const id of dirty) {
-        this.track(this._patchMeta(id, { needs_refresh: true })).catch((err) =>
+        this.queueWrite(id, () => this._patchMeta(id, { needs_refresh: true })).catch((err) =>
           cacheDiag("fail", "persist.mark_stale_failed", { error: String(err) }, id),
         );
       }
@@ -1714,16 +1757,20 @@ export class MessageStore {
     this.notify(id);
     // Wait for any in-flight write-behind ops for this conversation to
     // settle before deleting, so a slow upsert can't race past us and
-    // recreate rows after the delete.
+    // recreate rows after the delete, and put the delete itself on the same
+    // per-conversation chain so anything queued while we waited runs before
+    // it. A persister enqueued after this point still lands behind the delete
+    // and recreates rows — unchanged from before the chain, and bounded the
+    // same way: the caller stops streaming into a conversation it deletes.
     await this.settle();
-    const p = (async () => {
+    const p = this.queueWrite(id, async () => {
       const db = await this.db();
       const tx = db.transaction(["messages", "conversation_meta"], "readwrite");
       await tx.objectStore("messages").delete(convRange(id));
       await tx.objectStore("conversation_meta").delete(id);
       await tx.done;
-    })();
-    this.track(p).catch(() => {});
+    });
+    p.catch(() => {});
     try {
       await p;
     } catch (err) {

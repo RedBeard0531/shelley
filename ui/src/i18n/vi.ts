@@ -136,6 +136,7 @@ export const vi: TranslationKeys = {
   manageModelsAction: "Quản lý models…",
   effortLabel: "Mức độ suy nghĩ",
   effortAuto: "tự động",
+  modelSwitchBusy: "Hoàn tất hoặc dừng lượt hiện tại để đổi mô hình",
   customModelsGroup: "Models tùy chỉnh",
   editModel: "Chỉnh sửa model",
   loadingModels: "Đang tải danh sách models...",
