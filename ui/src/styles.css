@@ -8486,6 +8486,13 @@ kbd {
   color: var(--text-primary);
 }
 
+.conversation-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: var(--bg-base);
+}
+
 .conversation-loading {
   height: 100%;
   display: flex;
@@ -12531,6 +12538,22 @@ kbd {
   color: #6b7280;
   font-weight: 400;
   margin-left: 4px;
+}
+
+.perf-hud-load td {
+  text-align: left;
+}
+
+.perf-hud-load-when {
+  color: #6b7280;
+}
+
+.perf-hud-load-source {
+  color: #7dd3fc;
+}
+
+.perf-hud-load-total {
+  color: #a7f3d0;
 }
 
 .perf-hud-longtask td {

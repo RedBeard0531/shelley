@@ -28,6 +28,27 @@
           </button>
         </span>
       </div>
+      <template v-if="!collapsed && loads.length > 0">
+        <div class="perf-hud-section">
+          conversation loads
+          <span class="perf-hud-section-hint">source · messages · total, newest first</span>
+        </div>
+        <table class="perf-hud-table">
+          <tbody>
+            <tr
+              v-for="load in loads"
+              :key="`${load.completedAt}-${load.conversationId}`"
+              class="perf-hud-load"
+              :title="loadBreakdown(load)"
+            >
+              <td class="perf-hud-load-when">{{ formatEpochAge(load.completedAt) }}</td>
+              <td class="perf-hud-name perf-hud-load-source">{{ sourceLabel(load.source) }}</td>
+              <td>{{ formatCount(load.messages) }} msg</td>
+              <td class="perf-hud-load-total">{{ formatDuration(load.totalMs) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
       <template v-if="!collapsed && longTasks.length > 0">
         <div class="perf-hud-section">
           long tasks
@@ -67,7 +88,7 @@
         </tbody>
       </table>
       <div v-if="!collapsed" class="perf-hud-footer">
-        __shelleyPerf.{snapshot,delta,longTasks,log,reset}
+        __shelleyPerf.{snapshot,delta,loads,longTasks,log,reset}
       </div>
     </div>
   </Teleport>
@@ -79,11 +100,15 @@ import {
   perfSnapshot,
   perfReset,
   perfLongTasks,
+  perfConversationLoads,
+  type ConversationLoad,
+  type ConversationLoadSource,
   type LongTask,
   type PerfCounter,
 } from "../../utils/perf";
 
 const POLL_MS = 500;
+const countFormatter = new Intl.NumberFormat();
 
 interface Row {
   name: string;
@@ -93,6 +118,7 @@ interface Row {
 }
 
 const rows = ref<Row[]>([]);
+const loads = ref<ConversationLoad[]>([]);
 const longTasks = ref<LongTask[]>([]);
 // performance.now() at the last sample; drives long-task age display without
 // a reactive clock.
@@ -115,11 +141,16 @@ let timer: number | undefined;
 const miniSummary = computed(() => {
   const hot = rows.value.filter((r) => r.rate > 0);
   const lt = longTasks.value[0];
+  const latestLoad = loads.value[0];
   // Surface a just-happened long task even when collapsed.
   const jank = lt && sampledAt.value - lt.startMs < 5000 ? ` ⚠${Math.round(lt.durMs)}ms` : "";
-  if (hot.length === 0) return `idle${jank}`;
+  const load =
+    latestLoad && Date.now() - latestLoad.completedAt < 10000
+      ? ` · ${sourceLabel(latestLoad.source)} ${formatDuration(latestLoad.totalMs)}`
+      : "";
+  if (hot.length === 0) return `idle${load}${jank}`;
   const total = hot.reduce((sum, r) => sum + r.rate, 0);
-  return `${hot.length} hot, ${total.toFixed(0)}/s${jank}`;
+  return `${hot.length} hot, ${total.toFixed(0)}/s${load}${jank}`;
 });
 
 function sample(): void {
@@ -135,9 +166,9 @@ function sample(): void {
   // Active counters first (by rate), then by total count.
   next.sort((a, b) => b.rate - a.rate || b.count - a.count || a.name.localeCompare(b.name));
   rows.value = next;
-  // Newest long tasks first: when chasing a jank you want the one that just
-  // happened at the top. The HUD shows a handful; the full buffer (20) stays
-  // available via __shelleyPerf.longTasks().
+  // Newest load/long task first. The full 20-entry buffers remain available
+  // through __shelleyPerf.{loads,longTasks}().
+  loads.value = perfConversationLoads().reverse().slice(0, 6);
   longTasks.value = perfLongTasks().reverse().slice(0, 6);
   sampledAt.value = now;
   prev = snap;
@@ -149,17 +180,66 @@ function reset(): void {
   prev = {};
   prevAt = performance.now();
   rows.value = [];
+  loads.value = [];
   longTasks.value = [];
 }
 
 async function copy(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(JSON.stringify(perfSnapshot(), null, 2));
+    await navigator.clipboard.writeText(
+      JSON.stringify(
+        {
+          counters: perfSnapshot(),
+          loads: perfConversationLoads(),
+          longTasks: perfLongTasks(),
+        },
+        null,
+        2,
+      ),
+    );
     copied.value = true;
     setTimeout(() => (copied.value = false), 1200);
   } catch (e) {
     console.warn("perf-hud: clipboard write failed", e);
   }
+}
+
+function sourceLabel(source: ConversationLoadSource): string {
+  switch (source) {
+    case "memory":
+      return "Memory";
+    case "indexeddb":
+      return "IndexedDB";
+    case "incremental":
+      return "Cache + tail";
+    case "network":
+      return "Network";
+  }
+}
+
+function formatCount(value: number): string {
+  return countFormatter.format(value);
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+function formatEpochAge(completedAt: number): string {
+  const ageSec = Math.max(0, (Date.now() - completedAt) / 1000);
+  if (ageSec < 60) return `${Math.round(ageSec)}s`;
+  return `${Math.floor(ageSec / 60)}m`;
+}
+
+function loadBreakdown(load: ConversationLoad): string {
+  const parts = [
+    `hydrate ${formatDuration(load.hydrateMs)}`,
+    `fetch ${formatDuration(load.fetchMs)}`,
+    `render ${formatDuration(load.renderMs)}`,
+  ];
+  if (load.bytes > 0) parts.push(`${(load.bytes / (1024 * 1024)).toFixed(1)} MB decoded`);
+  return parts.join(" · ");
 }
 
 // Timed counters accumulate float milliseconds (performance.now() has µs

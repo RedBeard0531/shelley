@@ -83,44 +83,9 @@
     </div>
 
     <!-- Messages area -->
-    <div class="messages-area-wrapper">
+    <div class="messages-area-wrapper" :aria-busy="loading">
       <div ref="messagesContainerRef" class="messages-container scrollable">
-        <template v-if="loading">
-          <div v-if="showLoadingProgressUI" class="conversation-loading full-height">
-            <div class="spinner" />
-            <div class="conversation-loading-title">
-              {{
-                loadingProgress?.phase === "parsing"
-                  ? "Rendering conversation\u2026"
-                  : "Loading conversation\u2026"
-              }}
-            </div>
-            <div class="conversation-loading-subtitle">
-              <template v-if="loadingProgress">
-                <template v-if="loadingProgress.bytesTotal && loadingProgress.bytesTotal > 0">
-                  {{ formatBytes(loadingProgress.bytesDownloaded) }} of
-                  {{ formatBytes(loadingProgress.bytesTotal) }}
-                </template>
-                <template v-else
-                  >{{ formatBytes(loadingProgress.bytesDownloaded) }} downloaded</template
-                >
-              </template>
-              <template v-else>Starting…</template>
-              {{
-                lastKnownMessageCount !== null
-                  ? ` \u2022 ~${lastKnownMessageCount} messages last time`
-                  : ""
-              }}
-            </div>
-            <div class="conversation-loading-bar">
-              <div :class="loadingBarFillClass" :style="loadingBarFillStyle" />
-            </div>
-          </div>
-          <div v-else class="flex items-center justify-center full-height">
-            <div class="spinner" />
-          </div>
-        </template>
-        <div v-else ref="messagesListRef" class="messages-list">
+        <div v-if="!loading || renderingConversation" ref="messagesListRef" class="messages-list">
           <!-- empty state -->
           <div v-if="messages.length === 0" class="empty-state">
             <div class="empty-state-content">
@@ -229,6 +194,22 @@
             </button>
           </div>
           <div ref="bottomSentinelRef" class="messages-bottom-sentinel" aria-hidden="true" />
+        </div>
+      </div>
+
+      <div v-if="loading" class="conversation-loading-overlay">
+        <div v-if="showLoadingProgressUI" class="conversation-loading">
+          <div class="spinner" />
+          <div class="conversation-loading-title" role="status" aria-live="polite">
+            {{ loadingTitle }}
+          </div>
+          <div class="conversation-loading-subtitle">{{ loadingSubtitle }}</div>
+          <div class="conversation-loading-bar">
+            <div :class="loadingBarFillClass" :style="loadingBarFillStyle" />
+          </div>
+        </div>
+        <div v-else class="flex items-center justify-center full-height">
+          <div class="spinner" />
         </div>
       </div>
 
@@ -433,7 +414,12 @@ import { handleModifiedNavClick } from "../utils/openInNewTab";
 import { isAutoExpandTool } from "../../utils/toolMeta";
 import { formatDay } from "../../utils/messageTime";
 import { SLASH_COMMANDS } from "../../utils/slashCommands";
-import { perfCount, perfWrap } from "../../utils/perf";
+import {
+  perfCount,
+  perfRecordConversationLoad,
+  perfWrap,
+  type ConversationLoadSource,
+} from "../../utils/perf";
 import {
   aggregateOtherUsage,
   type OtherUsageEntry,
@@ -566,11 +552,14 @@ const showUserEmails = computed(() => {
 });
 provide("showUserEmails", showUserEmails);
 const loading = ref(true);
+const renderingConversation = ref(false);
 const showLoadingProgressUI = ref(false);
 const loadingProgress = ref<{
-  phase: "downloading" | "parsing";
+  phase: "cache" | "downloading" | "parsing" | "rendering";
   bytesDownloaded: number;
   bytesTotal?: number;
+  messages?: number;
+  source?: ConversationLoadSource;
 } | null>(null);
 const sending = ref(false);
 const error = ref<string | null>(null);
@@ -829,6 +818,7 @@ let loadingFlag = false;
 let pendingScroll: number | null | undefined = undefined;
 let loadingProgressDelay: number | null = null;
 let currentConversationId: string | null = props.conversationId;
+let conversationLoadEpoch = 0;
 let catchingUp = false;
 // Layout-free "is the viewport at/near the bottom" signal, maintained by the
 // bottom sentinel's IntersectionObserver. Persisted (instead of a raw scrollTop)
@@ -1216,6 +1206,62 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatMessageCount(count: number): string {
+  return messageCountFormatter.format(count);
+}
+
+function loadSourceLabel(source: ConversationLoadSource | undefined): string {
+  switch (source) {
+    case "memory":
+      return "Memory cache";
+    case "indexeddb":
+      return "IndexedDB cache";
+    case "incremental":
+      return "Cache + server tail";
+    case "network":
+      return "Network";
+    default:
+      return "Message cache";
+  }
+}
+
+const loadingTitle = computed(() => {
+  const progress = loadingProgress.value;
+  switch (progress?.phase) {
+    case "cache":
+      return "Checking message cache…";
+    case "parsing":
+      return "Preparing conversation…";
+    case "rendering":
+      return progress.messages !== undefined
+        ? `Rendering ${formatMessageCount(progress.messages)} messages…`
+        : "Rendering conversation…";
+    default:
+      return "Loading conversation…";
+  }
+});
+
+const loadingSubtitle = computed(() => {
+  const progress = loadingProgress.value;
+  const known = progress?.messages ?? lastKnownMessageCount.value;
+  const knownText =
+    known !== null && known !== undefined ? `${formatMessageCount(known)} messages` : "";
+  if (!progress || progress.phase === "cache") {
+    return knownText ? `${knownText} last time · checking IndexedDB` : "Checking IndexedDB";
+  }
+  if (progress.phase === "rendering") {
+    const pieces = [loadSourceLabel(progress.source)];
+    if (knownText) pieces.push(knownText);
+    if (progress.bytesDownloaded > 0) pieces.push(formatBytes(progress.bytesDownloaded));
+    return pieces.join(" · ");
+  }
+  const bytes =
+    progress.bytesTotal && progress.bytesTotal > 0
+      ? `${formatBytes(progress.bytesDownloaded)} of ${formatBytes(progress.bytesTotal)}`
+      : `${formatBytes(progress.bytesDownloaded)} downloaded`;
+  return knownText ? `${bytes} · ~${knownText} last time` : bytes;
+});
+
 // ---- Render model (porting renderMessages into structured data) ----
 const renderModel = computed<GenerationBlock[]>(perfWrap("chat.renderModel", buildRenderModel));
 function buildRenderModel(): GenerationBlock[] {
@@ -1536,8 +1582,10 @@ function syncFromStore(focusedId: string) {
   if (!rec) return;
   perfCount("chat.syncFromStore");
   messages.value = rec.messages;
-  lastKnownMessageCount.value = rec.messages.length;
-  saveMsgCount(rec.messages.length);
+  if (rec.messages.length > 0 || rec.hasFullHistory) {
+    lastKnownMessageCount.value = rec.messages.length;
+    saveMsgCount(rec.messages.length);
+  }
   contextWindowSize.value = rec.contextWindowSize;
   if (props.onConversationUpdate && rec.conversation) {
     props.onConversationUpdate(rec.conversation);
@@ -1553,8 +1601,173 @@ function syncTransientFromStore(focusedId: string) {
   agentWorking.value = tr.agentWorking;
 }
 
+const LARGE_LOAD_STATUS_MESSAGES = 100;
+const LOAD_DETAIL_DELAY_MS = 300;
+const messageCountFormatter = new Intl.NumberFormat();
+
+interface ConversationLoadTiming {
+  startedAt: number;
+  hydrateMs: number;
+  fetchMs: number;
+  renderMs: number;
+}
+
+function clearConversationLoading(): void {
+  loadingFlag = false;
+  loading.value = false;
+  renderingConversation.value = false;
+  if (loadingProgressDelay) {
+    clearTimeout(loadingProgressDelay);
+    loadingProgressDelay = null;
+  }
+  showLoadingProgressUI.value = false;
+  loadingProgress.value = null;
+}
+
+function beginConversationLoading(focusedId: string): void {
+  if (!loading.value) return;
+  loadingFlag = true;
+  renderingConversation.value = false;
+  const storedCount = loadMsgCount();
+  const listedCount = messageStore.peek(focusedId)?.maxSequenceIdKnown ?? 0;
+  const knownCount = storedCount ?? (listedCount > 0 ? listedCount : null);
+  lastKnownMessageCount.value = knownCount;
+  loadingProgress.value = {
+    phase: "cache",
+    bytesDownloaded: 0,
+    messages: knownCount ?? undefined,
+  };
+  showLoadingProgressUI.value = (knownCount ?? 0) >= LARGE_LOAD_STATUS_MESSAGES;
+  if (!showLoadingProgressUI.value) {
+    if (loadingProgressDelay) clearTimeout(loadingProgressDelay);
+    loadingProgressDelay = window.setTimeout(() => {
+      if (focusedId === currentConversationId && loading.value) {
+        showLoadingProgressUI.value = true;
+      }
+    }, LOAD_DETAIL_DELAY_MS);
+  }
+}
+
+/** Keep the already-painted status overlay through Vue's DOM patch and one
+ * browser paint. The timeout only bounds browsers/background tabs that stop
+ * delivering animation frames. */
+function waitForConversationPaint(): Promise<void> {
+  if (document.visibilityState === "hidden") return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, 250);
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+  });
+}
+
+type CachedConversationRecord = NonNullable<ReturnType<typeof messageStore.peek>>;
+
+function applyConversationRecord(cached: CachedConversationRecord): void {
+  pendingScroll = loadScroll();
+  messages.value = cached.messages;
+  lastKnownMessageCount.value = cached.messages.length;
+  saveMsgCount(cached.messages.length);
+  contextWindowSize.value = cached.contextWindowSize;
+  if (props.onConversationUpdate && cached.conversation) {
+    props.onConversationUpdate(cached.conversation);
+  }
+}
+
+/** Paint usable cached history before a tail/full refresh. The refresh remains
+ * part of the same measured load, but can no longer strand the cache behind an
+ * overlay if the network stalls. */
+async function revealCachedConversation(
+  focusedId: string,
+  loadEpoch: number,
+  source: ConversationLoadSource,
+  timing: ConversationLoadTiming,
+  cached: CachedConversationRecord,
+): Promise<void> {
+  if (!loading.value) return;
+  if (focusedId !== currentConversationId || loadEpoch !== conversationLoadEpoch) return;
+
+  applyConversationRecord(cached);
+  renderingConversation.value = true;
+  if (cached.messages.length >= LARGE_LOAD_STATUS_MESSAGES) {
+    showLoadingProgressUI.value = true;
+  }
+  loadingProgress.value = {
+    phase: "rendering",
+    bytesDownloaded: 0,
+    messages: cached.messages.length,
+    source,
+  };
+
+  const renderStarted = performance.now();
+  await nextTick();
+  await waitForConversationPaint();
+  if (focusedId !== currentConversationId || loadEpoch !== conversationLoadEpoch) return;
+  timing.renderMs += performance.now() - renderStarted;
+  clearConversationLoading();
+}
+
+async function finishConversationLoad(
+  focusedId: string,
+  loadEpoch: number,
+  source: ConversationLoadSource,
+  timing: ConversationLoadTiming,
+  cached: CachedConversationRecord,
+  bytes: number,
+): Promise<void> {
+  if (focusedId !== currentConversationId || loadEpoch !== conversationLoadEpoch) return;
+
+  applyConversationRecord(cached);
+
+  const renderStarted = performance.now();
+  if (loading.value) {
+    renderingConversation.value = true;
+    if (cached.messages.length >= LARGE_LOAD_STATUS_MESSAGES) {
+      showLoadingProgressUI.value = true;
+    }
+    loadingProgress.value = {
+      phase: "rendering",
+      bytesDownloaded: bytes,
+      messages: cached.messages.length,
+      source,
+    };
+  }
+
+  await nextTick();
+  await waitForConversationPaint();
+  if (focusedId !== currentConversationId || loadEpoch !== conversationLoadEpoch) return;
+
+  const renderMs = timing.renderMs + (performance.now() - renderStarted);
+  const totalMs = performance.now() - timing.startedAt;
+  clearConversationLoading();
+  perfRecordConversationLoad({
+    conversationId: focusedId,
+    source,
+    messages: cached.messages.length,
+    bytes,
+    hydrateMs: timing.hydrateMs,
+    fetchMs: timing.fetchMs,
+    renderMs,
+    totalMs,
+  });
+}
+
 async function loadMessages(focusedId: string) {
-  const isCurrent = () => focusedId === currentConversationId;
+  const loadEpoch = ++conversationLoadEpoch;
+  const isCurrent = () =>
+    focusedId === currentConversationId && loadEpoch === conversationLoadEpoch;
+  const timing: ConversationLoadTiming = {
+    startedAt: performance.now(),
+    hydrateMs: 0,
+    fetchMs: 0,
+    renderMs: 0,
+  };
+  beginConversationLoading(focusedId);
 
   // Drafts never have server-side messages; skip the network load entirely so
   // a stalled fetch can't strand the loading spinner. The switch watcher
@@ -1565,43 +1778,37 @@ async function loadMessages(focusedId: string) {
     props.currentConversation?.is_draft &&
     props.currentConversation.conversation_id === focusedId
   ) {
-    loadingFlag = false;
-    loading.value = false;
-    if (loadingProgressDelay) {
-      clearTimeout(loadingProgressDelay);
-      loadingProgressDelay = null;
-    }
-    showLoadingProgressUI.value = false;
-    loadingProgress.value = null;
+    clearConversationLoading();
     return;
   }
 
-  if (!messageStore.isHydrated(focusedId)) {
+  const wasHydrated = messageStore.isHydrated(focusedId);
+  const hadHotMessages = (messageStore.peek(focusedId)?.messages.length ?? 0) > 0;
+  // Hot-memory loads have no asynchronous cache read to give the status a
+  // chance to paint before Vue mounts the large message tree. Yield one paint
+  // explicitly; otherwise status + thousands of rows land in the same flush.
+  if (wasHydrated && loading.value) {
+    await nextTick();
+    await waitForConversationPaint();
+    if (!isCurrent()) return;
+  }
+  if (!wasHydrated) {
+    const hydrateStarted = performance.now();
     await messageStore.hydrate(focusedId);
+    timing.hydrateMs = performance.now() - hydrateStarted;
   }
   if (!isCurrent()) return;
 
   let cached = messageStore.peek(focusedId);
   if (cached) {
-    pendingScroll = loadScroll();
     messages.value = cached.messages;
-    lastKnownMessageCount.value = cached.messages.length;
-    saveMsgCount(cached.messages.length);
+    if (cached.messages.length > 0 || cached.hasFullHistory) {
+      lastKnownMessageCount.value = cached.messages.length;
+      saveMsgCount(cached.messages.length);
+    }
     contextWindowSize.value = cached.contextWindowSize;
     if (props.onConversationUpdate && cached.conversation) {
       props.onConversationUpdate(cached.conversation);
-    }
-    // Only drop the loading state once we actually have messages to show.
-    // A cached record can exist with an empty messages array (e.g. hydrated
-    // from an empty IDB row before the REST backfill lands); flipping loading
-    // off here would render the "Send a message to start the conversation"
-    // empty-state over a conversation that has history. Keep the spinner up
-    // until either messages arrive or the REST load below completes.
-    if (cached.messages.length > 0) {
-      loadingFlag = false;
-      loading.value = false;
-      showLoadingProgressUI.value = false;
-      loadingProgress.value = null;
     }
   }
 
@@ -1611,51 +1818,55 @@ async function loadMessages(focusedId: string) {
     (cached.maxSequenceIdKnown <= 0 || cached.maxSequenceId >= cached.maxSequenceIdKnown);
 
   if (cacheIsComplete && !cached!.needsRefresh) {
-    // We have the full history (even if it's legitimately empty). Clear the
-    // loading state so a genuinely empty conversation shows its empty-state
-    // rather than an indefinite spinner.
     cacheDiag("hit", "load.served_from_cache", {
       conversation_id: focusedId,
       messages: cached!.messages.length,
     });
-    loadingFlag = false;
-    loading.value = false;
-    showLoadingProgressUI.value = false;
-    loadingProgress.value = null;
+    await finishConversationLoad(
+      focusedId,
+      loadEpoch,
+      wasHydrated || hadHotMessages ? "memory" : "indexeddb",
+      timing,
+      cached!,
+      0,
+    );
     return;
+  }
+
+  if (cached && cached.messages.length > 0) {
+    await revealCachedConversation(
+      focusedId,
+      loadEpoch,
+      wasHydrated || hadHotMessages ? "memory" : "indexeddb",
+      timing,
+      cached,
+    );
+    if (!isCurrent()) return;
   }
 
   // Incremental path: the cache holds a complete contiguous history, we just
   // don't know whether the server has grown past it (stream reconnect, or the
   // list's known-max is ahead of us). Ask only for the tail — a few hundred
-  // bytes instead of re-downloading the whole conversation. The messages
-  // already on screen stay on screen while this runs.
+  // bytes instead of re-downloading the whole conversation.
   if (cached && cached.hasFullHistory && cached.messages.length > 0) {
     const fromSeq = cached.maxSequenceId;
+    const fetchStarted = performance.now();
+    let fetchComplete = false;
     try {
       const tail = await api.getConversationSince(focusedId, fromSeq);
+      timing.fetchMs += performance.now() - fetchStarted;
+      fetchComplete = true;
       if (!isCurrent()) return;
       messageStore.applyIncrementalTail(focusedId, tail, fromSeq);
       cached = messageStore.peek(focusedId);
-      pendingScroll = loadScroll();
-      const merged = cached?.messages ?? [];
-      messages.value = merged;
-      lastKnownMessageCount.value = merged.length;
-      saveMsgCount(merged.length);
-      loadingFlag = false;
-      loading.value = false;
-      if (loadingProgressDelay) {
-        clearTimeout(loadingProgressDelay);
-        loadingProgressDelay = null;
-      }
-      showLoadingProgressUI.value = false;
-      loadingProgress.value = null;
+      if (!cached) throw new Error("conversation cache vanished after incremental refresh");
       if (props.onConversationUpdate && tail.conversation) {
         props.onConversationUpdate(tail.conversation);
       }
+      await finishConversationLoad(focusedId, loadEpoch, "incremental", timing, cached, 0);
       return;
     } catch (err) {
-      // Fall through to the full load below; the cached view stays on screen.
+      if (!fetchComplete) timing.fetchMs += performance.now() - fetchStarted;
       cacheDiag(
         "fail",
         "refresh.incremental_failed",
@@ -1681,60 +1892,48 @@ async function loadMessages(focusedId: string) {
   });
 
   try {
-    loadingFlag = true;
-    if (!cached) loading.value = true;
+    loadingFlag = loading.value;
     error.value = null;
-    showLoadingProgressUI.value = false;
-    if (loadingProgressDelay) clearTimeout(loadingProgressDelay);
-    loadingProgressDelay = window.setTimeout(() => {
-      showLoadingProgressUI.value = true;
-    }, 500);
-    if (!cached) lastKnownMessageCount.value = loadMsgCount();
-    loadingProgress.value = { phase: "downloading", bytesDownloaded: 0 };
+    let downloadedBytes = 0;
+    if (loading.value) {
+      loadingProgress.value = {
+        phase: "downloading",
+        bytesDownloaded: 0,
+        messages: lastKnownMessageCount.value ?? undefined,
+        source: "network",
+      };
+    }
 
-    let response = await api.getConversationWithProgress(focusedId, (progress) => {
-      loadingProgress.value = progress;
+    const fetchStarted = performance.now();
+    const response = await api.getConversationWithProgress(focusedId, (progress) => {
+      downloadedBytes = progress.bytesDownloaded;
+      if (!isCurrent() || !loading.value) return;
+      loadingProgress.value = {
+        ...progress,
+        messages: lastKnownMessageCount.value ?? undefined,
+        source: "network",
+      };
     });
+    timing.fetchMs += performance.now() - fetchStarted;
     if (!isCurrent()) return;
 
     // applyFullHistory is non-regressing: a REST snapshot can be STALE relative
-    // to the live /api/stream2 feed (the agent reply to a just-created
-    // conversation can land between issuing the GET and its response
-    // resolving), so the store merges in any newer streamed messages rather
-    // than replacing wholesale. Render from the STORE (post-merge), not the
-    // raw response, so a stale snapshot never regresses live state.
+    // to the live /api/stream2 feed, so render from the store after its merge.
     messageStore.applyFullHistory(focusedId, response);
     cached = messageStore.peek(focusedId);
-
-    pendingScroll = loadScroll();
-    const loadedMessages = cached?.messages ?? response.messages ?? [];
-    messages.value = loadedMessages;
-    lastKnownMessageCount.value = loadedMessages.length;
-    saveMsgCount(loadedMessages.length);
-    loadingFlag = false;
-    loading.value = false;
-    if (loadingProgressDelay) {
-      clearTimeout(loadingProgressDelay);
-      loadingProgressDelay = null;
+    if (!cached) throw new Error("conversation cache missing after full load");
+    if (response.context_window_size !== undefined) {
+      contextWindowSize.value = response.context_window_size;
     }
-    showLoadingProgressUI.value = false;
-    loadingProgress.value = null;
-    contextWindowSize.value = response.context_window_size ?? 0;
     if (props.onConversationUpdate && response.conversation) {
       props.onConversationUpdate(response.conversation);
     }
+    await finishConversationLoad(focusedId, loadEpoch, "network", timing, cached, downloadedBytes);
   } catch (err) {
     if (!isCurrent()) return;
     console.error("Failed to load messages:", err);
     error.value = "Failed to load messages";
-    loadingFlag = false;
-    loading.value = false;
-    if (loadingProgressDelay) {
-      clearTimeout(loadingProgressDelay);
-      loadingProgressDelay = null;
-    }
-    showLoadingProgressUI.value = false;
-    loadingProgress.value = null;
+    clearConversationLoading();
   }
 }
 
@@ -2401,15 +2600,20 @@ function onDiffViewerClose() {
 
 // Loading bar fill class/style mirror the React conditional.
 const loadingBarFillClass = computed(() => {
+  const phase = loadingProgress.value?.phase;
+  if (phase === "parsing" || phase === "rendering") {
+    return "conversation-loading-bar-fill parsing";
+  }
   const lp = loadingProgress.value;
-  if (lp?.phase === "parsing") return "conversation-loading-bar-fill parsing";
-  if (!lp?.bytesTotal || lp.bytesTotal <= 0) return "conversation-loading-bar-fill indeterminate";
+  if (phase === "cache" || !lp?.bytesTotal || lp.bytesTotal <= 0) {
+    return "conversation-loading-bar-fill indeterminate";
+  }
   return "conversation-loading-bar-fill";
 });
 const loadingBarFillStyle = computed<Record<string, string> | undefined>(() => {
   const lp = loadingProgress.value;
-  if (lp?.phase === "parsing") return undefined;
-  if (lp?.bytesTotal && lp.bytesTotal > 0) {
+  if (!lp || lp.phase !== "downloading") return undefined;
+  if (lp.bytesTotal && lp.bytesTotal > 0) {
     return { width: `${Math.min(100, (lp.bytesDownloaded / lp.bytesTotal) * 100)}%` };
   }
   return undefined;
@@ -2675,6 +2879,7 @@ watch(
     // An annotation view belongs to the image it was opened from; switching
     // conversations leaves it stranded.
     closeImageComment();
+    clearConversationLoading();
     // Reset scroll bookkeeping so state from the previous conversation can't
     // leak across the switch. lastListHeight/clampBudget are especially
     // important: the observer re-attach (watch on the recreated .messages-list)
@@ -2753,7 +2958,11 @@ watch(
     // loadMessages resolves, so the empty-state only appears for genuinely
     // empty conversations.
     const inMemory = messageStore.peek(focusedId);
-    if (inMemory && inMemory.messages.length > 0) {
+    if (
+      inMemory &&
+      inMemory.messages.length > 0 &&
+      inMemory.messages.length < LARGE_LOAD_STATUS_MESSAGES
+    ) {
       loading.value = false;
     } else {
       loading.value = true;

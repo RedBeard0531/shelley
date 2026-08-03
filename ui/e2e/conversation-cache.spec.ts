@@ -207,6 +207,52 @@ test.describe('Conversation cache', () => {
     expect(stats['load.full_rest'] ?? 0).toBe(0);
   });
 
+  test('a stalled incremental refresh does not hide cached history', async ({ page, request }) => {
+    const conv = await createConversationViaAPIWithDetails(request, 'Hello');
+
+    await page.goto(`/c/${conv.slug}`);
+    await expect(page.getByTestId('message-input')).toBeVisible({ timeout: 30000 });
+    await waitForText(page, "Hello! I'm Shelley, your AI assistant.");
+    await waitForCachedHistory(page, conv.conversationId);
+
+    await page.goto('about:blank');
+    const chatResp = await request.post(`/api/conversation/${conv.conversationId}/chat`, {
+      data: { message: 'echo: delayed tail', model: 'predictable' },
+    });
+    expect(chatResp.ok()).toBeTruthy();
+    await expect(async () => {
+      const resp = await request.get(`/api/conversation/${conv.conversationId}`);
+      expect(JSON.stringify((await resp.json()).messages ?? [])).toContain('delayed tail');
+    }).toPass({ timeout: 30000 });
+
+    let releaseTail = () => {};
+    const tailGate = new Promise<void>((resolve) => {
+      releaseTail = resolve;
+    });
+    let sawIncremental = false;
+    await page.route(new RegExp(`/api/conversation/${conv.conversationId}\\?`), async (route) => {
+      if (!new URL(route.request().url()).searchParams.has('last_sequence_id')) {
+        await route.continue();
+        return;
+      }
+      sawIncremental = true;
+      await tailGate;
+      await route.continue();
+    });
+
+    try {
+      await page.goto(`/c/${conv.slug}`);
+      await expect.poll(() => sawIncremental).toBeTruthy();
+      // The network tail is still blocked, but the complete IndexedDB prefix
+      // must already be visible and the loading overlay must be gone.
+      await waitForText(page, "Hello! I'm Shelley, your AI assistant.");
+      await expect(page.locator('.conversation-loading')).toHaveCount(0);
+    } finally {
+      releaseTail();
+    }
+    await waitForText(page, 'delayed tail');
+  });
+
   test('messages added while the tab was closed arrive via an incremental fetch', async ({
     page,
     request,

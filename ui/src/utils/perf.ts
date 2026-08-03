@@ -24,13 +24,33 @@
 //   __shelleyPerf.reset()
 //   __shelleyPerf.delta(ms)   -> Promise of counts accrued over the window
 //   __shelleyPerf.longTasks() -> recent >50ms main-thread blocks + suspects
+//   __shelleyPerf.loads()     -> recent conversation load source + phase timings
 
 export interface PerfCounter {
   count: number;
   totalMs: number;
 }
 
+export type ConversationLoadSource = "memory" | "indexeddb" | "incremental" | "network";
+
+/** One completed conversation load, including the browser work that happens
+ * after data is available. `renderMs` spans Vue patching plus the first paint,
+ * so it remains useful in Safari where the Long Tasks API is unavailable. */
+export interface ConversationLoad {
+  conversationId: string;
+  source: ConversationLoadSource;
+  messages: number;
+  bytes: number;
+  hydrateMs: number;
+  fetchMs: number;
+  renderMs: number;
+  totalMs: number;
+  completedAt: number;
+}
+
 const counters = new Map<string, PerfCounter>();
+const conversationLoads: ConversationLoad[] = [];
+const CONVERSATION_LOAD_BUFFER = 20;
 
 /** Increment a named counter, optionally accumulating elapsed milliseconds. */
 export function perfCount(name: string, durMs?: number): void {
@@ -65,8 +85,21 @@ export function perfSnapshot(): Record<string, PerfCounter> {
   return out;
 }
 
+export function perfRecordConversationLoad(load: Omit<ConversationLoad, "completedAt">): void {
+  const recorded = { ...load, completedAt: Date.now() };
+  conversationLoads.push(recorded);
+  if (conversationLoads.length > CONVERSATION_LOAD_BUFFER) conversationLoads.shift();
+  perfCount(`conversationLoad.${load.source}`, load.totalMs);
+}
+
+/** Completed loads, oldest first. */
+export function perfConversationLoads(): ConversationLoad[] {
+  return conversationLoads.map((load) => ({ ...load }));
+}
+
 export function perfReset(): void {
   counters.clear();
+  conversationLoads.length = 0;
   longTasks.length = 0;
   lastLongTaskCounts.clear();
 }
@@ -153,6 +186,7 @@ declare global {
       delta: typeof perfDelta;
       count: typeof perfCount;
       longTasks: typeof perfLongTasks;
+      loads: typeof perfConversationLoads;
     };
   }
 }
@@ -165,6 +199,7 @@ if (typeof window !== "undefined") {
     delta: perfDelta,
     count: perfCount,
     longTasks: perfLongTasks,
+    loads: perfConversationLoads,
   };
   // Baseline browser events worth correlating against: window resizes.
   window.addEventListener("resize", () => perfCount("browser.windowResize"));
