@@ -108,7 +108,12 @@
             />
           </svg>
         </button>
-        <div v-if="showAdvancedSettings" class="advanced-settings-popover">
+        <div
+          v-if="showAdvancedSettings"
+          ref="advancedPopoverRef"
+          class="advanced-settings-popover"
+          :style="popoverStyle"
+        >
           <div class="advanced-settings-header">
             <span>Tools</span>
             <button
@@ -178,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted } from "vue";
+import { computed, ref, watch, onUnmounted, nextTick } from "vue";
 import type { Conversation } from "../../types";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
 import { tildifyPath } from "../../utils/tildify";
@@ -275,6 +280,35 @@ const readoutProps = computed(() => ({
 // Local advanced-settings popover state + outside-click close.
 const showAdvancedSettings = ref(false);
 const advancedSettingsRef = ref<HTMLDivElement | null>(null);
+const advancedPopoverRef = ref<HTMLDivElement | null>(null);
+// Horizontal offset (relative to the gear wrapper) that keeps the popover
+// within the viewport. The gear sits toward the left of the status bar, so a
+// static CSS anchor either overflows off the left edge (right-anchored) or off
+// the right edge on narrow desktop widths (left-anchored) — hence we measure.
+const popoverStyle = ref<Record<string, string>>({});
+function positionPopover() {
+  const wrapper = advancedSettingsRef.value;
+  const popover = advancedPopoverRef.value;
+  if (!wrapper || !popover) return;
+  // The mobile media query pins the popover with position:fixed; don't fight
+  // it. Use documentElement.clientWidth (scrollbar-excluded) so this boundary
+  // matches the CSS @media (max-width: 640px) exactly.
+  const viewportWidth = document.documentElement.clientWidth;
+  if (viewportWidth <= 640) {
+    popoverStyle.value = {};
+    return;
+  }
+  const margin = 8;
+  const wrapRect = wrapper.getBoundingClientRect();
+  const width = popover.offsetWidth;
+  const maxLeft = viewportWidth - margin - width;
+  // Prefer aligning the popover's left edge to the gear, clamped into view.
+  const desiredLeft = Math.max(margin, Math.min(wrapRect.left, maxLeft));
+  popoverStyle.value = {
+    left: `${Math.round(desiredLeft - wrapRect.left)}px`,
+    right: "auto",
+  };
+}
 function onOutside(e: MouseEvent) {
   if (advancedSettingsRef.value && !advancedSettingsRef.value.contains(e.target as Node)) {
     showAdvancedSettings.value = false;
@@ -282,9 +316,19 @@ function onOutside(e: MouseEvent) {
 }
 watch(showAdvancedSettings, (open) => {
   document.removeEventListener("mousedown", onOutside);
-  if (open) document.addEventListener("mousedown", onOutside);
+  window.removeEventListener("resize", positionPopover);
+  if (open) {
+    document.addEventListener("mousedown", onOutside);
+    window.addEventListener("resize", positionPopover);
+    nextTick(positionPopover);
+  } else {
+    popoverStyle.value = {};
+  }
 });
-onUnmounted(() => document.removeEventListener("mousedown", onOutside));
+onUnmounted(() => {
+  document.removeEventListener("mousedown", onOutside);
+  window.removeEventListener("resize", positionPopover);
+});
 
 function currentOverride(name: string): "default" | "on" | "off" {
   return props.toolOverrides[name] || "default";

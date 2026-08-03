@@ -4083,7 +4083,10 @@ svg {
 .advanced-settings-popover {
   position: absolute;
   bottom: 100%;
-  right: 0;
+  /* Gear trigger sits on the left of the status bar, so open the popover
+     rightward from its left edge. Anchoring to the right overflowed off the
+     left viewport edge and got clipped. */
+  left: 0;
   margin-bottom: 4px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
