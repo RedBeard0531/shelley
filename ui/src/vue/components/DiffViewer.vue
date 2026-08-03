@@ -402,8 +402,10 @@
       <!-- Comment dialog -->
       <CommentDialog
         v-if="showCommentDialog"
+        :key="commentDialogOpens"
         v-model:text="commentText"
-        :info="showCommentDialog"
+        :where="lineCommentLabel(showCommentDialog, true)"
+        :quoted="showCommentDialog.selectedText"
         @submit="handleAddComment"
         @cancel="showCommentDialog = null"
       />
@@ -427,7 +429,11 @@ import { api } from "../../services/api";
 import { loadMonaco } from "../../services/monaco";
 import { isDarkModeActive } from "../../services/theme";
 import { useVimEnabled, useMonacoVim } from "../composables/monacoVim";
-import { useMonacoComments, truncateWithEllipsis } from "../composables/monacoComments";
+import {
+  lineCommentLabel,
+  truncateWithEllipsis,
+  useMonacoComments,
+} from "../composables/monacoComments";
 import VimToggle from "./VimToggle.vue";
 import CommentDialog from "./CommentDialog.vue";
 import CommitPicker from "./CommitPicker.vue";
@@ -563,6 +569,7 @@ let scheduleSaveFn: (() => void) | null = null;
 // Shared comment-mode UX (click-to-comment, selection prompt, dialog state).
 const {
   showCommentDialog,
+  commentDialogOpens,
   commentPrompt,
   commentText,
   attach: attachComments,

@@ -14,7 +14,12 @@
 
   <!-- text -->
   <template v-else-if="ct === 'text'">
-    <MarkdownContent v-if="renderMd" :text="content.Text || ''" :message-id="messageId" />
+    <MarkdownContent
+      v-if="renderMd"
+      :text="content.Text || ''"
+      :message-id="messageId"
+      commentable
+    />
     <div v-else class="whitespace-pre-wrap break-words">
       <InlineText :text="content.Text || ''" />
     </div>
@@ -85,6 +90,10 @@
       <div class="text-xs text-secondary msg-media-type-label">
         Media Type: {{ content.MediaType }}
       </div>
+      <!-- Deliberately not a CommentableImage: this is the diagnostic path for
+           content types the UI doesn't recognize, and such an image has no
+           filesystem identity, so a comment on it could only cite an image
+           endpoint URL the agent cannot open. -->
       <img
         v-if="content.MediaType.startsWith('image/') && content.DisplayImageURL"
         :src="content.DisplayImageURL"
@@ -265,6 +274,7 @@ const toolDispatch = computed<{ is: unknown; props: Record<string, unknown> } | 
       toolName === "output_iframe" ||
       toolName === "screenshot" ||
       toolName === "browser_take_screenshot" ||
+      toolName === "read_image" ||
       toolName === "llm_one_shot"
     ) {
       base.display = c.Display;

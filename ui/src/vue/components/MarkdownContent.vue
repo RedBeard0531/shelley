@@ -1,15 +1,28 @@
 <!-- Vue port of components/MarkdownContent.tsx. Renders sanitized markdown HTML
-     via v-html. The pure pipeline lives in utils/markdownRender.ts and is
-     shared with the React component. Preserves the .markdown-content
-     .break-words container contract. -->
+     via v-html. The pure pipeline lives in utils/markdownRender.ts.
+     Preserves the .markdown-content .break-words container contract.
+
+     With `commentable`, images in the rendered markdown open the image
+     annotation view when clicked (or activated from the keyboard). That is
+     opt-in because the view is hosted by ChatInterface: the export page renders
+     the same markdown with no host, and an image that announces itself as a
+     button and then does nothing is worse than a plain image. -->
 <template>
-  <div class="markdown-content break-words" v-html="html"></div>
+  <div
+    ref="containerRef"
+    class="markdown-content break-words"
+    @click="onImageActivate"
+    @keydown="onImageActivate"
+    v-html="html"
+  ></div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
+import { COMMENT_ICON } from "../../utils/icons";
 import { renderMarkdownToSafeHTML } from "../../utils/markdownRender";
 import { perfWrap } from "../../utils/perf";
+import { handleImageCommentClick, openImageComment } from "../composables/imageComment";
 
 const props = defineProps<{
   text: string;
@@ -17,9 +30,73 @@ const props = defineProps<{
   // rewritten to the per-message file endpoint and rendered. Without it we
   // cannot authorize a local file, so such images are dropped.
   messageId?: string;
+  // Make images here open the annotation view. Only for hosts rendered inside
+  // ChatInterface, which owns that view. Read as a fixed property of the host,
+  // not something toggled on a mounted instance: turning it off would need the
+  // wrappers below torn down again.
+  commentable?: boolean;
 }>();
+
+const containerRef = ref<HTMLDivElement | null>(null);
 
 const html = computed(
   perfWrap("markdown.render", () => renderMarkdownToSafeHTML(props.text, props.messageId)),
 );
+
+// Images inside a link are excluded throughout: there the image is the link's
+// label, so the anchor owns activation and calling it a button would both
+// mis-announce it and add a redundant tab stop. The badge wrapper is a <span>,
+// not an <a>, so `closest("a")` stays an accurate test after wrapping.
+function isCommentable(img: HTMLImageElement): boolean {
+  return !!props.commentable && !img.parentElement?.closest("a");
+}
+
+// Give commentable images button semantics, a tab stop, and the hover badge.
+// Done in bulk after each render (v-html replaces the subtree) rather than
+// per-image, which is also why activation is handled by one delegated listener
+// below. The wrapper is what the badge positions against, matching
+// CommentableImage.vue's markup so both get the same affordance.
+watch(
+  [html, containerRef],
+  () => {
+    const root = containerRef.value;
+    if (!root || !props.commentable) return;
+    for (const img of root.querySelectorAll("img")) {
+      // The wrapper marks an image as already done: this runs whenever the
+      // container ref settles, not only when the HTML is replaced.
+      if (!isCommentable(img) || img.closest(".commentable-image-link")) continue;
+      img.setAttribute("role", "button");
+      img.setAttribute("tabindex", "0");
+      img.classList.add("commentable-image");
+      const wrap = document.createElement("span");
+      wrap.className = "commentable-image-link";
+      img.replaceWith(wrap);
+      wrap.append(img, badge());
+    }
+  },
+  { flush: "post", immediate: true },
+);
+
+function badge(): HTMLElement {
+  const el = document.createElement("span");
+  el.className = "commentable-image-badge";
+  el.setAttribute("aria-hidden", "true");
+  el.innerHTML = `${COMMENT_ICON} Comment`;
+  return el;
+}
+
+function onImageActivate(e: MouseEvent | KeyboardEvent) {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !isCommentable(img)) return;
+  if (e instanceof KeyboardEvent) {
+    // Only the activation keys, and only once the target is known to be an
+    // image: a blanket space-prevent here would cost every message its
+    // space-to-scroll. Autorepeat is ignored so holding a key doesn't churn.
+    if (e.repeat || (e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    openImageComment({ src: img.src });
+    return;
+  }
+  handleImageCommentClick(e, { src: img.src });
+}
 </script>

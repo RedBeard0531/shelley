@@ -352,6 +352,17 @@
       "
     />
 
+    <!-- Image annotation view. Opened by clicking any image in the
+         conversation (see composables/imageComment.ts); its comments land in
+         the message input like the diff viewer's. -->
+    <ImageCommentModal
+      v-if="imageCommentTarget"
+      :key="imageCommentTarget.src"
+      :target="imageCommentTarget"
+      @submit="(text) => (diffCommentText = text)"
+      @close="closeImageComment"
+    />
+
     <!-- Diff Viewer -->
     <DiffViewer
       :cwd="(diffViewerCwd || currentConversation?.cwd || selectedCwd) as string"
@@ -413,6 +424,7 @@ import { useDraftAutosave } from "../composables/draftAutosave";
 import { useFeatureFlag } from "../composables/featureFlags";
 import { useVersionChecker } from "../composables/versionChecker";
 import { provideToolProgress } from "../composables/toolProgress";
+import { closeImageComment, useImageCommentTarget } from "../composables/imageComment";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import { buildMessageQuote } from "../../utils/messageQuote";
 import { hasMultipleUsers } from "../../utils/messageAuthors";
@@ -440,6 +452,7 @@ import SystemPromptView from "./SystemPromptView.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
 import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
 import DiffViewer from "./DiffViewer.vue";
+import ImageCommentModal from "./ImageCommentModal.vue";
 import GitGraphViewer from "./GitGraphViewer.vue";
 import AgentsMdEditorModal from "./AgentsMdEditorModal.vue";
 import TerminalPanel from "./TerminalPanel.vue";
@@ -775,6 +788,9 @@ const showAgentsMdEditor = ref(false);
 const diffViewerInitialCommit = ref<string | undefined>(undefined);
 const diffViewerCwd = ref<string | undefined>(undefined);
 const diffCommentText = ref("");
+// The image being annotated, if any (module state so any image in the message
+// tree can open the view without prop drilling).
+const imageCommentTarget = useImageCommentTarget();
 const agentWorking = ref(false);
 const cancelling = ref(false);
 const contextWindowSize = ref(0);
@@ -2656,6 +2672,9 @@ watch(
   (id) => {
     currentConversationId = id;
     teardownSubscriptions();
+    // An annotation view belongs to the image it was opened from; switching
+    // conversations leaves it stranded.
+    closeImageComment();
     // Reset scroll bookkeeping so state from the previous conversation can't
     // leak across the switch. lastListHeight/clampBudget are especially
     // important: the observer re-attach (watch on the recreated .messages-list)
@@ -3203,5 +3222,7 @@ onUnmounted(() => {
   mobileMq.removeEventListener("change", onMobileChange);
   if (loadingProgressDelay) clearTimeout(loadingProgressDelay);
   if (highlightTimeout) clearTimeout(highlightTimeout);
+  // Module state: an image left open would reappear over the next conversation.
+  closeImageComment();
 });
 </script>

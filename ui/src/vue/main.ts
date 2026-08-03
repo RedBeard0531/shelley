@@ -4,6 +4,7 @@
 import { createApp } from "vue";
 import PrimeVue from "primevue/config";
 import Tooltip from "primevue/tooltip";
+import FocusTrap from "primevue/focustrap";
 import { ShelleyPreset } from "./theme/shelley-preset";
 
 import "primeicons/primeicons.css";
@@ -48,5 +49,8 @@ if (exportId) {
   app.use(PrimeVue, primeVueOptions);
   app.use(i18nPlugin);
   app.directive("tooltip", Tooltip);
+  // Used by the hand-rolled full-screen overlays (PrimeVue's Dialog, behind
+  // Modal.vue, engages the trap itself).
+  app.directive("focustrap", FocusTrap);
   app.mount(rootContainer);
 }

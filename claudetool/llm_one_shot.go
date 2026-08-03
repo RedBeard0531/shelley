@@ -231,12 +231,27 @@ func (t *LLMOneShotTool) run(ctx context.Context, req llmOneShotInput) llm.ToolO
 			// Save a copy so the UI can render the image via /api/read.
 			// Failures are non-fatal: the request itself is unaffected.
 			if saved := saveOneShotImage(ctx, prepared); saved != "" {
-				displayImages = append(displayImages, map[string]any{
-					"url":    "/api/read?path=" + url.QueryEscape(saved),
-					"path":   pf,
+				img := map[string]any{
+					"url": "/api/read?path=" + url.QueryEscape(saved),
+					// Resolved against the tool's working directory, not as the
+					// agent wrote it: a relative path in an image comment would
+					// resolve against whatever cwd the reader happens to have.
+					"path": path,
+					// The saved copy is the (possibly downscaled) LLM-facing one,
+					// so its dimensions describe the rendered image.
 					"width":  prepared.Width,
 					"height": prepared.Height,
-				})
+				}
+				// source_* describe the file at "path", the coordinates the UI
+				// reports image comments in. Omitted when unknown.
+				if prepared.SourceWidth > 0 && prepared.SourceHeight > 0 {
+					img["source_width"] = prepared.SourceWidth
+					img["source_height"] = prepared.SourceHeight
+				}
+				if prepared.SourceOrientation != imageutil.OrientationNormal {
+					img["source_orientation"] = int(prepared.SourceOrientation)
+				}
+				displayImages = append(displayImages, img)
 			}
 			continue
 		}

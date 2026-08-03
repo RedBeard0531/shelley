@@ -57,7 +57,16 @@ test.describe("Edit-file modal comment mode", () => {
     await expect(dialog).toContainText("Add Comment (Line 2)");
     await expect(dialog.locator(".diff-viewer-selected-text")).toContainText("bravo second line");
 
+    // Clicking the same line again retargets the dialog: the text follows, and
+    // focus comes back to it. The label is identical in that case, so nothing
+    // derived from the label can be what notices.
     await dialog.locator(".diff-viewer-comment-input").fill("needs more bravado");
+    await dialog.locator(".diff-viewer-comment-input").blur();
+    await modal.locator(".view-line", { hasText: "bravo second line" }).click();
+    await expect(dialog).toContainText("Add Comment (Line 2)");
+    await expect(dialog.locator(".diff-viewer-comment-input")).toHaveValue("needs more bravado");
+    await expect(dialog.locator(".diff-viewer-comment-input")).toBeFocused();
+
     await dialog.getByRole("button", { name: "Add Comment" }).click();
     await expect(dialog).not.toBeVisible();
 

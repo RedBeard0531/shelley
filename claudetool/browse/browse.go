@@ -588,6 +588,18 @@ func (b *BrowseTools) screenshotRun(ctx context.Context, input screenshotInput) 
 		"selector": input.Selector,
 	}
 
+	// Dimensions of the file at "path", which may differ from the (possibly
+	// downscaled) copy sent to the model. The UI reports image comments in
+	// these coordinates so a region the user marks can be cropped out of the
+	// file the header names. Omitted rather than fatal when they can't be read:
+	// the screenshot itself is fine and useful, and the UI falls back to the
+	// rendered image's coordinates (stating them in the comment either way).
+	// Same choice as readImageDisplay.
+	if w, h, err := imageutil.DecodeDisplayDimensions(buf); err == nil {
+		display["source_width"] = w
+		display["source_height"] = h
+	}
+
 	// If the model can't consume image inputs (e.g. GLM 5.2), don't send the
 	// image content — the API would reject the request. The screenshot still
 	// gets saved to disk and shown in the UI via Display; the model just gets
@@ -1067,6 +1079,11 @@ func (b *BrowseTools) readImageRun(ctx context.Context, input readImageInput) ll
 		description += " [resized to fit model limits]"
 	}
 
+	display, err := readImageDisplay(input.Path, prepared)
+	if err != nil {
+		return llm.ErrorToolOut(err)
+	}
+
 	return llm.ToolOut{LLMContent: []llm.Content{
 		{
 			Type: llm.ContentTypeText,
@@ -1079,7 +1096,35 @@ func (b *BrowseTools) readImageRun(ctx context.Context, input readImageInput) ll
 			DisplayWidth:  prepared.Width,
 			DisplayHeight: prepared.Height,
 		},
-	}}
+	}, Display: display}
+}
+
+// readImageDisplay describes the file the tool read for the UI. The path is
+// absolute because the UI cites it in image comments and the agent has to be
+// able to resolve it. source_* are that file's dimensions, which exceed the
+// LLM-facing copy's when the image was downscaled; the UI reports image
+// comments in them so a region the user marks crops out of this file. They are
+// omitted when unknown -- a format Go can't decode is also one it can't resize,
+// so the rendered image is the file itself.
+func readImageDisplay(path string, prepared imageutil.Prepared) (map[string]any, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve image path %s: %w", path, err)
+	}
+	display := map[string]any{
+		"type": "read_image",
+		"path": abs,
+	}
+	if prepared.SourceWidth > 0 && prepared.SourceHeight > 0 {
+		display["source_width"] = prepared.SourceWidth
+		display["source_height"] = prepared.SourceHeight
+	}
+	// Only when it means something: the UI turns this into an instruction to
+	// auto-orient, which for an unrotated image would be noise.
+	if prepared.SourceOrientation != imageutil.OrientationNormal {
+		display["source_orientation"] = int(prepared.SourceOrientation)
+	}
+	return display, nil
 }
 
 func imageLimits(ctx context.Context) (maxDimension, maxBytes int) {

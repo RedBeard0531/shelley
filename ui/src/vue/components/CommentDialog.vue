@@ -1,9 +1,18 @@
-<!-- Draggable "Add Comment" dialog shared by DiffViewer and
-     EditableFileModal (comment mode). Preserves the diff-viewer-comment-*
-     class/behavior contract from DiffViewer: centered by default, explicit
-     top/left once dragged, drag via the header handle, focus the textarea on
-     open. v-model:text binds the comment text; "submit"/"cancel" are emitted
-     for the host to handle. -->
+<!-- Draggable "Add Comment" dialog shared by the comment-mode hosts: DiffViewer,
+     EditableFileModal, and ImageCommentModal. Preserves the
+     diff-viewer-comment-* class/behavior contract from DiffViewer: centered by
+     default, explicit top/left once dragged, drag via the header handle, focus
+     the textarea on open. v-model:text binds the comment text;
+     "submit"/"cancel" are emitted for the host to handle.
+
+     What is being commented on is a string the host formats ("Line 12, new",
+     "300x180+120+340"); this component only renders it.
+
+     Retargeting (picking another line or region while text is pending) is a
+     remount, keyed by the host on its open counter: that recenters a dragged
+     dialog and refocuses the input without this component having to watch for
+     it, and it fires even when the new target's label is identical to the old
+     one (clicking the same line twice). -->
 <template>
   <div
     ref="dialogRef"
@@ -12,14 +21,9 @@
     :style="dialogPos ? { top: `${dialogPos.top}px`, left: `${dialogPos.left}px` } : undefined"
   >
     <h4 class="diff-viewer-comment-dialog-handle" @mousedown="startDialogDrag">
-      <span>
-        Add Comment (Line{{
-          info.startLine !== info.endLine ? `s ${info.startLine}-${info.endLine}` : ` ${info.line}`
-        }}<template v-if="showSide">, {{ info.side === "left" ? "old" : "new" }}</template
-        >)
-      </span>
+      <span>Add Comment ({{ where }})</span>
     </h4>
-    <pre v-if="info.selectedText" class="diff-viewer-selected-text">{{ info.selectedText }}</pre>
+    <pre v-if="quoted" class="diff-viewer-selected-text">{{ quoted }}</pre>
     <textarea
       ref="inputRef"
       :value="text"
@@ -43,18 +47,15 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
-import type { CommentDialogInfo } from "../composables/monacoComments";
+import { onMounted, onUnmounted, ref } from "vue";
 
-const props = withDefaults(
-  defineProps<{
-    info: CommentDialogInfo;
-    text: string;
-    /** Show the ", old/new" side suffix (diff views only). */
-    showSide?: boolean;
-  }>(),
-  { showSide: true },
-);
+const props = defineProps<{
+  /** What is being commented on, e.g. "Line 12, new" or "a 300x180 region". */
+  where: string;
+  text: string;
+  /** Excerpt of what was selected, shown above the input. */
+  quoted?: string;
+}>();
 const emit = defineEmits<{
   (e: "update:text", text: string): void;
   (e: "submit"): void;
@@ -103,14 +104,5 @@ function endDialogDrag() {
 onMounted(() => {
   setTimeout(() => inputRef.value?.focus(), 50);
 });
-// Retargeting the open dialog (clicking another line while text is pending)
-// recenters and refocuses it, matching the old remount-per-open behavior.
-watch(
-  () => props.info,
-  () => {
-    dialogPos.value = null;
-    setTimeout(() => inputRef.value?.focus(), 50);
-  },
-);
 onUnmounted(endDialogDrag);
 </script>

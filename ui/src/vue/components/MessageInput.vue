@@ -740,7 +740,7 @@ async function handleFileSelect(event: Event) {
   target.value = "";
 }
 
-// Auto-insert injected text (diff comments) directly into the textarea.
+// Auto-insert injected text (diff comments, image comments) into the textarea.
 watch(
   () => props.injectedText,
   (injected) => {
@@ -750,7 +750,13 @@ watch(
         return prev + (needsNewline ? "\n\n" : "") + injected;
       });
       emit("clear-injected-text");
-      setTimeout(() => textareaRef.value?.focus(), 0);
+      // Focusing shows the user where the text landed, but not at the cost of
+      // yanking focus out of a modal that is still open: the image comment view
+      // stays up across submissions so several regions can be commented on.
+      setTimeout(() => {
+        if (document.activeElement?.closest('[aria-modal="true"]')) return;
+        textareaRef.value?.focus();
+      }, 0);
     }
   },
 );

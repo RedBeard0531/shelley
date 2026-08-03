@@ -18,6 +18,12 @@ func TestPrepare(t *testing.T) {
 	if prepared.Width != 200 || prepared.Height != 66 {
 		t.Errorf("dimensions = %dx%d, want 200x66", prepared.Width, prepared.Height)
 	}
+	// Callers that hand out the source path alongside the downscaled bytes need
+	// the source's dimensions: coordinates into the resized copy don't address
+	// the original file (the UI's image comments rely on this).
+	if prepared.SourceWidth != 300 || prepared.SourceHeight != 100 {
+		t.Errorf("source dimensions = %dx%d, want 300x100", prepared.SourceWidth, prepared.SourceHeight)
+	}
 
 	unchanged, err := Prepare(createTestPNG(t, 10, 8), "small.png", 200, 0)
 	if err != nil {
@@ -25,6 +31,9 @@ func TestPrepare(t *testing.T) {
 	}
 	if unchanged.Resized || unchanged.Width != 10 || unchanged.Height != 8 {
 		t.Errorf("unchanged = %+v", unchanged)
+	}
+	if unchanged.SourceWidth != 10 || unchanged.SourceHeight != 8 {
+		t.Errorf("unchanged source dimensions = %dx%d, want 10x8", unchanged.SourceWidth, unchanged.SourceHeight)
 	}
 }
 

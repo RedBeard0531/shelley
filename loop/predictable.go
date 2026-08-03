@@ -316,6 +316,10 @@ func (s *PredictableService) Do(ctx context.Context, req *llm.Request) (*llm.Res
 			return s.makeChangeDirToolResponse(path, inputTokens), nil
 		}
 
+		if path, ok := strings.CutPrefix(inputText, "read_image: "); ok {
+			return s.makeReadImageToolResponse(strings.TrimSpace(path), inputTokens), nil
+		}
+
 		if delayStr, ok := strings.CutPrefix(inputText, "delay: "); ok {
 			delaySeconds, err := strconv.ParseFloat(delayStr, 64)
 			if err == nil && delaySeconds > 0 {
@@ -715,7 +719,9 @@ func (s *PredictableService) countRequestTokens(req *llm.Request) uint64 {
 
 // makeScreenshotToolResponse creates a response that calls the screenshot tool
 func (s *PredictableService) makeScreenshotToolResponse(selector string, inputTokens uint64) *llm.Response {
-	toolInputData := map[string]any{}
+	// The browser tool dispatches on "action"; without it the call fails with
+	// `unknown action: ""`.
+	toolInputData := map[string]any{"action": "screenshot"}
 	if selector != "" {
 		toolInputData["selector"] = selector
 	}
@@ -745,6 +751,37 @@ func (s *PredictableService) makeScreenshotToolResponse(selector string, inputTo
 			InputTokens:  inputTokens,
 			OutputTokens: outputTokens,
 			CostUSD:      0.0,
+		},
+	}
+}
+
+// makeReadImageToolResponse creates a response that calls the read_image tool
+func (s *PredictableService) makeReadImageToolResponse(path string, inputTokens uint64) *llm.Response {
+	toolInputBytes, _ := json.Marshal(map[string]string{"path": path})
+	responseText := fmt.Sprintf("Reading %s...", path)
+	outputTokens := uint64(len(responseText)/4 + len(toolInputBytes)/4)
+	if outputTokens == 0 {
+		outputTokens = 1
+	}
+	return &llm.Response{
+		ID:    fmt.Sprintf("pred-read_image-%d", time.Now().UnixNano()),
+		Type:  "message",
+		Role:  llm.MessageRoleAssistant,
+		Model: "predictable-v1",
+		Content: []llm.Content{
+			{Type: llm.ContentTypeText, Text: responseText},
+			{
+				ID:        fmt.Sprintf("tool_%d", time.Now().UnixNano()%1000),
+				Type:      llm.ContentTypeToolUse,
+				ToolName:  "read_image",
+				ToolInput: json.RawMessage(toolInputBytes),
+			},
+		},
+		StopReason: llm.StopReasonToolUse,
+		Usage: llm.Usage{
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+			CostUSD:      0.001,
 		},
 	}
 }

@@ -50,15 +50,16 @@
           <span class="screenshot-tool-time">{{ executionTime }}</span>
         </div>
         <div class="screenshot-tool-image-container">
-          <a :href="imageUrl" target="_blank" rel="noopener noreferrer">
-            <img
-              :src="imageUrl"
-              :alt="`Image: ${filename}`"
-              class="tool-image-responsive"
-              :width="imageWidth || undefined"
-              :height="imageHeight || undefined"
-            />
-          </a>
+          <CommentableImage
+            :src="imageUrl"
+            :alt="`Image: ${filename}`"
+            :path="imagePath"
+            :width="imageWidth"
+            :height="imageHeight"
+            :source-width="sourceSize?.width"
+            :source-height="sourceSize?.height"
+            :needs-auto-orient="needsAutoOrient"
+          />
         </div>
       </div>
 
@@ -82,6 +83,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
+import CommentableImage from "../CommentableImage.vue";
+import { displayNeedsAutoOrient, displaySourceSize } from "../../../utils/imageComment";
 
 const props = defineProps<{
   toolInput?: unknown;
@@ -89,6 +92,7 @@ const props = defineProps<{
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;
+  display?: unknown; // Display data from the tool_result Content
 }>();
 
 // Default to expanded.
@@ -109,6 +113,17 @@ const getStringField = (input: unknown, field: string): string | undefined => {
 const filename = computed(
   () => getStringField(props.toolInput, "path") || getStringField(props.toolInput, "id") || "image",
 );
+
+// The file the tool read, so image comments reference it rather than the
+// (downscaled) copy served from the message image endpoint. Display carries it
+// absolute; toolInput may hold a relative path the agent couldn't resolve.
+const imagePath = computed(() => getStringField(props.display, "path"));
+// Dimensions of that file, which exceed the rendered image's when it had to be
+// downscaled to fit model limits.
+const sourceSize = computed(() => displaySourceSize(props.display));
+// An EXIF-rotated source file: its stored pixels are turned relative to both
+// sourceSize and what the browser draws, so a crop has to auto-orient first.
+const needsAutoOrient = computed(() => displayNeedsAutoOrient(props.display));
 
 // Build image URL from the tool result's image content.
 // The server replaces inline base64 data with a URL to /api/message/{id}/image/...

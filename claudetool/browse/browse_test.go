@@ -586,6 +586,20 @@ func TestReadImageToolResizesOversizedImage(t *testing.T) {
 	if cfg.Width > 200 || cfg.Height > 200 {
 		t.Errorf("resized image still exceeds limit: %dx%d", cfg.Width, cfg.Height)
 	}
+
+	// The UI reports image comments in the source file's coordinates (the user
+	// drags a box on the rendered image but the comment names the path), so
+	// Display must carry the pre-resize dimensions.
+	display, ok := toolOut.Display.(map[string]any)
+	if !ok {
+		t.Fatalf("Display = %#v, want map", toolOut.Display)
+	}
+	if display["path"] != testImagePath {
+		t.Errorf("Display path = %v, want %s", display["path"], testImagePath)
+	}
+	if display["source_width"] != 300 || display["source_height"] != 250 {
+		t.Errorf("Display source dimensions = %vx%v, want 300x250", display["source_width"], display["source_height"])
+	}
 }
 
 func TestReadImageToolRejectsOversizedBytes(t *testing.T) {

@@ -12,8 +12,28 @@ type Prepared struct {
 	MediaType string
 	Width     int
 	Height    int
-	Converted bool
-	Resized   bool
+	// SourceWidth and SourceHeight are the dimensions of the input image,
+	// before any downscaling, as a viewer that honors EXIF orientation displays
+	// them. They differ from Width/Height when Resized, and are what callers
+	// must report when they also hand out the source path: coordinates into the
+	// LLM-facing copy do not address the original file.
+	//
+	// Display dimensions rather than stored ones because that is the space the
+	// UI and image tools both work in -- a JPEG tagged "rotate 90" is 100x50 in
+	// the file and 50x100 everywhere a person or ImageMagick looks at it.
+	//
+	// Zero only for formats this binary cannot decode, which are also the ones
+	// it cannot resize — so they are always set when Resized is true.
+	SourceWidth  int
+	SourceHeight int
+	// SourceOrientation is the EXIF orientation of the input image, i.e. the
+	// transform a viewer applies that a raw pixel read does not. Callers that
+	// hand out coordinates into the source file must report it when it is not
+	// OrientationNormal: tools crop stored pixels, so they need to be told to
+	// auto-orient first to agree with what the user saw.
+	SourceOrientation Orientation
+	Converted         bool
+	Resized           bool
 }
 
 // Prepare validates image data and fits it within a model's advertised limits.
@@ -49,6 +69,13 @@ func Prepare(data []byte, source string, maxDimension, maxBytes int) (Prepared, 
 
 	resized := false
 	format := strings.TrimPrefix(mediaType, "image/")
+	// Dimensions before any downscaling. A format with no decoder registered in
+	// this binary (WebP, GIF) fails here, leaving these zero — but such an image
+	// also cannot be resized below, so Width/Height stay equal to the source's
+	// and callers never need the pre-resize numbers. Whenever Resized is true,
+	// these are populated.
+	sourceWidth, sourceHeight, _ := DecodeDisplayDimensions(data)
+	sourceOrientation := DecodeOrientation(data)
 	if maxDimension > 0 {
 		// ResizeImage returns the original bytes when the image already fits.
 		// If it cannot decode a format such as WebP, leave the bytes unchanged
@@ -67,13 +94,19 @@ func Prepare(data []byte, source string, maxDimension, maxBytes int) (Prepared, 
 		)
 	}
 
-	width, height, _ := DecodeDimensions(data)
+	// Also display dimensions: when nothing was resized these bytes are the
+	// original's, EXIF tag and all, and the <img> that renders them will rotate.
+	// A resize re-encodes without the tag, making the two the same thing.
+	width, height, _ := DecodeDisplayDimensions(data)
 	return Prepared{
-		Data:      data,
-		MediaType: "image/" + format,
-		Width:     width,
-		Height:    height,
-		Converted: converted,
-		Resized:   resized,
+		Data:              data,
+		MediaType:         "image/" + format,
+		Width:             width,
+		Height:            height,
+		SourceWidth:       sourceWidth,
+		SourceHeight:      sourceHeight,
+		SourceOrientation: sourceOrientation,
+		Converted:         converted,
+		Resized:           resized,
 	}, nil
 }

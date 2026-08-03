@@ -20,6 +20,20 @@ export interface CommentDialogInfo {
   endLine?: number;
 }
 
+/**
+ * CommentDialog's "what am I commenting on" label for a line comment.
+ *
+ * `showSide` distinguishes the diff views, where a line number is ambiguous
+ * between the old and new file, from the single-file editor, where it isn't.
+ */
+export function lineCommentLabel(info: CommentDialogInfo, showSide: boolean): string {
+  const lines =
+    info.startLine !== info.endLine
+      ? `Lines ${info.startLine}-${info.endLine}`
+      : `Line ${info.line}`;
+  return showSide ? `${lines}, ${info.side === "left" ? "old" : "new"}` : lines;
+}
+
 // Floating "add comment" prompt shown after a text selection in comment mode.
 // Lets the user keep their selection (rather than the dialog popping up
 // immediately on click and interfering with selecting text).
@@ -55,6 +69,16 @@ export function useMonacoComments(deps: MonacoCommentsDeps) {
   const showCommentDialog = ref<CommentDialogInfo | null>(null);
   const commentPrompt = ref<CommentPromptInfo | null>(null);
   const commentText = ref("");
+  // Bumped every time the dialog is pointed at something. Hosts key the dialog
+  // on it so retargeting remounts it -- which is what recenters and refocuses
+  // it -- including when the new target's label matches the old one (clicking
+  // the same line twice).
+  const commentDialogOpens = ref(0);
+
+  function pointDialogAt(info: CommentDialogInfo) {
+    showCommentDialog.value = info;
+    commentDialogOpens.value++;
+  }
 
   /**
    * Wire comment-mode mouse/touch/hover handlers onto an editor. `editorDom`
@@ -86,13 +110,13 @@ export function useMonacoComments(deps: MonacoCommentsDeps) {
       } else if (model) {
         selectedText = model.getLineContent(lineNumber) || "";
       }
-      showCommentDialog.value = {
+      pointDialogAt({
         line: startLine,
         side: "right",
         selectedText,
         startLine,
         endLine,
-      };
+      });
     };
 
     // A click counts as a "comment on this line" gesture if it lands on the
@@ -263,13 +287,13 @@ export function useMonacoComments(deps: MonacoCommentsDeps) {
   function openCommentFromPrompt() {
     const p = commentPrompt.value;
     if (!p) return;
-    showCommentDialog.value = {
+    pointDialogAt({
       line: p.startLine,
       side: "right",
       selectedText: p.selectedText,
       startLine: p.startLine,
       endLine: p.endLine,
-    };
+    });
     commentPrompt.value = null;
   }
 
@@ -285,6 +309,7 @@ export function useMonacoComments(deps: MonacoCommentsDeps) {
 
   return {
     showCommentDialog,
+    commentDialogOpens,
     commentPrompt,
     commentText,
     attach,

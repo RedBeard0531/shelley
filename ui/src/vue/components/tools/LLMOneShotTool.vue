@@ -41,15 +41,16 @@
     <!-- Images are always visible, even when the card is collapsed. -->
     <div v-if="displayImages.length" class="tool-section llm-one-shot-images">
       <div v-for="img in displayImages" :key="img.url" class="screenshot-tool-image-container">
-        <a :href="img.url" target="_blank" rel="noopener noreferrer">
-          <img
-            :src="img.url"
-            :alt="`Image: ${img.path || 'attachment'}`"
-            class="tool-image-responsive"
-            :width="img.width || undefined"
-            :height="img.height || undefined"
-          />
-        </a>
+        <CommentableImage
+          :src="img.url"
+          :alt="`Image: ${img.path || 'attachment'}`"
+          :path="img.path"
+          :width="img.width"
+          :height="img.height"
+          :source-width="img.source_width"
+          :source-height="img.source_height"
+          :needs-auto-orient="(img.source_orientation ?? 1) > 1"
+        />
       </div>
     </div>
 
@@ -89,6 +90,7 @@
 import { computed } from "vue";
 import type { LLMContent } from "../../../types";
 import { useToolExpanded } from "../../composables/toolDetail";
+import CommentableImage from "../CommentableImage.vue";
 
 interface LLMOneShotInput {
   prompt_files?: string[] | string;
@@ -102,6 +104,14 @@ interface LLMOneShotDisplayImage {
   path?: string;
   width?: number;
   height?: number;
+  // Dimensions of the file at `path`, which exceed width/height when the image
+  // was downscaled to fit model limits. Image comments are reported in these.
+  source_width?: number;
+  source_height?: number;
+  // EXIF orientation of that file, present only when it is not 1 (normal): its
+  // stored pixels are rotated relative to the dimensions above, so a crop of a
+  // commented region has to auto-orient first.
+  source_orientation?: number;
 }
 
 const props = defineProps<{

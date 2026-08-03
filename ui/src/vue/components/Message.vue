@@ -545,6 +545,9 @@ function handleMessageClick(e: MouseEvent) {
   if (
     target.closest("a") ||
     target.closest("button") ||
+    // A markdown image is a bare <img> that opens the annotation view on click
+    // (MarkdownContent.vue); toggling the action bar underneath it is noise.
+    target.matches('img[role="button"]') ||
     target.closest("[data-action-bar]") ||
     target.closest(".bash-tool-header") ||
     target.closest(".patch-tool-header") ||

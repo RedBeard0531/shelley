@@ -49,15 +49,16 @@
           <span class="screenshot-tool-time">{{ executionTime }}</span>
         </div>
         <div class="screenshot-tool-image-container">
-          <a :href="imageUrl" target="_blank" rel="noopener noreferrer">
-            <img
-              :src="imageUrl"
-              :alt="`Screenshot: ${filename}`"
-              class="tool-image-responsive"
-              :width="imageWidth || undefined"
-              :height="imageHeight || undefined"
-            />
-          </a>
+          <CommentableImage
+            :src="imageUrl"
+            :alt="`Screenshot: ${filename}`"
+            :path="screenshotPath"
+            :width="imageWidth"
+            :height="imageHeight"
+            :source-width="sourceSize?.width"
+            :source-height="sourceSize?.height"
+            :needs-auto-orient="needsAutoOrient"
+          />
         </div>
       </div>
 
@@ -81,6 +82,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
+import CommentableImage from "../CommentableImage.vue";
+import { displayNeedsAutoOrient, displaySourceSize } from "../../../utils/imageComment";
 
 const props = defineProps<{
   toolInput?: unknown;
@@ -124,6 +127,15 @@ const imageContent = computed(() =>
 // content, but the screenshot is still saved to disk and surfaced via Display.
 const displayUrl = computed(() => getStringField(props.display, "url"));
 const imageUrl = computed(() => imageContent.value?.DisplayImageURL || displayUrl.value);
+// On-disk path of the full-size screenshot (Display.path), so image comments
+// can point the agent at a file it can crop rather than at an image endpoint.
+const screenshotPath = computed(() => getStringField(props.display, "path"));
+// Dimensions of that file, which exceed the rendered image's when the
+// screenshot had to be downscaled for the model.
+const sourceSize = computed(() => displaySourceSize(props.display));
+// An EXIF-rotated source file: its stored pixels are turned relative to both
+// sourceSize and what the browser draws, so a crop has to auto-orient first.
+const needsAutoOrient = computed(() => displayNeedsAutoOrient(props.display));
 const imageWidth = computed(() => imageContent.value?.DisplayWidth);
 const imageHeight = computed(() => imageContent.value?.DisplayHeight);
 

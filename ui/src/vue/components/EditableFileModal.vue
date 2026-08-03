@@ -94,9 +94,10 @@
         <!-- Comment dialog -->
         <CommentDialog
           v-if="showCommentDialog"
+          :key="commentDialogOpens"
           v-model:text="commentText"
-          :info="showCommentDialog"
-          :show-side="false"
+          :where="lineCommentLabel(showCommentDialog, false)"
+          :quoted="showCommentDialog.selectedText"
           @submit="handleAddComment"
           @cancel="showCommentDialog = null"
         />
@@ -112,7 +113,7 @@ import { loadMonaco } from "../../services/monaco";
 import { isDarkModeActive } from "../../services/theme";
 import { tildifyPath } from "../../utils/tildify";
 import { useVimEnabled, useMonacoVim } from "../composables/monacoVim";
-import { useMonacoComments } from "../composables/monacoComments";
+import { lineCommentLabel, useMonacoComments } from "../composables/monacoComments";
 import VimToggle from "./VimToggle.vue";
 import CommentDialog from "./CommentDialog.vue";
 
@@ -172,6 +173,7 @@ const vimActive = computed(() => vimEnabled.value && mode.value === "edit");
 // Shared comment-mode UX (click-to-comment, selection prompt, dialog state).
 const {
   showCommentDialog,
+  commentDialogOpens,
   commentPrompt,
   commentText,
   attach: attachComments,
