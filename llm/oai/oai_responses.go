@@ -930,6 +930,7 @@ func parseResponsesSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*resp
 	// Responses streams finalize message/tool output in output_item.done.
 	// response.completed may only carry completion metadata and usage.
 	outputItems := make(map[int]responsesOutputItem)
+	citeFilter := llm.NewCitationStreamFilter()
 	err := iterResponsesSSEEvents(r, func(sse responsesSSEEvent) error {
 		if sse.Data == "[DONE]" {
 			return nil
@@ -947,7 +948,15 @@ func parseResponsesSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*resp
 		switch eventType {
 		case "response.output_text.delta":
 			if onStream != nil && event.Delta != "" {
-				onStream(llm.StreamDelta{Type: "text", Text: event.Delta, Index: event.ContentIndex})
+				if filtered := citeFilter.Filter(event.OutputIndex, event.ContentIndex, event.Delta); filtered != "" {
+					onStream(llm.StreamDelta{Type: "text", Text: filtered, Index: event.ContentIndex})
+				}
+			}
+		case "response.output_text.done":
+			if onStream != nil {
+				if filtered := citeFilter.Finish(event.OutputIndex, event.ContentIndex); filtered != "" {
+					onStream(llm.StreamDelta{Type: "text", Text: filtered, Index: event.ContentIndex})
+				}
 			}
 		case "response.reasoning_summary_text.delta":
 			if onStream != nil && event.Delta != "" {
@@ -981,6 +990,14 @@ func parseResponsesSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*resp
 	})
 	if err != nil {
 		return nil, err
+	}
+	// Only after a clean end: a stream that errored is retried from the top,
+	// so emitting its held remnant would add a fragment to text the retry
+	// replays in full.
+	if onStream != nil {
+		for _, delta := range citeFilter.FinishAll() {
+			onStream(delta)
+		}
 	}
 	if completed == nil {
 		return nil, fmt.Errorf("incomplete stream: no response.completed event")

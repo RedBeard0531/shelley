@@ -31,6 +31,15 @@ func TestFinalResponseBody_PrefersTextFromLatest(t *testing.T) {
 	}
 }
 
+func TestFinalResponseBody_StripsCitationMarkers(t *testing.T) {
+	msgs := []generated.Message{
+		agentMsg(t, llm.Content{Type: llm.ContentTypeText, Text: "Done\ue200cite\ue202turn1search0\ue201!"}),
+	}
+	if got := finalResponseBody(msgs); got != "Done!" {
+		t.Errorf("got %q, want %q", got, "Done!")
+	}
+}
+
 func TestFinalResponseBody_SkipsToolOnlyTail(t *testing.T) {
 	// Newest: tool-only. Older: has text. Should fall back to older text.
 	toolOnly := agentMsg(

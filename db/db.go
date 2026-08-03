@@ -698,11 +698,16 @@ const previewTimestampLen = len("2006-01-02T15:04:05Z")
 // splitPreviewPacked splits the preview_packed column back into its timestamp
 // and (already truncated) preview text. An empty packed value means the
 // conversation has no agent-message preview, so both results are empty.
+//
+// The preview is client-facing, so inline citation markup is stripped here.
+// Truncation can cut a citation group in half; the strip fails open on the
+// remnant, which shows a bare "citeturn1search0" rather than the stray
+// glyphs the raw markers render as.
 func splitPreviewPacked(packed string) (preview, updatedAt string) {
 	if len(packed) < previewTimestampLen {
 		return "", ""
 	}
-	return packed[previewTimestampLen:], packed[:previewTimestampLen]
+	return llm.StripInlineCitationMarkers(packed[previewTimestampLen:]), packed[:previewTimestampLen]
 }
 
 // ListConversations retrieves conversations with pagination
@@ -909,7 +914,12 @@ func (db *DB) SearchConversationsFTS(ctx context.Context, query string, limit, o
 			if _, ok := snippets[r.ConversationID]; ok {
 				continue // first row per conv = best rank
 			}
-			snippets[r.ConversationID] = centerOnMark(r.Snippet, 120)
+			// The FTS source column is built from raw message JSON, so
+			// snippets carry citation markup. Strip before centering: the
+			// mark sentinels are outside the marker range, and stripping
+			// first keeps centerOnMark's byte slicing off a marker's
+			// 3-byte sequence.
+			snippets[r.ConversationID] = centerOnMark(llm.StripInlineCitationMarkers(r.Snippet), 120)
 		}
 		for i := range results {
 			results[i].Snippet = snippets[results[i].Conversation.ConversationID]

@@ -55,7 +55,8 @@ func finalResponseBody(messages []generated.Message) string {
 }
 
 // lastTextContent returns the last non-empty Text content block in msg, or "".
-// Matches the existing behavior in publishConversationState.
+// Matches the existing behavior in publishConversationState. The text is
+// client-facing (notification bodies), so inline citation markup is stripped.
 func lastTextContent(msg llm.Message) string {
 	var text string
 	for _, c := range msg.Content {
@@ -63,7 +64,7 @@ func lastTextContent(msg llm.Message) string {
 			text = c.Text
 		}
 	}
-	return text
+	return llm.StripInlineCitationMarkers(text)
 }
 
 // summarizeLastToolUse renders a short "Ran <tool>: <hint>" line for the

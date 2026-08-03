@@ -856,7 +856,12 @@ func (s *Server) lastAgentText(ctx context.Context, conversationID string) (stri
 				texts = append(texts, content.Text)
 			}
 		}
-		return strings.Join(texts, "\n"), m.SequenceID, nil
+		// Callers splice this into the parent conversation, where it reaches
+		// clients through a tool_result rather than through llmDataForAPI's
+		// agent-text path. Strip here, before any caller truncates: a byte
+		// cut through a marker's 3-byte sequence would leave an orphan that
+		// no later strip can recognize.
+		return llm.StripInlineCitationMarkers(strings.Join(texts, "\n")), m.SequenceID, nil
 	}
 	return "", 0, nil
 }

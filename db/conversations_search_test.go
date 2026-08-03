@@ -125,3 +125,44 @@ func TestSearchConversationsFTS(t *testing.T) {
 		t.Errorf("expected 0 results for bare %% query, got %d", len(noise))
 	}
 }
+
+// TestSearchConversationsFTSStripsCitationMarkers checks the search snippet,
+// which is built from raw message JSON and is client-facing.
+func TestSearchConversationsFTSStripsCitationMarkers(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conv, err := db.CreateConversation(ctx, stringPtr("cited"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	text := "A pelican is a large waterbird\ue200cite\ue202turn1search0\ue201 that fishes in flocks."
+	if _, err := db.CreateMessage(ctx, CreateMessageParams{
+		ConversationID: conv.ConversationID,
+		Type:           MessageTypeAgent,
+		LLMData:        map[string]any{"Content": []any{map[string]any{"Type": 2, "Text": text}}},
+	}); err != nil {
+		t.Fatalf("create agent msg: %v", err)
+	}
+
+	results, err := db.SearchConversationsFTS(ctx, "pelican", 50, 0)
+	if err != nil {
+		t.Fatalf("SearchConversationsFTS: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	snippet := results[0].Snippet
+	if strings.ContainsAny(snippet, "\ue200\ue201\ue202\ue203") {
+		t.Errorf("snippet contains citation markers: %q", snippet)
+	}
+	if strings.Contains(snippet, "citeturn1search0") {
+		t.Errorf("snippet contains citation payload: %q", snippet)
+	}
+	if !strings.Contains(snippet, "that fishes in flocks.") {
+		t.Errorf("snippet lost text following the citation: %q", snippet)
+	}
+}

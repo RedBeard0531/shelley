@@ -841,6 +841,7 @@ func TestSplitPreviewPacked(t *testing.T) {
 		{"timestamp only", ts, "", ts},
 		{"timestamp and text", ts + "hello world", "hello world", ts},
 		{"shorter than timestamp", "abc", "", ""},
+		{"citation markers stripped", ts + "answer\ue200cite\ue202turn1search0\ue201 next", "answer next", ts},
 		{"multibyte text preserved", ts + "héllo\u00e9", "héllo\u00e9", ts},
 	}
 	for _, tt := range tests {

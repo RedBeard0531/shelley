@@ -44,3 +44,36 @@ func TestLlmDataForAPIStripsOpenAIResponsesReasoningMetadata(t *testing.T) {
 		t.Fatalf("provider metadata leaked to API: %+v", got.Content[0].OpenAIResponsesReasoning)
 	}
 }
+
+func TestLlmDataForAPIStripsInlineCitationMarkersFromAgentText(t *testing.T) {
+	t.Parallel()
+
+	msg := llm.Message{
+		Role: llm.MessageRoleAssistant,
+		Content: []llm.Content{{
+			Type: llm.ContentTypeText,
+			Text: "answer\ue200cite\ue202turn1search0\ue201 next",
+		}},
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(b)
+	apiData, _ := llmDataForAPI(&raw, string(db.MessageTypeAgent), "msg_1")
+	if apiData == nil {
+		t.Fatal("llmDataForAPI returned nil")
+	}
+	var got llm.Message
+	if err := json.Unmarshal([]byte(*apiData), &got); err != nil {
+		t.Fatal(err)
+	}
+	if gotText := got.Content[0].Text; gotText != "answer next" {
+		t.Fatalf("API text = %q, want answer next", gotText)
+	}
+
+	userData, _ := llmDataForAPI(&raw, string(db.MessageTypeUser), "msg_1")
+	if userData != &raw {
+		t.Fatal("user-authored text should not be normalized")
+	}
+}

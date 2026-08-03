@@ -220,6 +220,16 @@ func llmDataForAPI(llmData *string, msgType, messageID string) (*string, *bool) 
 
 	changed := stripImageDataFromContents(msg.Content, messageID)
 	for i := range msg.Content {
+		if msgType == string(db.MessageTypeAgent) && msg.Content[i].Type == llm.ContentTypeText {
+			// Stripping shifts the text under any Citations annotation, whose
+			// start_index/end_index are relative to the raw text. No client
+			// places citations by offset — they render one marker per cited
+			// URL — but anything that starts to must rebase them here.
+			if stripped := llm.StripInlineCitationMarkers(msg.Content[i].Text); stripped != msg.Content[i].Text {
+				msg.Content[i].Text = stripped
+				changed = true
+			}
+		}
 		if msg.Content[i].OpenAIResponsesReasoning != nil {
 			msg.Content[i].OpenAIResponsesReasoning = nil
 			changed = true

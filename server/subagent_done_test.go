@@ -206,6 +206,7 @@ func TestSubagentDone(t *testing.T) {
 	t.Run("ConcurrentSubagentFinishes_BothPairsAtomic", testSubagentDone_ConcurrentFinishes)
 	t.Run("LastMessageIsToolUse_FallsBackGracefully", testSubagentDone_LastMessageIsToolUse)
 	t.Run("GitInfoMessageDoesNotLeakIntoNotification", testSubagentDone_GitInfoIgnored)
+	t.Run("CitationMarkersStripped", testSubagentDone_CitationMarkersStripped)
 	t.Run("EvictedParentManagerStillNotified", testSubagentDone_EvictedParentManagerStillNotified)
 }
 
@@ -1666,5 +1667,37 @@ func testSubagentDone_GitInfoIgnored(t *testing.T) {
 	}
 	if strings.Contains(text, "now at 7b2a11b65") {
 		t.Errorf("gitinfo message text leaked into tool_result: %q", truncForLog(text))
+	}
+}
+
+// testSubagentDone_CitationMarkersStripped verifies that a ChatGPT-backed
+// subagent's inline citation markup does not reach the parent conversation.
+// The notification carries the text in a tool_result, which llmDataForAPI's
+// agent-text strip never sees, so it must already be clean.
+func testSubagentDone_CitationMarkersStripped(t *testing.T) {
+	f := newSubagentDoneFixture(t, "Found it\ue200cite\ue202turn1search0\ue201 in the docs.")
+
+	f.fireOnDone()
+
+	waitFor(t, 5*time.Second, func() bool {
+		_, _, ok := f.findSyntheticPair()
+		return ok
+	})
+
+	_, result, ok := f.findSyntheticPair()
+	if !ok {
+		t.Fatalf("expected synthetic pair")
+	}
+	var text string
+	for _, c := range result.Content {
+		if c.Type == llm.ContentTypeToolResult {
+			text = toolResultText(c)
+		}
+	}
+	if !strings.Contains(text, "Found it in the docs.") {
+		t.Errorf("expected stripped subagent response in tool_result, got %q", truncForLog(text))
+	}
+	if strings.ContainsAny(text, "\ue200\ue201\ue202\ue203") {
+		t.Errorf("citation markers leaked into tool_result: %q", truncForLog(text))
 	}
 }
