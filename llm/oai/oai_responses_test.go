@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -940,6 +941,218 @@ func TestResponsesServiceDoConsumesPlainTextStream(t *testing.T) {
 	}
 	if got := streamed.String(); got != "streamed response" {
 		t.Fatalf("streamed text = %q, want streamed response", got)
+	}
+}
+
+func TestResponsesServiceRetriesPlainTextServerError(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts <= 2 {
+			http.Error(w, "gateway proxy: upstream request failed (trace: abc123)", http.StatusBadGateway)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			ID:     "retry-ok",
+			Status: "completed",
+			Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+			Usage:  responsesUsage{InputTokens: 1, OutputTokens: 1},
+		})
+	}))
+	defer server.Close()
+
+	var retries []llm.RetryEvent
+	svc := &ResponsesService{
+		APIKey:   "test-api-key",
+		Model:    GPT41,
+		ModelURL: server.URL,
+		Backoff:  []time.Duration{0},
+	}
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+	if len(retries) != 2 {
+		t.Fatalf("retry events = %d, want 2", len(retries))
+	}
+	if got := retries[0].Err; !strings.Contains(got, "trace: abc123") {
+		t.Fatalf("first retry error = %q, want gateway trace", got)
+	}
+	if got := resp.Content[0].Text; got != "ok" {
+		t.Fatalf("response text = %q, want ok", got)
+	}
+}
+
+func TestResponsesServicePrefersStructuredServerErrorMessage(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(w, `{"error":{"message":"structured boom"}}`)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			ID:     "retry-ok",
+			Status: "completed",
+			Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+			Usage:  responsesUsage{InputTokens: 1, OutputTokens: 1},
+		})
+	}))
+	defer server.Close()
+
+	var retry llm.RetryEvent
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnRetry:  func(event llm.RetryEvent) { retry = event },
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if !strings.Contains(retry.Err, "structured boom") || strings.Contains(retry.Err, `{"error"`) {
+		t.Fatalf("retry error = %q, want structured message only", retry.Err)
+	}
+}
+
+func TestResponsesServiceUsesFirstBackoffForFirstRetry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "temporary failure", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var retry llm.RetryEvent
+	svc := &ResponsesService{
+		APIKey:   "test-api-key",
+		Model:    GPT41,
+		ModelURL: server.URL,
+		Backoff:  []time.Duration{0, time.Hour},
+	}
+	_, err := svc.Do(ctx, &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnRetry: func(event llm.RetryEvent) {
+			retry = event
+			cancel()
+		},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want cancellation")
+	}
+	if retry.Sleep != 0 {
+		t.Fatalf("first retry sleep = %v, want Backoff[0] (0)", retry.Sleep)
+	}
+}
+
+func TestResponsesServiceRetriesPlainTextRateLimit(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			http.Error(w, "gateway rate limited", http.StatusTooManyRequests)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			ID:     "retry-ok",
+			Status: "completed",
+			Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+			Usage:  responsesUsage{InputTokens: 1, OutputTokens: 1},
+		})
+	}))
+	defer server.Close()
+
+	var retries []llm.RetryEvent
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if len(retries) != 1 || !strings.Contains(retries[0].Err, "rate limited") {
+		t.Fatalf("retry events = %#v, want one rate-limit event", retries)
+	}
+}
+
+func TestResponsesServiceBoundsRetriedErrorBodies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(strings.Repeat("x", 64<<10)))
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want exhausted retries")
+	}
+	if len(err.Error()) > 20<<10 {
+		t.Fatalf("error length = %d, want bounded retry history", len(err.Error()))
+	}
+}
+
+func TestResponsesServiceDoesNotRetryPlainTextClientError(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		http.Error(w, "integration not found or not attached to this VM", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want client error")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	if !strings.Contains(err.Error(), "integration not found") {
+		t.Fatalf("error = %q, want raw gateway message", err)
+	}
+}
+
+func TestResponsesServiceBoundsClientErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("useful prefix: " + strings.Repeat("x", 64<<10)))
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL}
+	_, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want client error")
+	}
+	if !strings.Contains(err.Error(), "useful prefix") {
+		t.Fatalf("error = %q, want useful prefix", err)
+	}
+	if len(err.Error()) > 8<<10 {
+		t.Fatalf("error length = %d, want bounded client error", len(err.Error()))
 	}
 }
 

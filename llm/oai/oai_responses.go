@@ -33,6 +33,7 @@ type ResponsesService struct {
 	DumpLLM       bool              // whether to dump request/response text to files for debugging; defaults to false
 	ThinkingLevel llm.ThinkingLevel // service-level default; zero (ThinkingLevelDefault) and ThinkingLevelOff both leave the field off the wire
 	ProviderName  string            // e.g., "openai"
+	Backoff       []time.Duration   // retry backoff durations; defaults to {1s, 2s, 5s, ...} if nil
 
 	// ReasoningEffort, if non-empty, is used as the reasoning.effort value sent to
 	// the OpenAI Responses API verbatim, overriding ThinkingLevel. This allows
@@ -632,18 +633,21 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 
 	// Retry mechanism: long tail because providers regularly have multi-hour
 	// incidents and returning after two minutes is a worse UX than waiting.
-	backoff := []time.Duration{
-		1 * time.Second,
-		2 * time.Second,
-		5 * time.Second,
-		10 * time.Second,
-		30 * time.Second,
-		1 * time.Minute,
-		2 * time.Minute,
-		5 * time.Minute,
-		10 * time.Minute,
-		20 * time.Minute,
-		30 * time.Minute,
+	backoff := s.Backoff
+	if len(backoff) == 0 {
+		backoff = []time.Duration{
+			1 * time.Second,
+			2 * time.Second,
+			5 * time.Second,
+			10 * time.Second,
+			30 * time.Second,
+			1 * time.Minute,
+			2 * time.Minute,
+			5 * time.Minute,
+			10 * time.Minute,
+			20 * time.Minute,
+			30 * time.Minute,
+		}
 	}
 
 	// retry loop
@@ -659,7 +663,9 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("responses request failed after %d attempts (context cancelled): %w", attempts, errs)
 			}
-			sleep := backoff[min(attempts, len(backoff)-1)] + time.Duration(rand.Int64N(int64(time.Second)))
+			base := backoff[min(attempts-1, len(backoff)-1)]
+			jitter := time.Duration(rand.Int64N(max(min(int64(base), int64(time.Second)), 1)))
+			sleep := base + jitter
 			if retryAfter > sleep {
 				sleep = retryAfter
 			}
@@ -709,38 +715,43 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 			}
 
 			var apiErr responsesError
-			if jsonErr := json.Unmarshal(body, &struct {
+			// Gateways may return plain text instead of the provider's JSON envelope.
+			_ = json.Unmarshal(body, &struct {
 				Error *responsesError `json:"error"`
-			}{Error: &apiErr}); jsonErr == nil && apiErr.Message != "" {
-				// We have a structured error
-				now := time.Now().Format(time.DateTime)
-				switch {
-				case httpResp.StatusCode >= 500:
-					// Server error, retry
-					retryAfter = llm.ParseRetryAfter(httpResp.Header.Get("Retry-After"))
-					lastErrSummary = fmt.Sprintf("status %d: %s", httpResp.StatusCode, llm.Truncate(apiErr.Message, 160))
-					slog.WarnContext(ctx, "responses_request_failed", "error", apiErr.Message, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName, "retry_after", retryAfter)
-					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
-					continue
-
-				case httpResp.StatusCode == 429:
-					// Rate limited, retry
-					retryAfter = llm.ParseRetryAfter(httpResp.Header.Get("Retry-After"))
-					lastErrSummary = fmt.Sprintf("status 429 rate limited: %s", llm.Truncate(apiErr.Message, 160))
-					slog.WarnContext(ctx, "responses_request_rate_limited", "error", apiErr.Message, "url", fullURL, "model", model.ModelName, "retry_after", retryAfter)
-					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (rate limited, url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
-					continue
-
-				case httpResp.StatusCode >= 400 && httpResp.StatusCode < 500:
-					// Client error, probably unrecoverable
-					slog.WarnContext(ctx, "responses_request_failed", "error", apiErr.Message, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName)
-					return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, apiErr.Message))
-				}
+			}{Error: &apiErr})
+			errMessage := strings.TrimSpace(string(body))
+			if apiErr.Message != "" {
+				errMessage = apiErr.Message
 			}
+			retryErrMessage := llm.Truncate(errMessage, 512)
+			terminalErrMessage := llm.Truncate(errMessage, 4<<10)
+			now := time.Now().Format(time.DateTime)
 
-			// No structured error, use the raw body
-			slog.WarnContext(ctx, "responses_request_failed", "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName, "body", string(body))
-			return nil, fmt.Errorf("status %d (url=%s, model=%s): %s", httpResp.StatusCode, fullURL, model.ModelName, string(body))
+			switch {
+			case httpResp.StatusCode >= 500:
+				// Server errors are retryable regardless of whether the provider or
+				// gateway encoded the error as JSON or plain text.
+				retryAfter = llm.ParseRetryAfter(httpResp.Header.Get("Retry-After"))
+				lastErrSummary = fmt.Sprintf("status %d: %s", httpResp.StatusCode, llm.Truncate(errMessage, 160))
+				slog.WarnContext(ctx, "responses_request_failed", "error", retryErrMessage, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName, "retry_after", retryAfter)
+				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, retryErrMessage))
+				continue
+
+			case httpResp.StatusCode == http.StatusTooManyRequests:
+				retryAfter = llm.ParseRetryAfter(httpResp.Header.Get("Retry-After"))
+				lastErrSummary = "status 429 rate limited: " + llm.Truncate(errMessage, 160)
+				slog.WarnContext(ctx, "responses_request_rate_limited", "error", retryErrMessage, "url", fullURL, "model", model.ModelName, "retry_after", retryAfter)
+				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (rate limited, url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, retryErrMessage))
+				continue
+
+			case httpResp.StatusCode >= 400:
+				slog.WarnContext(ctx, "responses_request_failed", "error", terminalErrMessage, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName)
+				return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, terminalErrMessage))
+
+			default:
+				slog.WarnContext(ctx, "responses_request_failed", "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName, "body", terminalErrMessage)
+				return nil, fmt.Errorf("status %d (url=%s, model=%s): %s", httpResp.StatusCode, fullURL, model.ModelName, terminalErrMessage)
+			}
 		}
 
 		var resp responsesResponse

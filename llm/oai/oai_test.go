@@ -1663,6 +1663,36 @@ func TestServiceDoSendsMaxCompletionTokens(t *testing.T) {
 	}
 }
 
+func TestServiceUsesFirstBackoffForFirstRetry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "temporary failure", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var retry llm.RetryEvent
+	svc := &Service{
+		APIKey:   "test-key",
+		Model:    GPT41,
+		ModelURL: server.URL + "/v1",
+		Backoff:  []time.Duration{0, time.Hour},
+	}
+	_, err := svc.Do(ctx, &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnRetry: func(event llm.RetryEvent) {
+			retry = event
+			cancel()
+		},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want cancellation")
+	}
+	if retry.Sleep != 0 {
+		t.Fatalf("first retry sleep = %v, want Backoff[0] (0)", retry.Sleep)
+	}
+}
+
 func TestServiceDoProxyPlainTextError(t *testing.T) {
 	// Simulate a proxy returning a plain-text error (not JSON).
 	// Previously this would fail to parse as *openai.APIError and

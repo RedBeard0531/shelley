@@ -1293,7 +1293,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 
 	// Retry mechanism
 	backoff := s.Backoff
-	if backoff == nil {
+	if len(backoff) == 0 {
 		// Long tail: many model providers have multi-hour incidents, and it is
 		// a much worse UX to return after a couple of minutes than to keep waiting.
 		backoff = []time.Duration{
@@ -1323,7 +1323,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("openai request failed after %d attempts (context cancelled): %w", attempts, errs)
 			}
-			base := backoff[min(attempts, len(backoff)-1)]
+			base := backoff[min(attempts-1, len(backoff)-1)]
 			jitter := time.Duration(rand.Int64N(max(min(int64(base), int64(time.Second)), 1)))
 			sleep := base + jitter
 			slog.WarnContext(ctx, "openai request sleep before retry", "sleep", sleep, "attempts", attempts, "elapsed", time.Since(retryStart).Round(time.Second), "last_error", lastErrSummary)
