@@ -1635,9 +1635,7 @@ function beginConversationLoading(focusedId: string): void {
   if (!loading.value) return;
   loadingFlag = true;
   renderingConversation.value = false;
-  const storedCount = loadMsgCount();
-  const listedCount = messageStore.peek(focusedId)?.maxSequenceIdKnown ?? 0;
-  const knownCount = storedCount ?? (listedCount > 0 ? listedCount : null);
+  const knownCount = loadMsgCount();
   lastKnownMessageCount.value = knownCount;
   loadingProgress.value = {
     phase: "cache",
@@ -1676,7 +1674,6 @@ function waitForConversationPaint(): Promise<void> {
 type CachedConversationRecord = NonNullable<ReturnType<typeof messageStore.peek>>;
 
 function applyConversationRecord(cached: CachedConversationRecord): void {
-  pendingScroll = loadScroll();
   messages.value = cached.messages;
   lastKnownMessageCount.value = cached.messages.length;
   saveMsgCount(cached.messages.length);
@@ -2882,6 +2879,7 @@ watch(
   () => props.conversationId,
   (id) => {
     currentConversationId = id;
+    pendingScroll = id ? loadScroll() : undefined;
     teardownSubscriptions();
     // An annotation view belongs to the image it was opened from; switching
     // conversations leaves it stranded.

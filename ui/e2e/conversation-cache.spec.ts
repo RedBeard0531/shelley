@@ -15,16 +15,20 @@ async function waitForText(page: import('@playwright/test').Page, text: string, 
  * Uses exact slug text matching to find the right item.
  */
 async function selectConversation(page: import('@playwright/test').Page, slug: string) {
-  // Open drawer (mobile: hamburger button)
-  const drawerButton = page.locator('button[aria-label="Open conversations"]');
-  await drawerButton.click();
-  const drawer = page.locator('.drawer.open');
-  await expect(drawer).toBeVisible({ timeout: 5000 });
-  // Click the conversation title with exact slug text
-  const titleEl = drawer.locator('.conversation-title').getByText(slug, { exact: true });
-  await expect(titleEl).toBeVisible({ timeout: 15000 });
+  const openDrawer = page.locator('button[aria-label="Open conversations"]');
+  const mobile = await openDrawer.isVisible();
+  if (mobile) {
+    await openDrawer.click();
+    await expect(page.locator('.drawer.open')).toBeVisible({ timeout: 5000 });
+  } else {
+    const expandSidebar = page.locator('button[aria-label="Expand sidebar"]');
+    if (await expandSidebar.isVisible()) await expandSidebar.click();
+  }
+  const titleEl = page.locator('.conversation-title').getByText(slug, { exact: true });
+  await titleEl.scrollIntoViewIfNeeded();
+  await expect(titleEl).toBeInViewport({ timeout: 15000 });
   await titleEl.click();
-  await expect(drawer).toBeHidden({ timeout: 10000 });
+  if (mobile) await expect(page.locator('.drawer.open')).toBeHidden({ timeout: 10000 });
 }
 
 /**
@@ -207,30 +211,75 @@ test.describe('Conversation cache', () => {
     expect(stats['load.full_rest'] ?? 0).toBe(0);
   });
 
-  test('a stalled incremental refresh does not hide cached history', async ({ page, request }) => {
-    const conv = await createConversationViaAPIWithDetails(request, 'Hello');
-
-    await page.goto(`/c/${conv.slug}`);
-    await expect(page.getByTestId('message-input')).toBeVisible({ timeout: 30000 });
-    await waitForText(page, "Hello! I'm Shelley, your AI assistant.");
-    await waitForCachedHistory(page, conv.conversationId);
-
-    await page.goto('about:blank');
-    const chatResp = await request.post(`/api/conversation/${conv.conversationId}/chat`, {
-      data: { message: 'echo: delayed tail', model: 'predictable' },
+  test('a stalled incremental refresh reveals and restores hot cached history', async ({ page, request }) => {
+    await page.addInitScript(() => {
+      const nativeEventSource = window.EventSource;
+      const sources: EventSource[] = [];
+      Object.defineProperty(window, '__testEventSources', { value: sources });
+      Object.defineProperty(window, 'EventSource', {
+        configurable: true,
+        value: class extends nativeEventSource {
+          constructor(url: string | URL, eventSourceInitDict?: EventSourceInit) {
+            super(url, eventSourceInitDict);
+            sources.push(this);
+          }
+        }
+      });
     });
-    expect(chatResp.ok()).toBeTruthy();
-    await expect(async () => {
-      const resp = await request.get(`/api/conversation/${conv.conversationId}`);
-      expect(JSON.stringify((await resp.json()).messages ?? [])).toContain('delayed tail');
-    }).toPass({ timeout: 30000 });
+    const generated = await request.post('/debug/loremipsum?json=1', {
+      form: { size: '15', model: 'predictable' }
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+    const slug = `loremipsum-15turns-${conversationId}`;
+    const other = await createConversationViaAPIWithDetails(request, 'Hello');
+
+    await page.goto(`/c/${slug}`);
+    await expect(page.getByTestId('message-input')).toBeVisible({ timeout: 30000 });
+    await expect.poll(() => page.getByTestId('message').count()).toBeGreaterThan(20);
+    await waitForCachedHistory(page, conversationId);
+
+    const restoredScrollTop = 1000;
+    const messagesContainer = page.locator('.messages-container');
+    await messagesContainer.evaluate((element, top) => {
+      element.scrollTop = top;
+      element.dispatchEvent(new Event('scroll'));
+    }, restoredScrollTop);
+    await expect.poll(() => page.evaluate(
+      (id) => localStorage.getItem(`shelley_scroll_${id}`),
+      conversationId
+    )).toBe(String(restoredScrollTop));
+    await selectConversation(page, other.slug);
+    await waitForText(page, "Hello! I'm Shelley, your AI assistant.");
+    await waitForCachedHistory(page, other.conversationId);
+
+    let sawOtherRefresh = false;
+    page.on('request', (req) => {
+      const url = new URL(req.url());
+      if (url.pathname === `/api/conversation/${other.conversationId}` &&
+          url.searchParams.has('last_sequence_id')) {
+        sawOtherRefresh = true;
+      }
+    });
+    await page.evaluate(() => {
+      const sources = (window as Window & { __testEventSources?: EventSource[] }).__testEventSources;
+      const source = sources?.at(-1);
+      if (!source) throw new Error('global EventSource was not captured');
+      source.close();
+      window.dispatchEvent(new Event('online'));
+    });
+    const reconnectEvent = await request.post('/debug/loremipsum?json=1', {
+      form: { size: '1', model: 'predictable' }
+    });
+    expect(reconnectEvent.ok()).toBeTruthy();
+    await expect.poll(() => sawOtherRefresh, { timeout: 15000 }).toBeTruthy();
 
     let releaseTail = () => {};
     const tailGate = new Promise<void>((resolve) => {
       releaseTail = resolve;
     });
     let sawIncremental = false;
-    await page.route(new RegExp(`/api/conversation/${conv.conversationId}\\?`), async (route) => {
+    await page.route(new RegExp(`/api/conversation/${conversationId}\\?`), async (route) => {
       if (!new URL(route.request().url()).searchParams.has('last_sequence_id')) {
         await route.continue();
         return;
@@ -241,16 +290,21 @@ test.describe('Conversation cache', () => {
     });
 
     try {
-      await page.goto(`/c/${conv.slug}`);
+      await selectConversation(page, slug);
       await expect.poll(() => sawIncremental).toBeTruthy();
-      // The network tail is still blocked, but the complete IndexedDB prefix
-      // must already be visible and the loading overlay must be gone.
-      await waitForText(page, "Hello! I'm Shelley, your AI assistant.");
-      await expect(page.locator('.conversation-loading')).toHaveCount(0);
+      // The network tail is still blocked, but the complete hot-memory prefix
+      // must already be usable, unobscured, and restored to its saved offset.
+      await expect.poll(() => page.getByTestId('message').count()).toBeGreaterThan(20);
+      await expect(page.locator('.conversation-loading-overlay')).toHaveCount(0);
+      await expect.poll(() => messagesContainer.evaluate(
+        (element) => element.scrollTop
+      )).toBeGreaterThan(restoredScrollTop - 100);
+      await expect.poll(() => messagesContainer.evaluate(
+        (element) => element.scrollTop
+      )).toBeLessThan(restoredScrollTop + 100);
     } finally {
       releaseTail();
     }
-    await waitForText(page, 'delayed tail');
   });
 
   test('messages added while the tab was closed arrive via an incremental fetch', async ({
