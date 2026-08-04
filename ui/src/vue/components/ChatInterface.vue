@@ -1516,6 +1516,9 @@ const showStreamingPreview = computed(() => !!streamingText.value && agentWorkin
 
 // ---- scroll ----
 const MAX_SCROLL_OFFSET = 0x7fffffff;
+function observedBottomScrollTop(listHeight: number, containerHeight: number): number {
+  return Math.max(0, listHeight - containerHeight);
+}
 const BOTTOM_PIN_SCROLL_RELEASE_DELTA = 128;
 // The bottom sentinel's IntersectionObserver rootMargin, which the observer
 // below is built from. An upward scroll larger than this cannot be one of the
@@ -1568,8 +1571,12 @@ function scrollToBottom() {
       stopBottomPin();
       return;
     }
-    el.scrollTop = MAX_SCROLL_OFFSET;
-    lastObservedScrollTop = el.scrollTop;
+    const bottomScrollTop =
+      lastListHeight > 0 && lastContainerHeight > 0
+        ? observedBottomScrollTop(lastListHeight, lastContainerHeight)
+        : null;
+    el.scrollTop = bottomScrollTop ?? MAX_SCROLL_OFFSET;
+    if (bottomScrollTop !== null) lastObservedScrollTop = bottomScrollTop;
     if (!bottomPinActive) return;
     bottomPinFrame = requestAnimationFrame(step);
   };
@@ -3323,9 +3330,16 @@ function setupScrollObservers() {
     // detection lives solely in handleScroll (with clamp discounting); inferring
     // it from resize events is what misfired on layout clamps.
     if (!userScrolled && !catchingUp) {
-      container.scrollTop = MAX_SCROLL_OFFSET;
+      // Avoid reading scrollTop after this write. In WebKit that read resolves
+      // the clamped offset by synchronously laying out content-visibility
+      // chunks. The observer already gives us both dimensions for free, and
+      // container padding cancels out of scrollHeight - clientHeight.
+      const bottomScrollTop = observedBottomScrollTop(listHeight, containerHeight);
+      container.scrollTop = bottomScrollTop;
+      if (listHeight > 0 && containerHeight > 0) lastObservedScrollTop = bottomScrollTop;
+    } else {
+      lastObservedScrollTop = container.scrollTop;
     }
-    lastObservedScrollTop = container.scrollTop;
   });
   // (Re)attach the element observers whenever the list/sentinel nodes change.
   // The v-if="loading" spinner tears down and recreates .messages-list on every

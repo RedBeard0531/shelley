@@ -2,6 +2,72 @@ import { test, expect } from "@playwright/test";
 import { createConversationViaAPI, createConversationViaAPIWithDetails } from "./helpers";
 
 test.describe("Scroll behavior", () => {
+  test("auto-pinning does not synchronously read back scrollTop", async ({ page, request }) => {
+    await page.addInitScript(() => {
+      const state = window as Window & {
+        __messagesScrollTopWrites?: number;
+        __messagesScrollTopReadsAfterWrite?: number;
+      };
+      const scrollTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+      if (!scrollTop?.get || !scrollTop.set)
+        throw new Error("Element.scrollTop accessors not found");
+      let wroteMessagesScrollTop = false;
+      state.__messagesScrollTopWrites = 0;
+      state.__messagesScrollTopReadsAfterWrite = 0;
+      Object.defineProperty(Element.prototype, "scrollTop", {
+        configurable: scrollTop.configurable,
+        enumerable: scrollTop.enumerable,
+        get() {
+          if (
+            wroteMessagesScrollTop &&
+            this instanceof HTMLElement &&
+            this.classList.contains("messages-container")
+          ) {
+            state.__messagesScrollTopReadsAfterWrite =
+              (state.__messagesScrollTopReadsAfterWrite || 0) + 1;
+          }
+          return scrollTop.get!.call(this);
+        },
+        set(value: number) {
+          if (this instanceof HTMLElement && this.classList.contains("messages-container")) {
+            state.__messagesScrollTopWrites = (state.__messagesScrollTopWrites || 0) + 1;
+            wroteMessagesScrollTop = true;
+            queueMicrotask(() => {
+              wroteMessagesScrollTop = false;
+            });
+          }
+          scrollTop.set!.call(this, value);
+        },
+      });
+    });
+
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+
+    await page.goto(`/c/${conversationId}`);
+    await expect(page.locator('[data-testid="message-input"]')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as Window & { __messagesScrollTopWrites?: number }).__messagesScrollTopWrites ||
+            0,
+        ),
+      )
+      .toBeGreaterThan(0);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as Window & { __messagesScrollTopReadsAfterWrite?: number })
+            .__messagesScrollTopReadsAfterWrite || 0,
+      ),
+    ).toBe(0);
+  });
+
   test("shows scroll-to-bottom button when scrolled up, auto-scrolls when at bottom", async ({
     page,
     request,
@@ -42,7 +108,8 @@ test.describe("Scroll behavior", () => {
       const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
       const scrollTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
       if (!scrollHeight?.get) throw new Error("Element.scrollHeight getter not found");
-      if (!scrollTop?.get || !scrollTop.set) throw new Error("Element.scrollTop accessors not found");
+      if (!scrollTop?.get || !scrollTop.set)
+        throw new Error("Element.scrollTop accessors not found");
       state.__messageRectReads = 0;
       state.__messagesScrollHeightReads = 0;
       Element.prototype.getBoundingClientRect = function () {
@@ -179,9 +246,7 @@ test.describe("Scroll behavior", () => {
     });
     await expect
       .poll(() =>
-        messagesContainer.evaluate(
-          (el) => el.scrollHeight - el.clientHeight - el.scrollTop > 100,
-        ),
+        messagesContainer.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop > 100),
       )
       .toBe(true);
     await expect(scrollButton).toBeVisible({ timeout: 5000 });
@@ -383,10 +448,7 @@ test.describe("Scroll behavior", () => {
     await expect(scrollButton).not.toBeVisible({ timeout: 10000 });
     await expect
       .poll(
-        () =>
-          messagesContainer.evaluate(
-            (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
-          ),
+        () => messagesContainer.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
         { timeout: 10000 },
       )
       .toBeLessThan(120);
@@ -398,10 +460,7 @@ test.describe("Scroll behavior", () => {
     await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
     await expect
       .poll(
-        () =>
-          messagesContainer.evaluate(
-            (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
-          ),
+        () => messagesContainer.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight),
         { timeout: 10000 },
       )
       .toBeLessThan(120);

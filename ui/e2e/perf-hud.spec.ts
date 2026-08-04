@@ -150,15 +150,16 @@ test.describe("Performance HUD", () => {
     const conversationTitle = page
       .locator(".conversation-title")
       .getByText(conversationSlug, { exact: true });
-    if (!(await conversationTitle.isVisible())) {
-      await page
-        .locator(
-          'button[aria-label="Open conversations"]:visible, button[aria-label="Expand sidebar"]:visible',
-        )
-        .first()
-        .click();
-      await expect(conversationTitle).toBeVisible();
+    const openConversations = page.locator('button[aria-label="Open conversations"]');
+    if (await openConversations.isVisible()) {
+      await openConversations.click();
+      await expect(page.locator(".drawer.open")).toBeVisible();
+    } else {
+      const expandSidebar = page.locator('button[aria-label="Expand sidebar"]');
+      if (await expandSidebar.isVisible()) await expandSidebar.click();
     }
+    await conversationTitle.scrollIntoViewIfNeeded();
+    await expect(conversationTitle).toBeInViewport();
     await conversationTitle.click();
     await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
 

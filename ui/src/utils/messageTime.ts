@@ -3,29 +3,42 @@
 // the existing test components/MessageTimestamp.test.ts) share one
 // implementation. The React file re-exports formatDay/formatRelative from here.
 
+const timeFormatter = new Intl.DateTimeFormat([], {
+  hour: "numeric",
+  minute: "2-digit",
+});
+const absoluteFormatter = new Intl.DateTimeFormat([], {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+const currentYearDayFormatter = new Intl.DateTimeFormat([], {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+});
+const otherYearDayFormatter = new Intl.DateTimeFormat([], {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+
 export function formatTime(d: Date): string {
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return timeFormatter.format(d);
 }
 
 export function formatAbsolute(d: Date): string {
-  return d.toLocaleString([], {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return absoluteFormatter.format(d);
 }
 
 export function formatDay(d: Date, now: Date): string {
-  const sameYear = d.getFullYear() === now.getFullYear();
-  return d.toLocaleDateString([], {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: sameYear ? undefined : "numeric",
-  });
+  const formatter =
+    d.getFullYear() === now.getFullYear() ? currentYearDayFormatter : otherYearDayFormatter;
+  return formatter.format(d);
 }
 
 export function formatRelative(deltaMs: number): string {
