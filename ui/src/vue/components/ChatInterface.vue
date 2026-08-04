@@ -1359,7 +1359,7 @@ function buildRenderModel(): GenerationBlock[] {
       const isPillable =
         toolPillsEnabled.value &&
         item.type === "tool" &&
-        !isAutoExpandTool(item.toolName, item.toolInput);
+        !isAutoExpandTool(item.toolName, item.toolInput, item.display);
       if (!isPillable || pillBuf.length === 0) {
         const tsNodes = maybeTimestamp(
           itemTime(item),

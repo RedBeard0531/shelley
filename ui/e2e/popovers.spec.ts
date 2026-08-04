@@ -60,6 +60,47 @@ test.describe("Conversation TOC popover", () => {
       expect(new URL(page.url()).hash).toMatch(/^#m-[a-zA-Z0-9]+$/);
     }).toPass({ timeout: 5000 });
   });
+
+  test("shows timeline images as thumbnails", async ({ page, request }) => {
+    test.setTimeout(180000);
+
+    const inlineSlug = await createConversationViaAPI(request, "screenshot image", {
+      agentTimeout: 90000,
+    });
+    await page.goto(`/c/${inlineSlug}`);
+    const inlineImage = page.locator(".message-agent img").first();
+    await expect(inlineImage).toBeVisible({ timeout: 30000 });
+
+    await page.locator(".toc-button").click();
+    const inlineEntry = page.locator(".toc-popover .toc-entry-eot").filter({
+      hasText: "Verified against the real product",
+    });
+    const inlineThumbnail = inlineEntry.locator(".toc-entry-thumbnail");
+    await expect(inlineThumbnail).toBeVisible();
+    expect(await inlineThumbnail.getAttribute("src")).toBe(await inlineImage.getAttribute("src"));
+    await page.keyboard.press("Escape");
+
+    const toolSlug = await createConversationViaAPI(request, "screenshot", {
+      agentTimeout: 90000,
+    });
+    await page.goto(`/c/${toolSlug}`);
+    const toolImage = page.locator(".screenshot-tool img").first();
+    await expect(toolImage).toBeVisible({ timeout: 30000 });
+    const toolImageSrc = await toolImage.getAttribute("src");
+    await page.locator(".screenshot-tool-header").first().click();
+    await expect(toolImage).toBeHidden();
+
+    await page.locator(".toc-button").click();
+    const toolEntry = page.locator(".toc-popover .toc-entry-image").first();
+    const toolThumbnail = toolEntry.locator(".toc-entry-thumbnail");
+    await expect(toolThumbnail).toBeVisible();
+    expect(await toolThumbnail.getAttribute("src")).toBe(toolImageSrc);
+
+    await toolEntry.click();
+    await expect(page.locator(".toc-popover")).toBeHidden();
+    await expect(page).toHaveURL(/#t-[a-zA-Z0-9]+$/);
+    await expect(page.locator(".screenshot-tool").first()).toHaveClass(/message-highlight/);
+  });
 });
 
 test.describe("Message action bar", () => {

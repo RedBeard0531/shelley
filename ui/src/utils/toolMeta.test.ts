@@ -1,4 +1,10 @@
-import { HEADLINE_BUDGET_NARROW, HEADLINE_BUDGET_WIDE, toolEmoji, toolHeadline } from "./toolMeta";
+import {
+  HEADLINE_BUDGET_NARROW,
+  HEADLINE_BUDGET_WIDE,
+  isAutoExpandTool,
+  toolEmoji,
+  toolHeadline,
+} from "./toolMeta";
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(`Assertion failed: ${msg}`);
@@ -140,6 +146,14 @@ run("umbrella browser tool picks per-family emoji for folded-in actions", () => 
     const got = toolEmoji("browser", { action });
     assert(got === emoji, `browser ${action} -> ${got}, want ${emoji}`);
   }
+});
+
+run("llm_one_shot image output stays inline", () => {
+  assert(
+    isAutoExpandTool("llm_one_shot", {}, { images: [{ url: "/api/read?path=image.png" }] }),
+    "image output should auto-expand",
+  );
+  assert(!isAutoExpandTool("llm_one_shot", {}, { images: [] }), "text-only output stays a pill");
 });
 
 console.log("\ntoolMeta tests passed");

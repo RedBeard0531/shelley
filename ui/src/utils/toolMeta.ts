@@ -444,11 +444,28 @@ function inputSummary(name: string | undefined | null, input: unknown): string {
  *  current full-bleed card so the user sees the diff / image
  *  without an extra tap.
  */
-export function isAutoExpandTool(name: string | undefined | null, input?: unknown): boolean {
+export function isAutoExpandTool(
+  name: string | undefined | null,
+  input?: unknown,
+  display?: unknown,
+): boolean {
   // The umbrella "browser" tool multiplexes many actions; only its
   // screenshot action produces an inline image worth auto-expanding.
   if (name === "browser") {
     return browserAction(input) === "screenshot";
+  }
+  if (name === "llm_one_shot") {
+    if (typeof display !== "object" || display === null) return false;
+    const images = (display as { images?: unknown }).images;
+    return (
+      Array.isArray(images) &&
+      images.some(
+        (image) =>
+          typeof image === "object" &&
+          image !== null &&
+          typeof (image as { url?: unknown }).url === "string",
+      )
+    );
   }
   switch (name) {
     case "patch":

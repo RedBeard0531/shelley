@@ -3,6 +3,7 @@
      falling back to a generic running/completed card. Preserves the
      tool-running / tool-result-details class + testid contract. -->
 <template>
+  <div v-if="toolUseId" class="toc-tool-anchor" :data-tool-use-id="toolUseId" aria-hidden="true" />
   <component :is="toolComponent" v-if="toolComponent" v-bind="toolComponentProps" />
 
   <!-- Fallback: running state -->
