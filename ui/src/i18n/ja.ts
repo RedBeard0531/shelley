@@ -103,6 +103,7 @@ export const ja: TranslationKeys = {
   subagentIsWorking: "サブエージェントが作業中...",
   running: "実行中",
   hideSubagents: "サブエージェントを非表示",
+  terminalsPinnedHere: "この会話のターミナル",
   showSubagents: "サブエージェントを表示",
   groupConversations: "会話をグループ化",
   resortNow: "今すぐ並べ替え",

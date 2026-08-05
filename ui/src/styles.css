@@ -877,6 +877,38 @@ body {
   min-width: 0;
 }
 
+/* Terminal count on drawer rows: shown when a conversation has more than one
+   pinned terminal. Sits at the right edge of the meta row, next to the
+   subagent badge when both are present. */
+.conversation-terminal-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  font-size: 0.75rem;
+  padding: 0 0.25rem;
+  border-radius: 0.25rem;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* When both badges are shown, only the first one should push right. */
+.conversation-terminal-count + .subagent-count-badge {
+  margin-left: 0;
+}
+
+.conversation-terminal-count-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.conversation-item.active .conversation-terminal-count {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.8);
+}
+
 .subagent-count-badge {
   display: inline-flex;
   align-items: center;
@@ -8129,8 +8161,23 @@ kbd {
   line-height: 1;
 }
 
+/* The running blob as a geometric circle, flex-centered like the pin, label,
+   and close button. As a text glyph (\25CF) its baseline descent made it sit
+   visually lower than everything else in the tab. */
 .terminal-panel-tab-running {
-  color: var(--success-text);
+  color: transparent;
+  position: relative;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+}
+
+.terminal-panel-tab-running::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--success-text);
 }
 
 .terminal-panel-tab-success {
@@ -8145,6 +8192,75 @@ kbd {
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Per-tab scope toggle: a filled pin when pinned to this conversation, a grey
+   outline when global. Sized as a real touch/click target. */
+.terminal-panel-tab-scope {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.terminal-panel-tab-pin {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 16px;
+  margin: 0 -2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  border-radius: 3px;
+  padding: 0;
+}
+
+/* Expand the hit area beyond the narrow visual box so the pin stays easy to
+   click/tap without pushing the tab layout out of line. */
+.terminal-panel-tab-pin::before {
+  content: "";
+  position: absolute;
+  inset: -4px -6px;
+}
+
+.terminal-panel-tab-pin svg {
+  display: block;
+  width: 11px;
+  height: 11px;
+}
+
+.terminal-panel-tab-pin-pinned {
+  color: var(--primary);
+}
+
+.terminal-panel-tab-pin-pinned svg {
+  fill: currentColor;
+  fill-opacity: 0.3;
+}
+
+.terminal-panel-tab-pin:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.terminal-panel-tab-pin-pinned:hover {
+  color: var(--primary-dark);
+}
+
+.terminal-panel-tab-pin:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Separates this conversation's own terminals from the global ones. */
+.terminal-panel-tabs-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
 }
 
 .terminal-panel-tab-close {
@@ -8177,6 +8293,11 @@ kbd {
   border-radius: 4px;
   padding: 2px;
   flex-shrink: 0;
+}
+
+.terminal-panel-action-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .terminal-panel-actions-divider {

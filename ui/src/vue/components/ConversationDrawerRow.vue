@@ -114,6 +114,30 @@
         >
           {{ ctx.formatCwdForDisplay(conversation.cwd) }}
         </span>
+        <!-- Terminal count. Only shown when the conversation has more than
+             one terminal pinned to it: a single terminal is the ordinary
+             case and not worth a badge. -->
+        <span
+          v-if="!isDraft && !itemArchived && terminalCount > 1"
+          class="conversation-terminal-count"
+          v-tooltip.top="`${terminalCount} ${ctx.t('terminalsPinnedHere')}`"
+          :aria-label="`${terminalCount} ${ctx.t('terminalsPinnedHere')}`"
+        >
+          <svg
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            class="conversation-terminal-count-icon"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              :stroke-width="2"
+              d="M8 9l3 3-3 3m5 0h3M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1z"
+            />
+          </svg>
+          {{ terminalCount }}
+        </span>
         <button
           v-if="!isDraft && !itemArchived && hasSubagents"
           class="subagent-count-badge"
@@ -326,6 +350,10 @@ const subagentCount = computed(() =>
   isDraft.value ? 0 : conversationSubagents.value.length || convState.value.subagent_count || 0,
 );
 const hasSubagents = computed(() => subagentCount.value > 0);
+// Live terminals pinned to this conversation. Badged only when > 1.
+const terminalCount = computed(
+  () => ctx.terminalCounts.value[props.conversation.conversation_id] ?? 0,
+);
 // How many of this conversation's subagents are currently working. Drives
 // the working ring + "running/total" split on the count badge.
 const runningSubagentCount = computed(

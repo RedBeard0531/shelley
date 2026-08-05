@@ -103,6 +103,7 @@ export const zhCN: TranslationKeys = {
   subagentIsWorking: "子代理正在工作...",
   running: "运行中",
   hideSubagents: "隐藏子代理",
+  terminalsPinnedHere: "个终端在此对话中",
   showSubagents: "显示子代理",
   groupConversations: "对话分组",
   resortNow: "立即重新排序",

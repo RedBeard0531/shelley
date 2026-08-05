@@ -326,12 +326,16 @@ import { handleModifiedNavClick } from "../utils/openInNewTab";
 import ConversationRow from "./ConversationDrawerRow.vue";
 import Button from "primevue/button";
 import { DrawerCtxKey, type GroupBy, parseTags } from "./conversationDrawerShared";
+import type { EphemeralTerminal } from "./terminalTypes";
 import { perfCount } from "../../utils/perf";
 
 const props = defineProps<{
   isOpen: boolean;
   isCollapsed: boolean;
   conversations: ConversationWithState[];
+  // All live terminals, used to badge conversations that have more than one
+  // terminal pinned to them.
+  ephemeralTerminals: EphemeralTerminal[];
   currentConversationId: string | null;
   viewedConversation?: Conversation | null;
   showActiveTrigger?: number;
@@ -928,6 +932,15 @@ onMounted(() => {});
 provide(DrawerCtxKey, {
   t,
   currentConversationId: computed(() => props.currentConversationId),
+  terminalCounts: computed(() => {
+    const counts: Record<string, number> = {};
+    for (const tm of props.ephemeralTerminals) {
+      if (tm.conversationId !== null) {
+        counts[tm.conversationId] = (counts[tm.conversationId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }),
   subagentsByParent,
   expandedSubagents,
   seenIds,

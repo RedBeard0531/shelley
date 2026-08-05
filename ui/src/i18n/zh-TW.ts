@@ -103,6 +103,7 @@ export const zhTW: TranslationKeys = {
   subagentIsWorking: "子代理正在工作...",
   running: "運行中",
   hideSubagents: "隱藏子代理",
+  terminalsPinnedHere: "個終端在此對話中",
   showSubagents: "顯示子代理",
   groupConversations: "對話分組",
   resortNow: "立即重新排序",

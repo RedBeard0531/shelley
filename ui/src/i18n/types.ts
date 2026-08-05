@@ -103,6 +103,7 @@ export interface TranslationKeys {
   subagentIsWorking: string;
   running: string;
   hideSubagents: string;
+  terminalsPinnedHere: string;
   showSubagents: string;
   groupConversations: string;
   resortNow: string;

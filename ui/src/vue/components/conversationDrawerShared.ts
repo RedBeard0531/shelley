@@ -60,6 +60,9 @@ export function renderSnippetSegments(snippet: string): SnippetSegment[] {
 export interface DrawerCtx {
   t: (key: keyof TranslationKeys) => string;
   currentConversationId: ComputedRef<string | null>;
+  // Number of live terminals pinned to each conversation. Rows show a badge
+  // when a conversation has more than one.
+  terminalCounts: ComputedRef<Record<string, number>>;
   subagentsByParent: ComputedRef<Record<string, ConversationWithState[]>>;
   expandedSubagents: Ref<Set<string>>;
   seenIds: Ref<Set<string> | null>;

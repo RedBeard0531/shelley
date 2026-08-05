@@ -103,6 +103,7 @@ export const ru: TranslationKeys = {
   subagentIsWorking: "Субагент работает...",
   running: "работает",
   hideSubagents: "Скрыть субагентов",
+  terminalsPinnedHere: "терминалов в этом разговоре",
   showSubagents: "Показать субагентов",
   groupConversations: "Группировать диалоги",
   resortNow: "Пересортировать",

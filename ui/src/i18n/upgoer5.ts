@@ -103,6 +103,7 @@ export const upgoer5: TranslationKeys = {
   subagentIsWorking: "Little helper is working...",
   running: "going",
   hideSubagents: "Hide little helpers",
+  terminalsPinnedHere: "type boxes stuck to this talk",
   showSubagents: "Show little helpers",
   groupConversations: "Put talks in groups",
   resortNow: "Put in order now",

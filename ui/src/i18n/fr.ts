@@ -105,6 +105,7 @@ export const fr: TranslationKeys = {
   subagentIsWorking: "Le sous-agent travaille...",
   running: "en cours",
   hideSubagents: "Masquer les sous-agents",
+  terminalsPinnedHere: "terminaux dans cette conversation",
   showSubagents: "Afficher les sous-agents",
   groupConversations: "Grouper les conversations",
   resortNow: "Trier maintenant",

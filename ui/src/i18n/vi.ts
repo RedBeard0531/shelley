@@ -103,6 +103,7 @@ export const vi: TranslationKeys = {
   subagentIsWorking: "Subagent đang làm việc...",
   running: "đang chạy",
   hideSubagents: "Ẩn subagent",
+  terminalsPinnedHere: "terminal trong cuộc trò chuyện này",
   showSubagents: "Hiện subagent",
   groupConversations: "Gộp nhóm các hội thoại",
   resortNow: "Sắp xếp lại",
