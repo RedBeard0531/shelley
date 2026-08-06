@@ -176,6 +176,8 @@
               :citations="item.citations"
               :render-markdown="shouldRenderMarkdown(markdownMode, isUser, isDistilledUser)"
               :message-id="message.message_id"
+              :cache-owner="message"
+              :run-key="String(index)"
             />
             <MessageContentBlock
               v-else

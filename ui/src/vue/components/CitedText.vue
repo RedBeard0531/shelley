@@ -9,7 +9,13 @@
     <InlineText :text="text" />
   </div>
   <template v-else>
-    <MarkdownContent :text="markdownText" :message-id="messageId" commentable />
+    <MarkdownContent
+      :text="markdownText"
+      :message-id="messageId"
+      :cache-owner="cacheOwner"
+      :run-key="runKey"
+      commentable
+    />
     <ol v-if="citations.length > 0" class="citation-sources">
       <li v-for="(c, i) in citations" :key="i" class="citation-source">
         <span class="citation-source-num">{{ c.num }}</span>
@@ -37,5 +43,9 @@ defineProps<{
   citations: Citation[];
   renderMarkdown: boolean;
   messageId?: string;
+  // See MarkdownContent.vue: bounds the render cache to this run's owning
+  // Message, distinguished from other runs in the same message by runKey.
+  cacheOwner?: object;
+  runKey?: string;
 }>();
 </script>

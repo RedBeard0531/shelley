@@ -138,9 +138,53 @@ const SANITIZE_OPTS = {
   ],
 };
 
-// renderMarkdownToSafeHTML parses markdown and returns sanitized HTML. Exported
-// so tests can exercise the exact pipeline used by the component.
-export function renderMarkdownToSafeHTML(text: string, messageId?: string): string {
+// Cache of rendered+sanitized HTML, scoped to the lifetime of the immutable
+// object (in practice, a Message) that owns a markdown run. Keying on the
+// object reference itself — rather than on the rendered text — means no
+// source text is retained as a cache key, and entries disappear for free once
+// their owner becomes unreachable (conversation pruned, tab closed, etc.): no
+// eviction policy or size cap needed.
+//
+// A single owner can have multiple markdown runs (coalesceContent splits a
+// message's content into several adjacent text blocks whenever tool calls
+// interleave with prose), so each owner maps to a small Map<runKey, html>
+// rather than a single string. Callers supply a runKey that's stable and
+// unique for a given run within that owner (Message.vue uses the
+// coalescedContent index).
+const cache = new WeakMap<object, Map<string, string>>();
+
+export interface MarkdownCacheKey {
+  // Object whose lifetime bounds the cache entry.
+  owner: object;
+  // Distinguishes multiple runs within the same owner.
+  runKey: string;
+}
+
+// renderMarkdownToSafeHTML parses markdown and returns sanitized HTML.
+//
+// `messageId` drives the local-image URL rewrite only (see buildMarked above)
+// and plays no part in caching. `cacheKey`, when supplied, memoizes the result
+// for the lifetime of `cacheKey.owner`; callers whose text can change without
+// a new owner — the streaming preview, the distillation preview, export —
+// omit it and always re-render.
+export function renderMarkdownToSafeHTML(
+  text: string,
+  messageId?: string,
+  cacheKey?: MarkdownCacheKey,
+): string {
+  let runs = cacheKey ? cache.get(cacheKey.owner) : undefined;
+  const cached = cacheKey ? runs?.get(cacheKey.runKey) : undefined;
+  if (cached !== undefined) return cached;
+
   const raw = buildMarked(messageId).parse(text, { async: false }) as string;
-  return DOMPurify.sanitize(raw, SANITIZE_OPTS);
+  const html = DOMPurify.sanitize(raw, SANITIZE_OPTS);
+
+  if (cacheKey) {
+    if (!runs) {
+      runs = new Map();
+      cache.set(cacheKey.owner, runs);
+    }
+    runs.set(cacheKey.runKey, html);
+  }
+  return html;
 }

@@ -35,12 +35,29 @@ const props = defineProps<{
   // not something toggled on a mounted instance: turning it off would need the
   // wrappers below torn down again.
   commentable?: boolean;
+  // Object whose lifetime bounds the render cache entry (the owning,
+  // immutable Message). Omitted by callers whose text isn't tied to a
+  // stable, immutable object — the streaming preview, the distillation
+  // preview, export — which always re-render.
+  cacheOwner?: object;
+  // Distinguishes multiple markdown runs within the same cacheOwner (e.g. a
+  // message with several text blocks split by tool calls). Required
+  // whenever cacheOwner is set.
+  runKey?: string;
 }>();
 
 const containerRef = ref<HTMLDivElement | null>(null);
 
 const html = computed(
-  perfWrap("markdown.render", () => renderMarkdownToSafeHTML(props.text, props.messageId)),
+  perfWrap("markdown.render", () =>
+    renderMarkdownToSafeHTML(
+      props.text,
+      props.messageId,
+      props.cacheOwner && props.runKey !== undefined
+        ? { owner: props.cacheOwner, runKey: props.runKey }
+        : undefined,
+    ),
+  ),
 );
 
 // Images inside a link are excluded throughout: there the image is the link's
