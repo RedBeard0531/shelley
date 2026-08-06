@@ -813,12 +813,7 @@ func (s *Server) searchConversationsFTSWithState(ctx context.Context, query stri
 	}
 	conversations := make([]db.ConversationListItem, len(hits))
 	for i, h := range hits {
-		conversations[i] = db.ConversationListItem{
-			Conversation:     h.Conversation,
-			Preview:          h.Preview,
-			PreviewUpdatedAt: h.PreviewUpdatedAt,
-			MaxSequenceID:    h.MaxSequenceID,
-		}
+		conversations[i] = h.ConversationListItem
 	}
 	decorated, err := s.decorateConversations(ctx, conversations)
 	if err != nil {
@@ -880,6 +875,7 @@ func (s *Server) decorateConversations(ctx context.Context, conversations []db.C
 			Preview:          item.Preview,
 			PreviewUpdatedAt: item.PreviewUpdatedAt,
 			MaxSequenceID:    item.MaxSequenceID,
+			Participants:     item.Participants,
 		}
 		if conv.Cwd != nil {
 			entry, ok := s.conversationListGitCache.get(*conv.Cwd, now)

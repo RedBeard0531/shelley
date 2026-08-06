@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1090,5 +1091,146 @@ func TestPromoteDraftAtomicOverrides(t *testing.T) {
 	}
 	if got := ParseConversationOptions(promoted2.ConversationOptions); got.ThinkingLevel != "low" {
 		t.Fatalf("promote2 options clobbered: got %+v", got)
+	}
+}
+
+// TestListConversationsParticipants verifies that the conversation list
+// queries collect the distinct exe.dev authors of each conversation's
+// messages, sorted and de-duplicated, ignoring messages with no author.
+func TestListConversationsParticipants(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	shared, err := db.CreateConversation(ctx, stringPtr("shared"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatalf("create shared: %v", err)
+	}
+	// bob first, then alice, then bob again: participants must come back
+	// sorted and de-duplicated, not in insertion order.
+	for _, email := range []string{"bob@example.com", "alice@example.com", "bob@example.com"} {
+		if _, err := db.CreateMessage(ctx, CreateMessageParams{
+			ConversationID: shared.ConversationID,
+			Type:           MessageTypeUser,
+			UserEmail:      email,
+		}); err != nil {
+			t.Fatalf("create user msg: %v", err)
+		}
+	}
+	// An agent reply and an unauthenticated user message contribute nobody.
+	if _, err := db.CreateMessage(ctx, CreateMessageParams{
+		ConversationID: shared.ConversationID,
+		Type:           MessageTypeAgent,
+	}); err != nil {
+		t.Fatalf("create agent msg: %v", err)
+	}
+	if _, err := db.CreateMessage(ctx, CreateMessageParams{
+		ConversationID: shared.ConversationID,
+		Type:           MessageTypeUser,
+	}); err != nil {
+		t.Fatalf("create anonymous user msg: %v", err)
+	}
+
+	// A conversation whose only message has no author has no participants.
+	anon, err := db.CreateConversation(ctx, stringPtr("anon"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatalf("create anon: %v", err)
+	}
+	if _, err := db.CreateMessage(ctx, CreateMessageParams{
+		ConversationID: anon.ConversationID,
+		Type:           MessageTypeUser,
+	}); err != nil {
+		t.Fatalf("create anon msg: %v", err)
+	}
+
+	// check asserts that every wanted conversation appears in items with
+	// exactly the expected participants.
+	check := func(name string, items []ConversationListItem, want map[string][]string) {
+		t.Helper()
+		got := make(map[string][]string, len(items))
+		for _, item := range items {
+			got[item.ConversationID] = item.Participants
+		}
+		for id, wantParticipants := range want {
+			participants, ok := got[id]
+			if !ok {
+				t.Errorf("%s: conversation %s missing from results", name, id)
+				continue
+			}
+			if !slices.Equal(participants, wantParticipants) {
+				t.Errorf("%s: participants for %s = %v, want %v", name, id, participants, wantParticipants)
+			}
+		}
+	}
+	both := map[string][]string{
+		shared.ConversationID: {"alice@example.com", "bob@example.com"},
+		anon.ConversationID:   nil,
+	}
+	onlyShared := map[string][]string{shared.ConversationID: {"alice@example.com", "bob@example.com"}}
+
+	items, err := db.ListConversations(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("ListConversations: %v", err)
+	}
+	check("ListConversations", items, both)
+
+	items, err = db.ListAllConversations(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("ListAllConversations: %v", err)
+	}
+	check("ListAllConversations", items, both)
+
+	items, err = db.SearchConversations(ctx, "shared", 10, 0)
+	if err != nil {
+		t.Fatalf("SearchConversations: %v", err)
+	}
+	check("SearchConversations", items, onlyShared)
+
+	items, err = db.SearchConversationsWithMessages(ctx, "shared", 10, 0)
+	if err != nil {
+		t.Fatalf("SearchConversationsWithMessages: %v", err)
+	}
+	check("SearchConversationsWithMessages", items, onlyShared)
+
+	hits, err := db.SearchConversationsFTS(ctx, "shared", 10, 0)
+	if err != nil {
+		t.Fatalf("SearchConversationsFTS: %v", err)
+	}
+	ftsItems := make([]ConversationListItem, len(hits))
+	for i, h := range hits {
+		ftsItems[i] = h.ConversationListItem
+	}
+	check("SearchConversationsFTS", ftsItems, onlyShared)
+}
+
+// TestDecodeParticipants covers the participants_json decoder directly: the
+// conversation-list patch stream hashes the marshalled list, so the output
+// must be sorted regardless of the order SQLite aggregated in, and an empty
+// array must decode to nil so it stays out of the JSON entirely.
+func TestDecodeParticipants(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"empty array", "[]", nil},
+		{"single", `["alice@example.com"]`, []string{"alice@example.com"}},
+		{"unsorted", `["bob@example.com","alice@example.com"]`, []string{"alice@example.com", "bob@example.com"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := decodeParticipants(tt.raw)
+			if err != nil {
+				t.Fatalf("decodeParticipants(%q): %v", tt.raw, err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("decodeParticipants(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+	if _, err := decodeParticipants("not json"); err == nil {
+		t.Error("decodeParticipants(\"not json\") = nil error, want error")
 	}
 }

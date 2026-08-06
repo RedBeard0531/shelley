@@ -103,6 +103,7 @@ export interface ConversationWithStateForTS {
   preview_updated_at?: string;
   search_snippet?: string;
   max_sequence_id: number;
+  participants?: string[] | null;
 }
 
 export type MessageType =

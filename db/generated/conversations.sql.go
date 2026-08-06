@@ -618,7 +618,12 @@ SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, 
      ORDER BY m.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(m.sequence_id) FROM messages m
-     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- See participants_json note on ListConversations.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT m.user_email) FROM messages m
+     WHERE m.conversation_id = c.conversation_id
+       AND m.user_email IS NOT NULL AND m.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 WHERE c.archived = FALSE
 ORDER BY c.updated_at DESC
@@ -631,9 +636,10 @@ type ListAllConversationsParams struct {
 }
 
 type ListAllConversationsRow struct {
-	Conversation  Conversation `json:"conversation"`
-	PreviewPacked string       `json:"preview_packed"`
-	MaxSequenceID int64        `json:"max_sequence_id"`
+	Conversation     Conversation `json:"conversation"`
+	PreviewPacked    string       `json:"preview_packed"`
+	MaxSequenceID    int64        `json:"max_sequence_id"`
+	ParticipantsJson string       `json:"participants_json"`
 }
 
 // Like ListConversations but includes subagents. Used by the conversation
@@ -667,6 +673,7 @@ func (q *Queries) ListAllConversations(ctx context.Context, arg ListAllConversat
 			&i.Conversation.QueuedMessages,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
+			&i.ParticipantsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -757,7 +764,18 @@ SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, 
      ORDER BY m.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(m.sequence_id) FROM messages m
-     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- participants_json: the distinct exe.dev accounts that authored messages in
+  -- this conversation (messages.user_email, stamped from the X-ExeDev-Email
+  -- header), as a JSON array. The order is SQLite's business, so
+  -- db.decodeParticipants sorts it: the conversation-list patch stream hashes
+  -- the marshalled list, and an unstable order would emit spurious diffs.
+  -- Rides idx_messages_participants (a partial covering index over authored
+  -- messages), so this costs one index seek per listed conversation.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT m.user_email) FROM messages m
+     WHERE m.conversation_id = c.conversation_id
+       AND m.user_email IS NOT NULL AND m.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 WHERE c.archived = FALSE AND c.parent_conversation_id IS NULL
 ORDER BY c.updated_at DESC
@@ -770,9 +788,10 @@ type ListConversationsParams struct {
 }
 
 type ListConversationsRow struct {
-	Conversation  Conversation `json:"conversation"`
-	PreviewPacked string       `json:"preview_packed"`
-	MaxSequenceID int64        `json:"max_sequence_id"`
+	Conversation     Conversation `json:"conversation"`
+	PreviewPacked    string       `json:"preview_packed"`
+	MaxSequenceID    int64        `json:"max_sequence_id"`
+	ParticipantsJson string       `json:"participants_json"`
 }
 
 func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsParams) ([]ListConversationsRow, error) {
@@ -803,6 +822,7 @@ func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsPa
 			&i.Conversation.QueuedMessages,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
+			&i.ParticipantsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -939,7 +959,12 @@ SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, 
      ORDER BY m.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(m.sequence_id) FROM messages m
-     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- See participants_json note on ListConversations.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT m.user_email) FROM messages m
+     WHERE m.conversation_id = c.conversation_id
+       AND m.user_email IS NOT NULL AND m.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 WHERE c.slug LIKE '%' || ? || '%' AND c.archived = FALSE AND c.parent_conversation_id IS NULL
 ORDER BY c.updated_at DESC
@@ -953,9 +978,10 @@ type SearchConversationsParams struct {
 }
 
 type SearchConversationsRow struct {
-	Conversation  Conversation `json:"conversation"`
-	PreviewPacked string       `json:"preview_packed"`
-	MaxSequenceID int64        `json:"max_sequence_id"`
+	Conversation     Conversation `json:"conversation"`
+	PreviewPacked    string       `json:"preview_packed"`
+	MaxSequenceID    int64        `json:"max_sequence_id"`
+	ParticipantsJson string       `json:"participants_json"`
 }
 
 func (q *Queries) SearchConversations(ctx context.Context, arg SearchConversationsParams) ([]SearchConversationsRow, error) {
@@ -986,6 +1012,7 @@ func (q *Queries) SearchConversations(ctx context.Context, arg SearchConversatio
 			&i.Conversation.QueuedMessages,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
+			&i.ParticipantsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -1030,7 +1057,12 @@ SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, 
      ORDER BY m.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(m.sequence_id) FROM messages m
-     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- See participants_json note on ListConversations.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT m.user_email) FROM messages m
+     WHERE m.conversation_id = c.conversation_id
+       AND m.user_email IS NOT NULL AND m.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 WHERE c.parent_conversation_id IS NULL
   AND (
@@ -1049,9 +1081,10 @@ type SearchConversationsFTSListParams struct {
 }
 
 type SearchConversationsFTSListRow struct {
-	Conversation  Conversation `json:"conversation"`
-	PreviewPacked string       `json:"preview_packed"`
-	MaxSequenceID int64        `json:"max_sequence_id"`
+	Conversation     Conversation `json:"conversation"`
+	PreviewPacked    string       `json:"preview_packed"`
+	MaxSequenceID    int64        `json:"max_sequence_id"`
+	ParticipantsJson string       `json:"participants_json"`
 }
 
 // Top-level conversations (active first, then archived) matching either a
@@ -1091,6 +1124,7 @@ func (q *Queries) SearchConversationsFTSList(ctx context.Context, arg SearchConv
 			&i.Conversation.QueuedMessages,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
+			&i.ParticipantsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -1183,7 +1217,12 @@ SELECT DISTINCT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.upd
      ORDER BY pm.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(pm.sequence_id) FROM messages pm
-     WHERE pm.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE pm.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- See participants_json note on ListConversations.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT pm.user_email) FROM messages pm
+     WHERE pm.conversation_id = c.conversation_id
+       AND pm.user_email IS NOT NULL AND pm.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 LEFT JOIN messages m ON c.conversation_id = m.conversation_id AND m.type IN ('user', 'agent')
 WHERE c.archived = FALSE
@@ -1205,9 +1244,10 @@ type SearchConversationsWithMessagesParams struct {
 }
 
 type SearchConversationsWithMessagesRow struct {
-	Conversation  Conversation `json:"conversation"`
-	PreviewPacked string       `json:"preview_packed"`
-	MaxSequenceID int64        `json:"max_sequence_id"`
+	Conversation     Conversation `json:"conversation"`
+	PreviewPacked    string       `json:"preview_packed"`
+	MaxSequenceID    int64        `json:"max_sequence_id"`
+	ParticipantsJson string       `json:"participants_json"`
 }
 
 // Search conversations by slug OR message content (user messages and agent responses, not system prompts)
@@ -1246,6 +1286,7 @@ func (q *Queries) SearchConversationsWithMessages(ctx context.Context, arg Searc
 			&i.Conversation.QueuedMessages,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
+			&i.ParticipantsJson,
 		); err != nil {
 			return nil, err
 		}

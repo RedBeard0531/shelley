@@ -675,11 +675,11 @@ func (db *DB) GetConversationBySlug(ctx context.Context, slug string) (*generate
 	return &conversation, err
 }
 
-// ConversationListItem is a conversation row plus the three derived fields the
+// ConversationListItem is a conversation row plus the derived fields the
 // conversation list needs but that don't live on the conversation row: a
 // one-line preview of the trailing agent message, that message's timestamp,
-// and the conversation's current max sequence_id. All three are computed by
-// correlated subqueries IN the list/search query itself (see
+// the conversation's current max sequence_id, and its participants. All are
+// computed by correlated subqueries IN the list/search query itself (see
 // conversations.sql), scoped to exactly the window of conversations returned,
 // so we never scan or JSON-decode messages for conversations off-window.
 type ConversationListItem struct {
@@ -687,6 +687,28 @@ type ConversationListItem struct {
 	Preview          string
 	PreviewUpdatedAt string // RFC 3339 (trailing Z), empty if there's no preview message
 	MaxSequenceID    int64
+	// Participants are the distinct exe.dev accounts that authored messages in
+	// this conversation, sorted. Nil for conversations whose messages all
+	// predate user_email or arrived without the X-ExeDev-Email header.
+	Participants []string
+}
+
+// decodeParticipants decodes the participants_json column (a JSON array of
+// emails built by json_group_array) into a sorted slice. Sorting here rather
+// than in SQL keeps the value stable regardless of the order SQLite happens to
+// aggregate in: the conversation-list patch stream hashes the marshalled list,
+// so an unstable order would emit spurious diffs. An empty array decodes to nil
+// so callers can omit it from their JSON.
+func decodeParticipants(raw string) ([]string, error) {
+	var participants []string
+	if err := json.Unmarshal([]byte(raw), &participants); err != nil {
+		return nil, fmt.Errorf("decoding participants %q: %w", raw, err)
+	}
+	if len(participants) == 0 {
+		return nil, nil
+	}
+	sort.Strings(participants)
+	return participants, nil
 }
 
 // previewTimestampLen is the fixed width of the RFC3339 timestamp
@@ -710,6 +732,23 @@ func splitPreviewPacked(packed string) (preview, updatedAt string) {
 	return llm.StripInlineCitationMarkers(packed[previewTimestampLen:]), packed[:previewTimestampLen]
 }
 
+// newConversationListItem assembles a list item from a conversation row and
+// the derived columns the list/search queries compute alongside it.
+func newConversationListItem(conv generated.Conversation, previewPacked string, maxSequenceID int64, participantsJSON string) (ConversationListItem, error) {
+	participants, err := decodeParticipants(participantsJSON)
+	if err != nil {
+		return ConversationListItem{}, err
+	}
+	preview, updatedAt := splitPreviewPacked(previewPacked)
+	return ConversationListItem{
+		Conversation:     conv,
+		Preview:          preview,
+		PreviewUpdatedAt: updatedAt,
+		MaxSequenceID:    maxSequenceID,
+		Participants:     participants,
+	}, nil
+}
+
 // ListConversations retrieves conversations with pagination
 func (db *DB) ListConversations(ctx context.Context, limit, offset int64) ([]ConversationListItem, error) {
 	var items []ConversationListItem
@@ -724,13 +763,11 @@ func (db *DB) ListConversations(ctx context.Context, limit, offset int64) ([]Con
 		}
 		items = make([]ConversationListItem, len(rows))
 		for i, r := range rows {
-			preview, updatedAt := splitPreviewPacked(r.PreviewPacked)
-			items[i] = ConversationListItem{
-				Conversation:     r.Conversation,
-				Preview:          preview,
-				PreviewUpdatedAt: updatedAt,
-				MaxSequenceID:    r.MaxSequenceID,
+			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson)
+			if err != nil {
+				return err
 			}
+			items[i] = item
 		}
 		return nil
 	})
@@ -751,13 +788,11 @@ func (db *DB) ListAllConversations(ctx context.Context, limit, offset int64) ([]
 		}
 		items = make([]ConversationListItem, len(rows))
 		for i, r := range rows {
-			preview, updatedAt := splitPreviewPacked(r.PreviewPacked)
-			items[i] = ConversationListItem{
-				Conversation:     r.Conversation,
-				Preview:          preview,
-				PreviewUpdatedAt: updatedAt,
-				MaxSequenceID:    r.MaxSequenceID,
+			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson)
+			if err != nil {
+				return err
 			}
+			items[i] = item
 		}
 		return nil
 	})
@@ -780,13 +815,11 @@ func (db *DB) SearchConversations(ctx context.Context, query string, limit, offs
 		}
 		items = make([]ConversationListItem, len(rows))
 		for i, r := range rows {
-			preview, updatedAt := splitPreviewPacked(r.PreviewPacked)
-			items[i] = ConversationListItem{
-				Conversation:     r.Conversation,
-				Preview:          preview,
-				PreviewUpdatedAt: updatedAt,
-				MaxSequenceID:    r.MaxSequenceID,
+			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson)
+			if err != nil {
+				return err
 			}
+			items[i] = item
 		}
 		return nil
 	})
@@ -811,13 +844,11 @@ func (db *DB) SearchConversationsWithMessages(ctx context.Context, query string,
 		}
 		items = make([]ConversationListItem, len(rows))
 		for i, r := range rows {
-			preview, updatedAt := splitPreviewPacked(r.PreviewPacked)
-			items[i] = ConversationListItem{
-				Conversation:     r.Conversation,
-				Preview:          preview,
-				PreviewUpdatedAt: updatedAt,
-				MaxSequenceID:    r.MaxSequenceID,
+			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson)
+			if err != nil {
+				return err
 			}
+			items[i] = item
 		}
 		return nil
 	})
@@ -829,14 +860,11 @@ func (db *DB) SearchConversationsWithMessages(ctx context.Context, query string,
 // around hit terms so callers can safely substitute spans without worrying
 // about HTML in message bodies.
 type ConversationSearchResult struct {
-	Conversation generated.Conversation
-	Snippet      string // empty if matched only by slug
-	// Preview, PreviewUpdatedAt and MaxSequenceID are the same derived
-	// conversation-list fields carried by ConversationListItem, computed in
-	// the search query itself (see SearchConversationsFTSList).
-	Preview          string
-	PreviewUpdatedAt string
-	MaxSequenceID    int64
+	// ConversationListItem carries the same derived conversation-list fields
+	// as the regular list, computed in the search query itself (see
+	// SearchConversationsFTSList).
+	ConversationListItem
+	Snippet string // empty if matched only by slug
 }
 
 // SnippetMarkStart and SnippetMarkEnd surround matched terms inside
@@ -888,13 +916,11 @@ func (db *DB) SearchConversationsFTS(ctx context.Context, query string, limit, o
 		results = make([]ConversationSearchResult, len(convs))
 		convIDs := make([]string, len(convs))
 		for i, c := range convs {
-			preview, updatedAt := splitPreviewPacked(c.PreviewPacked)
-			results[i] = ConversationSearchResult{
-				Conversation:     c.Conversation,
-				Preview:          preview,
-				PreviewUpdatedAt: updatedAt,
-				MaxSequenceID:    c.MaxSequenceID,
+			item, err := newConversationListItem(c.Conversation, c.PreviewPacked, c.MaxSequenceID, c.ParticipantsJson)
+			if err != nil {
+				return err
 			}
+			results[i] = ConversationSearchResult{ConversationListItem: item}
 			convIDs[i] = c.Conversation.ConversationID
 		}
 		if len(convIDs) == 0 {

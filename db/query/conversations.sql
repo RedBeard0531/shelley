@@ -66,7 +66,18 @@ SELECT sqlc.embed(c),
      ORDER BY m.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(m.sequence_id) FROM messages m
-     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- participants_json: the distinct exe.dev accounts that authored messages in
+  -- this conversation (messages.user_email, stamped from the X-ExeDev-Email
+  -- header), as a JSON array. The order is SQLite's business, so
+  -- db.decodeParticipants sorts it: the conversation-list patch stream hashes
+  -- the marshalled list, and an unstable order would emit spurious diffs.
+  -- Rides idx_messages_participants (a partial covering index over authored
+  -- messages), so this costs one index seek per listed conversation.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT m.user_email) FROM messages m
+     WHERE m.conversation_id = c.conversation_id
+       AND m.user_email IS NOT NULL AND m.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 WHERE c.archived = FALSE AND c.parent_conversation_id IS NULL
 ORDER BY c.updated_at DESC
@@ -99,7 +110,12 @@ SELECT sqlc.embed(c),
      ORDER BY m.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(m.sequence_id) FROM messages m
-     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- See participants_json note on ListConversations.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT m.user_email) FROM messages m
+     WHERE m.conversation_id = c.conversation_id
+       AND m.user_email IS NOT NULL AND m.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 WHERE c.archived = FALSE
 ORDER BY c.updated_at DESC
@@ -135,7 +151,12 @@ SELECT sqlc.embed(c),
      ORDER BY m.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(m.sequence_id) FROM messages m
-     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- See participants_json note on ListConversations.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT m.user_email) FROM messages m
+     WHERE m.conversation_id = c.conversation_id
+       AND m.user_email IS NOT NULL AND m.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 WHERE c.slug LIKE '%' || ? || '%' AND c.archived = FALSE AND c.parent_conversation_id IS NULL
 ORDER BY c.updated_at DESC
@@ -160,7 +181,12 @@ SELECT DISTINCT sqlc.embed(c),
      ORDER BY pm.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(pm.sequence_id) FROM messages pm
-     WHERE pm.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE pm.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- See participants_json note on ListConversations.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT pm.user_email) FROM messages pm
+     WHERE pm.conversation_id = c.conversation_id
+       AND pm.user_email IS NOT NULL AND pm.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 LEFT JOIN messages m ON c.conversation_id = m.conversation_id AND m.type IN ('user', 'agent')
 WHERE c.archived = FALSE
@@ -206,7 +232,12 @@ SELECT sqlc.embed(c),
      ORDER BY m.sequence_id DESC LIMIT 1), '') AS TEXT) AS preview_packed,
   CAST(COALESCE((
     SELECT MAX(m.sequence_id) FROM messages m
-     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id
+     WHERE m.conversation_id = c.conversation_id), 0) AS INTEGER) AS max_sequence_id,
+  -- See participants_json note on ListConversations.
+  CAST(COALESCE((
+    SELECT json_group_array(DISTINCT m.user_email) FROM messages m
+     WHERE m.conversation_id = c.conversation_id
+       AND m.user_email IS NOT NULL AND m.user_email <> ''), '[]') AS TEXT) AS participants_json
 FROM conversations c
 WHERE c.parent_conversation_id IS NULL
   AND (
