@@ -18,6 +18,11 @@ export const upgoer5: TranslationKeys = {
   archiveConversation: "Put Away Talk",
   exportConversation: "Save Out Talk",
   checkForNewVersion: "Look for a newer one",
+  conversationView: "Talk view",
+  seeAllMessages: "See all",
+  seeEndOfTurnMessagesOnly: "See only end-of-turn messages",
+  brevity: "Shortness",
+  look: "Look",
 
   // Theme
   system: "Same as computer",

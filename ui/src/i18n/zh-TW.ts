@@ -18,6 +18,11 @@ export const zhTW: TranslationKeys = {
   archiveConversation: "封存對話",
   exportConversation: "匯出對話",
   checkForNewVersion: "檢查新版本",
+  conversationView: "對話檢視",
+  seeAllMessages: "查看全部",
+  seeEndOfTurnMessagesOnly: "僅查看回合結束訊息",
+  brevity: "簡潔",
+  look: "外觀",
 
   // Theme
   system: "跟隨系統",

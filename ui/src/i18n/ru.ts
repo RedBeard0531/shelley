@@ -18,6 +18,11 @@ export const ru: TranslationKeys = {
   archiveConversation: "Архивировать диалог",
   exportConversation: "Экспортировать диалог",
   checkForNewVersion: "Проверить обновления",
+  conversationView: "Вид беседы",
+  seeAllMessages: "Показать всё",
+  seeEndOfTurnMessagesOnly: "Показывать только сообщения конца хода",
+  brevity: "Краткость",
+  look: "Вид",
 
   // Theme
   system: "Системная",

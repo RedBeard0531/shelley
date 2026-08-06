@@ -178,46 +178,120 @@
         >
       </button>
 
-      <!-- Theme: System / Light / Dark -->
+      <!-- Compact view/theme/notification controls -->
       <div class="overflow-menu-divider" />
-      <div class="overflow-menu-control">
-        <SelectButton
-          v-model="theme"
-          :options="themeOptions"
-          option-value="value"
-          data-key="value"
-          :allow-empty="false"
-          :aria-label="t('system') + ' / ' + t('light') + ' / ' + t('dark')"
-          @update:model-value="onThemeChange"
+      <div class="overflow-quick-controls">
+        <button
+          type="button"
+          class="overflow-quick-control"
+          data-testid="conversation-view-toggle"
+          :aria-label="conversationViewLabel"
+          :aria-pressed="conversationViewMode === 'end-of-turn'"
+          :title="conversationViewLabel"
+          @click="toggleConversationView"
         >
-          <template #option="{ option }">
-            <i :class="['pi', option.icon]" :title="option.label" aria-hidden="true" />
-            <span class="sr-only-label">{{ option.label }}</span>
-          </template>
-        </SelectButton>
-      </div>
+          <span class="overflow-quick-label">{{ t("brevity") }}</span>
+          <span class="overflow-choice-stage" aria-hidden="true">
+            <Transition name="choice-rotate" mode="out-in">
+              <svg
+                :key="conversationViewMode"
+                class="overflow-choice-current"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+              >
+                <template v-if="conversationViewMode === 'all'">
+                  <path d="M8 6h12M8 12h12M8 18h12" stroke-width="2" stroke-linecap="round" />
+                  <circle cx="4" cy="6" r="1.4" fill="currentColor" stroke="none" />
+                  <circle cx="4" cy="12" r="1.4" fill="currentColor" stroke="none" />
+                  <circle cx="4" cy="18" r="1.4" fill="currentColor" stroke="none" />
+                </template>
+                <template v-else>
+                  <path d="M8 7h12M8 17h12" stroke-width="2" stroke-linecap="round" />
+                  <circle cx="4" cy="7" r="1.4" fill="currentColor" stroke="none" />
+                  <path
+                    d="m2.7 17 1.1 1.1 2.3-2.5"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </template>
+              </svg>
+            </Transition>
+          </span>
+          <span class="overflow-choice-alternatives" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <template v-if="conversationViewMode === 'all'">
+                <path d="M8 7h12M8 17h12" stroke-width="2" stroke-linecap="round" />
+                <circle cx="4" cy="7" r="1.4" fill="currentColor" stroke="none" />
+                <path
+                  d="m2.7 17 1.1 1.1 2.3-2.5"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </template>
+              <template v-else>
+                <path d="M8 6h12M8 12h12M8 18h12" stroke-width="2" stroke-linecap="round" />
+                <circle cx="4" cy="6" r="1.4" fill="currentColor" stroke="none" />
+                <circle cx="4" cy="12" r="1.4" fill="currentColor" stroke="none" />
+                <circle cx="4" cy="18" r="1.4" fill="currentColor" stroke="none" />
+              </template>
+            </svg>
+          </span>
+          <span class="sr-only-label">{{ conversationViewLabel }}</span>
+        </button>
 
-      <!-- Browser notifications: on / off -->
-      <template v-if="notificationSupported">
-        <div class="overflow-menu-divider" />
-        <div class="overflow-menu-control">
-          <SelectButton
-            v-model="notifEnabled"
-            :options="notifOptions"
-            option-value="value"
-            option-disabled="disabled"
-            data-key="value"
-            :allow-empty="false"
-            :aria-label="t('enableNotifications') + ' / ' + t('disableNotifications')"
-            @update:model-value="onNotifChange"
-          >
-            <template #option="{ option }">
-              <i :class="['pi', option.icon]" :title="option.label" aria-hidden="true" />
-              <span class="sr-only-label">{{ option.label }}</span>
-            </template>
-          </SelectButton>
-        </div>
-      </template>
+        <button
+          type="button"
+          class="overflow-quick-control"
+          data-testid="theme-cycle"
+          :aria-label="themeLabel"
+          :title="themeLabel"
+          @click="cycleTheme"
+        >
+          <span class="overflow-quick-label">{{ t("look") }}</span>
+          <span class="overflow-choice-stage" aria-hidden="true">
+            <Transition name="choice-rotate" mode="out-in">
+              <i :key="theme" :class="['pi', themeIcon, 'overflow-choice-current']" />
+            </Transition>
+          </span>
+          <span class="overflow-choice-alternatives" aria-hidden="true">
+            <i v-for="choice in otherThemes" :key="choice" :class="['pi', themeIconFor(choice)]" />
+          </span>
+          <span class="sr-only-label">{{ themeLabel }}</span>
+        </button>
+
+        <button
+          v-if="notificationSupported"
+          type="button"
+          class="overflow-quick-control"
+          data-testid="notification-toggle"
+          :disabled="notifBlocked && !notifEnabled"
+          :aria-label="notificationLabel"
+          :aria-pressed="notifEnabled"
+          :title="notificationLabel"
+          @click="toggleNotifications"
+        >
+          <span class="overflow-quick-label">{{ t("notifications") }}</span>
+          <span class="overflow-choice-stage" aria-hidden="true">
+            <Transition name="choice-rotate" mode="out-in">
+              <i
+                :key="String(notifEnabled)"
+                :class="[
+                  'pi',
+                  notifEnabled ? 'pi-bell' : 'pi-bell-slash',
+                  'overflow-choice-current',
+                ]"
+              />
+            </Transition>
+          </span>
+          <span class="overflow-choice-alternatives" aria-hidden="true">
+            <i :class="['pi', notifEnabled ? 'pi-bell-slash' : 'pi-bell']" />
+          </span>
+          <span class="sr-only-label">{{ notificationLabel }}</span>
+        </button>
+      </div>
 
       <!-- Language -->
       <div class="overflow-menu-divider" />
@@ -251,11 +325,11 @@
 import { computed, ref } from "vue";
 import Popover from "primevue/popover";
 import Button from "primevue/button";
-import SelectButton from "primevue/selectbutton";
 import Select from "primevue/select";
 import type { Link } from "../../types";
 import type { Locale } from "../../i18n/types";
 import { useI18n } from "../composables/i18n";
+import { useConversationView } from "../composables/conversationView";
 import { menuShortcutLabel, isFirefox } from "../../utils/menuShortcuts";
 import { type ThemeMode, getStoredTheme, setStoredTheme, applyTheme } from "../../services/theme";
 import {
@@ -286,6 +360,17 @@ const emit = defineEmits<{
 }>();
 
 const { t, locale, setLocale } = useI18n();
+const { conversationViewMode, setConversationViewMode } = useConversationView();
+const conversationViewLabel = computed(() => {
+  const current =
+    conversationViewMode.value === "all" ? t("seeAllMessages") : t("seeEndOfTurnMessagesOnly");
+  const next =
+    conversationViewMode.value === "all" ? t("seeEndOfTurnMessagesOnly") : t("seeAllMessages");
+  return `${current} → ${next}`;
+});
+function toggleConversationView() {
+  setConversationViewMode(conversationViewMode.value === "all" ? "end-of-turn" : "all");
+}
 
 // Edit File uses Cmd/Ctrl+Shift+P (VS Code parity). Firefox reserves that combo
 // for "New Private Window" and never delivers it to the page, so the shortcut
@@ -322,43 +407,41 @@ function onExternalLink(url: string) {
 
 const notificationSupported = typeof Notification !== "undefined";
 
-// ---- Theme toggle (System / Light / Dark) ----
-// Option labels are computed so they re-translate when the locale changes (the
-// language Select lives in this same popover, so a switch is visible live).
+// ---- Theme cycle (System → Light → Dark) ----
 const theme = ref<ThemeMode>(getStoredTheme());
-const themeOptions = computed(() => [
-  { value: "system" as ThemeMode, icon: "pi-desktop", label: t("system") },
-  { value: "light" as ThemeMode, icon: "pi-sun", label: t("light") },
-  { value: "dark" as ThemeMode, icon: "pi-moon", label: t("dark") },
-]);
-function onThemeChange(mode: ThemeMode) {
-  theme.value = mode;
-  setStoredTheme(mode);
-  applyTheme(mode);
+const themeOrder: ThemeMode[] = ["system", "light", "dark"];
+const nextTheme = computed(
+  () => themeOrder[(themeOrder.indexOf(theme.value) + 1) % themeOrder.length],
+);
+function themeIconFor(mode: ThemeMode): string {
+  if (mode === "light") return "pi-sun";
+  if (mode === "dark") return "pi-moon";
+  return "pi-desktop";
+}
+const themeIcon = computed(() => themeIconFor(theme.value));
+const otherThemes = computed(() => themeOrder.filter((choice) => choice !== theme.value));
+const themeLabel = computed(() => `${t(theme.value)} → ${t(nextTheme.value)}`);
+function cycleTheme() {
+  theme.value = nextTheme.value;
+  setStoredTheme(theme.value);
+  applyTheme(theme.value);
 }
 
 // ---- Browser notifications (on / off) ----
 const notifEnabled = ref<boolean>(isChannelEnabled("browser"));
-const notifBlocked = getBrowserNotificationState() === "denied";
-const notifOptions = computed(() => [
-  {
-    value: true,
-    icon: "pi-bell",
-    label: notifBlocked ? t("blockedByBrowser") : t("enableNotifications"),
-    disabled: notifBlocked,
-  },
-  { value: false, icon: "pi-bell-slash", label: t("disableNotifications"), disabled: false },
-]);
-async function onNotifChange(next: boolean) {
-  if (next) {
-    // v-model has already flipped notifEnabled to true; confirm via the
-    // permission prompt and revert if the user denies.
-    const granted = await requestBrowserNotificationPermission();
-    notifEnabled.value = granted;
-  } else {
+const notifBlocked = ref(getBrowserNotificationState() === "denied");
+const notificationLabel = computed(() => {
+  if (notifBlocked.value && !notifEnabled.value) return t("blockedByBrowser");
+  return notifEnabled.value ? t("disableNotifications") : t("enableNotifications");
+});
+async function toggleNotifications() {
+  if (notifEnabled.value) {
     setChannelEnabled("browser", false);
     notifEnabled.value = false;
+    return;
   }
+  notifEnabled.value = await requestBrowserNotificationPermission();
+  notifBlocked.value = getBrowserNotificationState() === "denied";
 }
 
 // ---- Language picker ----

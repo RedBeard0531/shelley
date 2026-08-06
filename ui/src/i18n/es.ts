@@ -18,6 +18,11 @@ export const es: TranslationKeys = {
   archiveConversation: "Archivar conversación",
   exportConversation: "Exportar conversación",
   checkForNewVersion: "Buscar nueva versión",
+  conversationView: "Vista de conversación",
+  seeAllMessages: "Ver todo",
+  seeEndOfTurnMessagesOnly: "Ver solo los mensajes de fin de turno",
+  brevity: "Brevedad",
+  look: "Apariencia",
 
   // Theme
   system: "Sistema",

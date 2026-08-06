@@ -18,6 +18,11 @@ export const vi: TranslationKeys = {
   archiveConversation: "Hội thoại đã lưu trữ",
   exportConversation: "Xuất hội thoại",
   checkForNewVersion: "Kiểm tra cập nhật",
+  conversationView: "Chế độ xem cuộc trò chuyện",
+  seeAllMessages: "Xem tất cả",
+  seeEndOfTurnMessagesOnly: "Chỉ xem tin nhắn cuối lượt",
+  brevity: "Ngắn gọn",
+  look: "Giao diện",
 
   // Theme
   system: "Hệ thống",

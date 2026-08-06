@@ -18,6 +18,11 @@ export interface TranslationKeys {
   archiveConversation: string;
   exportConversation: string;
   checkForNewVersion: string;
+  conversationView: string;
+  seeAllMessages: string;
+  seeEndOfTurnMessagesOnly: string;
+  brevity: string;
+  look: string;
 
   // Theme
   system: string;

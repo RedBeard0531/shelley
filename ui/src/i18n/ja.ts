@@ -18,6 +18,11 @@ export const ja: TranslationKeys = {
   archiveConversation: "会話をアーカイブ",
   exportConversation: "会話をエクスポート",
   checkForNewVersion: "新しいバージョンを確認",
+  conversationView: "会話表示",
+  seeAllMessages: "すべて表示",
+  seeEndOfTurnMessagesOnly: "ターン終了メッセージのみ表示",
+  brevity: "簡潔さ",
+  look: "外観",
 
   // Theme
   system: "システム",

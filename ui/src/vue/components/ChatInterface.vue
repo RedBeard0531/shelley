@@ -216,7 +216,7 @@
       <!-- Floating nav cluster -->
       <div v-if="conversationId && messages.length > 0" class="chat-nav-cluster">
         <ConversationTOC
-          :messages="messages"
+          :messages="visibleMessages"
           :container-ref="messagesContainerRef"
           :near-bottom="!showScrollToBottom"
           :conversation-slug="currentConversation?.slug"
@@ -400,6 +400,7 @@ import {
   suggestURL,
 } from "../../utils/modelSetupHint";
 import { useMarkdownMode } from "../composables/markdownMode";
+import { useConversationView } from "../composables/conversationView";
 import { useI18n } from "../composables/i18n";
 import { useDraftAutosave } from "../composables/draftAutosave";
 import { useFeatureFlag } from "../composables/featureFlags";
@@ -413,6 +414,11 @@ import { tildifyPath } from "../../utils/tildify";
 import { handleModifiedNavClick } from "../utils/openInNewTab";
 import { isAutoExpandTool } from "../../utils/toolMeta";
 import { formatDay } from "../../utils/messageTime";
+import {
+  clearConversationViewCache,
+  isHumanUserMessage,
+  isVisibleConversationMessage,
+} from "../../utils/conversationView";
 import { SLASH_COMMANDS } from "../../utils/slashCommands";
 import {
   perfCount,
@@ -509,6 +515,7 @@ const props = withDefaults(
 
 const { t } = useI18n();
 const { markdownMode } = useMarkdownMode();
+const { conversationViewMode } = useConversationView();
 const toolPillsEnabled = useFeatureFlag("tool-pills");
 const {
   hasUpdate,
@@ -972,7 +979,6 @@ const maxContextTokens = computed(() => selectedModelInfo.value?.max_context_tok
 // Content type constants mirror llm/llm.go.
 const LLM_TYPE_TEXT = 2;
 const LLM_TYPE_TOOL_USE = 5;
-const LLM_TYPE_TOOL_RESULT = 6;
 
 // Short excerpt of an agent message for the token cost graph hover readout:
 // first text block, or the first tool call when the message is tools-only.
@@ -1007,28 +1013,6 @@ function messageSnippet(m: Message): string {
   }
   snippetCache.set(m.message_id, snippet);
   return snippet;
-}
-
-// True for user messages typed by a human (not tool results, which are also
-// type "user" on the wire). Cached by message_id: parsing llm_data is costly
-// and messages are immutable.
-const humanUserCache = new Map<string, boolean>();
-function isHumanUserMessage(m: Message): boolean {
-  if (m.type !== "user") return false;
-  const cached = humanUserCache.get(m.message_id);
-  if (cached !== undefined) return cached;
-  let human = true;
-  if (m.llm_data) {
-    try {
-      const llm = typeof m.llm_data === "string" ? JSON.parse(m.llm_data) : m.llm_data;
-      const content: LLMContent[] = llm?.Content || [];
-      human = !content.some((c) => c.Type === LLM_TYPE_TOOL_RESULT);
-    } catch {
-      /* ignore malformed llm_data */
-    }
-  }
-  humanUserCache.set(m.message_id, human);
-  return human;
 }
 
 // Parsed usage_data / other_usage_data, cached by message_id like
@@ -1196,8 +1180,20 @@ const welcomeParts = computed(() =>
   t("welcomeMessage").split(/(\{hostname\}|\{docsLink\}|\{proxyLink\})/),
 );
 
-const coalescedItems = computed(
-  perfWrap("chat.coalesceMessages", () => coalesceMessages(messages.value)),
+const coalescedItems = computed(() => {
+  const items = perfWrap("chat.coalesceMessages", () => coalesceMessages(messages.value))();
+  if (conversationViewMode.value === "all") return items;
+  return items.filter(
+    (item) =>
+      item.type === "message" &&
+      !!item.message &&
+      isVisibleConversationMessage(item.message, conversationViewMode.value),
+  );
+});
+const visibleMessages = computed(() =>
+  messages.value.filter((message) =>
+    isVisibleConversationMessage(message, conversationViewMode.value),
+  ),
 );
 
 function formatBytes(bytes: number): string {
@@ -1280,7 +1276,11 @@ function buildRenderModel(): GenerationBlock[] {
 
   msgs.forEach((message) => {
     generationSet.add(message.generation);
-    if (message.type === "system" && !isDistillStatusMessage(message)) {
+    if (
+      conversationViewMode.value === "all" &&
+      message.type === "system" &&
+      !isDistillStatusMessage(message)
+    ) {
       const existing = systemMessagesByGeneration.get(message.generation) || [];
       existing.push(message);
       systemMessagesByGeneration.set(message.generation, existing);
@@ -1512,7 +1512,9 @@ function chunkRenderNodes(nodes: RenderNode[]): RenderChunk[] {
   return chunks;
 }
 
-const showStreamingPreview = computed(() => !!streamingText.value && agentWorking.value);
+const showStreamingPreview = computed(
+  () => conversationViewMode.value === "all" && !!streamingText.value && agentWorking.value,
+);
 
 // ---- scroll ----
 const MAX_SCROLL_OFFSET = 0x7fffffff;
@@ -2903,7 +2905,7 @@ watch(
     // unique, so stale entries are never *wrong* — they'd just accumulate for
     // every conversation visited in the session. Drop them on the switch.
     snippetCache.clear();
-    humanUserCache.clear();
+    clearConversationViewCache();
     usageParseCache.clear();
     otherUsageParseCache.clear();
     usageWanted.value = false;

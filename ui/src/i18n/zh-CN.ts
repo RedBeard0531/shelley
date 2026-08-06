@@ -18,6 +18,11 @@ export const zhCN: TranslationKeys = {
   archiveConversation: "归档对话",
   exportConversation: "导出对话",
   checkForNewVersion: "检查新版本",
+  conversationView: "对话视图",
+  seeAllMessages: "查看全部",
+  seeEndOfTurnMessagesOnly: "仅查看回合结束消息",
+  brevity: "简洁",
+  look: "外观",
 
   // Theme
   system: "跟随系统",
