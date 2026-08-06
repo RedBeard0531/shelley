@@ -4,7 +4,21 @@
      tool-running / tool-result-details class + testid contract. -->
 <template>
   <div v-if="toolUseId" class="toc-tool-anchor" :data-tool-use-id="toolUseId" aria-hidden="true" />
-  <component :is="toolComponent" v-if="toolComponent" v-bind="toolComponentProps" />
+  <component
+    :is="toolComponent"
+    v-if="toolComponent && mountSpecializedCard"
+    v-bind="toolComponentProps"
+  />
+  <div
+    v-else-if="toolComponent"
+    ref="mountPlaceholderEl"
+    :class="`tool-card-mount-placeholder tool-card-mount-placeholder--${placeholderKind}`"
+    data-testid="tool-call-completed"
+    :data-tool-name="toolName"
+    :data-tool-use-id="toolUseId"
+    role="group"
+    :aria-label="`${toolName} tool result`"
+  />
 
   <!-- Fallback: running state -->
   <div v-else-if="!hasResult" class="message message-tool" data-testid="tool-call-running">
@@ -99,8 +113,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../types";
+import { useNearViewport } from "../composables/nearViewport";
 import { useInToolDetail } from "../composables/toolDetail";
 import { usePerfLifecycle } from "../composables/perfLifecycle";
 import { useToolStreamingOutput } from "../composables/toolProgress";
@@ -123,6 +138,7 @@ import SubagentTool from "./tools/SubagentTool.vue";
 import LLMOneShotTool from "./tools/LLMOneShotTool.vue";
 import OutputIframeTool from "./tools/OutputIframeTool.vue";
 import WebSearchTool from "./tools/WebSearchTool.vue";
+import { toolCardPlaceholderKind } from "./toolCardMount";
 
 const props = defineProps<{
   toolName: string;
@@ -138,6 +154,19 @@ const props = defineProps<{
 }>();
 
 const inToolDetail = useInToolDetail();
+
+// Completed inline specialized cards are the dominant mount cost in very large
+// conversations. Keep a tiny geometry placeholder until the shared observer
+// says the card is near the viewport. Cards that started running (or render in
+// the tool-detail modal) stay eager and never get torn down on completion.
+const mountPlaceholderEl = ref<HTMLElement | null>(null);
+const nearViewport = useNearViewport(mountPlaceholderEl);
+const startedEager = !props.hasResult || inToolDetail;
+const mountSpecializedCard = computed(() => startedEager || !props.hasResult || nearViewport.value);
+
+const placeholderKind = computed(() =>
+  toolCardPlaceholderKind(props.toolName, props.toolInput, props.display),
+);
 
 // Streaming output is injected (see composables/toolProgress.ts) so that
 // per-second progress events re-render only the running tool's card instead

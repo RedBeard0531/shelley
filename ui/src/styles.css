@@ -1294,6 +1294,39 @@ body {
   }
 }
 
+/* Completed specialized tool cards mount only when they approach the viewport.
+ * These blank shells preserve the approximate outer block geometry (including
+ * the card's 0.5rem vertical margins) without mounting any tool interior. */
+.tool-card-mount-placeholder {
+  --tool-card-placeholder-outer-size: 76px;
+  box-sizing: border-box;
+  block-size: calc(var(--tool-card-placeholder-outer-size) - 1rem);
+  margin: 0.5rem 0;
+  width: 100%;
+  border-radius: 0.5rem;
+  background: var(--gray-100);
+  contain: strict;
+  contain-intrinsic-block-size: calc(var(--tool-card-placeholder-outer-size) - 1rem);
+  pointer-events: none;
+}
+
+.dark .tool-card-mount-placeholder {
+  background: var(--gray-800);
+}
+
+.tool-card-mount-placeholder--bash {
+  --tool-card-placeholder-outer-size: 68px;
+}
+
+.tool-card-mount-placeholder--output-iframe {
+  --tool-card-placeholder-outer-size: 84px;
+}
+
+.tool-card-mount-placeholder--patch,
+.tool-card-mount-placeholder--media {
+  --tool-card-placeholder-outer-size: 282px;
+}
+
 /* Tool Component (shared styles for all tools) */
 .tool {
   background: var(--gray-100);

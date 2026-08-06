@@ -18,6 +18,24 @@ const ROOT_MARGIN = "100%";
 type Callback = () => void;
 let sharedObserver: IntersectionObserver | null = null;
 const callbacks = new WeakMap<Element, Callback>();
+const pendingElements = new Set<Element>();
+
+function reveal(element: Element): void {
+  const cb = callbacks.get(element);
+  if (!cb) return;
+  callbacks.delete(element);
+  pendingElements.delete(element);
+  sharedObserver?.unobserve(element);
+  cb();
+}
+
+// Printing must include the real tool cards, not blank geometry placeholders.
+// One shared listener keeps this O(1) in listener count even for huge histories.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeprint", () => {
+    for (const element of [...pendingElements]) reveal(element);
+  });
+}
 
 function observer(): IntersectionObserver {
   if (!sharedObserver) {
@@ -25,12 +43,7 @@ function observer(): IntersectionObserver {
       (entries) => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
-          const cb = callbacks.get(entry.target);
-          if (cb) {
-            callbacks.delete(entry.target);
-            sharedObserver?.unobserve(entry.target);
-            cb();
-          }
+          reveal(entry.target);
         }
       },
       { rootMargin: ROOT_MARGIN },
@@ -43,19 +56,25 @@ function observer(): IntersectionObserver {
 // view (and stays true). If IntersectionObserver is unavailable (jsdom), the
 // ref is true immediately.
 export function useNearViewport(el: Ref<Element | null>): Ref<boolean> {
-  const near = ref(typeof IntersectionObserver === "undefined");
+  const printing =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("print").matches;
+  const near = ref(typeof IntersectionObserver === "undefined" || printing);
 
   watch(
     el,
     (element, prev) => {
       if (prev) {
         callbacks.delete(prev);
+        pendingElements.delete(prev);
         sharedObserver?.unobserve(prev);
       }
       if (element && !near.value) {
         callbacks.set(element, () => {
           near.value = true;
         });
+        pendingElements.add(element);
         observer().observe(element);
       }
     },
@@ -66,6 +85,7 @@ export function useNearViewport(el: Ref<Element | null>): Ref<boolean> {
     const element = el.value;
     if (element) {
       callbacks.delete(element);
+      pendingElements.delete(element);
       sharedObserver?.unobserve(element);
     }
   });

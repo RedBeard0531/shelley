@@ -398,6 +398,28 @@ function highlight(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove("message-highlight"), 2200);
 }
 
+function toolUseIdForElement(el: HTMLElement): string | null {
+  if (el.dataset.toolUseId) return el.dataset.toolUseId;
+  const anchor = el.previousElementSibling;
+  return anchor instanceof HTMLElement ? anchor.dataset.toolUseId || null : null;
+}
+
+function highlightTool(container: HTMLElement, toolUseId: string, el: HTMLElement) {
+  highlight(el);
+  if (!el.classList.contains("tool-card-mount-placeholder")) return;
+
+  let tries = 0;
+  const requery = () => {
+    const current = findToolElement(container, toolUseId);
+    if (current && current !== el && !current.classList.contains("tool-card-mount-placeholder")) {
+      highlight(current);
+      return;
+    }
+    if (++tries < 40) window.setTimeout(requery, 100);
+  };
+  requery();
+}
+
 // Defined in <script setup> (uses local helpers). Not exported: <script setup>
 // cannot contain ES module exports, and nothing imports this symbol. The React
 // module exported it for parity but only used it internally, as we do here.
@@ -408,8 +430,15 @@ function scrollToFragment(
 ): boolean {
   const el = findElementByFragment(container, fragment);
   if (!el) return false;
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
-  if (options.highlight !== false) highlight(el);
+  el.scrollIntoView({
+    behavior: el.classList.contains("tool-card-mount-placeholder") ? "auto" : "smooth",
+    block: "start",
+  });
+  if (options.highlight !== false) {
+    const toolUseId = fragment.startsWith("t-") ? toolUseIdForElement(el) : null;
+    if (toolUseId) highlightTool(container, toolUseId, el);
+    else highlight(el);
+  }
   return true;
 }
 
@@ -564,8 +593,11 @@ function handleGoto(entry: TOCEntry) {
   if (entry.toolUseId) {
     const el = findToolElement(container, entry.toolUseId);
     if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
-    highlight(el);
+    el.scrollIntoView({
+      behavior: el.classList.contains("tool-card-mount-placeholder") ? "auto" : "smooth",
+      block: "start",
+    });
+    highlightTool(container, entry.toolUseId, el);
     const url = `${window.location.pathname}${window.location.search}#${entry.id}`;
     history.replaceState(null, "", url);
     return;
