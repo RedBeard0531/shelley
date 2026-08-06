@@ -112,28 +112,31 @@ func (q *Queries) CountMessagesInConversation(ctx context.Context, conversationI
 }
 
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, other_usage_data)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, other_usage_data, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?15, CURRENT_TIMESTAMP))
 RETURNING message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data
 `
 
 type CreateMessageParams struct {
-	MessageID           string  `json:"message_id"`
-	ConversationID      string  `json:"conversation_id"`
-	SequenceID          int64   `json:"sequence_id"`
-	Generation          int64   `json:"generation"`
-	Type                string  `json:"type"`
-	LlmData             *string `json:"llm_data"`
-	UserData            *string `json:"user_data"`
-	UsageData           *string `json:"usage_data"`
-	DisplayData         *string `json:"display_data"`
-	ExcludedFromContext bool    `json:"excluded_from_context"`
-	LlmApiUrl           *string `json:"llm_api_url"`
-	ModelName           *string `json:"model_name"`
-	UserEmail           *string `json:"user_email"`
-	OtherUsageData      *string `json:"other_usage_data"`
+	MessageID           string      `json:"message_id"`
+	ConversationID      string      `json:"conversation_id"`
+	SequenceID          int64       `json:"sequence_id"`
+	Generation          int64       `json:"generation"`
+	Type                string      `json:"type"`
+	LlmData             *string     `json:"llm_data"`
+	UserData            *string     `json:"user_data"`
+	UsageData           *string     `json:"usage_data"`
+	DisplayData         *string     `json:"display_data"`
+	ExcludedFromContext bool        `json:"excluded_from_context"`
+	LlmApiUrl           *string     `json:"llm_api_url"`
+	ModelName           *string     `json:"model_name"`
+	UserEmail           *string     `json:"user_email"`
+	OtherUsageData      *string     `json:"other_usage_data"`
+	CreatedAt           interface{} `json:"created_at"`
 }
 
+// created_at is normally left NULL to default to CURRENT_TIMESTAMP; see
+// db.CreateMessageParams.CreatedAt for who overrides it and why.
 func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error) {
 	row := q.db.QueryRowContext(ctx, createMessage,
 		arg.MessageID,
@@ -150,6 +153,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 		arg.ModelName,
 		arg.UserEmail,
 		arg.OtherUsageData,
+		arg.CreatedAt,
 	)
 	var i Message
 	err := row.Scan(

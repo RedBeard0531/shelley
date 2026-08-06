@@ -601,6 +601,53 @@ func TestCheckpoint(t *testing.T) {
 	}
 }
 
+// TestCreateMessageWithExplicitCreatedAt verifies CreatedAt overrides the
+// CURRENT_TIMESTAMP default when set, and that a nil CreatedAt (every real
+// caller) still stamps real insertion time.
+func TestCreateMessageWithExplicitCreatedAt(t *testing.T) {
+	database := setupTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conv, err := database.CreateConversation(ctx, stringPtr("created-at"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+
+	// Explicit CreatedAt, far in the past, must be stored verbatim rather
+	// than defaulting to CURRENT_TIMESTAMP.
+	synthetic := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	msg, err := database.CreateMessage(ctx, CreateMessageParams{
+		ConversationID: conv.ConversationID,
+		Type:           MessageTypeUser,
+		UserData:       map[string]any{"n": 1},
+		CreatedAt:      &synthetic,
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	if !msg.CreatedAt.Equal(synthetic) {
+		t.Errorf("CreatedAt = %v, want %v", msg.CreatedAt, synthetic)
+	}
+
+	// Nil CreatedAt (the default for every real caller) must fall back to
+	// real insertion time, not the zero value or the previous message's
+	// synthetic time.
+	before := time.Now().Add(-time.Second)
+	msg2, err := database.CreateMessage(ctx, CreateMessageParams{
+		ConversationID: conv.ConversationID,
+		Type:           MessageTypeUser,
+		UserData:       map[string]any{"n": 2},
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	after := time.Now().Add(time.Second)
+	if msg2.CreatedAt.Before(before) || msg2.CreatedAt.After(after) {
+		t.Errorf("CreatedAt = %v, want between %v and %v", msg2.CreatedAt, before, after)
+	}
+}
+
 // TestCreateMessages verifies the bulk insert assigns monotonically increasing
 // sequence ids, preserves input order, and commits in a single transaction
 // (one commit hook) regardless of message count.

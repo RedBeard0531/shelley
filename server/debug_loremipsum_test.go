@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"shelley.exe.dev/db"
 )
@@ -137,6 +138,143 @@ func TestGenerateLoremConversation(t *testing.T) {
 	}
 	if len(seenGenerations) < 3 {
 		t.Errorf("expected messages spanning >=3 generations, saw %d", len(seenGenerations))
+	}
+}
+
+// TestGenerateLoremConversationTimestampsAreChronological verifies a
+// message's created_at strictly advances and stays close to the tool/usage
+// timestamps embedded in its own llm_data/usage_data (see
+// db.CreateMessageParams.CreatedAt for why they must share one timeline). A
+// frozen or DB-default created_at fails even at 4 turns.
+func TestGenerateLoremConversationTimestampsAreChronological(t *testing.T) {
+	t.Parallel()
+	server, database, _ := newTestServer(t)
+	ctx := context.Background()
+
+	const turns = 4
+	convID, err := server.generateLoremConversation(ctx, turns, "claude-opus-4-5")
+	if err != nil {
+		t.Fatalf("generateLoremConversation: %v", err)
+	}
+
+	msgs, err := database.ListMessages(ctx, convID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) < 10 {
+		t.Fatalf("expected several messages, got %d", len(msgs))
+	}
+
+	// closeBound comfortably covers the generator's measured intra-message
+	// spread (~19.2s for this turns count) with no slack for the pre-fix
+	// bug (off by minutes) to hide in.
+	const closeBound = 25 * time.Second
+
+	var prevCreatedAt time.Time
+	checked := 0
+	for i, m := range msgs {
+		// recordTyped ticks g.clock on every call, so created_at must strictly
+		// advance; a frozen/DB-default value would repeat instead.
+		if i > 0 && !m.CreatedAt.After(prevCreatedAt) {
+			t.Errorf("message %d (seq=%d, type=%s): created_at %s does not strictly advance past previous message's created_at %s",
+				i, m.SequenceID, m.Type, m.CreatedAt, prevCreatedAt)
+		}
+		prevCreatedAt = m.CreatedAt
+
+		assertClose := func(label string, ts time.Time) {
+			checked++
+			d := ts.Sub(m.CreatedAt)
+			if d < 0 {
+				d = -d
+			}
+			if d > closeBound {
+				t.Errorf("message %d (seq=%d, type=%s): %s = %s is %s away from created_at = %s (want <= %s)",
+					i, m.SequenceID, m.Type, label, ts, d, m.CreatedAt, closeBound)
+			}
+		}
+
+		if m.UsageData != nil {
+			var usage struct {
+				StartTime *time.Time `json:"start_time"`
+				EndTime   *time.Time `json:"end_time"`
+			}
+			if err := json.Unmarshal([]byte(*m.UsageData), &usage); err != nil {
+				t.Fatalf("message %s has invalid usage_data: %v", m.MessageID, err)
+			}
+			if usage.StartTime != nil {
+				assertClose("usage.start_time", *usage.StartTime)
+			}
+			if usage.EndTime != nil {
+				assertClose("usage.end_time", *usage.EndTime)
+			}
+		}
+
+		if m.LlmData == nil {
+			continue
+		}
+		var parsed struct {
+			Content []struct {
+				ToolUseStartTime *time.Time `json:"ToolUseStartTime"`
+				ToolUseEndTime   *time.Time `json:"ToolUseEndTime"`
+			} `json:"Content"`
+		}
+		if err := json.Unmarshal([]byte(*m.LlmData), &parsed); err != nil {
+			t.Fatalf("message %s has invalid llm_data: %v", m.MessageID, err)
+		}
+		for _, c := range parsed.Content {
+			if c.ToolUseStartTime != nil {
+				assertClose("ToolUseStartTime", *c.ToolUseStartTime)
+			}
+			if c.ToolUseEndTime != nil {
+				assertClose("ToolUseEndTime", *c.ToolUseEndTime)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no usage/tool timestamps were found to check; test is not exercising the bug")
+	}
+}
+
+// TestGenerateLoremConversationPreviewIsReadable verifies that a lorem
+// conversation's explicit CreatedAt round-trips through the real
+// conversation-list query (ListConversations), whose preview/timestamp
+// columns are computed via SQL strftime() (see conversations.sql). strftime()
+// can't parse Go's default time.Time string representation, so passing a
+// *time.Time straight through as a driver value silently produced an
+// unparseable created_at and a blank preview/timestamp for every lorem
+// conversation.
+func TestGenerateLoremConversationPreviewIsReadable(t *testing.T) {
+	t.Parallel()
+	server, database, _ := newTestServer(t)
+	ctx := context.Background()
+
+	convID, err := server.generateLoremConversation(ctx, 4, "claude-opus-4-5")
+	if err != nil {
+		t.Fatalf("generateLoremConversation: %v", err)
+	}
+
+	items, err := database.ListConversations(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("ListConversations: %v", err)
+	}
+	var item *db.ConversationListItem
+	for i := range items {
+		if items[i].ConversationID == convID {
+			item = &items[i]
+			break
+		}
+	}
+	if item == nil {
+		t.Fatalf("conversation %s not found in ListConversations", convID)
+	}
+	if item.PreviewUpdatedAt == "" {
+		t.Fatal("PreviewUpdatedAt is blank; strftime() could not parse the message's created_at")
+	}
+	if _, err := time.Parse(time.RFC3339, item.PreviewUpdatedAt); err != nil {
+		t.Errorf("PreviewUpdatedAt %q is not a parseable RFC3339 timestamp: %v", item.PreviewUpdatedAt, err)
+	}
+	if item.Preview == "" {
+		t.Error("Preview is blank")
 	}
 }
 

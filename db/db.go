@@ -1158,6 +1158,13 @@ type CreateMessageParams struct {
 	// the row nor the array change persists, so a crash can't leave an array
 	// entry that Hydrate would re-feed as a duplicate.
 	RemoveQueuedID string
+	// CreatedAt overrides the row's created_at (default CURRENT_TIMESTAMP).
+	// Every real caller leaves this nil so messages get true wall-clock
+	// insertion time. The loremipsum debug generator is the one caller that
+	// sets it, stamping created_at from its own synthetic clock so a
+	// message's created_at and the tool/usage timestamps embedded in it
+	// stay on one timeline instead of disagreeing about "now".
+	CreatedAt *time.Time
 }
 
 // nullableString returns nil for an empty string so the column is stored as
@@ -1167,6 +1174,25 @@ func nullableString(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// sqliteDateTimeFormat matches SQLite's native datetime string format
+// (millisecond precision, UTC "Z" suffix), which strftime() and SQLite's
+// date/time functions parse directly. Millisecond precision is enough to
+// order rows the lorem generator writes 200ms apart; nanosecond-precision
+// Go formats (e.g. time.RFC3339Nano) are NOT parsed by strftime(), which
+// would leave conversations.sql's preview/timestamp queries unable to read
+// an explicitly-stamped created_at back out.
+const sqliteDateTimeFormat = "2006-01-02T15:04:05.000Z"
+
+// sqliteTimeArg formats an explicit CreatedAt override for the generated
+// query's created_at arg, or nil to let SQL's COALESCE(..., CURRENT_TIMESTAMP)
+// apply the default.
+func sqliteTimeArg(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.UTC().Format(sqliteDateTimeFormat)
 }
 
 // marshalMessageJSON marshals the JSON columns of a message into the
@@ -1235,6 +1261,7 @@ func insertMessageTx(ctx context.Context, q *generated.Queries, params CreateMes
 		ModelName:           nullableString(params.ModelName),
 		UserEmail:           nullableString(params.UserEmail),
 		OtherUsageData:      otherUsageDataJSON,
+		CreatedAt:           sqliteTimeArg(params.CreatedAt),
 	})
 	if err != nil {
 		return generated.Message{}, err

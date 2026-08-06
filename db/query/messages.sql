@@ -1,6 +1,8 @@
 -- name: CreateMessage :one
-INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, other_usage_data)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+-- created_at is normally left NULL to default to CURRENT_TIMESTAMP; see
+-- db.CreateMessageParams.CreatedAt for who overrides it and why.
+INSERT INTO messages (message_id, conversation_id, sequence_id, generation, type, llm_data, user_data, usage_data, display_data, excluded_from_context, llm_api_url, model_name, user_email, other_usage_data, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(sqlc.narg('created_at'), CURRENT_TIMESTAMP))
 RETURNING *;
 
 -- name: GetNextSequenceID :one
