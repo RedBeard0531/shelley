@@ -969,6 +969,9 @@ func (s *Server) conversationMux() *http.ServeMux {
 	mux.HandleFunc("POST /{id}/fork", func(w http.ResponseWriter, r *http.Request) {
 		s.handleForkConversation(w, r, r.PathValue("id"))
 	})
+	mux.HandleFunc("POST /{id}/cwd", func(w http.ResponseWriter, r *http.Request) {
+		s.handleSetConversationCwd(w, r, r.PathValue("id"))
+	})
 	return mux
 }
 
@@ -2970,6 +2973,125 @@ func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
+}
+
+// SetCwdRequest represents a request to move a conversation to a different
+// working directory.
+type SetCwdRequest struct {
+	Cwd string `json:"cwd"`
+}
+
+// handleSetConversationCwd handles POST /conversation/<id>/cwd: the user-driven
+// counterpart of the agent's change_dir tool, backing the directory segment of
+// the status readout.
+//
+// Validation happens before anything moves. A half-applied change — the row
+// updated but the running toolset not, or vice versa — is worse than a refused
+// one, because nothing afterwards would notice the disagreement.
+func (s *Server) handleSetConversationCwd(w http.ResponseWriter, r *http.Request, conversationID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+
+	var req SetCwdRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Absolute only: a relative path has no meaning here. The obvious base to
+	// resolve against would be the conversation's current cwd, which is the very
+	// thing being replaced — so ".." would mean different directories depending
+	// on when the request landed.
+	if req.Cwd == "" || !filepath.IsAbs(req.Cwd) {
+		http.Error(w, "cwd must be an absolute path", http.StatusBadRequest)
+		return
+	}
+	cwd := filepath.Clean(req.Cwd)
+	info, err := os.Stat(cwd)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "directory does not exist", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fmt.Sprintf("cannot use directory: %v", err), http.StatusBadRequest)
+		return
+	}
+	if !info.IsDir() {
+		http.Error(w, "path is not a directory", http.StatusBadRequest)
+		return
+	}
+
+	conversation, err := s.db.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		s.logger.Error("Failed to load conversation for cwd change", "conversationID", conversationID, "error", err)
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+	if conversation.Archived {
+		http.Error(w, "conversation is archived", http.StatusConflict)
+		return
+	}
+	// A draft has no agent and no history yet; its cwd is still client state and
+	// travels with the first send (see the promote path in handleChatConversation).
+	// Creating a manager here to move it would hydrate the conversation and write
+	// a system prompt — pinned to the OLD directory, since the row hasn't moved
+	// yet — well before the user has sent anything.
+	if conversation.IsDraft {
+		http.Error(w, "conversation is still a draft; set its directory before sending", http.StatusConflict)
+		return
+	}
+
+	userEmail := r.Header.Get("X-ExeDev-Email")
+	ctx = contextWithUserEmail(ctx, userEmail)
+
+	// Route through the manager even when one isn't already live: it owns the
+	// in-memory cwd and the toolset, and creating it here is what makes the
+	// change visible to a turn that starts moments later.
+	manager, err := s.getOrCreateConversationManager(ctx, conversationID, userEmail)
+	if err != nil {
+		s.logger.Error("Failed to get conversation manager for cwd change", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Mid-turn, the agent may be running a command right now; moving the ground
+	// under it would make its output a lie. Ask the user to wait rather than
+	// cancelling their turn for them. (The model picker takes the opposite side
+	// of this trade, but it has no choice — a model switch cannot be applied
+	// without rebuilding the loop.) SetCwd re-checks this atomically; the point
+	// of checking here is the specific message.
+	if manager.IsAgentWorking() {
+		http.Error(w, "Finish or stop the current turn to change the directory", http.StatusConflict)
+		return
+	}
+
+	if err := manager.SetCwd(ctx, cwd); err != nil {
+		if errors.Is(err, errAgentWorking) {
+			http.Error(w, "Finish or stop the current turn to change the directory", http.StatusConflict)
+			return
+		}
+		s.logger.Error("Failed to change conversation cwd", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	updated, err := s.db.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		s.logger.Error("Failed to reload conversation after cwd change", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	go s.publishConversationListUpdate(ConversationListUpdate{
+		Type:         "update",
+		Conversation: updated,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(updated)
 }
 
 // TagsRequest represents a request to update a conversation's tags.

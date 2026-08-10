@@ -628,6 +628,24 @@ class ApiService {
     return response.json();
   }
 
+  // Moves an existing conversation to a different working directory: the
+  // user-driven counterpart of the agent's change_dir tool. The server
+  // validates the path, updates the live toolset, and tells the agent, so this
+  // is deliberately not a draft-style local update. Rejections are meaningful
+  // (a missing directory, or a turn in flight), so the message is surfaced.
+  async setConversationCwd(conversationId: string, cwd: string): Promise<Conversation> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/cwd`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ cwd }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text.trim() || `Failed to change directory: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
   async updateConversationTags(conversationId: string, tags: string[]): Promise<Conversation> {
     const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/tags`, {
       method: "POST",

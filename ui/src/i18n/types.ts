@@ -142,6 +142,9 @@ export interface TranslationKeys {
   effortLabel: string;
   effortAuto: string;
   modelSwitchBusy: string;
+  modelSwitchHint: string;
+  cwdChangeHint: string;
+  cwdChangeBusy: string;
   customModelsGroup: string;
   editModel: string;
   loadingModels: string;

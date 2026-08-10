@@ -302,14 +302,9 @@
     <!-- Directory Picker Modal -->
     <DirectoryPickerModal
       :is-open="showDirectoryPicker"
-      :initial-path="selectedCwd"
+      :initial-path="currentConversation?.cwd || selectedCwd"
       @close="showDirectoryPicker = false"
-      @select="
-        (path) => {
-          setSelectedCwd(path);
-          cwdError = null;
-        }
-      "
+      @select="applyPickedCwd"
     />
 
     <MessageSelectionToolbar :on-comment="handleMessageComment" />
@@ -777,6 +772,29 @@ function setSelectedCwd(cwd: string) {
 
 const cwdError = ref<string | null>(null);
 const showDirectoryPicker = ref(false);
+
+// Directory pick from the picker modal. How it applies depends on whether the
+// conversation exists yet — the same split as the model picker: a draft's cwd is
+// client state until the first send, while an existing conversation's is server
+// state (the agent's tools run there), so it has to change through the server so
+// the live toolset moves with it and the agent is told where it now is.
+async function applyPickedCwd(path: string) {
+  cwdError.value = null;
+  const id = props.conversationId;
+  if (!id || props.currentConversation?.is_draft) {
+    setSelectedCwd(path);
+    return;
+  }
+  try {
+    await api.setConversationCwd(id, path);
+    // Deliberately no local write: the server broadcasts the updated
+    // conversation and the currentConversation watch applies it, so a rejected
+    // change can't leave the readout claiming a directory we are not in.
+  } catch (err) {
+    console.error("Failed to change directory:", err);
+    error.value = err instanceof Error ? err.message : "Failed to change directory";
+  }
+}
 const isMobile = ref(window.innerWidth < 768);
 const showDiffViewer = ref(false);
 const showGitGraph = ref(false);

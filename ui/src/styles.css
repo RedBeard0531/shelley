@@ -65,6 +65,21 @@ body {
   --warning-bg: #fffbeb;
   --warning-border: #fcd34d;
   --warning-text: #92400e;
+  /* Ramp for the context-usage token count: the number warms up as the
+     conversation grows (see .context-usage-label-tokens-*). Its own scale
+     rather than reusing --warning-text, which is tuned for text on
+     --warning-bg, not for a lone number on the status bar. Contrast climbs
+     with each step and every step out-contrasts the --text-secondary the
+     count wears when it is plain, so escalating is never a fade.
+
+     The top step follows the theme's error color, because that is what
+     "alarm" looks like everywhere else in the app. The indirection re-resolves
+     per theme because .dark lands on <html>, the same element these are
+     declared on, so its --error-text is the one substituted here. The two
+     lower steps have no such stand-in and are restated in .dark below. */
+  --context-usage-warn: #a16207;
+  --context-usage-high: #c2410c;
+  --context-usage-critical: var(--error-text);
   --blue-bg: #eff6ff;
   --blue-border: #bfdbfe;
   --blue-text: #1e40af;
@@ -103,6 +118,12 @@ body {
   --warning-bg: rgba(251, 191, 36, 0.15);
   --warning-border: #fbbf24;
   --warning-text: #fcd34d;
+  /* Dark counterparts: the light ramp's deeper shades would sink into the bar,
+     so these run lighter with each step instead of darker. Same invariants —
+     climbing contrast, all above the plain count's. (The top step needs no
+     entry: it follows --error-text, overridden above.) */
+  --context-usage-warn: #d4a017;
+  --context-usage-high: #fca55c;
   --blue-bg: rgba(59, 130, 246, 0.1);
   --blue-border: rgba(59, 130, 246, 0.3);
   --blue-text: #93c5fd;
@@ -4735,11 +4756,53 @@ svg {
    flex-shrink: 0). flex-shrink is weighted by base size, so the long cwd
    already absorbs most of any deficit — the explicit 3 states the intent
    rather than leaving it emergent, and keeps the model name legible longer.
-   direction: rtl ellipsizes the root, keeping the leaf directory visible. */
+
+   The segment is a button (it opens the directory picker) stripped back to
+   text; the vertical padding/negative margin pair gives it a 24px hit target
+   without moving the layout, as on the token count beside it. */
 .status-readout-cwd {
   flex-shrink: 3;
   min-width: 0;
   max-width: 60ch;
+  display: flex;
+  padding: 5px 0;
+  margin: -5px 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.status-readout-cwd:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.status-readout-cwd:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* Disabled while the agent works (the server refuses a mid-turn move). Same
+   treatment as the inline model picker: dim rather than grey out — it is still
+   the readout — drop the pointer cursor, and retract the underline so it stops
+   inviting a click. The tooltip on the button says why. */
+.status-readout-cwd:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.status-readout-cwd:disabled .status-readout-affordance {
+  text-decoration-line: none;
+}
+
+/* direction: rtl ellipsizes the root, keeping the leaf directory visible.
+   On the inner span, not the button: an rtl flex container would also flip the
+   order of its children. */
+.status-readout-cwd-path {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4806,26 +4869,15 @@ svg {
   }
 }
 
-/* Wrapper holding the popover and its anchor. min-width: 0 because a block-level
-   flex item defaults to min-width: auto, which floors it at its content width;
-   the token count itself never shrinks (see .context-usage-label-tokens), but a
+/* Wrapper holding the popover and its anchor. Flex so the button inside sizes
+   to its text rather than stretching as a block; min-width: 0 because a flex
+   item defaults to min-width: auto, which floors it at its content width — the
+   token count itself never shrinks (see .context-usage-label-tokens), but a
    floored segment steals width the model name beside it needs to ellipsize. */
 .context-usage-root {
-  min-width: 0;
-}
-
-.context-usage-container {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
   min-width: 0;
-}
-
-.context-warning-icon {
-  flex-shrink: 0;
-  font-size: 0.875rem;
-  line-height: 1;
-  cursor: help;
 }
 
 /* Context usage readout: "132k · model-name", opens the context usage popup.
@@ -4862,19 +4914,61 @@ svg {
   border-radius: 3px;
 }
 
+/* The affordance shared by all three readout segments. Each is a control that
+   has to read as part of one line of plain text ("~/dir · 115k · Model"), so
+   none of them can have a box or a chevron. A dotted underline is what is left:
+   the conventional "there is more here" mark, and text-decoration rather than a
+   border so it hugs the glyphs and costs no layout — which matters because the
+   token count never shrinks and the model name has to stay free to ellipsize.
+   It solidifies on hover/focus, where the pointer has already committed. */
+.status-readout-affordance {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  transition: text-decoration-color 0.15s ease;
+}
+
+/* :hover on the segment, not on the text: the hit target is the enclosing
+   button, which is taller than its glyphs (see the padding/margin trick on
+   .context-usage-label), so hovering the padding must light the underline too. */
+.status-readout-control:hover .status-readout-affordance,
+.status-readout-control:focus-visible .status-readout-affordance,
+.status-readout-control:focus-within .status-readout-affordance {
+  text-decoration-color: currentColor;
+}
+
+/* The token count adds its size ramp on top of the shared affordance. */
 .context-usage-label-tokens {
   flex-shrink: 0;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
-  transition: color 0.3s ease;
+  transition:
+    color 0.3s ease,
+    text-decoration-color 0.15s ease;
 }
 
+/* Size, not health: the number colors as the conversation grows past 100k /
+   200k / 300k tokens (or fills the model's window, whichever comes first).
+   Replaces the warning triangle that used to sit beside it. The label's :hover
+   rule (color: var(--text-primary)) can't wash these out — it only reaches the
+   count by inheritance, and the count's own color wins. */
 .context-usage-label-tokens-warn {
-  color: var(--warning-text, #f59e0b);
+  color: var(--context-usage-warn);
 }
 
-.context-usage-label-tokens-error {
-  color: var(--error-text);
+.context-usage-label-tokens-high {
+  color: var(--context-usage-high);
+}
+
+/* Bold at the top step, so the loudest state is not purely a hue: yellow ->
+   orange -> red is exactly the ramp the common color vision deficiencies
+   flatten. Free of layout risk here — the readout is monospace, and the count
+   is flex-shrink: 0. */
+.context-usage-label-tokens-critical {
+  color: var(--context-usage-critical);
+  font-weight: 600;
 }
 
 /* Inline status slot in message controls — hidden on desktop, shown on mobile */
@@ -12238,6 +12332,13 @@ kbd {
 
 .p-select.model-picker-inline.p-disabled .p-select-label {
   cursor: default;
+}
+
+/* Disabled means the click does nothing, so retract the invitation: no dotted
+   underline while the agent works. (The wrapper still carries a tooltip saying
+   why — see StatusReadout.) */
+.p-select.model-picker-inline.p-disabled .status-readout-affordance {
+  text-decoration-line: none;
 }
 
 /* PrimeVue's .p-select-label is the focusable combobox. Its box is 5px taller

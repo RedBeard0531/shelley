@@ -56,7 +56,9 @@
   >
     <template #value>
       <span class="model-picker-value">
-        <span class="model-picker-value-name">{{ selectedLabel }}</span>
+        <span :class="['model-picker-value-name', { 'status-readout-affordance': inline }]">{{
+          selectedLabel
+        }}</span>
         <span v-if="effortText && !inline" class="model-picker-value-effort"
           >· {{ effortText }}</span
         >
@@ -113,9 +115,7 @@
       <template v-if="reasoningSupported">
         <div class="model-picker-divider" />
         <div class="model-picker-effort">
-          <span :id="effortLabelId" class="model-picker-effort-label">{{
-            t("effortLabel")
-          }}</span>
+          <span :id="effortLabelId" class="model-picker-effort-label">{{ t("effortLabel") }}</span>
           <div class="model-picker-effort-pills" role="radiogroup" :aria-labelledby="effortLabelId">
             <button
               v-for="level in effortLevels"
@@ -265,9 +265,7 @@ const selectedModelObj = computed(() => props.models.find((m) => m.id === props.
 // control, so the trigger never looks like a model is selected.
 const selectedLabel = computed(
   () =>
-    labels.value.get(props.selectedModel) ||
-    props.selectedModel ||
-    t("noModelSelectedPlaceholder"),
+    labels.value.get(props.selectedModel) || props.selectedModel || t("noModelSelectedPlaceholder"),
 );
 
 // ---- reasoning effort --------------------------------------------------

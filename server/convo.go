@@ -123,7 +123,12 @@ type ConversationManager struct {
 	// fields it populates (cwd, modelID, conversationOptions, toolSetConfig,
 	// hasConversationEvents, agentWorking) between the initial unlocked
 	// hydrated-check and the final write under cm.mu.
-	hydrateMu             sync.Mutex
+	hydrateMu sync.Mutex
+	// cwdMu serializes SetCwd. The three writes it makes (the conversation row,
+	// the live toolset, the notice message) are not atomic together, so two
+	// concurrent moves could otherwise interleave into a state where the row
+	// says one directory and the tools are in the other.
+	cwdMu                 sync.Mutex
 	hydrated              bool
 	hasConversationEvents bool
 	cwd                   string // working directory for tools
@@ -2319,6 +2324,116 @@ func reasoningDisplayName(level string) string {
 		return "default"
 	}
 	return level
+}
+
+// Cwd returns the conversation's current working directory.
+func (cm *ConversationManager) Cwd() string {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.cwd
+}
+
+// errAgentWorking is returned by SetCwd when a turn is in flight. Moving the
+// working directory then would change the ground under a running bash command.
+var errAgentWorking = errors.New("agent is working")
+
+// SetCwd moves the conversation to dir: the directory the agent's tools run in
+// and the one the status bar shows. It is the user-driven counterpart of the
+// agent's own change_dir tool, and has to reach the same three places that tool
+// does, or the user and the agent end up disagreeing about where they are:
+//
+//  1. the conversation row, which the UI reads and which a future loop is
+//     hydrated from;
+//  2. the live toolset's working directory, so the very next bash command lands
+//     in the new directory rather than the one baked in at loop build time
+//     (this is the part a plain DB write would miss);
+//  3. the message log, as an in-context user message — the agent has the old
+//     directory in its history (the system prompt's "Initial pwd", and every
+//     tool result so far) and will keep resolving relative paths against it
+//     unless it is told. A marker excluded from context would move the tools
+//     out from under an agent that still believes it is elsewhere.
+//
+// Returns errAgentWorking if a turn is in flight. Callers check this too, for a
+// better error message, but the authoritative check is the one here: it shares
+// a critical section with the move, so a turn that starts between the caller's
+// check and this one cannot slip through.
+func (cm *ConversationManager) SetCwd(ctx context.Context, dir string) error {
+	cm.cwdMu.Lock()
+	defer cm.cwdMu.Unlock()
+
+	cm.mu.Lock()
+	if cm.agentWorking {
+		cm.mu.Unlock()
+		return errAgentWorking
+	}
+	old := cm.cwd
+	toolSet := cm.toolSet
+	if old == dir {
+		cm.mu.Unlock()
+		return nil
+	}
+	// Move the in-memory cwd inside the same critical section as the check, so
+	// a turn starting concurrently either sees the new directory or is refused.
+	// The DB write below can fail, in which case we roll this back.
+	cm.cwd = dir
+	cm.mu.Unlock()
+
+	if err := cm.db.UpdateConversationCwd(ctx, cm.conversationID, dir); err != nil {
+		cm.mu.Lock()
+		cm.cwd = old
+		cm.mu.Unlock()
+		return fmt.Errorf("failed to persist working directory: %w", err)
+	}
+
+	// The toolset only exists once a loop has been built. Until then there is
+	// nothing to update: ensureLoop reads cm.cwd when it builds one, and
+	// cwdMu keeps a concurrent SetCwd from interleaving with this one.
+	if toolSet != nil {
+		toolSet.WorkingDir().Set(dir)
+	}
+
+	return cm.recordCwdChangeNotice(ctx, old, dir)
+}
+
+// recordCwdChangeNotice tells the agent, in context, that the user moved the
+// conversation. User-role because it is the user's action and the agent has to
+// act on it; consecutive user messages are already ordinary here (queued turns
+// and compaction summaries both produce them).
+func (cm *ConversationManager) recordCwdChangeNotice(ctx context.Context, from, to string) error {
+	text := fmt.Sprintf("[The user changed the working directory to %s. Use it for subsequent commands and relative paths.]", to)
+	if from != "" {
+		text = fmt.Sprintf("[The user changed the working directory from %s to %s. Use the new one for subsequent commands and relative paths.]", from, to)
+	}
+	message := llm.Message{
+		Role:    llm.MessageRoleUser,
+		Content: []llm.Content{{Type: llm.ContentTypeText, Text: text}},
+	}
+	createdMsg, err := cm.db.CreateMessage(ctx, db.CreateMessageParams{
+		ConversationID: cm.conversationID,
+		Type:           db.MessageTypeUser,
+		LLMData:        message,
+		UserData:       map[string]any{"cwd_change": true, "from": from, "to": to},
+		UsageData:      llm.Usage{},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to record working directory change: %w", err)
+	}
+	cm.Touch()
+
+	var conversation generated.Conversation
+	err = cm.db.Queries(ctx, func(q *generated.Queries) error {
+		var qerr error
+		conversation, qerr = q.GetConversation(ctx, cm.conversationID)
+		return qerr
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get conversation for cwd change notification: %w", err)
+	}
+	cm.publishStream(createdMsg.SequenceID, StreamResponse{
+		Messages:     toAPIMessages([]generated.Message{*createdMsg}),
+		Conversation: &conversation,
+	})
+	return nil
 }
 
 // recordModelCommandInfo records an informational modelchange marker (bare
