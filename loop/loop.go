@@ -188,6 +188,24 @@ func (l *Loop) QueueMessages(messages ...llm.Message) {
 	}
 }
 
+// AppendHistory appends messages to the loop's in-memory history without
+// starting a turn.
+//
+// For out-of-band messages that are already persisted and must be visible to
+// the NEXT request, but should not themselves provoke a response — e.g. the
+// notice that the user moved the working directory. QueueUserMessage is the
+// wrong tool for that: queued messages drive a turn.
+//
+// Only safe between turns. The caller must hold whatever lock keeps a turn from
+// starting concurrently (see ConversationManager.SetCwd); appending mid-request
+// would put a message into history that the in-flight request was built
+// without, so the model would answer without having seen it.
+func (l *Loop) AppendHistory(messages ...llm.Message) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.history = append(l.history, messages...)
+}
+
 // GetUsage returns the total usage accumulated by this loop
 func (l *Loop) GetUsage() llm.Usage {
 	l.mu.Lock()

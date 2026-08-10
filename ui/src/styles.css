@@ -8833,6 +8833,54 @@ kbd {
   margin-right: 0.25em;
 }
 
+/* The user moved the conversation's working directory (see
+   CwdChangeMessage.vue). Same compact status shape as the modelchange marker
+   beside it — both are "something about this conversation changed here" — with
+   the paths as code so they read as paths. Override the base .message column
+   flex so it lays out inline. */
+.message.msg-cwdchange-container {
+  flex-flow: row wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  font-style: normal;
+  white-space: normal;
+}
+
+.msg-cwdchange-icon {
+  margin-right: 0.25em;
+}
+
+.msg-cwdchange-text {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35em;
+  justify-content: center;
+}
+
+.msg-cwdchange-path {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-primary);
+  /* Long paths ellipsize from the left, keeping the leaf directory — the part
+     that says where you actually are — visible. */
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+.msg-cwdchange-arrow {
+  color: var(--text-secondary);
+}
+
 /* Customized pill for an actual model/reasoning switch. Override the base
    .message column flex so the chips lay out inline. */
 .message.msg-modelchange-switch {

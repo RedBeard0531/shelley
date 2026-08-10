@@ -1893,6 +1893,18 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	cm.loopCtx = processCtx
 	cm.modelID = modelID
 	cm.toolSet = toolSet
+	// The cwd was read at the top of this function and baked into the toolset,
+	// but building one takes a while (DB reads, tool construction) and none of
+	// that happens under cm.mu — a SetCwd could have landed in between. It would
+	// have found cm.toolSet still nil and skipped the toolset update, leaving the
+	// tools pinned to a directory the conversation has already left, behind an
+	// HTTP 200. Re-read the authoritative value here, in the same critical
+	// section that publishes the toolset, so whichever of the two runs last
+	// agrees with the other. (The agentWorking guard does not cover this:
+	// AcceptUserMessage calls ensureLoop before it marks the agent working.)
+	if cm.cwd != "" && cm.cwd != cwd {
+		toolSet.WorkingDir().Set(cm.cwd)
+	}
 	cm.mu.Unlock()
 
 	// Persist model for legacy conversations
@@ -2392,7 +2404,17 @@ func (cm *ConversationManager) SetCwd(ctx context.Context, dir string) error {
 		toolSet.WorkingDir().Set(dir)
 	}
 
-	return cm.recordCwdChangeNotice(ctx, old, dir)
+	// The move has happened by this point: the row and the tools are both in the
+	// new directory, and neither can be taken back (the tools may already have
+	// run something there). A failed notice therefore must not be reported as a
+	// failed move — answering 500 here would invite a retry of a change that has
+	// already applied. Log it instead: the cost is an agent that has to work the
+	// new directory out from its next tool result, not a wrong directory.
+	if err := cm.recordCwdChangeNotice(ctx, old, dir); err != nil {
+		cm.logger.Error("working directory moved, but the agent was not told",
+			"conversationID", cm.conversationID, "from", old, "to", dir, "error", err)
+	}
+	return nil
 }
 
 // recordCwdChangeNotice tells the agent, in context, that the user moved the
@@ -2419,6 +2441,22 @@ func (cm *ConversationManager) recordCwdChangeNotice(ctx context.Context, from, 
 		return fmt.Errorf("failed to record working directory change: %w", err)
 	}
 	cm.Touch()
+
+	// Persisting is not enough. A live loop holds its own in-memory history and
+	// only rebuilds it from the DB when it is constructed; between turns it
+	// survives, so a row written here would stay invisible to the model until
+	// something dropped the loop (a model switch, a compaction, eviction). Splice
+	// it in directly — the message must be seen by the NEXT request without
+	// provoking a turn of its own, which rules out QueueUserMessage.
+	//
+	// Safe against a concurrent turn because the only caller, SetCwd, holds
+	// cwdMu and has already established the agent is idle under cm.mu.
+	cm.mu.Lock()
+	liveLoop := cm.loop
+	cm.mu.Unlock()
+	if liveLoop != nil {
+		liveLoop.AppendHistory(message)
+	}
 
 	var conversation generated.Conversation
 	err = cm.db.Queries(ctx, func(q *generated.Queries) error {

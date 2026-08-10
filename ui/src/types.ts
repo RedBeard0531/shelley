@@ -319,6 +319,23 @@ export function isDistillStatusMessage(message: Message): boolean {
   return distillStatus(message) !== null;
 }
 
+// The working directory a user-driven cwd change moved to, or null if the
+// message isn't one. These are user-role messages because the agent has to read
+// them (a marker excluded from context would let it keep using the old
+// directory), but they aren't something the user typed, so the UI renders them
+// as a status line rather than a chat bubble. See recordCwdChangeNotice.
+export function cwdChange(message: Message): { from: string; to: string } | null {
+  if (!message.user_data) return null;
+  try {
+    const userData =
+      typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
+    if (!userData?.cwd_change) return null;
+    return { from: userData.from || "", to: userData.to || "" };
+  } catch {
+    return null;
+  }
+}
+
 // Helper to check if a message was copied verbatim into the current generation
 // by a compaction (distill_method=compact). The UI collapses these behind a
 // single "messages carried forward" band so the re-played tail isn't

@@ -273,7 +273,7 @@ const readoutProps = computed(() => ({
   onUsageNeeded: props.onUsageNeeded,
   // The readout's cwd segment. Same picker as the composer's cwd chip, but for
   // a conversation that already exists, where the pick has to go through the
-  // server (see changeConversationCwd in ChatInterface).
+  // server (see applyPickedCwd in ChatInterface).
   onChangeConversationCwd: props.onOpenDirectoryPicker,
   onSwitchConversationModel: props.onSwitchConversationModel,
   onSwitchConversationThinkingLevel: props.onSwitchConversationThinkingLevel,

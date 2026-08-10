@@ -783,6 +783,17 @@ async function applyPickedCwd(path: string) {
   const id = props.conversationId;
   if (!id || props.currentConversation?.is_draft) {
     setSelectedCwd(path);
+    // Drafts keep their cwd in the row as well as locally, so a reload or
+    // another device sees the pick (and so re-opening this picker starts from
+    // it — it reads currentConversation?.cwd first). 404 once promoted, which
+    // is a no-op: the cwd travels with the send by then. Mirrors
+    // setConversationCwd in App.vue, the command-palette path to the same
+    // change.
+    if (id) {
+      api.updateDraft(id, { cwd: path }).catch((err) => {
+        console.debug("Could not persist draft cwd (likely already promoted):", err);
+      });
+    }
     return;
   }
   try {

@@ -25,7 +25,7 @@
         class="status-readout-cwd status-readout-control hide-on-mobile"
         :disabled="agentWorking || !onChangeConversationCwd"
         v-tooltip.top="cwdTooltip"
-        :aria-label="`${t('dirLabel')} ${tildifyPath(cwd)}`"
+        :aria-label="cwdAriaLabel"
         @click="onChangeConversationCwd?.()"
       >
         <span class="status-readout-cwd-path status-readout-affordance">{{
@@ -128,5 +128,16 @@ const cwdTooltip = computed(() => {
   if (props.agentWorking) return t("cwdChangeBusy");
   if (!props.onChangeConversationCwd) return props.cwd;
   return `${props.cwd} — ${t("cwdChangeHint")}`;
+});
+
+// The accessible name has to carry what the tooltip carries for a pointer: the
+// visible text is just a path, which says nothing about the button doing
+// anything. A tooltip alone wouldn't do it — PrimeVue's is not wired up as an
+// aria-describedby — so the destination goes in the name itself.
+const cwdAriaLabel = computed(() => {
+  const label = `${t("dirLabel")} ${props.cwd}`;
+  if (props.agentWorking) return `${label} — ${t("cwdChangeBusy")}`;
+  if (!props.onChangeConversationCwd) return label;
+  return `${label} — ${t("cwdChangeHint")}`;
 });
 </script>

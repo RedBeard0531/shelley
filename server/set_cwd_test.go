@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/llm"
+	"shelley.exe.dev/loop"
 )
 
 // postSetCwd asks the server to move a conversation to dir.
@@ -92,6 +96,144 @@ func TestSetConversationCwd(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatalf("no in-context message mentioning %q; messages=%d", dest, len(messages))
+	}
+}
+
+// The notice has to reach the LIVE loop, not just the database.
+//
+// A loop keeps its own in-memory history and only rebuilds it from the DB when
+// it is created; between turns it survives, so a row written straight to the DB
+// is invisible to the model until something drops the loop (a model switch, a
+// compaction, a 30-minute eviction). Persisting alone would mean the user sees
+// the notice in the transcript, the tools really have moved, and the agent is
+// told nothing — the exact disagreement this endpoint exists to prevent, made
+// harder to spot because the transcript looks right.
+func TestSetConversationCwdNoticeReachesLiveLoop(t *testing.T) {
+	t.Parallel()
+	server, database, _ := newTestServer(t)
+
+	start := t.TempDir()
+	dest := t.TempDir()
+	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := conversation.ConversationID
+
+	// A real turn, so there is a live loop with history to go stale.
+	postChatMessage(t, server, id, "bash: pwd")
+	waitForBashResult(t, database, id, start, 10*time.Second)
+	waitForIdle(t, server, id)
+
+	if w := postSetCwd(t, server, id, dest); w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	manager, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	liveLoop := manager.loop
+	manager.mu.Unlock()
+	if liveLoop == nil {
+		t.Fatal("no live loop after a completed turn; this test would prove nothing")
+	}
+
+	for _, msg := range liveLoop.GetHistory() {
+		for _, c := range msg.Content {
+			if strings.Contains(c.Text, dest) {
+				return
+			}
+		}
+	}
+	t.Fatalf("cwd notice is absent from the live loop's history: the next turn's"+
+		" LLM request would still describe %q as the working directory", start)
+}
+
+// recordingService wraps an llm.Service and remembers the messages of every
+// request that passes through, so a test can assert on what the model was
+// actually sent rather than on internal state that merely implies it.
+type recordingService struct {
+	llm.Service
+	mu       sync.Mutex
+	requests [][]llm.Message
+}
+
+func (r *recordingService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	r.mu.Lock()
+	r.requests = append(r.requests, append([]llm.Message(nil), req.Messages...))
+	r.mu.Unlock()
+	return r.Service.Do(ctx, req)
+}
+
+// lastRequestMentions reports whether the most recent request carried needle.
+func (r *recordingService) lastRequestMentions(needle string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.requests) == 0 {
+		return false
+	}
+	for _, m := range r.requests[len(r.requests)-1] {
+		for _, c := range m.Content {
+			if strings.Contains(c.Text, needle) {
+				return true
+			}
+			for _, tr := range c.ToolResult {
+				if strings.Contains(tr.Text, needle) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// The end of the chain the test above starts: the notice must be in the LLM
+// request the next turn actually sends. Everything else — the DB row, the loop's
+// history — is only a means to this.
+func TestSetConversationCwdNoticeReachesNextLLMRequest(t *testing.T) {
+	t.Parallel()
+	database, cleanup := setupTestDB(t)
+	t.Cleanup(cleanup)
+	rec := &recordingService{Service: loop.NewPredictableService()}
+	server := NewServer(database, &testLLMManager{service: rec},
+		claudetool.ToolSetConfig{EnableBrowser: false},
+		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		true, "predictable", "")
+	server.hooksDir = t.TempDir()
+
+	start := t.TempDir()
+	dest := t.TempDir()
+	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := conversation.ConversationID
+
+	postChatMessage(t, server, id, "bash: pwd")
+	waitForBashResult(t, database, id, start, 10*time.Second)
+	waitForIdle(t, server, id)
+
+	if w := postSetCwd(t, server, id, dest); w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The move itself must not have provoked a turn: the notice informs the
+	// next request, it does not ask the agent for anything.
+	manager, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.IsAgentWorking() {
+		t.Error("changing the directory started a turn on its own")
+	}
+
+	postChatMessage(t, server, id, "hello")
+	waitForIdle(t, server, id)
+
+	if !rec.lastRequestMentions(dest) {
+		t.Errorf("the next LLM request never mentioned the new directory %q", dest)
 	}
 }
 

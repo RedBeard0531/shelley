@@ -10,6 +10,11 @@
   <!-- Distillation status: compact agent-side indicator. -->
   <DistillStatusMessage v-if="isDistill" :message="message" />
 
+  <!-- The user moved the conversation's working directory. A user-role message
+       (the agent must read it), but not something the user typed, so it renders
+       as a status line rather than a chat bubble. -->
+  <CwdChangeMessage v-else-if="isCwdChange" :message="message" />
+
   <!-- system: render nothing. -->
   <template v-else-if="message.type === 'system'" />
 
@@ -217,6 +222,7 @@ import {
   type LLMMessage,
   type LLMContent,
   type Usage,
+  cwdChange,
   isDistillStatusMessage,
 } from "../../types";
 import { type MarkdownMode } from "../../services/settings";
@@ -232,6 +238,7 @@ import GitInfoMessage from "./GitInfoMessage.vue";
 import WarningMessage from "./WarningMessage.vue";
 import ModelChangeMessage from "./ModelChangeMessage.vue";
 import DistillStatusMessage from "./DistillStatusMessage.vue";
+import CwdChangeMessage from "./CwdChangeMessage.vue";
 import ErrorRetryButton from "./ErrorRetryButton.vue";
 import RefusalContinueButton from "./RefusalContinueButton.vue";
 import MessageContentBlock from "./MessageContentBlock.vue";
@@ -277,6 +284,7 @@ function shouldRenderMarkdown(
 }
 
 const isDistill = computed(() => isDistillStatusMessage(props.message));
+const isCwdChange = computed(() => cwdChange(props.message) !== null);
 
 // ---- Action bar state (show on hover or tap) ----
 const showActionBar = ref(false);

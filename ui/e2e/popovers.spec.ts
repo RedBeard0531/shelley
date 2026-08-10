@@ -523,10 +523,17 @@ test.describe("Status readout controls", () => {
     }).toPass({ timeout: 15000 });
 
     // ...and the agent was told, in a message it will actually read. Without
-    // this it keeps resolving relative paths against the old directory.
-    const notice = page.locator(`[data-testid="message"]:has-text("${e2eDir}")`).last();
+    // this it keeps resolving relative paths against the old directory. It is a
+    // user-role row (so the agent sees it) but renders as a status line, not a
+    // chat bubble — the user didn't type it.
+    const notice = page.locator('[data-testid="message-cwdchange"]').last();
     await expect(notice).toBeVisible();
     await expect(notice).toContainText("working directory");
+    await expect(notice).toContainText(expectedLabel);
+    // Not rendered as something the user said.
+    await expect(
+      page.locator(`[data-testid="message"].message-user:has-text("${e2eDir}")`),
+    ).toHaveCount(0);
   });
 
   test("token count opens the cost popup, model name opens the picker", async ({
