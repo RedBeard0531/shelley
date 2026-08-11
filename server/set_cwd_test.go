@@ -151,30 +151,47 @@ func TestSetConversationCwdNoticeReachesLiveLoop(t *testing.T) {
 		" LLM request would still describe %q as the working directory", start)
 }
 
-// recordingService wraps an llm.Service and remembers the messages of every
-// request that passes through, so a test can assert on what the model was
-// actually sent rather than on internal state that merely implies it.
+// newRecordingTestServer builds a test server whose LLM calls are recorded, so
+// a test can assert on the requests the agent actually sent.
+func newRecordingTestServer(t *testing.T) (*Server, *db.DB, *recordingService) {
+	t.Helper()
+	database, cleanup := setupTestDB(t)
+	t.Cleanup(cleanup)
+	rec := &recordingService{Service: loop.NewPredictableService()}
+	server := NewServer(database, &testLLMManager{service: rec},
+		claudetool.ToolSetConfig{EnableBrowser: false},
+		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		true, "predictable", "")
+	server.hooksDir = t.TempDir()
+	return server, database, rec
+}
+
+// recordingService wraps an llm.Service and remembers the messages and system
+// prompt of every request that passes through, so a test can assert on what the
+// model was actually sent rather than on internal state that merely implies it.
 type recordingService struct {
 	llm.Service
 	mu       sync.Mutex
 	requests [][]llm.Message
+	systems  []string
 }
 
 func (r *recordingService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	var system strings.Builder
+	for _, sc := range req.System {
+		system.WriteString(sc.Text)
+	}
 	r.mu.Lock()
 	r.requests = append(r.requests, append([]llm.Message(nil), req.Messages...))
+	r.systems = append(r.systems, system.String())
 	r.mu.Unlock()
 	return r.Service.Do(ctx, req)
 }
 
-// lastRequestMentions reports whether the most recent request carried needle.
-func (r *recordingService) lastRequestMentions(needle string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.requests) == 0 {
-		return false
-	}
-	for _, m := range r.requests[len(r.requests)-1] {
+// messagesMention reports whether any of the messages contains needle, in text
+// or in tool-result content.
+func messagesMention(messages []llm.Message, needle string) bool {
+	for _, m := range messages {
 		for _, c := range m.Content {
 			if strings.Contains(c.Text, needle) {
 				return true
@@ -189,19 +206,55 @@ func (r *recordingService) lastRequestMentions(needle string) bool {
 	return false
 }
 
+// turnIndex finds the recorded request for the turn the given user message
+// drove. Callers must hold r.mu.
+//
+// Two things make the obvious implementations wrong. "The last request" picks up
+// the conversation-naming call, which fires separately and lands last on a first
+// send. And a substring search for the user's text matches that same slug call,
+// because its prompt quotes the conversation. So the anchor is a user-role
+// message whose entire text IS the message sent — which only the real turn has.
+func (r *recordingService) turnIndex(t *testing.T, userText string) int {
+	t.Helper()
+	for i := len(r.requests) - 1; i >= 0; i-- {
+		for j := range r.requests[i] {
+			m := &r.requests[i][j]
+			if m.Role != llm.MessageRoleUser {
+				continue
+			}
+			if strings.TrimSpace(messageTextContent(m)) == strings.TrimSpace(userText) {
+				return i
+			}
+		}
+	}
+	t.Fatalf("no recorded LLM request was the turn for user message %q (recorded %d requests)", userText, len(r.requests))
+	return -1
+}
+
+// turnSystemPrompt returns the system prompt sent with the turn the given user
+// message drove.
+func (r *recordingService) turnSystemPrompt(t *testing.T, userText string) string {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.systems[r.turnIndex(t, userText)]
+}
+
+// turnMentioning reports whether the turn the given user message drove also
+// mentioned needle.
+func (r *recordingService) turnMentioning(t *testing.T, userText, needle string) bool {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return messagesMention(r.requests[r.turnIndex(t, userText)], needle)
+}
+
 // The end of the chain the test above starts: the notice must be in the LLM
 // request the next turn actually sends. Everything else — the DB row, the loop's
 // history — is only a means to this.
 func TestSetConversationCwdNoticeReachesNextLLMRequest(t *testing.T) {
 	t.Parallel()
-	database, cleanup := setupTestDB(t)
-	t.Cleanup(cleanup)
-	rec := &recordingService{Service: loop.NewPredictableService()}
-	server := NewServer(database, &testLLMManager{service: rec},
-		claudetool.ToolSetConfig{EnableBrowser: false},
-		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
-		true, "predictable", "")
-	server.hooksDir = t.TempDir()
+	server, database, rec := newRecordingTestServer(t)
 
 	start := t.TempDir()
 	dest := t.TempDir()
@@ -232,7 +285,7 @@ func TestSetConversationCwdNoticeReachesNextLLMRequest(t *testing.T) {
 	postChatMessage(t, server, id, "hello")
 	waitForIdle(t, server, id)
 
-	if !rec.lastRequestMentions(dest) {
+	if !rec.turnMentioning(t, "hello", dest) {
 		t.Errorf("the next LLM request never mentioned the new directory %q", dest)
 	}
 }
@@ -465,5 +518,72 @@ func TestSetConversationCwdRefusesWhileWorking(t *testing.T) {
 	}
 	if got.Cwd == nil || *got.Cwd != start {
 		t.Errorf("cwd moved while the agent was working: %v", got.Cwd)
+	}
+}
+
+// A non-draft conversation that has never been sent to has no system prompt
+// yet, so the SetCwd handler's getOrCreateConversationManager is what writes
+// one — pinned to the directory being LEFT, since the row hasn't moved. This
+// pins down what the agent ends up believing in that case.
+//
+// Note this path has no live loop yet, so the notice reaches the model by DB
+// hydration rather than by AppendHistory: it covers the other half of the
+// delivery story from TestSetConversationCwdNoticeReachesLiveLoop.
+func TestSetConversationCwdBeforeFirstSend(t *testing.T) {
+	t.Parallel()
+	server, database, rec := newRecordingTestServer(t)
+
+	start := t.TempDir()
+	dest := t.TempDir()
+	// userInitiated=true, isDraft=false: gets a full system prompt on hydrate.
+	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := conversation.ConversationID
+
+	if w := postSetCwd(t, server, id, dest); w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Pin the premise that makes this test worth having, rather than trusting the
+	// comment above: with no loop yet, the notice can only reach the model by DB
+	// hydration. If something later made SetCwd build a loop eagerly, this would
+	// quietly become a duplicate of TestSetConversationCwdNoticeReachesNextLLMRequest
+	// while still claiming to cover the other delivery path.
+	premise, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	premise.mu.Lock()
+	liveLoop := premise.loop
+	premise.mu.Unlock()
+	if liveLoop != nil {
+		t.Fatal("a loop already exists before the first send; this test no longer covers the DB-hydration delivery path")
+	}
+
+	postChatMessage(t, server, id, "hello")
+	waitForIdle(t, server, id)
+
+	// Whatever the system prompt says, the request as a whole must leave the
+	// agent in no doubt about where it now is.
+	if !rec.turnMentioning(t, "hello", dest) {
+		t.Errorf("request never mentioned the new directory %q", dest)
+	}
+	// Moving before the first send makes the move itself trigger the hydrate that
+	// writes the system prompt, so that prompt names the directory being LEFT.
+	// That sounds alarming and isn't: a system prompt is written once, at the
+	// first send, and names whatever the cwd was then — so ANY later move leaves
+	// it equally stale. The notice is what reconciles the two, in this path and
+	// in the ordinary one alike. Asserting that keeps the two paths honest about
+	// being the same shape, and would catch a future change that started relying
+	// on the system prompt to carry the current directory.
+	system := rec.turnSystemPrompt(t, "hello")
+	if !strings.Contains(system, start) {
+		t.Errorf("expected the system prompt to name the directory it was written in (%q)", start)
+	}
+	if strings.Contains(system, dest) {
+		t.Errorf("system prompt unexpectedly names the new directory %q; if system prompts now track "+
+			"the live cwd, the notice may be redundant here", dest)
 	}
 }
