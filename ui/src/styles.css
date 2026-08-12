@@ -11619,6 +11619,11 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  /* Let a wide pill (a long headline, or a long line of live output) shrink
+   * to the row instead of overflowing it: as a flex item this needs
+   * min-width:0, otherwise its automatic minimum size is its content width. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .tool-pill {
@@ -11661,15 +11666,27 @@ kbd {
   flex-shrink: 0;
 }
 
-.tool-pill-text {
+/* The pill's label: its headline (.tool-pill-text) or, while the tool runs and
+ * reports output, the last line it printed (.tool-pill-output). ToolPillLabel
+ * renders one or the other, never both, so they share their layout. Pills stay
+ * chip-sized rather than growing to the conversation width: each label already
+ * bounds its own text (the headline budget in toolMeta.ts, MAX_LEN in
+ * lastLine.ts), and max-width is the visual guard for both. */
+.tool-pill-text,
+.tool-pill-output {
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  /* Desktop affords wider pills; the headline budget in toolMeta.ts
-   * already picks how much text to surface, this is the visual guard. */
   max-width: 360px;
+  /* overflow:hidden both clips the text and opts these flex items out of the
+   * automatic minimum content size, so a narrow row shrinks them further. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Live output reads as transient: dimmer than the pill's --text-primary. */
+.tool-pill-output {
+  color: var(--text-secondary);
 }
 
 .tool-pill-spinner {
@@ -11728,6 +11745,9 @@ kbd {
 }
 
 @media (max-width: 600px) {
+  /* Headline only, deliberately: while a tool runs, .tool-pill-output is the
+   * pill's only label and may use the full row, which on a phone is narrower
+   * than the desktop cap anyway (so the cap never actually binds there). */
   .tool-pill-text {
     max-width: 150px;
   }

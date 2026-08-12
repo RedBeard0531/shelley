@@ -25,7 +25,10 @@
             <span class="tool-pill-emoji" aria-hidden="true">{{
               toolEmoji(item.toolName || "tool", item.toolInput)
             }}</span>
-            <span class="tool-pill-text">{{ headlineFor(item) }}</span>
+            <ToolPillLabel
+              :headline="headlineFor(item)"
+              :tool-use-id="item.hasResult ? undefined : item.toolUseId"
+            />
             <span v-if="!item.hasResult" class="tool-pill-spinner" aria-hidden="true" />
             <span v-if="pillErrored(item)" class="tool-pill-err" aria-hidden="true">✗</span>
           </button>
@@ -97,6 +100,7 @@ import { provideToolDetail } from "../composables/toolDetail";
 import Modal from "./Modal.vue";
 import CoalescedToolCall from "./CoalescedToolCall.vue";
 import SubagentPillLive from "./SubagentPillLive.vue";
+import ToolPillLabel from "./ToolPillLabel.vue";
 
 const props = defineProps<{
   items: CoalescedItem[];
