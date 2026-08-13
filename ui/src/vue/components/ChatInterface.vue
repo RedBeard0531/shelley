@@ -3421,16 +3421,87 @@ function handleVisibilityChange() {
 }
 
 // Cmd/Ctrl+ArrowDown scrolls to bottom.
+//
+// The composer is only exempt while the caret has somewhere left to go, so the
+// native "move down/to end" gesture still works mid-edit. A blanket exemption
+// for every text field broke the shortcut in the most common case there is:
+// selecting a conversation (or finishing a send) auto-focuses the composer, so
+// the shortcut silently did nothing for a reader who had scrolled up and never
+// clicked back into the message list. An empty or already-at-end composer has
+// no caret movement to preserve, so scrolling is unambiguous there.
+function targetOwnsArrowDown(target: HTMLElement): boolean {
+  // The terminal dock. xterm swallows nearly every key, but ArrowDown with Meta
+  // is one it deliberately passes through (macOS reserves the chord), and it
+  // surfaces here with the empty .xterm-helper-textarea as the target -- so
+  // neither the textarea rule below nor the cover check would catch it, and
+  // Cmd+Down at a shell prompt scrolled the conversation behind the dock. The
+  // panel sits below the message list rather than over it, so hit-testing
+  // cannot see it either.
+  if (target.closest(".terminal-panel")) return true;
+  if (target.isContentEditable) return true;
+  // tagName rather than instanceof: matches the check this replaced, and keeps
+  // working for elements from another document (portals, print views).
+  switch (target.tagName) {
+    case "TEXTAREA": {
+      const el = target as HTMLTextAreaElement;
+      // A collapsed caret at the very end of the draft has nowhere further to
+      // go. Anything else — text below the caret, or a live selection the key
+      // would collapse — is an edit gesture worth preserving.
+      return el.selectionStart !== el.selectionEnd || el.selectionEnd < el.value.length;
+    }
+    // Arrow keys drive most native controls: list navigation in the drawer's
+    // search/rename/tag inputs, value stepping in number/date/range, selection
+    // in radio groups, and opening a select. Rather than enumerate the few
+    // types where ArrowDown is inert (checkbox, buttons), leave them all alone
+    // -- none of them is the composer, which is the case this shortcut is for.
+    case "INPUT":
+    case "SELECT":
+      return true;
+  }
+  return false;
+}
+
+// True when something is drawn over the message list: the diff viewer, git
+// graph, command palette, a modal dialog. Scrolling a list the user cannot see
+// is never what they meant, and those overlays have their own ArrowDown
+// bindings. Hit-testing covers every overlay without this component having to
+// know about any of them, and can't be fooled by one that renders into a
+// portal outside our subtree.
+//
+// Three probes down the middle rather than one: an overlay covers all of them,
+// while a tooltip or floating toolbar parked over a single point does not. The
+// points are clamped into the viewport because elementFromPoint returns null
+// for anything outside it, which would otherwise read as "covered" whenever
+// the container extends past the window. Costs one layout read per keypress,
+// which is not a hot path.
+function messageListCovered(container: HTMLElement): boolean {
+  const rect = container.getBoundingClientRect();
+  const left = Math.max(rect.left, 0);
+  const right = Math.min(rect.right, window.innerWidth);
+  const top = Math.max(rect.top, 0);
+  const bottom = Math.min(rect.bottom, window.innerHeight);
+  // Entirely offscreen or zero-sized: nothing to scroll into view.
+  if (right <= left || bottom <= top) return true;
+  const x = (left + right) / 2;
+  return [0.25, 0.5, 0.75].every((f) => {
+    const hit = document.elementFromPoint(x, top + (bottom - top) * f);
+    return !hit || !container.contains(hit);
+  });
+}
+
 function handleScrollKeyDown(e: KeyboardEvent) {
   if (e.key !== "ArrowDown") return;
   const mod = e.metaKey || e.ctrlKey;
   if (!mod || e.altKey || e.shiftKey) return;
+  // Something closer to the key already claimed it -- notably the composer's
+  // slash-command and /model autocomplete menus, which step their selection
+  // with ArrowDown regardless of modifiers. Those handlers sit on the element
+  // itself, so they have run by the time this document-level listener does.
+  if (e.defaultPrevented) return;
   const target = e.target as HTMLElement | null;
-  if (target) {
-    const tag = target.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
-  }
-  if (!messagesContainerRef.value) return;
+  if (target && targetOwnsArrowDown(target)) return;
+  const container = messagesContainerRef.value;
+  if (!container || messageListCovered(container)) return;
   e.preventDefault();
   scrollToBottom();
 }

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import { createConversationViaAPI, createConversationViaAPIWithDetails } from "./helpers";
 
 test.describe("Scroll behavior", () => {
@@ -566,5 +566,227 @@ test.describe("Scroll behavior", () => {
       .poll(() => messagesContainer.evaluate((el) => el.scrollTop), { timeout: 3000 })
       .toBeLessThan(50);
     await expect(scrollButton).toBeVisible({ timeout: 5000 });
+  });
+});
+
+// Desktop viewport: the drawer is only rendered alongside the chat on desktop,
+// and the shortcut is a desktop-only affordance anyway.
+test.describe("Cmd/Ctrl+ArrowDown scroll-to-bottom shortcut", () => {
+  test.use({ viewport: { width: 1280, height: 720 }, isMobile: false, hasTouch: false });
+
+  async function seedScrollableConversation(request: APIRequestContext): Promise<string> {
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+    return conversationId;
+  }
+
+  test("scrolls to the bottom after switching conversations in the drawer", async ({
+    page,
+    request,
+  }) => {
+    // Regression: selecting a conversation in the drawer auto-focuses the
+    // composer, and the shortcut used to bail out on any focused textarea. The
+    // keypress then went nowhere -- exactly the state a reader is in right
+    // after switching conversations.
+    const first = await seedScrollableConversation(request);
+    const second = await seedScrollableConversation(request);
+
+    await page.goto(`/c/${first}`);
+    await expect(page.locator('[data-testid="message-input"]')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    await page.locator(`.conversation-item[data-conversation-id="${second}"]`).click();
+    // The first conversation's messages stay mounted briefly during the switch,
+    // so waiting on "a message is visible" alone can pass before the second one
+    // has loaded -- and its own load-time autoscroll would then land after the
+    // manual scroll below, greening this test for the wrong reason.
+    await expect(page).toHaveURL(new RegExp(`/c/[^/]*${second}`), { timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    const messagesContainer = page.locator(".messages-container");
+    // Precondition the fix hinges on: focus is in the composer, not the list.
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.tagName), { timeout: 10000 })
+      .toBe("TEXTAREA");
+
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+
+    await page.keyboard.press("ControlOrMeta+ArrowDown");
+
+    await expect
+      .poll(
+        () =>
+          messagesContainer.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop <= 2),
+        { timeout: 10000 },
+      )
+      .toBe(true);
+    await expect(page.locator(".scroll-to-bottom-button")).not.toBeVisible({ timeout: 10000 });
+  });
+
+  test("leaves the caret alone when the composer has text below it", async ({ page, request }) => {
+    // The composer only yields the shortcut when the caret has nowhere further
+    // to go; mid-draft, the native "move down/to end" gesture wins.
+    const conversationId = await seedScrollableConversation(request);
+    await page.goto(`/c/${conversationId}`);
+    const input = page.locator('[data-testid="message-input"]');
+    await expect(input).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    const draft = "first line\nsecond line";
+    await input.fill(draft);
+    await input.evaluate((el: HTMLTextAreaElement) => {
+      el.selectionStart = el.selectionEnd = 0;
+    });
+
+    const messagesContainer = page.locator(".messages-container");
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+
+    await page.keyboard.press("ControlOrMeta+ArrowDown");
+    // Asserting the caret actually moved doubles as a positive control: without
+    // it, this test would also pass if the shortcut had been deleted outright
+    // rather than merely yielding here. Where it lands is platform-specific
+    // (Linux/Windows move down a line, macOS jumps to the end), so only assert
+    // that it left the first line.
+    await expect
+      .poll(() => input.evaluate((el: HTMLTextAreaElement) => el.selectionEnd), { timeout: 5000 })
+      .toBeGreaterThanOrEqual(draft.indexOf("\n") + 1);
+    expect(await messagesContainer.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+  });
+
+  test("leaves the drawer search box alone", async ({ page, request }) => {
+    // ArrowDown is list navigation in the drawer's single-line inputs, so they
+    // keep the key even though no caret moves vertically.
+    const conversationId = await seedScrollableConversation(request);
+    await page.goto(`/c/${conversationId}`);
+    await expect(page.locator('[data-testid="message-input"]')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    const messagesContainer = page.locator(".messages-container");
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+
+    await page.locator(".drawer-header-actions").getByLabel("Search conversations").click();
+    await expect(page.locator(".drawer-search-input")).toBeFocused({ timeout: 10000 });
+
+    await page.keyboard.press("ControlOrMeta+ArrowDown");
+    await page.waitForTimeout(300);
+
+    expect(await messagesContainer.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+  });
+
+  test("leaves the composer's slash menu alone", async ({ page, request }) => {
+    // The slash-command menu steps its selection with ArrowDown regardless of
+    // modifiers. It handles the key on the textarea itself, so this shortcut
+    // must not also fire and yank the reader to the bottom.
+    const conversationId = await seedScrollableConversation(request);
+    await page.goto(`/c/${conversationId}`);
+    const input = page.locator('[data-testid="message-input"]');
+    await expect(input).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    await input.click();
+    await input.pressSequentially("/");
+    const menu = page.getByTestId("slash-command-menu");
+    await expect(menu).toBeVisible({ timeout: 10000 });
+
+    const messagesContainer = page.locator(".messages-container");
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+
+    await page.keyboard.press("ControlOrMeta+ArrowDown");
+    // The menu consumed the key and advanced its selection: a positive signal,
+    // so this doesn't green merely because the keypress went unprocessed.
+    await expect(menu.locator('[role="option"]').nth(1)).toHaveAttribute(
+      "aria-selected",
+      "true",
+      { timeout: 5000 },
+    );
+    expect(await messagesContainer.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+  });
+
+  test("leaves the terminal alone", async ({ page, request }) => {
+    // Regression: xterm consumes almost every key, but deliberately passes
+    // ArrowDown+Meta through (macOS reserves the chord). It arrives with the
+    // empty .xterm-helper-textarea as the target, and the terminal dock sits
+    // below the message list rather than over it, so neither the textarea rule
+    // nor the cover check caught it -- Cmd+Down at a shell prompt scrolled the
+    // conversation behind the dock.
+    const conversationId = await seedScrollableConversation(request);
+    await page.goto(`/c/${conversationId}`);
+    await expect(page.locator('[data-testid="message-input"]')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
+    await page.locator(".overflow-menu-item", { hasText: /terminal/i }).click();
+    const xtermInput = page.locator(".terminal-panel .xterm-helper-textarea");
+    await expect(xtermInput).toBeVisible({ timeout: 30000 });
+    await xtermInput.focus();
+
+    const messagesContainer = page.locator(".messages-container");
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+
+    // Meta specifically: Ctrl+ArrowDown is consumed by xterm itself, so it
+    // would pass here even with the bug present.
+    await page.keyboard.press("Meta+ArrowDown");
+    await page.waitForTimeout(500);
+
+    expect(await messagesContainer.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+  });
+
+  test("does not scroll the message list hidden behind an overlay", async ({ page, request }) => {
+    // The git graph covers the conversation and binds ArrowDown to its own
+    // commit navigation. Scrolling a list the reader cannot see would both
+    // fight that binding and lose their place.
+    const conversationId = await seedScrollableConversation(request);
+    await page.goto(`/c/${conversationId}`);
+    await expect(page.locator('[data-testid="message-input"]')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    const messagesContainer = page.locator(".messages-container");
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+
+    await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
+    await page.locator(".overflow-menu-item", { hasText: /git graph/i }).click();
+    await expect(page.locator(".git-graph-container")).toBeVisible({ timeout: 30000 });
+
+    await page.keyboard.press("ControlOrMeta+ArrowDown");
+    await page.waitForTimeout(500);
+
+    expect(await messagesContainer.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+
+    // ...and it works again once the overlay is gone. Closing the git graph
+    // returns focus to the (empty) composer, so this also re-exercises the
+    // composer-focused path the fix is about.
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".git-graph-container")).toBeHidden({ timeout: 10000 });
+    await expect(page.locator('[data-testid="message-input"]')).toBeFocused({ timeout: 10000 });
+    await expect(page.locator('[data-testid="message-input"]')).toHaveValue("");
+    await page.keyboard.press("ControlOrMeta+ArrowDown");
+    await expect
+      .poll(
+        () =>
+          messagesContainer.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop <= 2),
+        { timeout: 10000 },
+      )
+      .toBe(true);
   });
 });
