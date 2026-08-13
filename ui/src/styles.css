@@ -1443,6 +1443,15 @@ body {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+/* ToolStatusIcon: the ✓/✗ in a tool card header. The colour comes from the
+   per-card .*-success / .*-error class the caller passes; this only handles
+   the box, so the glyph sits on the text baseline like the emoji beside it. */
+.tool-status-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 .tool-success {
   color: var(--success-text);
   font-size: 0.875rem;
@@ -1835,57 +1844,49 @@ body {
 
 .patch-tool-success {
   color: var(--success-text);
-  font-size: 0.875rem;
   flex-shrink: 0;
 }
 
 .patch-tool-error {
   color: var(--text-secondary);
-  font-size: 0.875rem;
   flex-shrink: 0;
 }
 
 .patch-tool-header-controls {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.125rem;
   flex-shrink: 0;
 }
 
-.patch-tool-toggle {
+/* Header icon buttons (open in editor / diff mode / expand). One shared look
+   across all three: a quiet secondary-colour glyph with a soft square hover
+   target, using the same hover greys as .btn-icon-sm elsewhere. Kept at full
+   opacity rather than dimmed-until-hover so the glyphs stay legible (and meet
+   contrast) on touch devices, which have no hover. */
+.patch-tool-icon-btn {
   background: none;
   border: none;
+  border-radius: 0.375rem;
   cursor: pointer;
-  padding: 0.25rem;
+  padding: 0.3125rem;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-secondary);
   flex-shrink: 0;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 
-.patch-tool-toggle:hover {
+.patch-tool-icon-btn:hover {
   color: var(--text-primary);
+  background: var(--gray-200);
 }
 
-.patch-tool-diff-mode-toggle {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 0.25rem;
-  cursor: pointer;
-  padding: 0.25rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  transition: all 0.15s ease;
-}
-
-.patch-tool-diff-mode-toggle:hover {
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border-color: var(--text-tertiary);
+.dark .patch-tool-icon-btn:hover {
+  background: var(--gray-600);
 }
 
 .patch-tool-details {

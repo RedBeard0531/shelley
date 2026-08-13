@@ -224,6 +224,7 @@ import Button from "primevue/button";
 import type { EphemeralTerminal } from "./components/terminalTypes";
 import { focusMessageInputIfUnfocused } from "../utils/focusMessageInput";
 import { tildifyPath } from "../utils/tildify";
+import { resolveAbsPath } from "../utils/absPath";
 import {
   type Conversation,
   type ConversationWithState,
@@ -242,6 +243,7 @@ import { initialDrawerCollapsed, saveDrawerCollapsedPreference } from "../utils/
 import { perfCount } from "../utils/perf";
 import { useI18n } from "./composables/i18n";
 import { ConversationsListKey, CurrentConversationIdKey } from "./composables/subagentLive";
+import { provideOpenFileEditor } from "./composables/fileEditor";
 import { useFeatureFlag } from "./composables/featureFlags";
 import PerfHud from "./components/PerfHud.vue";
 
@@ -676,6 +678,16 @@ function openFileInEditor(absPath: string) {
   fileFinderOpen.value = false;
   editorFilePath.value = absPath;
 }
+
+// Open any file in the editor modal, from anywhere in the tree (patch tool
+// cards, etc.). A successful patch records an absolute path, but a failed one
+// carries only the path the agent passed, which may be relative; resolve those
+// against the same directory the file finder searches (the conversation's cwd,
+// else the last-used one). /api/read-file requires a clean absolute path.
+provideOpenFileEditor((path: string) => {
+  const abs = resolveAbsPath(path, finderDir.value);
+  if (abs) openFileInEditor(abs);
+});
 
 // A comment submitted from the file editor's comment mode: hand it to
 // ChatInterface for injection into the message input.

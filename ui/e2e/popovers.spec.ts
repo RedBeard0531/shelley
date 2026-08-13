@@ -206,8 +206,18 @@ test.describe("Context usage popup", () => {
     // No icon, no badge: the segment's whole rendered text is the count. This
     // is what the triangle used to violate, and it catches any successor to it
     // — not just the one class that has been deleted.
+    //
+    // Read both texts in ONE evaluation. The count starts at 0 and is filled in
+    // when usage arrives, so two sequential innerText() round-trips can straddle
+    // that update and compare the segment's "0" against the count's "6k".
     const segment = page.locator(".context-usage-root:visible").first();
-    expect((await segment.innerText()).trim()).toBe((await tokens.innerText()).trim());
+    await expect(async () => {
+      const [segmentText, tokensText] = await segment.evaluate((root) => [
+        (root as HTMLElement).innerText.trim(),
+        (root.querySelector(".context-usage-label-tokens") as HTMLElement | null)?.innerText.trim(),
+      ]);
+      expect(segmentText).toBe(tokensText);
+    }).toPass({ timeout: 10000 });
 
     const decoration = await tokens.evaluate((el) => {
       const s = getComputedStyle(el);

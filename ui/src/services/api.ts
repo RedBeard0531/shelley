@@ -593,8 +593,10 @@ class ApiService {
   }
 
   // findFiles fuzzy-searches files under `dir` server-side. `query` is the
-  // fuzzy pattern (empty returns the first files alphabetically). `signal`
-  // lets callers abort superseded requests while the user types.
+  // fuzzy pattern (empty returns the first files alphabetically); whitespace
+  // splits it into terms that are ANDed, so "vm storage s3" matches
+  // vm-storage-s3-design.md. `signal` lets callers abort superseded requests
+  // while the user types.
   async findFiles(
     dir: string,
     query: string,

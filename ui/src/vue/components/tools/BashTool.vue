@@ -12,31 +12,19 @@
           in {{ displayData.workingDir }}
         </span>
         <span v-if="isComplete && isCancelled" class="bash-tool-cancelled">✗ cancelled</span>
-        <span v-if="isComplete && hasError && !isCancelled" class="bash-tool-error">✗</span>
-        <span v-if="isComplete && !hasError" class="bash-tool-success">✓</span>
+        <ToolStatusIcon
+          v-if="isComplete && hasError && !isCancelled"
+          state="error"
+          class="bash-tool-error"
+        />
+        <ToolStatusIcon v-if="isComplete && !hasError" state="ok" class="bash-tool-success" />
       </div>
       <button
         class="bash-tool-toggle"
         :aria-label="isExpanded ? 'Collapse' : 'Expand'"
         :aria-expanded="isExpanded"
       >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 12 12"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          class="tool-chevron"
-          :class="{ 'tool-chevron-expanded': isExpanded }"
-        >
-          <path
-            d="M4.5 3L7.5 6L4.5 9"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
+        <ToolChevron :expanded="isExpanded" />
       </button>
     </div>
 
@@ -90,6 +78,8 @@ import { computed, nextTick, ref, watch } from "vue";
 import type { LLMContent } from "../../../types";
 import AnsiText from "./AnsiText.vue";
 import { useToolExpanded, useInToolDetail } from "../../composables/toolDetail";
+import ToolChevron from "./ToolChevron.vue";
+import ToolStatusIcon from "./ToolStatusIcon.vue";
 
 interface BashDisplayData {
   workingDir: string;

@@ -185,19 +185,216 @@ func (s *Server) handleFindFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	matches := fuzzy.Find(query, files)
+	matches := findFuzzyMulti(query, files)
 	if len(matches) > limit {
 		matches = matches[:limit]
 		resp.Truncated = true
 	}
 	for _, m := range matches {
 		resp.Matches = append(resp.Matches, FindFilesMatch{
-			Path:           m.Str,
-			MatchedIndexes: byteToRuneOffsets(m.Str, m.MatchedIndexes),
+			Path:           m.str,
+			MatchedIndexes: byteToRuneOffsets(m.str, m.matchedIndexes),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// fuzzyMatch is one ranked path plus the byte offsets that matched. rounds
+// counts how many query terms have matched it so far (see findFuzzyMulti).
+type fuzzyMatch struct {
+	str            string
+	matchedIndexes []int
+	score          int
+	rounds         int
+}
+
+// findFuzzyMulti fuzzy-matches query against files. A query with whitespace is
+// split into terms that are ANDed together: every term must fuzzy-match the
+// path, in any order, and their highlights are unioned. That makes
+// "vm storage s3" find "docs/vm-storage-s3-backup-design.md", which a single
+// fuzzy pass can't do because the literal space never appears in the path.
+func findFuzzyMulti(query string, files []string) []fuzzyMatch {
+	// Repeated terms would otherwise be scored twice, ranking "vm vm" matches
+	// above the same files found by "vm".
+	terms := dedupeFold(strings.Fields(query))
+	switch len(terms) {
+	case 0:
+		return nil
+	case 1:
+		raw := fuzzy.Find(terms[0], files)
+		out := make([]fuzzyMatch, 0, len(raw))
+		seen := make(map[string]bool, len(raw))
+		for _, m := range raw {
+			// `git ls-files` lists a path once per stage during an unresolved
+			// merge; duplicate rows would collide on the UI list's :key.
+			if seen[m.Str] {
+				continue
+			}
+			seen[m.Str] = true
+			out = append(out, fuzzyMatch{
+				str:            m.Str,
+				matchedIndexes: refineHighlights(m.Str, terms[0], m.MatchedIndexes),
+				score:          m.Score,
+			})
+		}
+		return out
+	}
+
+	// Intersect term by term, narrowing the candidate set each round so later
+	// (typically more selective) terms only scan survivors.
+	candidates := files
+	acc := make(map[string]*fuzzyMatch, len(files))
+	for i, term := range terms {
+		raw := fuzzy.Find(term, candidates)
+		next := make([]string, 0, len(raw))
+		for _, m := range raw {
+			prev, ok := acc[m.Str]
+			if !ok {
+				if i > 0 {
+					continue // dropped by an earlier term
+				}
+				prev = &fuzzyMatch{str: m.Str}
+				acc[m.Str] = prev
+			} else if prev.rounds > i {
+				continue // duplicate path: already scored this round
+			}
+			prev.matchedIndexes = append(prev.matchedIndexes, refineHighlights(m.Str, term, m.MatchedIndexes)...)
+			prev.score += m.Score
+			prev.rounds = i + 1
+			next = append(next, m.Str)
+		}
+		// Drop paths that failed this term so they can't resurface later.
+		for p, m := range acc {
+			if m.rounds <= i {
+				delete(acc, p)
+			}
+		}
+		candidates = next
+		if len(candidates) == 0 {
+			return nil
+		}
+	}
+
+	out := make([]fuzzyMatch, 0, len(candidates))
+	for _, p := range candidates {
+		m := acc[p]
+		m.matchedIndexes = dedupeSorted(m.matchedIndexes)
+		// fuzzy charges each call ~len(path) for the characters the term didn't
+		// match, so summing N terms bills the path length N times and buries a
+		// long, well-separated path ("docs/vm-storage-s3-backup-design.md")
+		// under a short run-together one ("a/vmstorages3.md"). Refund the N-1
+		// extra charges (the penalty is per byte of the path, matching
+		// fuzzy.Find) so length is counted once, as in a single-term query.
+		m.score += (len(terms) - 1) * len(p)
+		out = append(out, *m)
+	}
+	// Best total score first; shorter paths break ties (fewer unmatched
+	// characters usually means a tighter match), then path for determinism.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].score != out[j].score {
+			return out[i].score > out[j].score
+		}
+		if len(out[i].str) != len(out[j].str) {
+			return len(out[i].str) < len(out[j].str)
+		}
+		return out[i].str < out[j].str
+	})
+	return out
+}
+
+// refineHighlights improves the highlight offsets sahilm/fuzzy reports for a
+// term. Its scoring can scatter a match across the path ("vm" in
+// "docs/vm-storage-s3.md" highlights the 'v' of vm and the 'm' of ".md"), which
+// reads as noise. When the term occurs literally (ASCII case-insensitively) in
+// the path we highlight that run instead, preferring an occurrence in the
+// basename so "server" underlines server.go rather than a parent directory.
+// Falls back to the library's offsets for genuine subsequence matches. Returns
+// byte offsets into path, one per character (rune starts only, matching what
+// fuzzy reports), for byteToRuneOffsets to convert.
+func refineHighlights(path, term string, fuzzyIdx []int) []int {
+	if term == "" {
+		return fuzzyIdx
+	}
+	start := -1
+	if slash := strings.LastIndexByte(path, '/'); slash >= 0 {
+		if i := indexASCIIFold(path[slash+1:], term); i >= 0 {
+			start = slash + 1 + i
+		}
+	}
+	if start < 0 {
+		start = indexASCIIFold(path, term)
+	}
+	if start < 0 {
+		return fuzzyIdx
+	}
+	out := make([]int, 0, len(term))
+	for i := range term {
+		out = append(out, start+i)
+	}
+	return out
+}
+
+// indexASCIIFold is strings.Index with ASCII case folding. It works on the
+// original bytes (rather than lowercasing first) so the returned offset stays
+// valid for the input; non-ASCII bytes must match exactly.
+func indexASCIIFold(s, sub string) int {
+	if len(sub) == 0 || len(sub) > len(s) {
+		return -1
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		match := true
+		for j := 0; j < len(sub); j++ {
+			if lowerASCII(s[i+j]) != lowerASCII(sub[j]) {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
+func lowerASCII(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
+}
+
+// dedupeFold removes ASCII-case-insensitive duplicates, keeping first order.
+func dedupeFold(terms []string) []string {
+	if len(terms) < 2 {
+		return terms
+	}
+	out := make([]string, 0, len(terms))
+	seen := make(map[string]bool, len(terms))
+	for _, t := range terms {
+		key := strings.ToLower(t)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, t)
+	}
+	return out
+}
+
+// dedupeSorted sorts idx ascending and removes duplicates in place.
+func dedupeSorted(idx []int) []int {
+	if len(idx) < 2 {
+		return idx
+	}
+	sort.Ints(idx)
+	out := idx[:1]
+	for _, v := range idx[1:] {
+		if v != out[len(out)-1] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // byteToRuneOffsets converts sahilm/fuzzy's byte offsets into s to rune
