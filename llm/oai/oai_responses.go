@@ -654,6 +654,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 	retryStart := time.Now()
 	var errs error               // accumulated errors across all attempts
 	var lastErrSummary string    // short description of the most recent attempt failure
+	var lastErrStatus int        // HTTP status of the most recent attempt failure, 0 if none
 	var retryAfter time.Duration // hint from upstream Retry-After header, reset each attempt
 	for attempts := 0; ; attempts++ {
 		if attempts > 15 {
@@ -670,9 +671,9 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 				sleep = retryAfter
 			}
 			retryAfter = 0
-			slog.WarnContext(ctx, "responses request sleep before retry", "sleep", sleep, "attempts", attempts, "elapsed", time.Since(retryStart).Round(time.Second), "last_error", lastErrSummary)
+			slog.WarnContext(ctx, "responses request sleep before retry", "sleep", sleep, "attempts", attempts, "elapsed", time.Since(retryStart).Round(time.Second), "status", lastErrStatus, "last_error", lastErrSummary)
 			if ir.OnRetry != nil {
-				ir.OnRetry(llm.RetryEvent{Attempt: attempts + 1, Sleep: sleep, Err: lastErrSummary, Provider: "openai", Model: model.ModelName})
+				ir.OnRetry(llm.RetryEvent{Attempt: attempts + 1, Sleep: sleep, Err: lastErrSummary, Status: lastErrStatus, Provider: "openai", Model: model.ModelName})
 			}
 			select {
 			case <-time.After(sleep):
@@ -697,6 +698,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		httpResp, err := httpc.Do(httpReq)
 		if err != nil {
 			lastErrSummary = "transport: " + llm.Truncate(err.Error(), 160)
+			lastErrStatus = 0
 			errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: %w", attempts+1, time.Now().Format(time.DateTime), err))
 			continue
 		}
@@ -704,14 +706,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 			body, readErr := io.ReadAll(httpResp.Body)
 			httpResp.Body.Close()
 			if readErr != nil {
-				if shouldRetryResponsesReadError(readErr) {
-					now := time.Now().Format(time.DateTime)
-					lastErrSummary = "read: " + llm.Truncate(readErr.Error(), 160)
-					slog.WarnContext(ctx, "responses_request_read_failed", "error", readErr, "url", fullURL, "model", model.ModelName)
-					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: read response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, readErr))
-					continue
-				}
-				return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: failed to read response body (url=%s, model=%s): %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, readErr))
+				slog.WarnContext(ctx, "responses_request_read_failed", "error", readErr, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName)
 			}
 
 			var apiErr responsesError
@@ -723,23 +718,41 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 			if apiErr.Message != "" {
 				errMessage = apiErr.Message
 			}
+			// io.ReadAll returns whatever it managed to read alongside the error, so
+			// a severed body still yields a (possibly empty) partial message. Keep it
+			// and note the truncation; the status code decides retryability below.
+			//
+			// The note deliberately omits readErr's text: it would embed transport
+			// phrases ("connection reset by peer") that loop.IsRetryableLLMError
+			// pattern-matches, flipping a terminal 4xx into a retryable one. The
+			// read error is already in the responses_request_read_failed log line.
+			if readErr != nil {
+				errMessage = strings.TrimSpace(errMessage + " [body truncated]")
+			}
 			retryErrMessage := llm.Truncate(errMessage, 512)
 			terminalErrMessage := llm.Truncate(errMessage, 4<<10)
 			now := time.Now().Format(time.DateTime)
 
+			// The status code is authoritative even when the body never arrived: a
+			// 502 whose explanation was cut off mid-read is still a transient
+			// gateway failure, and a 400 is still terminal. Classifying on the read
+			// error instead would retry unrecoverable client errors and give up on
+			// recoverable server ones.
 			switch {
 			case httpResp.StatusCode >= 500:
 				// Server errors are retryable regardless of whether the provider or
 				// gateway encoded the error as JSON or plain text.
 				retryAfter = llm.ParseRetryAfter(httpResp.Header.Get("Retry-After"))
-				lastErrSummary = fmt.Sprintf("status %d: %s", httpResp.StatusCode, llm.Truncate(errMessage, 160))
+				lastErrSummary = llm.Truncate(errMessage, 160)
+				lastErrStatus = httpResp.StatusCode
 				slog.WarnContext(ctx, "responses_request_failed", "error", retryErrMessage, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName, "retry_after", retryAfter)
 				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, retryErrMessage))
 				continue
 
 			case httpResp.StatusCode == http.StatusTooManyRequests:
 				retryAfter = llm.ParseRetryAfter(httpResp.Header.Get("Retry-After"))
-				lastErrSummary = "status 429 rate limited: " + llm.Truncate(errMessage, 160)
+				lastErrSummary = "rate limited: " + llm.Truncate(errMessage, 160)
+				lastErrStatus = httpResp.StatusCode
 				slog.WarnContext(ctx, "responses_request_rate_limited", "error", retryErrMessage, "url", fullURL, "model", model.ModelName, "retry_after", retryAfter)
 				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (rate limited, url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, retryErrMessage))
 				continue
@@ -761,6 +774,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 			if err != nil {
 				now := time.Now().Format(time.DateTime)
 				lastErrSummary = "stream: " + llm.Truncate(err.Error(), 160)
+				lastErrStatus = 0
 				slog.WarnContext(ctx, "responses_request_stream_failed", "error", err, "url", fullURL, "model", model.ModelName)
 				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: stream response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, err))
 				continue
@@ -770,19 +784,23 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 			body, err := io.ReadAll(httpResp.Body)
 			httpResp.Body.Close()
 			if err != nil {
-				if shouldRetryResponsesReadError(err) {
-					now := time.Now().Format(time.DateTime)
-					lastErrSummary = "read: " + llm.Truncate(err.Error(), 160)
-					slog.WarnContext(ctx, "responses_request_read_failed", "error", err, "url", fullURL, "model", model.ModelName)
-					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: read response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, err))
-					continue
-				}
-				return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: failed to read response body (url=%s, model=%s): %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, err))
+				// A severed read of an otherwise-successful response is a
+				// transport hiccup, not a verdict on the request: retry it. The SSE
+				// branch above retries any stream error, and the two branches
+				// differ only in framing, so this must not be stricter.
+				now := time.Now().Format(time.DateTime)
+				lastErrSummary = "read: " + llm.Truncate(err.Error(), 160)
+				lastErrStatus = 0
+				slog.WarnContext(ctx, "responses_request_read_failed", "error", err, "url", fullURL, "model", model.ModelName)
+				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: read response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, err))
+				continue
 			}
 
 			if err := json.Unmarshal(body, &resp); err != nil {
 				if shouldRetryResponsesDecodeError(err, body) {
 					now := time.Now().Format(time.DateTime)
+					lastErrSummary = "decode: " + llm.Truncate(err.Error(), 160)
+					lastErrStatus = 0
 					slog.WarnContext(ctx, "responses_request_decode_failed", "error", err, "url", fullURL, "model", model.ModelName, "body_length", len(body))
 					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: decode response body (url=%s, model=%s, bytes=%d): %w", attempts+1, now, fullURL, model.ModelName, len(body), err))
 					continue
@@ -837,10 +855,6 @@ func withoutOpenAIResponsesReasoning(messages []llm.Message) []llm.Message {
 		filtered[i].Content = content
 	}
 	return filtered
-}
-
-func shouldRetryResponsesReadError(err error) bool {
-	return errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 type responsesSSEEvent struct {
