@@ -40,13 +40,13 @@ async function stubConversationList(page: Page, conversations: ConversationWithS
 }
 
 test.describe("conversation drawer startup and app bar", () => {
-  test("starts collapsed when the only item is a draft", async ({ page }) => {
+  test("starts expanded even when the only item is a draft", async ({ page }) => {
     await stubConversationList(page, [conversation("draft", true)]);
 
     await page.goto("/new");
 
-    await expect(page.locator(".drawer")).toHaveClass(/collapsed/);
-    await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+    await expect(page.locator(".drawer")).not.toHaveClass(/collapsed/);
+    await expect(page.getByRole("button", { name: "Collapse sidebar" })).toBeVisible();
   });
 
   test("starts expanded for multiple conversations with aligned app-bar titles", async ({
@@ -98,12 +98,18 @@ test.describe("conversation drawer startup and app bar", () => {
     expect(metrics.chatTitle.margin).toBe("0px");
   });
 
-  test("manual expand survives reload despite the sparse heuristic", async ({ page }) => {
+  test("manual collapse survives reload with a single conversation", async ({ page }) => {
     await stubConversationList(page, [conversation("only")]);
 
     await page.goto("/new");
 
     const drawer = page.locator(".drawer");
+    await expect(drawer).not.toHaveClass(/collapsed/);
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
+    await expect(drawer).toHaveClass(/collapsed/);
+
+    await page.reload();
+
     await expect(drawer).toHaveClass(/collapsed/);
     await page.getByRole("button", { name: "Expand sidebar" }).click();
     await expect(drawer).not.toHaveClass(/collapsed/);

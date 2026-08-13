@@ -315,7 +315,8 @@ provide(ConversationsListKey, conversations);
 provide(CurrentConversationIdKey, currentConversationId);
 const viewedConversation = ref<Conversation | null>(null);
 const drawerOpen = ref(false);
-const drawerCollapsed = ref(false);
+// The drawer starts expanded unless the user collapsed it last time.
+const drawerCollapsed = ref(initialDrawerCollapsed(localStorage));
 const commandPaletteOpen = ref(false);
 const diffViewerTrigger = ref(0);
 const gitGraphTrigger = ref(0);
@@ -341,7 +342,6 @@ const showActiveTrigger = ref(0);
 
 // ---- non-reactive refs ----
 let initialSlugResolved = false;
-let startupDrawerStateApplied = false;
 let conversationListHash: string | null = null;
 let globalStreamHandle: { forceReconnect: () => void; close: () => void } | null = null;
 
@@ -538,10 +538,6 @@ async function loadConversations() {
       commitListState({ list: snapshot.conversations, hash: snapshot.hash });
     }
     const currentList = streamHash ? conversations.value : snapshot.conversations;
-    if (!startupDrawerStateApplied) {
-      drawerCollapsed.value = initialDrawerCollapsed(currentList, localStorage);
-      startupDrawerStateApplied = true;
-    }
     const topLevel = currentList.filter((c) => !c.parent_conversation_id);
 
     const slugConv = await resolveInitialSlug(currentList);
