@@ -4,6 +4,7 @@
 import type { ComputedRef, InjectionKey, Ref } from "vue";
 import type { Conversation, ConversationWithState } from "../../types";
 import type { TranslationKeys } from "../../i18n/types";
+import type { OfferedTag } from "../../utils/tagFilter";
 
 export type GroupBy = "none" | "cwd" | "git_repo" | "tag";
 
@@ -92,7 +93,9 @@ export interface DrawerCtx {
   handleRename: (conversationId: string) => void;
   handleRenameKeyDown: (e: KeyboardEvent, conversationId: string) => void;
   handleOpenTagEditor: (e: MouseEvent, conversationId: string) => void;
-  handleAddTag: (conversation: Conversation) => void;
+  handleAddTag: (conversation: Conversation, tag?: string) => Promise<void>;
+  // Tag-editor dropdown: existing tags matching `typed` anywhere, best-first.
+  matchTagOffers: (conversation: Conversation, typed: string) => OfferedTag[];
   handleRemoveTag: (conversation: Conversation, tag: string) => void;
   handleArchive: (e: MouseEvent, conversationId: string) => void;
   handleUnarchive: (e: MouseEvent, conversationId: string) => void;

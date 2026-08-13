@@ -775,6 +775,19 @@ body {
   }
 }
 
+/* The row tag editor's suggestion dropdown reuses the `tag:` menu styling,
+   but it is teleported to <body> to escape the drawer's overflow, so it is
+   positioned in viewport coordinates (fixed) rather than anchored to the
+   search bar. */
+.tag-editor-menu {
+  position: fixed;
+  left: 0;
+  right: auto;
+  top: 0;
+  margin-top: 0;
+  min-width: 10rem;
+}
+
 .tag-filter-options {
   margin-top: 0.25rem;
   max-height: 14rem;
@@ -11837,14 +11850,16 @@ kbd {
   display: inline-flex;
   flex: 1;
   min-width: 4rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 
 .conversation-tag-inline-input {
-  flex: 1;
+  position: relative;
+  width: 100%;
   min-width: 4rem;
   padding: 0 0.15rem;
-  font-size: 0.75rem;
-  line-height: 1.4;
+  font: inherit;
   border: none;
   border-radius: 0;
   background-color: transparent;

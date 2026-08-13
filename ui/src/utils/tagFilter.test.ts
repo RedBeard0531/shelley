@@ -6,6 +6,7 @@ import {
   completeTermInQuery,
   filterConversationsByQuery,
   formatTagTerm,
+  matchTags,
   offeredTags,
   parseSearchQuery,
   removeTagFromQuery,
@@ -113,6 +114,42 @@ run("offered tags never include a tag that does not co-occur", () => {
 
 run("offered tags exclude what is already selected", () => {
   assert(!offeredTags(corpus, ["infra"]).some((o) => o.tag === "infra"), "selected tag dropped");
+});
+
+run("matchTags matches anywhere and ranks prefix hits first", () => {
+  const pool = [
+    conv("1", ["terminal-work", "integration"]),
+    conv("2", ["terminal-work", "integration"]),
+    conv("3", ["in-progress"]),
+  ];
+  const names = (typed: string, exclude: string[] = []) =>
+    matchTags(pool, typed, exclude).map((o) => o.tag);
+  // Empty query offers the whole vocabulary, most-used first.
+  assertEqual(names(""), ["integration", "terminal-work", "in-progress"], "empty offers all");
+  // `work` appears mid-string in terminal-work, and as a prefix in workflow;
+  // the prefix hit ranks first even though it is less used.
+  const pool2 = [
+    conv("1", ["terminal-work", "workflow"]),
+    conv("2", ["terminal-work"]),
+  ];
+  assertEqual(
+    matchTags(pool2, "work", []).map((o) => o.tag),
+    ["workflow", "terminal-work"],
+    "prefix ranks first over more-used mid-string",
+  );
+  // Case-insensitive substring.
+  assertEqual(names("WORK"), ["terminal-work"], "case-insensitive substring");
+  assertEqual(names("zzz"), [], "no match");
+  // Within one rank, more-used tags come first (offeredTags order is stable).
+  const pool3 = [conv("1", ["terse", "terminal-work"]), conv("2", ["terminal-work"])];
+  assertEqual(
+    matchTags(pool3, "ter", []).map((o) => o.tag),
+    ["terminal-work", "terse"],
+    "most-used wins within a rank",
+  );
+  // Tags already on the conversation are excluded from its own suggestions.
+  assertEqual(names("in", ["in-progress"]), ["integration", "terminal-work"], "own tags excluded");
+  assertEqual(names("in", ["In-Progress"]), ["integration", "terminal-work"], "exclusion folds case");
 });
 
 run("offered tags sort by count descending then alphabetically", () => {

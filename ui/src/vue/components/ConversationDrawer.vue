@@ -386,6 +386,7 @@ import {
   completeTermInQuery,
   filterConversationsByQuery,
   formatTagTerm,
+  matchTags,
   offeredTags,
   parseSearchQuery,
   queryHasTagFilter,
@@ -396,6 +397,7 @@ import {
   tagMatchesQuery,
   toggleTagInQuery,
 } from "../../utils/tagFilter";
+import type { OfferedTag } from "../../utils/tagFilter";
 import { perfCount } from "../../utils/perf";
 
 const props = defineProps<{
@@ -531,10 +533,14 @@ watch(pendingDeleteId, (id) => {
 });
 
 function onTagEditorOutside(e: MouseEvent) {
-  if (tagEditorRef.value && !tagEditorRef.value.contains(e.target as Node)) {
-    tagEditorId.value = null;
-    tagInput.value = "";
-  }
+  const target = e.target as Node;
+  if (tagEditorRef.value && tagEditorRef.value.contains(target)) return;
+  // The tag-editor suggestion dropdown is teleported to <body>, so it sits
+  // outside tagEditorRef; a click on one of its options must not be read as
+  // "outside" and close the editor.
+  if ((target as Element)?.closest?.(".tag-editor-menu")) return;
+  tagEditorId.value = null;
+  tagInput.value = "";
 }
 watch(tagEditorId, (id) => {
   if (id) document.addEventListener("mousedown", onTagEditorOutside);
@@ -759,8 +765,8 @@ async function saveTags(conversationId: string, tags: string[]) {
     console.error("Failed to update tags:", err);
   }
 }
-async function handleAddTag(conversation: Conversation) {
-  const value = tagInput.value.trim().replace(/^#+/, "");
+async function handleAddTag(conversation: Conversation, tag?: string) {
+  const value = (tag ?? tagInput.value).trim().replace(/^#+/, "");
   if (!value) return;
   const current = parseTags(conversation);
   if (current.includes(value)) {
@@ -769,6 +775,18 @@ async function handleAddTag(conversation: Conversation) {
   }
   tagInput.value = "";
   await saveTags(conversation.conversation_id, [...current, value]);
+}
+// The row tag editor's dropdown: existing tags matching what's typed anywhere
+// in their text, ranked best-first, minus the conversation's own tags. A
+// typed leading `#` is not part of any stored tag, so it's stripped before
+// matching.
+function matchTagOffers(conversation: Conversation, typed: string): OfferedTag[] {
+  const hashes = /^#+/.exec(typed)?.[0] ?? "";
+  return matchTags(
+    [...props.conversations, ...archivedConversations.value],
+    typed.slice(hashes.length),
+    parseTags(conversation),
+  );
 }
 async function handleRemoveTag(conversation: Conversation, tag: string) {
   const current = parseTags(conversation);
@@ -1209,6 +1227,7 @@ provide(DrawerCtxKey, {
   handleRenameKeyDown,
   handleOpenTagEditor,
   handleAddTag,
+  matchTagOffers,
   handleRemoveTag,
   handleArchive,
   handleUnarchive,

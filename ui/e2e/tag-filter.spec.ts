@@ -445,4 +445,84 @@ test.describe("Tag filter", () => {
     await expect(row(page, none.conversationId)).toHaveCount(0);
     await expect(pairGroup.locator(".conversation-group-label")).toHaveText("#gt-blue #gt-red");
   });
+
+  test("the row tag editor offers a dropdown of matching tags", async ({ page, request }) => {
+    // `ac-terminal-work` and `workbench` exist on donors; typing `work` on
+    // target should offer both (substring match), ranked prefix-first, with
+    // Enter committing the highlighted offer.
+    const donor = await createConversationViaAPIWithDetails(request, "autocomplete donor", {
+      cwd: "/tmp",
+    });
+    const donor2 = await createConversationViaAPIWithDetails(request, "autocomplete donor 2", {
+      cwd: "/tmp",
+    });
+    const target = await createConversationViaAPIWithDetails(request, "autocomplete target", {
+      cwd: "/tmp",
+    });
+    await setTags(request, donor.conversationId, ["ac-terminal-work", "workbench"]);
+    // `spare-tag` is never added to target, so its offer keeps the dropdown
+    // openable at the end of the test.
+    await setTags(request, donor2.conversationId, ["ac-terminal-work", "spare-tag"]);
+
+    await page.goto(`/c/${target.slug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
+    await openDrawer(page);
+
+    const targetRow = row(page, target.conversationId);
+    await targetRow.hover();
+    await targetRow.locator('button[aria-label="Edit tags"]').click();
+    const input = targetRow.locator(".conversation-tag-inline-input");
+    await expect(input).toBeFocused();
+
+    // Focusing the empty input offers the whole vocabulary (shared with other
+    // tests' tags, so only presence is asserted here; ranking is below).
+    const menu = page.getByTestId("tag-editor-menu");
+    await expect(menu).toBeVisible();
+    const options = menu.getByTestId("tag-editor-option");
+    await expect(menu.locator('[data-tag="ac-terminal-work"]')).toBeVisible();
+
+    // A mid-word substring matches; the prefix hit ranks first even though
+    // the mid-string one is more used.
+    await input.pressSequentially("work");
+    await expect(options).toHaveCount(2);
+    await expect(options.nth(0)).toHaveAttribute("data-tag", "workbench");
+    await expect(options.nth(1)).toHaveAttribute("data-tag", "ac-terminal-work");
+
+    // Arrow keys move the highlight; Enter commits the highlighted offer.
+    await input.press("ArrowDown");
+    await input.press("Enter");
+    await expect(
+      targetRow.locator(".conversation-tag").filter({ hasText: "ac-terminal-work" }),
+    ).toBeVisible();
+    // The editor stays open, cleared and focused, for the next tag.
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue("");
+
+    // The tag now on the row is excluded from its own suggestions.
+    await input.pressSequentially("work");
+    await expect(options).toHaveCount(1);
+    await expect(options.first()).toHaveAttribute("data-tag", "workbench");
+
+    // Clicking an offer commits it too.
+    await options.first().click();
+    await expect(
+      targetRow.locator(".conversation-tag").filter({ hasText: "workbench" }),
+    ).toBeVisible();
+
+    // Text matching nothing closes the menu; Enter saves it literally.
+    await input.pressSequentially("brand-new-tag");
+    await expect(menu).toHaveCount(0);
+    await input.press("Enter");
+    await expect(
+      targetRow.locator(".conversation-tag").filter({ hasText: "brand-new-tag" }),
+    ).toBeVisible();
+
+    // Escape peels one layer: first the open menu, then the editor.
+    await expect(menu).toBeVisible(); // spare-tag is still on offer
+    await input.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(input).toBeFocused();
+    await input.press("Escape");
+    await expect(targetRow.locator(".conversation-tag-inline-input")).toHaveCount(0);
+  });
 });

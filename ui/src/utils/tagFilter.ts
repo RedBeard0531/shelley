@@ -108,6 +108,30 @@ export function offeredTags(
   );
 }
 
+// The row tag editor's dropdown: existing tags matching `typed` anywhere in
+// their text (not just as a prefix), each with its usage count, ranked so the
+// best pick is first. `exclude` holds the tags already on the conversation
+// being edited, which cannot usefully be added again. An empty `typed` offers
+// the whole vocabulary (most-used first). Prefix matches sort ahead of
+// mid-string matches; offeredTags' count-then-alpha order breaks ties (the
+// sort is stable). The first entry is the "best match" Enter commits.
+export function matchTags(
+  conversations: Conversation[],
+  typed: string,
+  exclude: readonly string[],
+): OfferedTag[] {
+  const needle = foldTag(typed);
+  const excluded = new Set(exclude.map(foldTag));
+  const all = offeredTags(conversations, []).filter((o) => !excluded.has(foldTag(o.tag)));
+  if (!needle) return all;
+  const matched = all.filter((o) => foldTag(o.tag).includes(needle));
+  return matched.sort((a, b) => {
+    const ap = foldTag(a.tag).startsWith(needle) ? 0 : 1;
+    const bp = foldTag(b.tag).startsWith(needle) ? 0 : 1;
+    return ap - bp;
+  });
+}
+
 export function isTagSelected(selected: readonly string[], tag: string): boolean {
   const folded = foldTag(tag);
   return folded !== "" && selected.some((t) => foldTag(t) === folded);
