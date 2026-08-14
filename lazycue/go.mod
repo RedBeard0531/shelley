@@ -1,6 +1,6 @@
 module github.com/boldsoftware/shelley/lazycue
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20260704091341-6ca7914c3938
