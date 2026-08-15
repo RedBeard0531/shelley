@@ -12,13 +12,17 @@ func TestLookupImageSupport(t *testing.T) {
 	}{
 		// First-party hosts (models.dev omits their "api" field; seeded via
 		// knownHosts).
-		{"anthropic", "https://api.anthropic.com", "claude-opus-4-1-20250805", true, true},
+		{"anthropic", "https://api.anthropic.com", "claude-opus-4-6", true, true},
 		{"openai", "https://api.openai.com/v1", "gpt-5.4", true, true},
 		{"gemini", "https://generativelanguage.googleapis.com", "gemini-3.1-pro-preview", true, true},
 
 		// Hosts that carry an explicit "api" field in models.dev.
 		{"fireworks text-only", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p2", true, false},
 		{"fireworks vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/kimi-k3", true, true},
+		{"fireworks inkling vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/inkling", true, true},
+		{"fireworks museglimmer vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/muse-glimmer-30b", true, true},
+		{"fireworks qwen3p8 text", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/qwen3p8-max", true, false},
+		{"fireworks ds-pro-0813 text", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/deepseek-v4-pro-0813", true, false},
 
 		// The original bug: a custom model pointed at opencode.ai/zen. The
 		// host matches even though the configured path needn't be exact, and
@@ -114,6 +118,8 @@ func TestLookupReasoningSupport(t *testing.T) {
 		{"https://api.openai.com/v1", "gpt-5.4", true, true},
 		{"https://api.openai.com/v1", "gpt-4o", false, true},
 		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/gpt-oss-20b", true, true},
+		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p2", true, true},
+		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/deepseek-v4-pro-0813", true, true},
 		{"https://generativelanguage.googleapis.com", "gemini-3-flash-preview", true, true},
 		{"https://made-up.example.com", "x", false, false},
 	}
@@ -142,6 +148,8 @@ func TestLookupCost(t *testing.T) {
 		{"openai dated", "https://llm.int.exe.xyz/v1/responses", "gpt-5.5-2026-04-23", true, 5, 30},
 		{"openai undated", "", "gpt-5.3-codex", true, 1.75, 14},
 		{"fireworks full path", "", "accounts/fireworks/models/kimi-k2p6", true, 0.95, 4},
+		{"fireworks inkling", "", "accounts/fireworks/models/inkling", true, 1, 4.05},
+		{"fireworks qwen3p8-max", "", "accounts/fireworks/models/qwen3p8-max", true, 2, 6},
 		{"unknown model", "", "predictable-v1", false, 0, 0},
 	}
 	for _, tc := range cases {

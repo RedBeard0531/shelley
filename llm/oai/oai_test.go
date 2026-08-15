@@ -1429,17 +1429,77 @@ func TestTokenContextWindowAdditionalCases(t *testing.T) {
 		{
 			name:     "GPT-OSS 20B model",
 			model:    GPTOSS20B,
-			expected: 128000,
+			expected: 131072,
 		},
 		{
 			name:     "DeepSeek V4 Pro Fireworks model",
 			model:    DeepseekV4ProFireworks,
+			expected: 1000000,
+		},
+		{
+			name:     "DeepSeek V4 Flash Fireworks model",
+			model:    DeepseekV4FlashFireworks,
+			expected: 1000000,
+		},
+		{
+			name:     "DeepSeek V4 Pro 0813 Fireworks model",
+			model:    DeepseekV4Pro0813Fireworks,
+			expected: 1000000,
+		},
+		{
+			name:     "DeepSeek V4 Flash 0731 Fireworks model",
+			model:    DeepseekV4Flash0731Fireworks,
+			expected: 1000000,
+		},
+		{
+			name:     "Kimi K2.6 Fireworks model",
+			model:    KimiK26Fireworks,
+			expected: 262000,
+		},
+		{
+			name:     "Kimi K2.7 Code Fireworks model",
+			model:    KimiK27CodeFireworks,
+			expected: 262000,
+		},
+		{
+			name:     "Kimi K3 Fireworks model",
+			model:    KimiK3Fireworks,
 			expected: 1048576,
+		},
+		{
+			name:     "GLM 5.2 Fireworks model",
+			model:    GLM52Fireworks,
+			expected: 1048575,
+		},
+		{
+			name:     "Inkling Fireworks model",
+			model:    InklingFireworks,
+			expected: 1048576,
+		},
+		{
+			name:     "Muse Glimmer 30B Fireworks model",
+			model:    MuseGlimmer30BFireworks,
+			expected: 131072,
+		},
+		{
+			name:     "Nemotron 3 Ultra Fireworks model",
+			model:    Nemotron3UltraNvfp4Fireworks,
+			expected: 262144,
+		},
+		{
+			name:     "Nemotron Lightning 3.5 Fireworks model",
+			model:    NemotronLightning35Fireworks,
+			expected: 262144,
+		},
+		{
+			name:     "Qwen3.8 Max Fireworks model",
+			model:    Qwen38MaxFireworks,
+			expected: 262144,
 		},
 		{
 			name:     "GPT-OSS 120B model",
 			model:    GPTOSS120B,
-			expected: 128000,
+			expected: 131072,
 		},
 		{
 			name:     "GPT-5 model",

@@ -68,6 +68,8 @@ func TestEnvSourceLabels(t *testing.T) {
 		{"gpt-5.5", "$OPENAI_API_KEY"},
 		{"gemini-3-flash", "$GEMINI_API_KEY"},
 		{"gpt-oss-20b-fireworks", "$FIREWORKS_API_KEY"},
+		{"qwen3.8-max-fireworks", "$FIREWORKS_API_KEY"},
+		{"inkling-fireworks", "$FIREWORKS_API_KEY"},
 	} {
 		b := findBuilt(bs, tt.id)
 		if b == nil {
@@ -120,6 +122,13 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 			{ID: "fireworks/deepseek-v4-pro", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-pro", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4-flash", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-flash", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/gpt-oss-20b", Provider: "fireworks", NativeID: "accounts/fireworks/models/gpt-oss-20b", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/deepseek-v4-flash-0731", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-flash-0731", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/deepseek-v4-pro-0813", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-pro-0813", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/inkling", Provider: "fireworks", NativeID: "accounts/fireworks/models/inkling", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/muse-glimmer-30b", Provider: "fireworks", NativeID: "accounts/fireworks/models/muse-glimmer-30b", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/nemotron-3-ultra-nvfp4", Provider: "fireworks", NativeID: "accounts/fireworks/models/nemotron-3-ultra-nvfp4", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/nemotron-lightning-3p5-30b-a3b", Provider: "fireworks", NativeID: "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/qwen3p8-max", Provider: "fireworks", NativeID: "accounts/fireworks/models/qwen3p8-max", APIs: []string{"openai_chat"}},
 		},
 	}
 	bs := Build(models.All(), []Source{LLMIntegration(integ, ""), Predictable()}, &http.Client{}, nil)
@@ -138,6 +147,13 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"deepseek-v4-pro-fireworks",
 		"deepseek-v4-flash-fireworks",
 		"gpt-oss-20b-fireworks",
+		"deepseek-v4-flash-0731-fireworks",
+		"deepseek-v4-pro-0813-fireworks",
+		"inkling-fireworks",
+		"muse-glimmer-30b-fireworks",
+		"nemotron-3-ultra-nvfp4-fireworks",
+		"nemotron-lightning-3p5-fireworks",
+		"qwen3.8-max-fireworks",
 	} {
 		b := findBuilt(bs, id)
 		if b == nil {
@@ -157,6 +173,13 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"deepseek-v4-pro",
 		"deepseek-v4-flash",
 		"gpt-oss-20b",
+		"deepseek-v4-flash-0731",
+		"deepseek-v4-pro-0813",
+		"inkling",
+		"muse-glimmer-30b",
+		"nemotron-3-ultra-nvfp4",
+		"nemotron-lightning-3p5-30b-a3b",
+		"qwen3p8-max",
 		"gemini-3-flash",
 	} {
 		if b := findBuilt(bs, id); b != nil {
