@@ -106,7 +106,11 @@ beyond what you put in the prompt, so share the "why" alongside the "what".
 
 Use the "reasoning" parameter to set the subagent's thinking effort (off,
 minimal, low, medium, high, xhigh, max). If omitted, the subagent inherits the
-parent conversation's reasoning level.`
+parent conversation's reasoning level. Only provide the "reasoning" parameter
+when the user requests a specific effort level; otherwise omit it.
+
+Only provide the "model" parameter when the user requests a specific model;
+otherwise omit it so the parent conversation's model is used.`
 
 	if len(s.AvailableModels) > 0 {
 		base += "\n\nAvailable models (use the \"model\" parameter to override the default):"
@@ -134,7 +138,7 @@ func (s *SubagentTool) subagentInputSchema() string {
 		modelProp = fmt.Sprintf(`,
     "model": {
       "type": "string",
-      "description": "LLM model for the subagent. Defaults to the parent conversation's model.",
+      "description": "LLM model for the subagent. Defaults to the parent conversation's model. Only provide the \"model\" parameter when the user requests a specific model; otherwise omit it.",
       "enum": [%s]
     }`, strings.Join(enumItems, ", "))
 	}
@@ -147,7 +151,7 @@ func (s *SubagentTool) subagentInputSchema() string {
 	reasoningProp := fmt.Sprintf(`,
     "reasoning": {
       "type": "string",
-      "description": "Reasoning/thinking effort level for the subagent. If omitted, the subagent inherits the parent conversation's reasoning level.",
+      "description": "Reasoning/thinking effort level for the subagent. If omitted, the subagent inherits the parent conversation's reasoning level. Only provide the \"reasoning\" parameter when the user requests a specific effort level; otherwise omit it.",
       "enum": [%s]
     }`, strings.Join(reasoningEnum, ", "))
 

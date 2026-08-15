@@ -314,6 +314,41 @@ func TestLLMOneShotToolDescription(t *testing.T) {
 	if !strings.Contains(llmTool.Description, "- model-b (Model B (fancy))") {
 		t.Errorf("expected model-b with display name in description, got: %s", llmTool.Description)
 	}
+	if !strings.Contains(llmTool.Description, "Only provide the \"model\" parameter when the user requests a specific model") {
+		t.Errorf("expected model selection guidance in description, got: %s", llmTool.Description)
+	}
+}
+
+func TestLLMOneShotToolDescriptionWarnsWhenCurrentModelLacksVision(t *testing.T) {
+	tool := &LLMOneShotTool{
+		LLMProvider: &oneShotMockProvider{services: map[string]llm.Service{
+			"text": &noImageOneShotService{},
+		}},
+		ModelID:    "text",
+		WorkingDir: NewMutableWorkingDir("/tmp"),
+	}
+
+	description := tool.Tool().Description
+	if !strings.Contains(description, "The current model does not support vision") {
+		t.Errorf("expected vision warning, got: %s", description)
+	}
+	if !strings.Contains(description, "vision-capable submodel") {
+		t.Errorf("expected vision submodel guidance, got: %s", description)
+	}
+}
+
+func TestLLMOneShotToolDescriptionOmitsVisionWarningForVisionModel(t *testing.T) {
+	tool := &LLMOneShotTool{
+		LLMProvider: &oneShotMockProvider{services: map[string]llm.Service{
+			"vision": &oneShotMockService{},
+		}},
+		ModelID:    "vision",
+		WorkingDir: NewMutableWorkingDir("/tmp"),
+	}
+
+	if strings.Contains(tool.Tool().Description, "The current model does not support vision") {
+		t.Errorf("did not expect vision warning for vision-capable model")
+	}
 }
 
 func TestLLMOneShotToolSchemaEnum(t *testing.T) {
@@ -334,6 +369,9 @@ func TestLLMOneShotToolSchemaEnum(t *testing.T) {
 	}
 	if !strings.Contains(schema, `"model-a"`) || !strings.Contains(schema, `"model-b"`) {
 		t.Errorf("expected model IDs in enum, got: %s", schema)
+	}
+	if !strings.Contains(schema, "Only provide the \\\"model\\\" parameter when the user requests a specific model") {
+		t.Errorf("expected model selection guidance in schema, got: %s", schema)
 	}
 }
 
