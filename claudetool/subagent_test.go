@@ -264,6 +264,23 @@ func TestSubagentTool_ModelOverride(t *testing.T) {
 		t.Errorf("model must not be required, got required=%v", schema.Required)
 	}
 
+	// The fork adds effort-selection guidance to the reasoning property; parse
+	// the schema (as 4d8ca519 does for required-ness) to assert it.
+	var reasoningProp struct {
+		Properties struct {
+			Reasoning struct {
+				Description string `json:"description"`
+			} `json:"reasoning"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(llmTool.InputSchema, &reasoningProp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reasoningProp.Properties.Reasoning.Description, "specific effort level") {
+		t.Errorf("expected effort selection guidance in reasoning description, got %q",
+			reasoningProp.Properties.Reasoning.Description)
+	}
+
 	// Choosing a short name runs the model ID it maps to.
 	input := subagentInput{Slug: "test", Prompt: "do something", Model: "claude-haiku-4.5"}
 	inputJSON, _ := json.Marshal(input)
