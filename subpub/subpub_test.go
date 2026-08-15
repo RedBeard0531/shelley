@@ -154,13 +154,13 @@ func TestSubPubSubscriberBehind(t *testing.T) {
 	// Subscriber waiting for messages after index 0
 	next := sp.Subscribe(ctx, 0)
 
-	// Fill up the channel buffer (10 messages) quickly before subscriber reads
-	for i := 1; i <= 10; i++ {
+	// Fill up the channel buffer quickly before subscriber reads
+	for i := 1; i <= SubscriberBuffer; i++ {
 		sp.Publish(int64(i), fmt.Sprintf("message%d", i))
 	}
 
 	// Try to send one more - subscriber should be disconnected because buffer is full
-	sp.Publish(11, "overflow")
+	sp.Publish(int64(SubscriberBuffer+1), "overflow")
 
 	// Try to receive - should work for buffered messages
 	received := 0
@@ -172,14 +172,14 @@ func TestSubPubSubscriberBehind(t *testing.T) {
 		}
 		messages = append(messages, msg)
 		received++
-		if received > 11 {
+		if received > SubscriberBuffer+1 {
 			t.Fatal("Received more messages than expected")
 		}
 	}
 
-	// Should have received exactly 10 messages before being disconnected
-	if received != 10 {
-		t.Errorf("Expected to receive 10 buffered messages, got %d: %v", received, messages)
+	// Should have received exactly SubscriberBuffer messages before being disconnected
+	if received != SubscriberBuffer {
+		t.Errorf("Expected to receive %d buffered messages, got %d: %v", SubscriberBuffer, received, messages)
 	}
 }
 
@@ -333,12 +333,12 @@ func TestSubPubSubscriberDisconnected(t *testing.T) {
 	// Create subscriber
 	next := sp.Subscribe(ctx, 0)
 
-	// Fill up the channel buffer (10 messages) + 1 more to trigger disconnection
-	for i := 1; i <= 11; i++ {
+	// Fill up the channel buffer + 1 more to trigger disconnection
+	for i := 1; i <= SubscriberBuffer+1; i++ {
 		sp.Publish(int64(i), fmt.Sprintf("message%d", i))
 	}
 
-	// Try to receive all messages - should get exactly 10, then be disconnected
+	// Try to receive all messages - should get exactly SubscriberBuffer, then be disconnected
 	received := 0
 	for {
 		_, ok := next()
@@ -346,14 +346,14 @@ func TestSubPubSubscriberDisconnected(t *testing.T) {
 			break
 		}
 		received++
-		if received > 11 {
+		if received > SubscriberBuffer+1 {
 			t.Fatal("Received more messages than expected")
 		}
 	}
 
-	// Should have received exactly 10 messages before being disconnected
-	if received != 10 {
-		t.Errorf("Expected to receive 10 buffered messages, got %d", received)
+	// Should have received exactly SubscriberBuffer messages before being disconnected
+	if received != SubscriberBuffer {
+		t.Errorf("Expected to receive %d buffered messages, got %d", SubscriberBuffer, received)
 	}
 }
 

@@ -31,6 +31,7 @@ import (
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/slug"
+	"shelley.exe.dev/subpub"
 	"shelley.exe.dev/ui"
 	"shelley.exe.dev/version"
 )
@@ -1964,7 +1965,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 		}
 	}
 
-	updates := make(chan StreamResponse, 10)
+	updates := make(chan StreamResponse, subpub.SubscriberBuffer)
 
 	// subscriberDead: subpub closes the channel of a subscriber that fell behind on
 	// overflow; without this the stream would zombie on, fed by local heartbeats.
@@ -2130,7 +2131,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 	//
 	// Subscribe BEFORE sending initial data so we don't miss broadcasts that
 	// happen between the DB query and the start of the event loop. The subpub
-	// channel is buffered (10), so events arriving while we write the initial
+	// channel is buffered (SubscriberBuffer), so events arriving while we write the initial
 	// response are queued rather than lost.
 	var next func() (StreamResponse, bool)
 	if !includeConversationListPatches {

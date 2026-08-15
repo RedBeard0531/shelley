@@ -11,6 +11,7 @@ import (
 
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/subpub"
 )
 
 // hasMessageText reports whether any message in the frame's LlmData JSON
@@ -400,11 +401,12 @@ func TestLegacyConversationStreamIsolatedFromOtherConversations(t *testing.T) {
 //
 // Determinism: the response writer is gated after registration so the main
 // loop blocks on its first write while the burst runs. That pins the drain
-// path (updates fills, subscriber pins on updates <-), so sub.ch (cap 10)
-// provably overflows regardless of scheduler speed — 50 broadcasts is safely
-// past the 22 needed (10 updates + 10 sub.ch + one in flight + the blocked
-// write's slot). The subscriberDead signal is buffered (cap 1), so it survives
-// until the gate opens and the main loop returns to its select.
+// path (updates fills, subscriber pins on updates <-), so sub.ch
+// (cap SubscriberBuffer) provably overflows regardless of scheduler speed —
+// burst of SubscriberBuffer*3 is safely past the 2*SubscriberBuffer+2 needed
+// (updates + sub.ch + one in flight + the blocked write's slot). The
+// subscriberDead signal is buffered (cap 1), so it survives until the gate
+// opens and the main loop returns to its select.
 func TestUnifiedStreamEndsWhenSubscriberDropsOverflow(t *testing.T) {
 	t.Parallel()
 	srv, _, _ := newTestServer(t)
@@ -457,11 +459,12 @@ func TestUnifiedStreamEndsWhenSubscriberDropsOverflow(t *testing.T) {
 	// the burst.
 	gated.arm()
 
-	// Burst 50 events in a tight loop: with the drain path pinned, the
-	// subscriber's channel (cap 10) overflows, subpub closes it, and the
-	// handler must end the connection instead of zombieing on local 30s
-	// heartbeats.
-	for i := 0; i < 50; i++ {
+	// Burst SubscriberBuffer*3 events in a tight loop: with the drain path
+	// pinned, the subscriber's channel (cap SubscriberBuffer) overflows,
+	// subpub closes it, and the handler must end the connection instead of
+	// zombieing on local 30s heartbeats.
+	burst := subpub.SubscriberBuffer * 3
+	for i := 0; i < burst; i++ {
 		srv.streamPub.Broadcast(StreamResponse{Heartbeat: true})
 	}
 

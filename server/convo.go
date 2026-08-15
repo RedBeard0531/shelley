@@ -1881,7 +1881,7 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	toolSet := claudetool.NewToolSet(processCtx, toolSetConfig)
 
 	// streamFlusher batches LLM stream deltas and flushes them periodically
-	// to avoid overwhelming the subpub channel (buffer=10) with hundreds
+	// to avoid overwhelming the subpub channel (buffer=SubscriberBuffer) with hundreds
 	// of individual deltas per second from the Anthropic SSE stream.
 	sf := newStreamFlusher(cm, 50*time.Millisecond)
 

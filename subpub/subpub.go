@@ -10,6 +10,14 @@ type SubPub[K any] struct {
 	subscribers []*subscriber[K]
 }
 
+// SubscriberBuffer is the per-subscriber channel buffer. Shared with the
+// server's per-connection `updates` channel (server/handlers.go) so both
+// stages of the delivery path tolerate the same burst. High-latency mobile
+// clients can pause consumption for a while; 100 gives them real headroom
+// before the disconnect-on-overflow policy kicks in (and the client
+// reconnects via the runStream teardown).
+const SubscriberBuffer = 100
+
 type subscriber[K any] struct {
 	// after is the index this subscriber joined at: it wants every message
 	// published with a strictly greater index. It is fixed for the life of the
@@ -43,8 +51,15 @@ func (sp *SubPub[K]) Subscribe(ctx context.Context, idx int64) func() (K, bool) 
 	// Create a child context so we can cancel the subscription independently
 	subCtx, cancel := context.WithCancel(ctx)
 
-	// Buffered channel to avoid blocking publishers
-	ch := make(chan K, 10)
+	// Buffered channel to avoid blocking publishers. Sized for typical
+	// sustained bursts (stream deltas are already batched at 50ms by the
+	// server's streamFlusher, so we need headroom for concurrent
+	// conversation activity, not raw token rates). A subscriber that
+	// genuinely falls behind is dropped on overflow (see Publish/Broadcast)
+	// and the connection-level teardown in runStream turns that into a
+	// client reconnect rather than a silent freeze; the buffer just decides
+	// how long a slow-but-live client is tolerated before that happens.
+	ch := make(chan K, SubscriberBuffer)
 	sub := &subscriber[K]{
 		after:  idx,
 		ch:     ch,
