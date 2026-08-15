@@ -134,7 +134,7 @@ func (s *SubagentTool) subagentInputSchema() string {
 	reasoningProp := fmt.Sprintf(`,
     "reasoning": {
       "type": "string",
-      "description": "Reasoning/thinking effort level for the subagent. If omitted, the subagent inherits the parent conversation's reasoning level.",
+      "description": "Optional. Reasoning/thinking effort level for the subagent. Omit to inherit the parent conversation's reasoning level; set only when the user asks for a specific effort level.",
       "enum": [%s]
     }`, strings.Join(reasoningEnum, ", "))
 
