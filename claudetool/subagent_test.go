@@ -256,6 +256,19 @@ func TestSubagentTool_ModelOverride(t *testing.T) {
 		t.Errorf("expected no display name suffix for sonnet, got %s", llmTool.Description)
 	}
 
+	if !strings.Contains(llmTool.Description, "Only provide the \"model\" parameter when the user requests a specific model") {
+		t.Errorf("expected model selection guidance in description, got %s", llmTool.Description)
+	}
+	if !strings.Contains(schemaStr, "specific model") {
+		t.Errorf("expected model selection guidance in schema, got %s", schemaStr)
+	}
+	if !strings.Contains(llmTool.Description, "specific effort level; otherwise omit it") {
+		t.Errorf("expected effort selection guidance in description, got %s", llmTool.Description)
+	}
+	if !strings.Contains(schemaStr, "specific effort level") {
+		t.Errorf("expected effort selection guidance in schema, got %s", schemaStr)
+	}
+
 	// Override model
 	input := subagentInput{Slug: "test", Prompt: "do something", Model: "claude-haiku-4.5"}
 	inputJSON, _ := json.Marshal(input)
