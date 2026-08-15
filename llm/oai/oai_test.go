@@ -2128,3 +2128,338 @@ func TestServiceReasoningEffort(t *testing.T) {
 		})
 	}
 }
+
+// streamSSE writes an OpenAI chat-completions SSE stream and returns the
+// request body for inspection.
+func streamSSE(w http.ResponseWriter, chunks ...string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	flusher, _ := w.(http.Flusher)
+	for _, c := range chunks {
+		io.WriteString(w, "data: "+c+"\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	io.WriteString(w, "data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+func TestServiceDoStreamTextAndThinking(t *testing.T) {
+	var gotReq map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &gotReq)
+		streamSSE(w,
+			`{"id":"chatcmpl-stream1","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me think"}, "finish_reason":null}]}`,
+			`{"id":"chatcmpl-stream1","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"content":"Hello"}, "finish_reason":null}]}`,
+			`{"id":"chatcmpl-stream1","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"content":" world"}, "finish_reason":null}]}`,
+			`{"id":"chatcmpl-stream1","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`{"id":"chatcmpl-stream1","object":"chat.completion.chunk","model":"gpt-4.1","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}`,
+		)
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey:       "test-key",
+		Model:        GPT41,
+		ModelURL:     server.URL + "/v1",
+		ProviderName: "fireworks",
+	}
+	var deltas []llm.StreamDelta
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(d llm.StreamDelta) { deltas = append(deltas, d) },
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	// Request must have stream=true and stream_options.include_usage.
+	if gotReq["stream"] != true {
+		t.Errorf("request stream = %v, want true", gotReq["stream"])
+	}
+	if so, ok := gotReq["stream_options"].(map[string]any); !ok || so["include_usage"] != true {
+		t.Errorf("request stream_options = %v, want include_usage", gotReq["stream_options"])
+	}
+
+	// Deltas: thinking first, then the two text fragments.
+	if len(deltas) != 3 {
+		t.Fatalf("deltas = %d, want 3 (%+v)", len(deltas), deltas)
+	}
+	if deltas[0].Type != "thinking" || deltas[0].Text != "Let me think" {
+		t.Errorf("delta[0] = %+v, want thinking 'Let me think'", deltas[0])
+	}
+	if deltas[1].Type != "text" || deltas[1].Text != "Hello" {
+		t.Errorf("delta[1] = %+v, want text 'Hello'", deltas[1])
+	}
+	if deltas[2].Type != "text" || deltas[2].Text != " world" {
+		t.Errorf("delta[2] = %+v, want text ' world'", deltas[2])
+	}
+
+	// Assembled response: content concatenated, thinking preserved, usage set.
+	if len(resp.Content) != 2 {
+		t.Fatalf("resp.Content = %+v, want thinking + text", resp.Content)
+	}
+	if resp.Content[0].Type != llm.ContentTypeThinking || resp.Content[0].Thinking != "Let me think" {
+		t.Errorf("content[0] = %+v, want thinking block", resp.Content[0])
+	}
+	if resp.Content[1].Type != llm.ContentTypeText || resp.Content[1].Text != "Hello world" {
+		t.Errorf("content[1] = %+v, want text 'Hello world'", resp.Content[1])
+	}
+	if resp.Usage.InputTokens != 7 || resp.Usage.OutputTokens != 5 {
+		t.Errorf("usage = %+v, want in=7 out=5", resp.Usage)
+	}
+	if resp.StopReason != llm.StopReasonStopSequence {
+		t.Errorf("stop reason = %v, want stop", resp.StopReason)
+	}
+}
+
+func TestServiceDoStreamToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Tool calls stream as fragments with an explicit index.
+		streamSSE(w,
+			`{"id":"chatcmpl-tool","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-tool","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-tool","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"SF\"}"}}]},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-tool","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		)
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey:       "test-key",
+		Model:        GPT41,
+		ModelURL:     server.URL + "/v1",
+		ProviderName: "fireworks",
+	}
+	var deltas []llm.StreamDelta
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "weather?"}}}},
+		Tools: []*llm.Tool{{
+			Name: "get_weather",
+		}},
+		OnStream: func(d llm.StreamDelta) { deltas = append(deltas, d) },
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	// No text/thinking deltas should have been emitted.
+	if len(deltas) != 0 {
+		t.Errorf("deltas = %+v, want none for tool calls", deltas)
+	}
+	if len(resp.Content) != 1 {
+		t.Fatalf("resp.Content = %+v, want one tool_use", resp.Content)
+	}
+	tc := resp.Content[0]
+	if tc.Type != llm.ContentTypeToolUse || tc.ToolName != "get_weather" {
+		t.Errorf("content = %+v, want tool_use get_weather", tc)
+	}
+	if tc.ID != "call_abc" {
+		t.Errorf("tool call id = %q, want call_abc", tc.ID)
+	}
+	if string(tc.ToolInput) != `{"city":"SF"}` {
+		t.Errorf("tool input = %s, want {\"city\":\"SF\"}", tc.ToolInput)
+	}
+	if resp.StopReason != llm.StopReasonToolUse {
+		t.Errorf("stop reason = %v, want tool_use", resp.StopReason)
+	}
+}
+
+func TestServiceDoStreamNoStreamOptionsForUnknownProvider(t *testing.T) {
+	// Providers other than fireworks/openai don't get stream_options (they
+	// might reject the field), but streaming still works.
+	var gotReq map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &gotReq)
+		streamSSE(w,
+			`{"id":"chatcmpl-x","object":"chat.completion.chunk","model":"together","choices":[{"index":0,"delta":{"role":"assistant","content":"yo"}}]}`,
+			`{"id":"chatcmpl-x","object":"chat.completion.chunk","model":"together","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		)
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey:       "test-key",
+		Model:        TogetherDeepseekV3,
+		ModelURL:     server.URL + "/v1",
+		ProviderName: "together",
+	}
+	var got string
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(d llm.StreamDelta) {
+			if d.Type == "text" {
+				got += d.Text
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if got != "yo" {
+		t.Errorf("streamed text = %q, want yo", got)
+	}
+	if gotReq["stream"] != true {
+		t.Errorf("request stream = %v, want true", gotReq["stream"])
+	}
+	if _, present := gotReq["stream_options"]; present {
+		t.Errorf("request stream_options present for together, want absent")
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "yo" {
+		t.Errorf("resp.Content = %+v, want text yo", resp.Content)
+	}
+}
+
+func TestServiceDoStreamRetriesTruncatedStream(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			// First attempt: stream dies mid-way (truncated body).
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher, _ := w.(http.Flusher)
+			io.WriteString(w, "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+			flusher.Flush()
+			// Hijack-less truncation: just return (no [DONE]) — the client
+			// sees io.ErrUnexpectedEOF.
+			return
+		}
+		streamSSE(w,
+			`{"id":"chatcmpl-ok","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"role":"assistant","content":"full"}}]}`,
+			`{"id":"chatcmpl-ok","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		)
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey:       "test-key",
+		Model:        GPT41,
+		ModelURL:     server.URL + "/v1",
+		ProviderName: "fireworks",
+		Backoff:      []time.Duration{time.Millisecond},
+	}
+	var deltas []llm.StreamDelta
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(d llm.StreamDelta) { deltas = append(deltas, d) },
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2 (truncated then success)", attempts)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "full" {
+		t.Errorf("final content = %+v, want text 'full'", resp.Content)
+	}
+}
+
+func TestServiceDoStreamHTTPErrorClassification(t *testing.T) {
+	t.Run("400 is terminal", func(t *testing.T) {
+		attempts := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":{"message":"stream_options not supported","type":"invalid_request_error"}}`)
+		}))
+		defer server.Close()
+
+		svc := &Service{
+			APIKey:       "k",
+			Model:        GPT41,
+			ModelURL:     server.URL + "/v1",
+			ProviderName: "fireworks",
+		}
+		_, err := svc.Do(context.Background(), &llm.Request{
+			Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+			OnStream: func(llm.StreamDelta) {},
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if attempts != 1 {
+			t.Errorf("attempts = %d, want 1 (400 terminal)", attempts)
+		}
+	})
+
+	t.Run("500 retries then succeeds", func(t *testing.T) {
+		attempts := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			if attempts == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				io.WriteString(w, `{"error":{"message":"upstream boom","type":"server_error"}}`)
+				return
+			}
+			streamSSE(w,
+				`{"id":"chatcmpl-ok","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"role":"assistant","content":"recovered"}}]}`,
+				`{"id":"chatcmpl-ok","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			)
+		}))
+		defer server.Close()
+
+		svc := &Service{
+			APIKey:       "k",
+			Model:        GPT41,
+			ModelURL:     server.URL + "/v1",
+			ProviderName: "fireworks",
+			Backoff:      []time.Duration{time.Millisecond},
+		}
+		var got string
+		resp, err := svc.Do(context.Background(), &llm.Request{
+			Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+			OnStream: func(d llm.StreamDelta) {
+				if d.Type == "text" {
+					got += d.Text
+				}
+			},
+		})
+		if err != nil {
+			t.Fatalf("Do() error = %v", err)
+		}
+		if attempts != 2 {
+			t.Errorf("attempts = %d, want 2", attempts)
+		}
+		if got != "recovered" {
+			t.Errorf("streamed text = %q, want recovered", got)
+		}
+		if resp.Content[0].Text != "recovered" {
+			t.Errorf("final content = %+v, want recovered", resp.Content[0])
+		}
+	})
+}
+
+func TestServiceDoStreamGatewayCostHeader(t *testing.T) {
+	// The exe.dev gateway reports per-call cost via an Exedev-Gateway-Cost
+	// response header. Streaming must preserve it even though the streamed
+	// body carries no usage (the assembled response has no embedded headers).
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Exedev-Gateway-Cost", "0.001234")
+		streamSSE(w,
+			`{"id":"chatcmpl-c","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}`,
+			`{"id":"chatcmpl-c","object":"chat.completion.chunk","model":"gpt-4.1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		)
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey:       "k",
+		Model:        GPT41,
+		ModelURL:     server.URL + "/v1",
+		ProviderName: "fireworks",
+	}
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(llm.StreamDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if resp.Usage.CostUSD != 0.001234 {
+		t.Errorf("CostUSD = %v, want 0.001234 from gateway header", resp.Usage.CostUSD)
+	}
+}

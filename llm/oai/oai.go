@@ -1,11 +1,14 @@
 package oai
 
 import (
+	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -1271,6 +1274,162 @@ func (s *Service) MaxImageBytes() int {
 	return 20 * 1024 * 1024
 }
 
+// accumulateStreamToolCalls merges one streamed tool-call fragment into acc.
+// Chat-completions streaming delivers tool calls as fragments keyed by an
+// explicit index (the ID, function name, and arguments arrive across multiple
+// chunks).
+func accumulateStreamToolCalls(acc *[]openai.ToolCall, frag openai.ToolCall) {
+	if frag.Index == nil {
+		return
+	}
+	i := *frag.Index
+	for len(*acc) <= i {
+		*acc = append(*acc, openai.ToolCall{Type: openai.ToolTypeFunction})
+	}
+	tc := &(*acc)[i]
+	if frag.ID != "" {
+		tc.ID = frag.ID
+	}
+	if frag.Function.Name != "" {
+		tc.Function.Name = frag.Function.Name
+	}
+	if frag.Function.Arguments != "" {
+		tc.Function.Arguments += frag.Function.Arguments
+	}
+}
+
+// shouldRetryStreamError reports whether a mid-stream failure is worth
+// retrying from the top. Truncated bodies (stream ended without [DONE]) and
+// empty/errant bodies are the common transient cases; anything else is
+// terminal.
+func shouldRetryStreamError(err error) bool {
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
+// streamChatCompletion runs a streaming chat-completions request, forwarding
+// deltas to onStream and returning an assembled response equivalent to the
+// non-streaming path (same message shape, usage, and finish reason).
+//
+// The raw SSE path (rather than go-openai's CreateChatCompletionStream) is
+// deliberate: the library swallows the [DONE] terminator, so an abruptly
+// truncated stream is indistinguishable from a clean end. Requiring [DONE]
+// lets the retry loop recover from truncated streams instead of returning
+// partial content as if it were final.
+func streamChatCompletion(ctx context.Context, httpc *http.Client, fullURL, apiKey, org string, req openai.ChatCompletionRequest, onStream func(llm.StreamDelta)) (*openai.ChatCompletionResponse, http.Header, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	if org != "" {
+		httpReq.Header.Set("OpenAI-Organization", org)
+	}
+
+	resp, err := httpc.Do(httpReq)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		var apiErr openai.APIError
+		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Message != "" {
+			apiErr.HTTPStatusCode = resp.StatusCode
+			apiErr.HTTPStatus = resp.Status
+			return nil, nil, &apiErr
+		}
+		return nil, nil, &openai.RequestError{HTTPStatusCode: resp.StatusCode, HTTPStatus: resp.Status, Body: raw}
+	}
+
+	hdrs := resp.Header.Clone()
+	out := &openai.ChatCompletionResponse{
+		ID:      req.Model,
+		Object:  "chat.completion",
+		Model:   req.Model,
+		Created: time.Now().Unix(),
+	}
+	current := openai.ChatCompletionChoice{
+		Index: 0,
+		Message: openai.ChatCompletionMessage{
+			Role: "assistant",
+		},
+	}
+	var toolCalls []openai.ToolCall
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	done := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			done = true
+			break
+		}
+		var chunk openai.ChatCompletionStreamResponse
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			// A partial/errant frame is a broken stream, not a clean end.
+			return nil, hdrs, io.ErrUnexpectedEOF
+		}
+		if chunk.ID != "" {
+			out.ID = chunk.ID
+		}
+		if chunk.Model != "" {
+			out.Model = chunk.Model
+		}
+		if chunk.Created != 0 {
+			out.Created = chunk.Created
+		}
+		if chunk.Usage != nil {
+			out.Usage = *chunk.Usage
+		}
+		for _, choice := range chunk.Choices {
+			if choice.FinishReason != "" {
+				current.FinishReason = choice.FinishReason
+			}
+			delta := choice.Delta
+			if delta.Content != "" {
+				current.Message.Content += delta.Content
+				if onStream != nil {
+					onStream(llm.StreamDelta{Type: "text", Text: delta.Content, Index: choice.Index})
+				}
+			}
+			if delta.ReasoningContent != "" {
+				current.Message.ReasoningContent += delta.ReasoningContent
+				if onStream != nil {
+					onStream(llm.StreamDelta{Type: "thinking", Text: delta.ReasoningContent, Index: choice.Index})
+				}
+			}
+			for _, frag := range delta.ToolCalls {
+				accumulateStreamToolCalls(&toolCalls, frag)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, hdrs, err
+	}
+	if !done {
+		// Server hung up without [DONE]: the stream was truncated.
+		return nil, hdrs, io.ErrUnexpectedEOF
+	}
+
+	current.Message.ToolCalls = toolCalls
+	out.Choices = []openai.ChatCompletionChoice{current}
+	return out, hdrs, nil
+}
+
 // Do sends a request to OpenAI using the go-openai package.
 func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error) {
 	// Configure the OpenAI client
@@ -1343,6 +1502,20 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		Tools:               tools,
 		ToolChoice:          fromLLMToolChoice(ir.ToolChoice), // TODO: make fromLLMToolChoice return an error when a perfect translation is not possible
 		MaxCompletionTokens: cmp.Or(s.MaxTokens, DefaultMaxTokens),
+	}
+
+	// Stream when the caller wants deltas (Fireworks and other chat-completions
+	// backends are OpenAI-compatible). Request usage in the final chunk so the
+	// assembled response carries the same usage as a non-streamed call. Only
+	// providers known to accept stream_options get it; unknown backends would
+	// otherwise reject the request with HTTP 400.
+	streaming := ir.OnStream != nil
+	if streaming {
+		req.Stream = true
+		switch s.ProviderName {
+		case "fireworks", "openai":
+			req.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
+		}
 	}
 
 	// Reasoning effort. Precedence:
@@ -1427,11 +1600,29 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			}
 		}
 
-		resp, err := client.CreateChatCompletion(ctx, req)
+		var (
+			resp *openai.ChatCompletionResponse
+			err  error
+			hdrs http.Header
+		)
+		if streaming {
+			resp, hdrs, err = streamChatCompletion(ctx, httpc, fullURL, s.APIKey, s.Org, req, ir.OnStream)
+		} else {
+			var full openai.ChatCompletionResponse
+			full, err = client.CreateChatCompletion(ctx, req)
+			resp = &full
+		}
 
 		// Handle successful response
 		if err == nil {
-			result := s.toLLMResponse(&resp)
+			result := s.toLLMResponse(resp)
+			// The streamed body may not carry usage/cost (providers only send
+			// usage with stream_options.include_usage; the gateway reports cost
+			// via response headers). Apply the header-derived gateway cost when
+			// the assembled response didn't already capture it.
+			if streaming && result.Usage.CostUSD == 0 && hdrs != nil {
+				result.Usage.CostUSD = llm.CostUSDFromResponse(hdrs)
+			}
 			// Record the endpoint actually used. baseURL omits the
 			// OpenAIURL fallback (the go-openai client applies it
 			// internally), so apply it here to avoid recording a
@@ -1445,6 +1636,15 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		if strings.Contains(err.Error(), "tls: bad record MAC") && attempts == 0 {
 			slog.WarnContext(ctx, "tls bad record MAC error, retrying once", "error", err.Error())
 			errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: TLS error: %w", attempts+1, time.Now().Format(time.DateTime), err))
+			continue
+		}
+
+		// Truncated/empty streams are retried (the streamed deltas the caller
+		// already saw are discarded; the retry replays the full response).
+		if streaming && shouldRetryStreamError(err) {
+			lastErrSummary = "stream: " + llm.Truncate(err.Error(), 160)
+			slog.WarnContext(ctx, "openai_request_stream_failed", "error", err, "url", fullURL, "model", model.ModelName)
+			errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: stream response body (url=%s, model=%s): %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, err))
 			continue
 		}
 
