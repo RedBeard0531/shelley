@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,6 +81,48 @@ func createLiveMessage(t *testing.T, srv *Server, database *db.DB, convID, text 
 		t.Fatalf("CreateMessage(%s): %v", convID, err)
 	}
 	srv.notifySubscribersNewMessage(ctx, convID, msg)
+}
+
+// gatedRecorder wraps responseRecorderWithClose; once armed, Write blocks on
+// release until the test disarms, so the runStream main loop cannot drain
+// updates during the overflow burst — making the subpub overflow deterministic
+// regardless of scheduler speed.
+type gatedRecorder struct {
+	*responseRecorderWithClose
+	mu      sync.Mutex
+	armed   bool
+	release chan struct{}
+}
+
+func (g *gatedRecorder) Write(p []byte) (int, error) {
+	g.mu.Lock()
+	armed := g.armed
+	release := g.release
+	g.mu.Unlock()
+	if armed && release != nil {
+		<-release
+		g.mu.Lock()
+		g.release = nil
+		g.mu.Unlock()
+	}
+	return g.responseRecorderWithClose.Write(p)
+}
+
+func (g *gatedRecorder) arm() {
+	g.mu.Lock()
+	g.armed = true
+	g.mu.Unlock()
+}
+
+func (g *gatedRecorder) disarm() {
+	g.mu.Lock()
+	release := g.release
+	g.release = nil
+	g.armed = false
+	g.mu.Unlock()
+	if release != nil {
+		close(release)
+	}
 }
 
 // TestUnifiedStreamMultiplexesTwoConversations: a single /api/stream2
@@ -344,5 +387,91 @@ func TestLegacyConversationStreamIsolatedFromOtherConversations(t *testing.T) {
 		if hasMessageText(f, "should-not-leak") {
 			t.Errorf("legacy endpoint received conversation B message body: %+v", f)
 		}
+	}
+}
+
+// TestUnifiedStreamEndsWhenSubscriberDropsOverflow: if a stream2 subscriber is
+// dropped by subpub because it fell behind (buffer 10 overflow), the handler
+// must tear the connection down promptly. Before the subscriberDead fix the
+// connection stayed open indefinitely, fed by local 30s heartbeats — the
+// browser showed a frozen UI, its watchdog never tripped, and no reconnect
+// happened. Regression guard: the handler must return, ending the connection,
+// like any other dropped stream.
+//
+// Determinism: the response writer is gated after registration so the main
+// loop blocks on its first write while the burst runs. That pins the drain
+// path (updates fills, subscriber pins on updates <-), so sub.ch (cap 10)
+// provably overflows regardless of scheduler speed — 50 broadcasts is safely
+// past the 22 needed (10 updates + 10 sub.ch + one in flight + the blocked
+// write's slot). The subscriberDead signal is buffered (cap 1), so it survives
+// until the gate opens and the main loop returns to its select.
+func TestUnifiedStreamEndsWhenSubscriberDropsOverflow(t *testing.T) {
+	t.Parallel()
+	srv, _, _ := newTestServer(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)
+	gated := &gatedRecorder{
+		responseRecorderWithClose: newResponseRecorderWithClose(),
+		release:                   make(chan struct{}),
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleStream(gated, req)
+	}()
+	defer func() {
+		// Release any write the main loop is blocked on (also on the t.Fatal
+		// path) and cancel so the handler returns even without subscriberDead;
+		// then wait for it to finish.
+		gated.disarm()
+		gated.Close()
+		cancel()
+		<-done
+	}()
+
+	// Wait for the handler's streamPub subscriber to be registered AND live:
+	// broadcast a canary heartbeat and poll the response until it appears.
+	// The initial list-patch frame is written before Subscribe, so the body
+	// alone can't prove registration — a delivered canary can. The recorder
+	// is not armed yet, so writes flow normally.
+	deadline := time.Now().Add(5 * time.Second)
+	registered := false
+	for time.Now().Before(deadline) && !registered {
+		srv.streamPub.Broadcast(StreamResponse{Heartbeat: true})
+		for _, f := range decodeSSE(gated.Snapshot()) {
+			if f.Heartbeat {
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if !registered {
+		t.Fatalf("stream subscriber never registered (no canary frame); body=%s", gated.Snapshot())
+	}
+
+	// Pin the main loop on its next write so it cannot drain updates during
+	// the burst.
+	gated.arm()
+
+	// Burst 50 events in a tight loop: with the drain path pinned, the
+	// subscriber's channel (cap 10) overflows, subpub closes it, and the
+	// handler must end the connection instead of zombieing on local 30s
+	// heartbeats.
+	for i := 0; i < 50; i++ {
+		srv.streamPub.Broadcast(StreamResponse{Heartbeat: true})
+	}
+
+	// Unblock the main loop; it finishes the write, hits subscriberDead, and
+	// returns.
+	gated.disarm()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream stayed open after subpub overflow; connection would zombie on local heartbeats")
 	}
 }

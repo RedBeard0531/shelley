@@ -1966,6 +1966,10 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 
 	updates := make(chan StreamResponse, 10)
 
+	// subscriberDead: subpub closes the channel of a subscriber that fell behind on
+	// overflow; without this the stream would zombie on, fed by local heartbeats.
+	subscriberDead := make(chan struct{}, 1)
+
 	if listNext != nil {
 		go func() {
 			for {
@@ -1993,6 +1997,17 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 			for {
 				streamData, cont := next()
 				if !cont {
+					if ctx.Err() == nil {
+						// subpub dropped us on overflow; the connection is a zombie
+						// (client sees only local heartbeats). End it so the browser
+						// reconnects instead of freezing (see subpub close-on-overflow).
+						s.logger.Warn("stream subscriber disconnected on overflow",
+							"endpoint", "stream2", "conversation_id", conversationID)
+						select {
+						case subscriberDead <- struct{}{}:
+						case <-ctx.Done():
+						}
+					}
 					return
 				}
 				select {
@@ -2013,6 +2028,9 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-subscriberDead:
+				// subscriber was dropped on subpub overflow; end the zombie connection.
 				return
 			case <-ticker.C:
 				if !writeStreamData(StreamResponse{Heartbeat: true}) {
@@ -2208,6 +2226,15 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 			for {
 				streamData, cont := next()
 				if !cont {
+					if ctx.Err() == nil {
+						// subpub dropped us on overflow; see the stream2 subscriber above.
+						s.logger.Warn("stream subscriber disconnected on overflow",
+							"endpoint", "conversation", "conversation_id", conversationID)
+						select {
+						case subscriberDead <- struct{}{}:
+						case <-ctx.Done():
+						}
+					}
 					return
 				}
 				select {
@@ -2224,6 +2251,9 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-subscriberDead:
+			// subscriber was dropped on subpub overflow; end the zombie connection.
 			return
 		case <-ticker.C:
 			// Local heartbeat keeps the connection alive even when no active
