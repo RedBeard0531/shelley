@@ -263,9 +263,9 @@ var (
 		TextVerbosity:      "",
 		URL:                FireworksURL,
 		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
+		IsReasoningModel:   true, // models.dev: reasoning
 		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		SupportsImages:     false, // models.dev: text-only
 	}
 
 	DeepseekV4FlashFireworks = Model{
@@ -274,9 +274,9 @@ var (
 		TextVerbosity:      "",
 		URL:                FireworksURL,
 		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
+		IsReasoningModel:   true, // models.dev: reasoning
 		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		SupportsImages:     false, // models.dev: text-only
 	}
 
 	MoonshotKimiK2 = Model{
@@ -318,9 +318,9 @@ var (
 		TextVerbosity:      "",
 		URL:                FireworksURL,
 		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
+		IsReasoningModel:   true, // models.dev: reasoning
 		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		SupportsImages:     false, // models.dev: text-only
 	}
 
 	KimiK26Fireworks = Model{
@@ -356,6 +356,76 @@ var (
 		SupportsImages:     true,
 	}
 
+	// Alias of DeepseekV4FlashFireworks (upstream's 30e01d3 retargeted that
+	// model to the live 0731 endpoint; the catalog ID keeps the 0731 name).
+	DeepseekV4Flash0731Fireworks = DeepseekV4FlashFireworks
+
+	DeepseekV4Pro0813Fireworks = Model{
+		UserName:           "deepseek-v4-pro-0813-fireworks",
+		ModelName:          "accounts/fireworks/models/deepseek-v4-pro-0813",
+		TextVerbosity:      "",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   true, // models.dev: reasoning
+		UseSimplifiedPatch: false,
+		SupportsImages:     false, // models.dev: text-only
+	}
+
+	InklingFireworks = Model{
+		UserName:           "inkling-fireworks",
+		ModelName:          "accounts/fireworks/models/inkling",
+		TextVerbosity:      "",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   true,  // models.dev: reasoning
+		UseSimplifiedPatch: false,
+		SupportsImages:     true,  // models.dev: text, image, audio
+	}
+
+	MuseGlimmer30BFireworks = Model{
+		UserName:           "muse-glimmer-30b-fireworks",
+		ModelName:          "accounts/fireworks/models/muse-glimmer-30b",
+		TextVerbosity:      "",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   true, // models.dev: reasoning
+		UseSimplifiedPatch: false,
+		SupportsImages:     true, // models.dev: text, image
+	}
+
+	Nemotron3UltraNvfp4Fireworks = Model{
+		UserName:           "nemotron-3-ultra-nvfp4-fireworks",
+		ModelName:          "accounts/fireworks/models/nemotron-3-ultra-nvfp4",
+		TextVerbosity:      "",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   true, // models.dev: reasoning
+		UseSimplifiedPatch: false,
+		SupportsImages:     false, // models.dev: text-only
+	}
+
+	NemotronLightning35Fireworks = Model{
+		UserName:           "nemotron-lightning-3p5-fireworks",
+		ModelName:          "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
+		TextVerbosity:      "",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   true, // models.dev: reasoning
+		UseSimplifiedPatch: false,
+		SupportsImages:     false, // models.dev: text-only
+	}
+
+	Qwen38MaxFireworks = Model{
+		UserName:           "qwen3.8-max-fireworks",
+		ModelName:          "accounts/fireworks/models/qwen3p8-max",
+		TextVerbosity:      "",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   true, // models.dev: reasoning
+		UseSimplifiedPatch: false,
+		SupportsImages:     false, // models.dev: text-only
+	}
+
 	Grok45 = Model{
 		UserName:           "grok-4.5",
 		ModelName:          "grok-4.5",
@@ -373,9 +443,9 @@ var (
 		TextVerbosity:      "",
 		URL:                FireworksURL,
 		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
+		IsReasoningModel:   true, // models.dev: reasoning
 		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		SupportsImages:     false, // models.dev: text-only
 	}
 
 	GPT5 = Model{
@@ -610,6 +680,13 @@ var ModelsRegistry = []Model{
 	KimiK26Fireworks,
 	KimiK27CodeFireworks,
 	KimiK3Fireworks,
+	DeepseekV4Flash0731Fireworks,
+	DeepseekV4Pro0813Fireworks,
+	InklingFireworks,
+	MuseGlimmer30BFireworks,
+	Nemotron3UltraNvfp4Fireworks,
+	NemotronLightning35Fireworks,
+	Qwen38MaxFireworks,
 	GPTOSS120B,
 	LlamaCPP,
 	// Skaband-supported models
@@ -1273,14 +1350,20 @@ func (s *Service) TokenContextWindow() int {
 		return 128000
 	case "qwen":
 		return 256000
-	case "gpt-oss-120b":
-		return 128000
-	case "accounts/fireworks/models/deepseek-v4-pro", "accounts/fireworks/models/deepseek-v4-flash", "accounts/fireworks/models/deepseek-v4-flash-0731":
-		return 1048576
+	case "gpt-oss-120b", "accounts/fireworks/models/gpt-oss-120b":
+		return 131072
+	case "accounts/fireworks/models/deepseek-v4-pro", "accounts/fireworks/models/deepseek-v4-pro-0813", "accounts/fireworks/models/deepseek-v4-flash", "accounts/fireworks/models/deepseek-v4-flash-0731":
+		return 1000000
 	case "accounts/fireworks/models/kimi-k2p7-code", "accounts/fireworks/models/kimi-k2p6":
-		return 262144
-	case "accounts/fireworks/models/kimi-k3":
+		return 262000
+	case "accounts/fireworks/models/kimi-k3", "accounts/fireworks/models/inkling":
 		return 1048576
+	case "accounts/fireworks/models/glm-5p2":
+		return 1048575
+	case "accounts/fireworks/models/qwen3p8-max", "accounts/fireworks/models/nemotron-3-ultra-nvfp4", "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b":
+		return 262144
+	case "accounts/fireworks/models/muse-glimmer-30b":
+		return 131072
 	case "gpt-5.1", "gpt-5.1-mini", "gpt-5.1-nano":
 		return 256000
 	default:

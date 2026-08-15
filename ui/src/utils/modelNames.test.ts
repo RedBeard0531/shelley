@@ -55,6 +55,12 @@ eq("kimi-k2.6-fireworks", "Kimi K2.6");
 eq("minimax-m3", "MiniMax M3");
 eq("minimax-m2p7", "MiniMax M2.7");
 eq("qwen3.7-plus-fireworks", "Qwen3.7 Plus");
+eq("deepseek-v4-flash-0731-fireworks", "DeepSeek V4 Flash 0731");
+eq("deepseek-v4-pro-0813-fireworks", "DeepSeek V4 Pro 0813");
+eq("qwen3.8-max-fireworks", "Qwen3.8 Max");
+eq("inkling-fireworks", "Inkling");
+eq("muse-glimmer-30b-fireworks", "Muse Glimmer 30B");
+eq("nemotron-lightning-3p5-fireworks", "Nemotron Lightning 3.5");
 
 // Unknown ids pass through verbatim.
 eq("predictable", "predictable");

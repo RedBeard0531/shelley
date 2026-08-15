@@ -292,6 +292,42 @@ func All() []Model {
 			Build: oaiChatSvc(oai.KimiK3Fireworks, "fireworks"),
 		},
 		{
+			ID: "deepseek-v4-pro-0813-fireworks", Provider: ProviderFireworks,
+			Description: "DeepSeek V4 Pro 0813 on Fireworks", APIModelName: oai.DeepseekV4Pro0813Fireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.DeepseekV4Pro0813Fireworks, "fireworks"),
+		},
+		{
+			ID: "inkling-fireworks", Provider: ProviderFireworks,
+			Description: "Inkling on Fireworks", APIModelName: oai.InklingFireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.InklingFireworks, "fireworks"),
+		},
+		{
+			ID: "muse-glimmer-30b-fireworks", Provider: ProviderFireworks,
+			Description: "Muse Glimmer 30B on Fireworks", APIModelName: oai.MuseGlimmer30BFireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.MuseGlimmer30BFireworks, "fireworks"),
+		},
+		{
+			ID: "nemotron-3-ultra-nvfp4-fireworks", Provider: ProviderFireworks,
+			Description: "Nemotron 3 Ultra on Fireworks", APIModelName: oai.Nemotron3UltraNvfp4Fireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.Nemotron3UltraNvfp4Fireworks, "fireworks"),
+		},
+		{
+			ID: "nemotron-lightning-3p5-fireworks", Provider: ProviderFireworks,
+			Description: "Nemotron 3.5 Lightning on Fireworks", APIModelName: oai.NemotronLightning35Fireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.NemotronLightning35Fireworks, "fireworks"),
+		},
+		{
+			ID: "qwen3.8-max-fireworks", Provider: ProviderFireworks,
+			Description: "Qwen3.8 Max on Fireworks", APIModelName: oai.Qwen38MaxFireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.Qwen38MaxFireworks, "fireworks"),
+		},
+		{
 			ID: "deepseek-v4-pro-fireworks", Provider: ProviderFireworks,
 			Description: "DeepSeek V4 Pro on Fireworks", APIModelName: oai.DeepseekV4ProFireworks.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
