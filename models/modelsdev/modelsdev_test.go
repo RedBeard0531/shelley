@@ -1,6 +1,11 @@
 package modelsdev
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	"shelley.exe.dev/llm"
+)
 
 func TestLookupImageSupport(t *testing.T) {
 	cases := []struct {
@@ -122,6 +127,91 @@ func TestLookupReasoningSupport(t *testing.T) {
 		if got != tc.want || found != tc.found {
 			t.Errorf("LookupReasoningSupport(%q, %q) = (%v, %v), want (%v, %v)", tc.endpoint, tc.model, got, found, tc.want, tc.found)
 		}
+	}
+}
+
+func TestParseReasoningCapabilities(t *testing.T) {
+	levels := func(names ...string) []llm.ThinkingLevel {
+		out := make([]llm.ThinkingLevel, len(names))
+		for i, name := range names {
+			out[i] = llm.ParseThinkingLevel(name)
+		}
+		return out
+	}
+	tests := []struct {
+		name string
+		in   modelEntry
+		want ReasoningCapabilities
+	}{
+		{name: "unsupported", in: modelEntry{}},
+		{
+			name: "explicit efforts",
+			in:   modelEntry{Reasoning: true, ReasoningOptions: []reasoningOption{{Type: "effort", Values: []string{"none", "low", "medium", "high", "xhigh", "max"}}}},
+			want: ReasoningCapabilities{Supported: true, Levels: levels("off", "low", "medium", "high", "xhigh", "max")},
+		},
+		{
+			name: "toggle adds off",
+			in:   modelEntry{Reasoning: true, ReasoningOptions: []reasoningOption{{Type: "toggle"}, {Type: "effort", Values: []string{"high", "max"}}}},
+			want: ReasoningCapabilities{Supported: true, Levels: levels("off", "high", "max")},
+		},
+		{
+			name: "toggle only leaves levels unknown",
+			in:   modelEntry{Reasoning: true, ReasoningOptions: []reasoningOption{{Type: "toggle"}}},
+			want: ReasoningCapabilities{Supported: true},
+		},
+		{
+			name: "budget only leaves levels unknown",
+			in:   modelEntry{Reasoning: true, ReasoningOptions: []reasoningOption{{Type: "budget_tokens"}}},
+			want: ReasoningCapabilities{Supported: true},
+		},
+		{
+			name: "default and unknown values are ignored",
+			in:   modelEntry{Reasoning: true, ReasoningOptions: []reasoningOption{{Type: "effort", Values: []string{"default", "future"}}}},
+			want: ReasoningCapabilities{Supported: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseReasoningCapabilities(tt.in); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("capabilities = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLookupReasoningCapabilities(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		model    string
+		found    bool
+		want     ReasoningCapabilities
+	}{
+		{
+			name:     "gateway model resolves by first-party name",
+			endpoint: "https://gateway.example/openai/v1",
+			model:    "gpt-5.6-sol",
+			found:    true,
+			want: ReasoningCapabilities{Supported: true, Levels: []llm.ThinkingLevel{
+				llm.ThinkingLevelOff, llm.ThinkingLevelLow, llm.ThinkingLevelMedium,
+				llm.ThinkingLevelHigh, llm.ThinkingLevelXHigh, llm.ThinkingLevelMax,
+			}},
+		},
+		{
+			name:  "date suffix is stripped",
+			model: "claude-haiku-4-5-20251001",
+			found: true,
+			want:  ReasoningCapabilities{Supported: true},
+		},
+		{name: "unknown", endpoint: "https://made-up.example", model: "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found := LookupReasoningCapabilities(tt.endpoint, tt.model)
+			if found != tt.found || !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("LookupReasoningCapabilities() = (%+v, %v), want (%+v, %v)", got, found, tt.want, tt.found)
+			}
+		})
 	}
 }
 

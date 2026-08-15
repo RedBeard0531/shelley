@@ -2009,12 +2009,49 @@ func TestServiceDoNonDeepSeekStripsReasoningContent(t *testing.T) {
 	}
 }
 
+func TestServiceSupportedReasoningLevels(t *testing.T) {
+	tests := []struct {
+		name  string
+		model Model
+		want  string
+	}{
+		{name: "GPT 5.6", model: GPT56Sol, want: "off,low,medium,high,xhigh,max"},
+		{name: "unknown", model: Model{ModelName: "totally-unknown-model"}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			levels := (&Service{Model: tt.model}).SupportedReasoningLevels()
+			names := make([]string, len(levels))
+			for i, level := range levels {
+				names[i] = level.Name()
+			}
+			if got := strings.Join(names, ","); got != tt.want {
+				t.Fatalf("levels = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServiceSupportsReasoningFromModelsDev(t *testing.T) {
+	if (&Service{Model: GPT4o}).SupportsReasoning() {
+		t.Fatal("GPT-4o chat service should not advertise reasoning")
+	}
+	if (&ResponsesService{Model: GPT4o}).SupportsReasoning() {
+		t.Fatal("GPT-4o Responses service should not advertise reasoning")
+	}
+	unknown := Model{ModelName: "totally-unknown-model"}
+	if !(&Service{Model: unknown}).SupportsReasoning() || !(&ResponsesService{Model: unknown}).SupportsReasoning() {
+		t.Fatal("unknown models should retain reasoning support")
+	}
+}
+
 // TestServiceReasoningEffort verifies that Service emits the right
 // reasoning_effort field across precedence (request override beats service
 // verbatim beats service default).
 func TestServiceReasoningEffort(t *testing.T) {
 	tests := []struct {
 		name       string
+		model      Model
 		svcLevel   llm.ThinkingLevel
 		svcEffort  string
 		reqLevel   llm.ThinkingLevel
@@ -2024,6 +2061,16 @@ func TestServiceReasoningEffort(t *testing.T) {
 		{name: "svc default medium", svcLevel: llm.ThinkingLevelMedium, wantEffort: "medium"},
 		{name: "svc high", svcLevel: llm.ThinkingLevelHigh, wantEffort: "high"},
 		{name: "svc xhigh clamped to high", svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
+		{name: "svc max clamped to high", svcLevel: llm.ThinkingLevelMax, wantEffort: "high"},
+		{name: "gpt-5.6 minimal rounds to low", model: GPT56Sol, svcLevel: llm.ThinkingLevelMinimal, wantEffort: "low"},
+		{name: "gpt-5.6 off sends none", model: GPT56Sol, reqLevel: llm.ThinkingLevelOff, wantEffort: "none"},
+		{name: "GLM low rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelLow, wantEffort: "high"},
+		{name: "GLM xhigh tie rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
+		{name: "Kimi xhigh tie rounds to high", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
+		{name: "DeepSeek V4 Pro keeps max", model: DeepseekV4ProFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
+		{name: "DeepSeek V4 Flash keeps max", model: DeepseekV4FlashFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
+		{name: "GLM 5.2 keeps max", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
+		{name: "Kimi K3 keeps max", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "svc off, svc verbatim wins", svcLevel: llm.ThinkingLevelOff, svcEffort: "verbatim", wantEffort: "verbatim"},
 		{name: "req override beats svc default", svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelLow, wantEffort: "low"},
 		{name: "req off wins", svcLevel: llm.ThinkingLevelMedium, svcEffort: "v", reqLevel: llm.ThinkingLevelOff, wantEffort: ""},
@@ -2048,9 +2095,13 @@ func TestServiceReasoningEffort(t *testing.T) {
 			}))
 			defer server.Close()
 
+			testModel := tt.model
+			if testModel.ModelName == "" {
+				testModel = GPT41
+			}
 			svc := &Service{
 				APIKey:          "k",
-				Model:           GPT41,
+				Model:           testModel,
 				ModelURL:        server.URL + "/v1",
 				ThinkingLevel:   tt.svcLevel,
 				ReasoningEffort: tt.svcEffort,

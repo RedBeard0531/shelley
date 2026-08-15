@@ -2496,9 +2496,11 @@ func (s *Server) handleModelCommand(ctx context.Context, w http.ResponseWriter, 
 		if msg := validateModelReasoningLevel(targetInfo, newReasoning); msg != "" {
 			return reply(msg)
 		}
-	} else if modelSet && validateModelReasoningLevel(targetInfo, currentReasoning) != "" {
-		reasoningSet = true
-		newReasoning = ""
+	} else if modelSet {
+		if rounded, changed := roundModelReasoningLevel(targetInfo, currentReasoning); changed {
+			reasoningSet = true
+			newReasoning = rounded
+		}
 	}
 
 	// Reduce to the actual deltas: ignore no-op changes.
@@ -2532,7 +2534,7 @@ func (s *Server) handleModelCommand(ctx context.Context, w http.ResponseWriter, 
 // reasoningLevelNames are the user-facing reasoning levels accepted by /model.
 // They match the levels offered by the ThinkingLevelPicker in the UI. The word
 // "default" is deliberately not a level: it selects the default MODEL instead.
-var reasoningLevelNames = []string{"off", "minimal", "low", "medium", "high", "xhigh"}
+var reasoningLevelNames = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 func isReasoningLevelName(s string) bool {
 	s = strings.ToLower(strings.TrimSpace(s))
@@ -2646,7 +2648,8 @@ func isReadyModel(id string, modelList []ModelInfo) bool {
 
 // modelCommandStatus builds the human-readable body shown for a bare /model
 // command or an invalid argument: the current model and reasoning level plus
-// the available options.
+// the available options. Models that advertise an exact reasoning level list
+// show it; the rest accept the standard levels through xhigh.
 func modelCommandStatus(currentModel, currentReasoning string, modelList []ModelInfo) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Current model: %s\nCurrent reasoning: %s", currentModel, reasoningDisplayName(currentReasoning))
@@ -2660,8 +2663,15 @@ func modelCommandStatus(currentModel, currentReasoning string, modelList []Model
 			name = fmt.Sprintf("%s (%s)", m.ID, m.DisplayName)
 		}
 		fmt.Fprintf(&b, "\n  /model %s", name)
+		switch {
+		case !m.SupportsReasoning:
+			b.WriteString(" — no reasoning")
+		case len(m.ReasoningLevels) > 0:
+			fmt.Fprintf(&b, " — %s", strings.Join(m.ReasoningLevels, ", "))
+		}
 	}
-	fmt.Fprintf(&b, "\n\nReasoning levels (use as /model <level> or /model <id> <level>): %s", strings.Join(reasoningLevelNames, ", "))
+	fmt.Fprintf(&b, "\n\nReasoning levels (use as /model <level> or /model <id> <level>): %s\nModels without a listed set accept %s through %s.",
+		strings.Join(reasoningLevelNames, ", "), reasoningLevelNames[0], reasoningLevelNames[len(reasoningLevelNames)-2])
 	return b.String()
 }
 
@@ -3927,6 +3937,35 @@ func findModelInfo(id string, models []ModelInfo) *ModelInfo {
 	return nil
 }
 
+func roundModelReasoningLevel(model *ModelInfo, level string) (string, bool) {
+	if level == "" || model == nil {
+		return level, false
+	}
+	if !model.SupportsReasoning {
+		return "", true
+	}
+	if len(model.ReasoningLevels) == 0 {
+		if level == "max" {
+			return "", true
+		}
+		return level, false
+	}
+	supported := make([]llm.ThinkingLevel, 0, len(model.ReasoningLevels))
+	for _, name := range model.ReasoningLevels {
+		if parsed := llm.ParseThinkingLevel(name); parsed != llm.ThinkingLevelDefault {
+			supported = append(supported, parsed)
+		}
+	}
+	rounded := llm.ClampThinkingLevel(llm.ParseThinkingLevel(level), supported).Name()
+	if validateModelReasoningLevel(model, rounded) != "" {
+		// Clamping can fail to land on a supported level (e.g. a model that
+		// only advertises off never attracts non-off levels); reset instead
+		// of persisting an unsendable level.
+		return "", true
+	}
+	return rounded, rounded != level
+}
+
 func validateModelReasoningLevel(model *ModelInfo, level string) string {
 	if level == "" || model == nil {
 		return ""
@@ -3935,6 +3974,9 @@ func validateModelReasoningLevel(model *ModelInfo, level string) string {
 		return fmt.Sprintf("Model %s does not support reasoning; use default.", model.ID)
 	}
 	if len(model.ReasoningLevels) == 0 {
+		if level == "max" {
+			return fmt.Sprintf("Model %s does not advertise reasoning level max; use default or a standard level through xhigh.", model.ID)
+		}
 		return ""
 	}
 	for _, supported := range model.ReasoningLevels {
@@ -3958,9 +4000,9 @@ func validateConversationOptions(opts db.ConversationOptions) string {
 	}
 	if opts.ThinkingLevel != "" {
 		switch opts.ThinkingLevel {
-		case "off", "minimal", "low", "medium", "high", "xhigh":
+		case "off", "minimal", "low", "medium", "high", "xhigh", "max":
 		default:
-			return fmt.Sprintf("Invalid thinking_level: %q; must be one of off, minimal, low, medium, high, xhigh", opts.ThinkingLevel)
+			return fmt.Sprintf("Invalid thinking_level: %q; must be one of off, minimal, low, medium, high, xhigh, max", opts.ThinkingLevel)
 		}
 	}
 	return ""

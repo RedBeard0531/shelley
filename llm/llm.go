@@ -33,8 +33,9 @@ type Service interface {
 }
 
 // ReasoningSupporter reports whether a service accepts reasoning controls and
-// which generic levels it exposes to callers. An empty level list means all
-// standard levels are supported.
+// which generic levels it exposes to callers. An empty level list means the
+// standard levels through xhigh are supported; max must be advertised
+// explicitly.
 type ReasoningSupporter interface {
 	SupportsReasoning() bool
 	SupportedReasoningLevels() []ThinkingLevel
@@ -52,6 +53,39 @@ func SupportedReasoningLevels(svc Service) []ThinkingLevel {
 		return rs.SupportedReasoningLevels()
 	}
 	return nil
+}
+
+// ClampThinkingLevel rounds an unsupported generic level to the nearest
+// supported level. Off is a mode rather than an effort tier: non-off values
+// only consider non-off candidates. Equal distances choose the lower effort.
+func ClampThinkingLevel(level ThinkingLevel, supported []ThinkingLevel) ThinkingLevel {
+	if level == ThinkingLevelDefault || len(supported) == 0 {
+		return level
+	}
+	for _, candidate := range supported {
+		if candidate == level {
+			return level
+		}
+	}
+	best := ThinkingLevelDefault
+	bestDistance := int(^uint(0) >> 1)
+	for _, candidate := range supported {
+		if level != ThinkingLevelOff && candidate == ThinkingLevelOff {
+			continue
+		}
+		distance := int(candidate) - int(level)
+		if distance < 0 {
+			distance = -distance
+		}
+		if distance < bestDistance || distance == bestDistance && candidate < best {
+			best = candidate
+			bestDistance = distance
+		}
+	}
+	if best == ThinkingLevelDefault {
+		return level
+	}
+	return best
 }
 
 type SimplifiedPatcher interface {
@@ -475,7 +509,8 @@ const (
 	ThinkingLevelLow                          // Low thinking (~2048 tokens / "low")
 	ThinkingLevelMedium                       // Medium thinking (~8192 tokens / "medium")
 	ThinkingLevelHigh                         // High thinking (~16384 tokens / "high")
-	ThinkingLevelXHigh                        // Maximum thinking (~32768 tokens / "xhigh")
+	ThinkingLevelXHigh                        // Extra-high thinking (~32768 tokens / "xhigh")
+	ThinkingLevelMax                          // Maximum thinking ("max"; OpenAI GPT-5.6 family)
 )
 
 // EffectiveThinkingLevel resolves the level to use for a request: a non-default
@@ -488,7 +523,7 @@ func EffectiveThinkingLevel(serviceDefault, requestOverride ThinkingLevel) Think
 }
 
 // ParseThinkingLevel parses one of the user-facing level names
-// ("default", "off", "minimal", "low", "medium", "high", "xhigh") into a
+// ("default", "off", "minimal", "low", "medium", "high", "xhigh", "max") into a
 // ThinkingLevel. Empty string and unknown values return ThinkingLevelDefault.
 func ParseThinkingLevel(s string) ThinkingLevel {
 	switch strings.ToLower(strings.TrimSpace(s)) {
@@ -504,13 +539,15 @@ func ParseThinkingLevel(s string) ThinkingLevel {
 		return ThinkingLevelHigh
 	case "xhigh":
 		return ThinkingLevelXHigh
+	case "max":
+		return ThinkingLevelMax
 	default:
 		return ThinkingLevelDefault
 	}
 }
 
 // Name returns the lower-case user-facing name for the thinking level
-// ("off", "minimal", "low", "medium", "high", "xhigh"). Returns "" for
+// ("off", "minimal", "low", "medium", "high", "xhigh", "max"). Returns "" for
 // ThinkingLevelDefault.
 func (t ThinkingLevel) Name() string {
 	switch t {
@@ -526,6 +563,8 @@ func (t ThinkingLevel) Name() string {
 		return "high"
 	case ThinkingLevelXHigh:
 		return "xhigh"
+	case ThinkingLevelMax:
+		return "max"
 	default:
 		return ""
 	}
@@ -533,8 +572,9 @@ func (t ThinkingLevel) Name() string {
 
 // ThinkingBudgetTokens returns the recommended budget_tokens for Anthropic's
 // extended thinking (used by older non-adaptive Claude models). Returns 0 for
-// ThinkingLevelOff/Default. ThinkingLevelXHigh is clamped to the high budget
-// since budget-style APIs don't have a separate "xhigh" tier.
+// ThinkingLevelOff/Default. ThinkingLevelXHigh and ThinkingLevelMax are
+// clamped to the high budget since budget-style APIs don't have separate
+// "xhigh"/"max" tiers.
 func (t ThinkingLevel) ThinkingBudgetTokens() int {
 	switch t {
 	case ThinkingLevelMinimal:
@@ -543,7 +583,7 @@ func (t ThinkingLevel) ThinkingBudgetTokens() int {
 		return 2048
 	case ThinkingLevelMedium:
 		return 8192
-	case ThinkingLevelHigh, ThinkingLevelXHigh:
+	case ThinkingLevelHigh, ThinkingLevelXHigh, ThinkingLevelMax:
 		return 16384
 	default:
 		return 0
@@ -563,6 +603,8 @@ func (t ThinkingLevel) ThinkingEffort() string {
 		return "high"
 	case ThinkingLevelXHigh:
 		return "xhigh"
+	case ThinkingLevelMax:
+		return "max"
 	default:
 		return ""
 	}

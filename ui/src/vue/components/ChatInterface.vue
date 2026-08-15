@@ -287,7 +287,8 @@
       :initial-rows="messageInputInitialRows"
       :conversation-id="conversationId"
       :lazy-draft-id="lazyDraftId"
-      :model-options="readyModelIds"
+      :model-options="readyModels"
+      :current-model-id="selectedModel"
       @clear-injected-text="
         diffCommentText = '';
         terminalInjectedText = null;
@@ -432,7 +433,12 @@ import {
 import { coalesceMessages, type CoalescedItem } from "./coalesce";
 import type { RenderNode, RenderChunk, GenerationBlock } from "./renderNode";
 import type { EphemeralTerminal } from "./terminalTypes";
-import { DEFAULT_THINKING_LEVEL, THINKING_LEVELS, type ThinkingLevel } from "./thinkingLevel";
+import {
+  DEFAULT_THINKING_LEVEL,
+  THINKING_LEVELS,
+  normalizeThinkingLevelForModel,
+  type ThinkingLevel,
+} from "./thinkingLevel";
 
 import MessageInput from "./MessageInput.vue";
 import ConversationTOC from "./ConversationTOC.vue";
@@ -582,6 +588,9 @@ const models = ref<
 
 // Ready model ids, surfaced to MessageInput for /model argument autocomplete.
 const readyModelIds = computed(() => models.value.filter((m) => m.ready).map((m) => m.id));
+// Ready models with reasoning capabilities, for the same autocomplete to offer
+// only levels the target model accepts.
+const readyModels = computed(() => models.value.filter((m) => m.ready));
 
 // Copy for the empty-model-list state. The server tells us WHY the list is
 // empty (missing exe.dev reflection/llm integration, or not on exe.dev at
@@ -608,15 +617,7 @@ const thinkingLevel = ref<ThinkingLevel>(
   (() => {
     try {
       const stored = localStorage.getItem(THINKING_LEVEL_KEY);
-      const valid: ThinkingLevel[] = [
-        "default",
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-      ];
+      const valid = THINKING_LEVELS.map((level) => level.value);
       if (stored !== null && valid.includes(stored as ThinkingLevel)) {
         return stored as ThinkingLevel;
       }
@@ -633,6 +634,11 @@ function setThinkingLevel(level: ThinkingLevel) {
   } catch {
     /* ignore */
   }
+}
+
+function thinkingLevelForModel(modelId: string, level: ThinkingLevel): ThinkingLevel {
+  const model = models.value.find((candidate) => candidate.id === modelId);
+  return normalizeThinkingLevelForModel(level, model);
 }
 
 // selectedModel is "" when the server serves no models. Deliberately no
@@ -720,7 +726,10 @@ async function sendModelCommand(arg: string) {
 
 function switchConversationModel(model: string) {
   if (model === selectedModel.value) return;
-  return sendModelCommand(model);
+  const rounded = thinkingLevelForModel(model, thinkingLevel.value);
+  const arg =
+    rounded !== "default" && rounded !== thinkingLevel.value ? `${model} ${rounded}` : model;
+  return sendModelCommand(arg);
 }
 
 // Reasoning pills in the status readout's picker. Same policy as the model
@@ -753,6 +762,8 @@ function switchConversationThinkingLevel(level: ThinkingLevel) {
 // would drop a legitimate re-pick of the original model made while a previous
 // pick's PUT was still in flight.
 function setSelectedModel(model: string) {
+  const rounded = thinkingLevelForModel(model, thinkingLevel.value);
+  if (rounded !== thinkingLevel.value) setThinkingLevel(rounded);
   applyModel(model);
   // Keep the server-side draft row in sync with the picker. Without this,
   // the draft keeps the model it was created with until the promoting chat
@@ -1174,17 +1185,9 @@ const otherUsageRows = computed<OtherUsageRow[]>(() => usageData.value.otherRows
 watch(
   selectedModelInfo,
   (model) => {
-    if (!model || model.supports_reasoning === false) {
-      setThinkingLevel("default");
-      return;
-    }
-    if (
-      thinkingLevel.value !== "default" &&
-      model.reasoning_levels?.length &&
-      !model.reasoning_levels.includes(thinkingLevel.value)
-    ) {
-      setThinkingLevel("default");
-    }
+    if (!model) return;
+    const rounded = thinkingLevelForModel(model.id, thinkingLevel.value);
+    if (rounded !== thinkingLevel.value) setThinkingLevel(rounded);
   },
   { immediate: true },
 );

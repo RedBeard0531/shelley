@@ -489,10 +489,10 @@ func (m *mockLLMService) SupportsImages() bool { return true }
 
 func TestReasoningServiceMapping(t *testing.T) {
 	inner := &captureThinkingService{}
-	svc := WrapReasoningConfig(inner, "", "unknown", "yes", `{"off":"off","minimal":"low","medium":"high"}`)
+	svc := WrapReasoningConfig(inner, "", "unknown", "yes", `{"off":"off","minimal":"low","medium":"high","max":"max"}`)
 
 	levels := llm.SupportedReasoningLevels(svc)
-	if got := []string{levels[0].Name(), levels[1].Name(), levels[2].Name()}; !reflect.DeepEqual(got, []string{"off", "minimal", "medium"}) {
+	if got := []string{levels[0].Name(), levels[1].Name(), levels[2].Name(), levels[3].Name()}; !reflect.DeepEqual(got, []string{"off", "minimal", "medium", "max"}) {
 		t.Fatalf("levels = %v", got)
 	}
 	if _, err := svc.Do(context.Background(), &llm.Request{ThinkingLevel: llm.ThinkingLevelMinimal}); err != nil {
@@ -500,6 +500,20 @@ func TestReasoningServiceMapping(t *testing.T) {
 	}
 	if inner.got != llm.ThinkingLevelLow {
 		t.Fatalf("mapped level = %s, want low", inner.got.Name())
+	}
+	if _, err := svc.Do(context.Background(), &llm.Request{ThinkingLevel: llm.ThinkingLevelMax}); err != nil {
+		t.Fatal(err)
+	}
+	if inner.got != llm.ThinkingLevelMax {
+		t.Fatalf("mapped level = %s, want max", inner.got.Name())
+	}
+}
+
+func TestReasoningServiceDelegatesLevelsWithoutMap(t *testing.T) {
+	inner := &advertisedReasoningService{levels: []llm.ThinkingLevel{llm.ThinkingLevelOff, llm.ThinkingLevelHigh, llm.ThinkingLevelMax}}
+	svc := WrapReasoningConfig(inner, "", "unknown", "yes", "")
+	if got := llm.SupportedReasoningLevels(svc); !reflect.DeepEqual(got, inner.levels) {
+		t.Fatalf("levels = %v, want %v", got, inner.levels)
 	}
 }
 
@@ -515,6 +529,16 @@ func TestReasoningServiceDisabled(t *testing.T) {
 	if inner.got != llm.ThinkingLevelOff {
 		t.Fatalf("level = %s, want off", inner.got.Name())
 	}
+}
+
+type advertisedReasoningService struct {
+	captureThinkingService
+	levels []llm.ThinkingLevel
+}
+
+func (s *advertisedReasoningService) SupportsReasoning() bool { return true }
+func (s *advertisedReasoningService) SupportedReasoningLevels() []llm.ThinkingLevel {
+	return s.levels
 }
 
 type captureThinkingService struct {

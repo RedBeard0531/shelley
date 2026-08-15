@@ -318,12 +318,12 @@ func TestSubagentTool_ReasoningOverride(t *testing.T) {
 	}
 
 	runner := tool.Runner.(*mockSubagentRunner)
-	input := subagentInput{Slug: "test", Prompt: "do something", Reasoning: "low"}
+	input := subagentInput{Slug: "test", Prompt: "do something", Reasoning: "max"}
 	inputJSON, _ := json.Marshal(input)
 	tool.Tool().Run(context.Background(), inputJSON)
 
-	if runner.lastReasoning != "low" {
-		t.Errorf("expected reasoning override 'low', got %q", runner.lastReasoning)
+	if runner.lastReasoning != "max" {
+		t.Errorf("expected reasoning override 'max', got %q", runner.lastReasoning)
 	}
 }
 

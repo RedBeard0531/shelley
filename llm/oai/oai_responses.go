@@ -484,6 +484,21 @@ func (s *ResponsesService) DefaultReasoningLevel() string {
 
 func (s *ResponsesService) SupportsServerSideWebSearch() bool { return true }
 
+// SupportsReasoning reports the models.dev capability when known. Unknown
+// models retain the historical default of supporting reasoning controls.
+func (s *ResponsesService) SupportsReasoning() bool {
+	caps, found := modelReasoningCapabilities(s.ModelURL, cmp.Or(s.Model, DefaultModel))
+	return !found || caps.Supported
+}
+
+// SupportedReasoningLevels advertises exact effort levels from models.dev.
+// Nil means the model has no exact effort metadata and callers use the
+// historical provider fallback.
+func (s *ResponsesService) SupportedReasoningLevels() []llm.ThinkingLevel {
+	caps, found := modelReasoningCapabilities(s.ModelURL, cmp.Or(s.Model, DefaultModel))
+	return advertisedReasoningLevels(caps, found)
+}
+
 // SupportsImages reports whether this service accepts image inputs.
 // OpenAI Responses API supports images for vision models; set
 // Model.SupportsImages to enable image inputs.
@@ -585,24 +600,40 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 	//   2. s.ReasoningEffort (custom verbatim string from per-model config)
 	//   3. s.ThinkingLevel (service-level default)
 	level := llm.EffectiveThinkingLevel(s.ThinkingLevel, ir.ThinkingLevel)
+	levels := s.SupportedReasoningLevels()
+	genericEffort := false
 	var effort string
 	switch {
 	case ir.ReasoningEffort != "":
 		effort = ir.ReasoningEffort
 	case ir.ThinkingLevel == llm.ThinkingLevelOff:
-		effort = ""
+		if len(levels) > 0 {
+			effort = "none"
+			genericEffort = true
+		}
 	case ir.ThinkingLevel != llm.ThinkingLevelDefault:
 		effort = ir.ThinkingLevel.ThinkingEffort()
+		genericEffort = true
 	case s.ReasoningEffort != "":
 		effort = s.ReasoningEffort
 	case level != llm.ThinkingLevelOff:
 		effort = level.ThinkingEffort()
+		genericEffort = true
 	}
-	// gpt-5.x-codex rejects `reasoning.effort="minimal"` with HTTP 400;
-	// clamp to "low". Verbatim user-supplied values (s.ReasoningEffort) are
-	// intentionally NOT clamped.
-	if effort == "minimal" && effort != s.ReasoningEffort && strings.Contains(model.ModelName, "codex") {
-		effort = "low"
+	// Exact models.dev effort lists use the shared rounding rule. Without an
+	// exact list, preserve the historical Responses clamps. Provider-verbatim
+	// values from the service or request are never clamped.
+	if genericEffort && effort != "" {
+		if len(levels) > 0 {
+			effort = clampKnownReasoningEffort(effort, levels)
+		} else {
+			if effort == "minimal" && strings.Contains(model.ModelName, "codex") {
+				effort = "low"
+			}
+			if effort == "max" {
+				effort = "xhigh"
+			}
+		}
 	}
 	if effort != "" {
 		req.Reasoning = &responsesReasoning{Effort: effort}

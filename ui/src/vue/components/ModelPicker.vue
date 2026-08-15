@@ -292,7 +292,9 @@ const effectiveEffort = computed<ThinkingLevel>(() =>
 const effortLevels = computed(() => {
   const real = THINKING_LEVELS.filter((l) => l.value !== "default");
   const advertised = selectedModelObj.value?.reasoning_levels as ThinkingLevel[] | undefined;
-  const list = advertised?.length ? real.filter((l) => advertised.includes(l.value)) : [...real];
+  const list = advertised?.length
+    ? real.filter((l) => advertised.includes(l.value))
+    : real.filter((l) => l.value !== "max");
   // Make sure the model's default is always selectable, even if it falls
   // outside the advertised subset (defensive; normally it's included).
   if (modelDefault.value && !list.some((l) => l.value === modelDefault.value)) {

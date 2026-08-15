@@ -685,3 +685,26 @@ func TestContentCallerCitationsOmitEmpty(t *testing.T) {
 }
 
 func (m *mockService) SupportsImages() bool { return true }
+
+func TestClampThinkingLevel(t *testing.T) {
+	tests := []struct {
+		name      string
+		level     ThinkingLevel
+		supported []ThinkingLevel
+		want      ThinkingLevel
+	}{
+		{name: "supported unchanged", level: ThinkingLevelHigh, supported: []ThinkingLevel{ThinkingLevelLow, ThinkingLevelHigh}, want: ThinkingLevelHigh},
+		{name: "unknown levels unchanged", level: ThinkingLevelMax, want: ThinkingLevelMax},
+		{name: "max rounds down", level: ThinkingLevelMax, supported: []ThinkingLevel{ThinkingLevelOff, ThinkingLevelHigh, ThinkingLevelXHigh}, want: ThinkingLevelXHigh},
+		{name: "tie rounds lower", level: ThinkingLevelXHigh, supported: []ThinkingLevel{ThinkingLevelHigh, ThinkingLevelMax}, want: ThinkingLevelHigh},
+		{name: "non-off never rounds to off", level: ThinkingLevelMinimal, supported: []ThinkingLevel{ThinkingLevelOff, ThinkingLevelLow}, want: ThinkingLevelLow},
+		{name: "unsupported off uses lowest tier", level: ThinkingLevelOff, supported: []ThinkingLevel{ThinkingLevelLow, ThinkingLevelHigh}, want: ThinkingLevelLow},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ClampThinkingLevel(tt.level, tt.supported); got != tt.want {
+				t.Fatalf("ClampThinkingLevel(%s) = %s, want %s", tt.level, got, tt.want)
+			}
+		})
+	}
+}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/models/modelsdev"
 )
 
 const (
@@ -1181,6 +1182,50 @@ func (s *Service) MaxImageBytes() int {
 	return 20 * 1024 * 1024
 }
 
+func modelReasoningCapabilities(endpoint string, model Model) (modelsdev.ReasoningCapabilities, bool) {
+	return modelsdev.LookupReasoningCapabilities(cmp.Or(endpoint, model.URL), model.ModelName)
+}
+
+func advertisedReasoningLevels(caps modelsdev.ReasoningCapabilities, found bool) []llm.ThinkingLevel {
+	if !found {
+		return nil
+	}
+	return append([]llm.ThinkingLevel(nil), caps.Levels...)
+}
+
+func effortForThinkingLevel(level llm.ThinkingLevel) string {
+	if level == llm.ThinkingLevelOff {
+		return "none"
+	}
+	return level.ThinkingEffort()
+}
+
+func clampKnownReasoningEffort(effort string, levels []llm.ThinkingLevel) string {
+	level := llm.ParseThinkingLevel(effort)
+	if effort == "none" {
+		level = llm.ThinkingLevelOff
+	}
+	if level == llm.ThinkingLevelDefault {
+		return effort
+	}
+	return effortForThinkingLevel(llm.ClampThinkingLevel(level, levels))
+}
+
+// SupportsReasoning reports the models.dev capability when known. Unknown
+// models retain the historical default of supporting reasoning controls.
+func (s *Service) SupportsReasoning() bool {
+	caps, found := modelReasoningCapabilities(s.ModelURL, cmp.Or(s.Model, DefaultModel))
+	return !found || caps.Supported
+}
+
+// SupportedReasoningLevels advertises exact effort levels from models.dev.
+// Nil means the model has no exact effort metadata and callers use the
+// historical provider fallback.
+func (s *Service) SupportedReasoningLevels() []llm.ThinkingLevel {
+	caps, found := modelReasoningCapabilities(s.ModelURL, cmp.Or(s.Model, DefaultModel))
+	return advertisedReasoningLevels(caps, found)
+}
+
 // Do sends a request to OpenAI using the go-openai package.
 func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error) {
 	// Configure the OpenAI client
@@ -1260,32 +1305,42 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 	//   2. s.ReasoningEffort (verbatim per-model config)
 	//   3. s.ThinkingLevel (service-level default)
 	level := llm.EffectiveThinkingLevel(s.ThinkingLevel, ir.ThinkingLevel)
+	levels := s.SupportedReasoningLevels()
+	genericEffort := false
 	switch {
 	case ir.ReasoningEffort != "":
 		req.ReasoningEffort = ir.ReasoningEffort
 	case ir.ThinkingLevel == llm.ThinkingLevelOff:
-		// Some providers require an explicit value to disable reasoning.
-		if s.ReasoningEffort == "none" {
+		// Preserve the historical unknown-model behavior, but use the explicit
+		// models.dev level set when one is available.
+		if len(levels) > 0 {
+			req.ReasoningEffort = "none"
+			genericEffort = true
+		} else if s.ReasoningEffort == "none" {
 			req.ReasoningEffort = s.ReasoningEffort
 		}
 	case ir.ThinkingLevel != llm.ThinkingLevelDefault:
 		req.ReasoningEffort = ir.ThinkingLevel.ThinkingEffort()
+		genericEffort = true
 	case s.ReasoningEffort != "":
 		req.ReasoningEffort = s.ReasoningEffort
 	case level != llm.ThinkingLevelOff && level != llm.ThinkingLevelDefault:
 		req.ReasoningEffort = level.ThinkingEffort()
+		genericEffort = true
 	}
-	// Many chat-completions backends (Fireworks gpt-oss, GLM, etc.) only
-	// accept low/medium/high for `reasoning_effort` and reject "minimal" and
-	// "xhigh" with HTTP 400. Clamp those down to the closest supported tier.
-	// Verbatim user-configured ReasoningEffort strings are intentionally
-	// preserved (they're an explicit "I know what this provider takes").
-	if req.ReasoningEffort != "" && req.ReasoningEffort != s.ReasoningEffort {
-		switch req.ReasoningEffort {
-		case "minimal":
-			req.ReasoningEffort = "low"
-		case "xhigh":
-			req.ReasoningEffort = "high"
+	// Exact models.dev effort lists use one rounding rule. Models without an
+	// exact list retain the historical conservative chat-completions clamps.
+	// Provider-verbatim values from the service or request are never clamped.
+	if genericEffort && req.ReasoningEffort != "" {
+		if len(levels) > 0 {
+			req.ReasoningEffort = clampKnownReasoningEffort(req.ReasoningEffort, levels)
+		} else {
+			switch req.ReasoningEffort {
+			case "minimal":
+				req.ReasoningEffort = "low"
+			case "xhigh", "max":
+				req.ReasoningEffort = "high"
+			}
 		}
 	}
 	// Construct the full URL for logging and debugging

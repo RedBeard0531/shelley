@@ -742,6 +742,9 @@ func (s *reasoningService) SupportsServerSideWebSearch() bool {
 }
 
 func (s *reasoningService) SupportedReasoningLevels() []llm.ThinkingLevel {
+	if len(s.levels) == 0 {
+		return llm.SupportedReasoningLevels(s.Service)
+	}
 	return append([]llm.ThinkingLevel(nil), s.levels...)
 }
 
@@ -800,7 +803,7 @@ func parseReasoningMap(raw string) (map[llm.ThinkingLevel]reasoningMapping, []ll
 	}
 	mapping := make(map[llm.ThinkingLevel]reasoningMapping, len(values))
 	levels := make([]llm.ThinkingLevel, 0, len(values))
-	for _, level := range []llm.ThinkingLevel{llm.ThinkingLevelOff, llm.ThinkingLevelMinimal, llm.ThinkingLevelLow, llm.ThinkingLevelMedium, llm.ThinkingLevelHigh, llm.ThinkingLevelXHigh} {
+	for _, level := range []llm.ThinkingLevel{llm.ThinkingLevelOff, llm.ThinkingLevelMinimal, llm.ThinkingLevelLow, llm.ThinkingLevelMedium, llm.ThinkingLevelHigh, llm.ThinkingLevelXHigh, llm.ThinkingLevelMax} {
 		mappedName, ok := values[level.Name()]
 		if !ok || mappedName == "" {
 			continue
