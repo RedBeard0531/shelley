@@ -1861,6 +1861,26 @@ func TestIsDeepSeekBaseURL(t *testing.T) {
 	}
 }
 
+func TestIsFireworksBaseURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"https://api.fireworks.ai/inference/v1", true},
+		{"https://API.Fireworks.AI/inference/v1", true},
+		{"https://gateway.fireworks.ai/v1", true},
+		{"https://api.openai.com/v1", false},
+		{"https://fireworks.example.com/v1", false},
+		{"", false},
+		{"://bad", false},
+	}
+	for _, tt := range tests {
+		if got := isFireworksBaseURL(tt.url); got != tt.want {
+			t.Errorf("isFireworksBaseURL(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
 func TestToLLMContentsExtractsReasoningContent(t *testing.T) {
 	msg := openai.ChatCompletionMessage{
 		Role:             "assistant",
@@ -1987,6 +2007,48 @@ func TestServiceDoDeepSeekRoundTripsReasoningContent(t *testing.T) {
 	}
 	if !strings.Contains(string(gotBody), `"reasoning_content":"I should call the weather tool."`) {
 		t.Errorf("expected real reasoning_content in request body, got: %s", gotBody)
+	}
+}
+
+func TestServiceDoFireworksDeepSeekRoundTripsReasoningContent(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(openai.ChatCompletionResponse{
+			ID: "x", Model: DeepseekV4Flash0731Fireworks.ModelName,
+			Choices: []openai.ChatCompletionChoice{{
+				Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
+				FinishReason: "stop",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey:       "k",
+		Model:        DeepseekV4Flash0731Fireworks,
+		ModelURL:     server.URL + "/v1",
+		ProviderName: "fireworks",
+	}
+	_, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{
+			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "weather?"}}},
+			{Role: llm.MessageRoleAssistant, Content: []llm.Content{
+				{Type: llm.ContentTypeThinking, Thinking: "I should call the weather tool."},
+				{Type: llm.ContentTypeToolUse, ID: "call_1", ToolName: "get_weather", ToolInput: []byte(`{"city":"Paris"}`)},
+			}},
+			{Role: llm.MessageRoleUser, Content: []llm.Content{{
+				Type: llm.ContentTypeToolResult, ToolUseID: "call_1",
+				ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "sunny"}},
+			}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if !strings.Contains(string(gotBody), `"reasoning_content":"I should call the weather tool."`) {
+		t.Errorf("Fireworks request dropped reasoning_content: %s", gotBody)
 	}
 }
 
@@ -2129,8 +2191,50 @@ func TestServiceReasoningEffort(t *testing.T) {
 	}
 }
 
-// streamSSE writes an OpenAI chat-completions SSE stream and returns the
-// request body for inspection.
+func TestServiceDoFireworksDeepSeekV4ReasoningControls(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		level llm.ThinkingLevel
+		want  string
+	}{
+		{name: "off", level: llm.ThinkingLevelOff, want: "none"},
+		{name: "xhigh", level: llm.ThinkingLevelXHigh, want: "xhigh"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req openai.ChatCompletionRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				got = req.ReasoningEffort
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{
+					Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
+					FinishReason: "stop",
+				}}})
+			}))
+			defer server.Close()
+
+			svc := &Service{
+				APIKey:       "k",
+				Model:        DeepseekV4Flash0731Fireworks,
+				ModelURL:     server.URL + "/v1",
+				ProviderName: "fireworks",
+			}
+			if _, err := svc.Do(context.Background(), &llm.Request{
+				Messages:      []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+				ThinkingLevel: tt.level,
+			}); err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("reasoning_effort = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func streamSSE(w http.ResponseWriter, chunks ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	flusher, _ := w.(http.Flusher)

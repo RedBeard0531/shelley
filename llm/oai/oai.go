@@ -384,9 +384,9 @@ var (
 		TextVerbosity:      "",
 		URL:                FireworksURL,
 		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   true,  // models.dev: reasoning
+		IsReasoningModel:   true, // models.dev: reasoning
 		UseSimplifiedPatch: false,
-		SupportsImages:     true,  // models.dev: text, image, audio
+		SupportsImages:     true, // models.dev: text, image, audio
 	}
 
 	MuseGlimmer30BFireworks = Model{
@@ -855,6 +855,31 @@ func isDeepSeekBaseURL(baseURL string) bool {
 	}
 	host := strings.ToLower(u.Hostname())
 	return host == "deepseek.com" || strings.HasSuffix(host, ".deepseek.com")
+}
+
+// isFireworksBaseURL reports whether the given base URL points at the
+// Fireworks OpenAI-compatible API.
+func isFireworksBaseURL(baseURL string) bool {
+	if baseURL == "" {
+		return false
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "fireworks.ai" || strings.HasSuffix(host, ".fireworks.ai")
+}
+
+// forwardsReasoningContent reports whether assistant reasoning_content should
+// be sent back on subsequent turns. Fireworks uses the same field for
+// interleaved reasoning, including tool turns.
+func forwardsReasoningContent(baseURL, providerName string) bool {
+	return isDeepSeekBaseURL(baseURL) || isFireworksBaseURL(baseURL) || strings.EqualFold(providerName, "fireworks")
+}
+
+func supportsDeepSeekV4ReasoningControls(baseURL, providerName, modelName string) bool {
+	return forwardsReasoningContent(baseURL, providerName) && strings.Contains(strings.ToLower(modelName), "deepseek-v4")
 }
 
 // fromLLMMessage converts llm.Message to OpenAI ChatCompletionMessage format
@@ -1462,21 +1487,16 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		allMessages = append(allMessages, msgs...)
 	}
 
-	// reasoning_content is a DeepSeek-specific extension to the OpenAI chat
-	// completions API. Other providers (OpenAI, Fireworks, Together, etc.) do
-	// not recognize it and may reject or silently mishandle the field. So we
-	// only forward it when talking to DeepSeek. For DeepSeek with thinking
-	// mode (the default for deepseek-v4-pro), assistant messages that include
-	// tool_calls must carry a reasoning_content field on subsequent turns or
-	// the API returns HTTP 400. If we have a real thinking block we use it
-	// (so the model can continue its prior CoT). Otherwise — e.g. for
-	// assistant turns replayed from history persisted before this fix — we
-	// inject a single-space placeholder so the request remains well-formed.
-	// See https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
-	if isDeepSeekBaseURL(baseURL) {
+	// reasoning_content is understood by DeepSeek and Fireworks' OpenAI-
+	// compatible reasoning models. Preserve it on assistant messages so
+	// interleaved reasoning survives tool turns. Other providers may reject
+	// this extension, so strip it there. Direct DeepSeek additionally requires
+	// a non-empty field on assistant tool-call messages; use a placeholder only
+	// for that API when old history has no saved thinking block.
+	if forwardsReasoningContent(baseURL, s.ProviderName) {
 		for i := range allMessages {
 			m := &allMessages[i]
-			if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ReasoningContent == "" {
+			if isDeepSeekBaseURL(baseURL) && m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ReasoningContent == "" {
 				m.ReasoningContent = " "
 			}
 		}
@@ -1527,9 +1547,15 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 	case ir.ReasoningEffort != "":
 		req.ReasoningEffort = ir.ReasoningEffort
 	case ir.ThinkingLevel == llm.ThinkingLevelOff:
-		// Some providers require an explicit value to disable reasoning.
-		if s.ReasoningEffort == "none" {
-			req.ReasoningEffort = s.ReasoningEffort
+		// Fireworks DeepSeek V4 defaults to thinking on, so explicitly send
+		// `none` when the caller disables it. Other chat backends retain their
+		// existing provider-specific behavior unless configured with `none`.
+		if s.ReasoningEffort == "none" || supportsDeepSeekV4ReasoningControls(baseURL, s.ProviderName, model.ModelName) {
+			if s.ReasoningEffort == "none" {
+				req.ReasoningEffort = s.ReasoningEffort
+			} else {
+				req.ReasoningEffort = "none"
+			}
 		}
 	case ir.ThinkingLevel != llm.ThinkingLevelDefault:
 		req.ReasoningEffort = ir.ThinkingLevel.ThinkingEffort()
@@ -1548,7 +1574,10 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		case "minimal":
 			req.ReasoningEffort = "low"
 		case "xhigh":
-			req.ReasoningEffort = "high"
+			// Fireworks DeepSeek V4 accepts xhigh and promotes it to max.
+			if !supportsDeepSeekV4ReasoningControls(baseURL, s.ProviderName, model.ModelName) {
+				req.ReasoningEffort = "high"
+			}
 		}
 	}
 	// Construct the full URL for logging and debugging
