@@ -4,7 +4,7 @@
   <div class="tool" :data-testid="isComplete ? 'tool-call-completed' : 'tool-call-running'">
     <div class="tool-header" @click="isExpanded = !isExpanded">
       <div class="tool-summary">
-        <span class="tool-emoji" :class="{ running: isRunning }">♿</span>
+        <span class="tool-emoji" :class="{ running: isRunning }">🌳</span>
         <span class="tool-command">{{ summary }}</span>
         <ToolStatusIcon v-if="isComplete && hasError" state="error" class="tool-error" />
         <ToolStatusIcon v-if="isComplete && !hasError" state="ok" class="tool-success" />
