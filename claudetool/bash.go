@@ -18,17 +18,13 @@ import (
 	"shelley.exe.dev/claudetool/bashkit"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/llmhttp"
+	"shelley.exe.dev/models"
 
 	"mvdan.cc/sh/v3/syntax"
 )
 
 // PermissionCallback is a function type for checking if a command is allowed to run
 type PermissionCallback func(command string) error
-
-// PreferredToolModels is the ordered list of model IDs preferred for
-// internal tool operations (validation, keyword search, etc.).
-// Every entry must be a model ID registered in models.All().
-var PreferredToolModels = []string{"deepseek-v4-flash-0731-fireworks", "claude-sonnet-4.6", "claude-sonnet-4.5", "predictable"}
 
 // BashTool specifies an llm.Tool for executing shell commands.
 type BashTool struct {
@@ -42,6 +38,9 @@ type BashTool struct {
 	WorkingDir *MutableWorkingDir
 	// LLMProvider provides access to LLM services for tool validation
 	LLMProvider LLMServiceProvider
+	// ModelID is the conversation's model, used to pick a workhorse model
+	// for tool validation.
+	ModelID string
 	// Env holds the conversation context exposed to invoked commands as
 	// SHELLEY_* environment variables.
 	Env ShelleyEnv
@@ -562,10 +561,6 @@ func (b *BashTool) installTool(ctx context.Context, cmd string) error {
 	if b.LLMProvider == nil {
 		return fmt.Errorf("no LLM provider available for tool validation")
 	}
-	llmService, err := b.selectBestLLM()
-	if err != nil {
-		return fmt.Errorf("failed to get LLM service for tool validation: %w", err)
-	}
 
 	query := fmt.Sprintf(`Do you know this command/package/tool? Is it legitimate, clearly non-harmful, and commonly used? Can it be installed with package manager %s?
 
@@ -585,16 +580,15 @@ Command: %s
 		}},
 	}
 
-	resp, err := llmService.Do(llmhttp.WithPurpose(ctx, "tool_install"), req)
+	resp, err := models.WorkhorseDo(llmhttp.WithPurpose(ctx, "tool_install"), b.LLMProvider, b.ModelID, req)
 	if err != nil {
 		return fmt.Errorf("failed to validate tool with LLM: %w", err)
 	}
 
-	if len(resp.Content) == 0 {
+	response := strings.TrimSpace(llm.FirstText(resp))
+	if response == "" {
 		return fmt.Errorf("empty response from LLM for tool validation")
 	}
-
-	response := strings.TrimSpace(resp.Content[0].Text)
 	if response == "NO" || response == "UNSURE" {
 		slog.InfoContext(ctx, "tool installation declined by LLM", "tool", cmd, "response", response)
 		return fmt.Errorf("tool %s not approved for installation", cmd)
@@ -679,26 +673,4 @@ func (b *BashTool) installPackage(ctx context.Context, cmd, packageName, package
 
 	slog.InfoContext(ctx, "tool installation successful", "tool", cmd, "package", packageName)
 	return nil
-}
-
-// selectBestLLM selects the best available LLM service for bash tool validation
-func (b *BashTool) selectBestLLM() (llm.Service, error) {
-	if b.LLMProvider == nil {
-		return nil, fmt.Errorf("no LLM provider available")
-	}
-
-	for _, model := range PreferredToolModels {
-		svc, err := b.LLMProvider.GetService(model)
-		if err == nil {
-			return svc, nil
-		}
-	}
-
-	// If no preferred model is available, try any available model
-	available := b.LLMProvider.GetAvailableModels()
-	if len(available) > 0 {
-		return b.LLMProvider.GetService(available[0])
-	}
-
-	return nil, fmt.Errorf("no LLM services available")
 }

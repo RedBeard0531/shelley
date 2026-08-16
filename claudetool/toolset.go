@@ -182,6 +182,7 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 	bashTool := &BashTool{
 		WorkingDir:       wd,
 		LLMProvider:      cfg.LLMProvider,
+		ModelID:          cfg.ModelID,
 		EnableJITInstall: cfg.EnableJITInstall,
 		Env:              env,
 	}
@@ -194,7 +195,7 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		ClipboardEnabled: true,
 	}
 
-	keywordTool := NewKeywordToolWithWorkingDir(cfg.LLMProvider, wd)
+	keywordTool := NewKeywordToolWithWorkingDir(cfg.LLMProvider, cfg.ModelID, wd)
 
 	changeDirTool := &ChangeDirTool{
 		WorkingDir: wd,
@@ -206,6 +207,7 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 	shellTool := &ShellTool{
 		WorkingDir:       wd,
 		LLMProvider:      cfg.LLMProvider,
+		ModelID:          cfg.ModelID,
 		EnableJITInstall: cfg.EnableJITInstall,
 		Env:              env,
 		BackgroundCtx:    ctx,

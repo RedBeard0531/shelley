@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/models"
 )
 
 func TestIsStrongModel(t *testing.T) {
@@ -479,6 +480,10 @@ func (m *mockLLMProviderWithProviders) GetAvailableModels() []string {
 	return nil
 }
 
+func (m *mockLLMProviderWithProviders) GetModelInfo(modelID string) *models.ModelInfo {
+	return &models.ModelInfo{DisplayName: modelID}
+}
+
 // plainOpenAIProvider returns a mockServiceWithProvider (no web search
 // capability) reporting provider "openai".
 type plainOpenAIProvider struct{}
@@ -487,6 +492,10 @@ func (p *plainOpenAIProvider) GetService(modelID string) (llm.Service, error) {
 	return &mockServiceWithProvider{provider: "openai"}, nil
 }
 func (p *plainOpenAIProvider) GetAvailableModels() []string { return nil }
+
+func (p *plainOpenAIProvider) GetModelInfo(modelID string) *models.ModelInfo {
+	return &models.ModelInfo{DisplayName: modelID}
+}
 
 // plainAnthropicProvider returns a mockServiceWithProvider (no web search
 // capability) reporting provider "anthropic". This mirrors a non-Claude model
@@ -499,6 +508,10 @@ func (p *plainAnthropicProvider) GetService(modelID string) (llm.Service, error)
 	return &mockServiceWithProvider{provider: "anthropic"}, nil
 }
 func (p *plainAnthropicProvider) GetAvailableModels() []string { return nil }
+
+func (p *plainAnthropicProvider) GetModelInfo(modelID string) *models.ModelInfo {
+	return &models.ModelInfo{DisplayName: modelID}
+}
 
 func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 	provider := &mockLLMProviderWithProviders{

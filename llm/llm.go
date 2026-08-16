@@ -55,6 +55,19 @@ func SupportedReasoningLevels(svc Service) []ThinkingLevel {
 	return nil
 }
 
+// FirstText returns the first non-empty text block of resp, skipping
+// Thinking blocks. Reasoning models sometimes emit thinking content even
+// when asked not to; reading Content[0].Text directly would see the (empty
+// .Text of the) Thinking block.
+func FirstText(resp *Response) string {
+	for _, c := range resp.Content {
+		if c.Type == ContentTypeText && strings.TrimSpace(c.Text) != "" {
+			return c.Text
+		}
+	}
+	return ""
+}
+
 // ClampThinkingLevel rounds an unsupported generic level to the nearest
 // supported level. Off is a mode rather than an effort tier: non-off values
 // only consider non-off candidates. Equal distances choose the lower effort.

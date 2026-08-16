@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
@@ -468,18 +467,6 @@ func TestRefreshBuiltModelsReplacesBuiltModelsAndPreservesCustomModels(t *testin
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("models = %v, want %v", got, want)
-		}
-	}
-}
-
-func TestPreferredToolModelsAreRegistered(t *testing.T) {
-	known := map[string]bool{}
-	for _, m := range All() {
-		known[m.ID] = true
-	}
-	for _, id := range claudetool.PreferredToolModels {
-		if !known[id] {
-			t.Errorf("PreferredToolModels contains %q which is not registered in models.All()", id)
 		}
 	}
 }

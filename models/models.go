@@ -334,7 +334,7 @@ func All() []Model {
 			Build: antSvc(ant.Claude45Sonnet),
 		},
 		{
-			ID: "claude-haiku-4.5", Provider: ProviderAnthropic, Tags: "slug-backup",
+			ID: "claude-haiku-4.5", Provider: ProviderAnthropic,
 			Description: "Claude Haiku 4.5", APIModelName: ant.Claude45Haiku,
 			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
 			Build: antSvc(ant.Claude45Haiku),
@@ -701,6 +701,7 @@ func (m *Manager) HasModel(modelID string) bool {
 // ModelInfo contains display name, provider metadata, and release date for a model.
 type ModelInfo struct {
 	DisplayName string
+	Provider    Provider
 	Tags        string
 	Source      string
 	ReleaseDate string
@@ -715,7 +716,7 @@ func (m *Manager) GetModelInfo(modelID string) *ModelInfo {
 	if !ok {
 		return nil
 	}
-	return &ModelInfo{DisplayName: entry.displayName, Tags: entry.tags, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType)}
+	return &ModelInfo{DisplayName: entry.displayName, Provider: entry.provider, Tags: entry.tags, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType)}
 }
 
 type reasoningMapping struct {
