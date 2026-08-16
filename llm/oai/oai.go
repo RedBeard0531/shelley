@@ -365,17 +365,6 @@ var (
 		SupportsImages:     true,
 	}
 
-	GPTOSS20B = Model{
-		UserName:           "gpt-oss-20b",
-		ModelName:          "accounts/fireworks/models/gpt-oss-20b",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
-	}
-
 	GPTOSS120B = Model{
 		UserName:           "gpt-oss-120b",
 		ModelName:          "accounts/fireworks/models/gpt-oss-120b",
@@ -608,7 +597,6 @@ var ModelsRegistry = []Model{
 	KimiK27CodeFireworks,
 	KimiK3Fireworks,
 	GPTOSS120B,
-	GPTOSS20B,
 	LlamaCPP,
 	// Skaband-supported models
 	Qwen,
@@ -1153,7 +1141,7 @@ func (s *Service) TokenContextWindow() int {
 		return 128000
 	case "qwen":
 		return 256000
-	case "gpt-oss-20b", "gpt-oss-120b":
+	case "gpt-oss-120b":
 		return 128000
 	case "accounts/fireworks/models/deepseek-v4-pro", "accounts/fireworks/models/deepseek-v4-flash", "accounts/fireworks/models/deepseek-v4-flash-0731":
 		return 1048576

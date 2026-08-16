@@ -382,12 +382,6 @@ func All() []Model {
 			Build: oaiChatSvc(oai.DeepseekV4FlashFireworks, "fireworks"),
 		},
 		{
-			ID: "gpt-oss-20b-fireworks", Provider: ProviderFireworks, Tags: "slug",
-			Description: "GPT-OSS 20B on Fireworks", APIModelName: oai.GPTOSS20B.ModelName,
-			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.GPTOSS20B, "fireworks"),
-		},
-		{
 			ID: "predictable", Provider: ProviderBuiltIn,
 			Description:    "Deterministic test model (no API key)",
 			APIType:        APITypeBuiltIn,

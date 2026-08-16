@@ -67,7 +67,7 @@ func TestEnvSourceLabels(t *testing.T) {
 		{"claude-opus-4.6", "$ANTHROPIC_API_KEY"},
 		{"gpt-5.5", "$OPENAI_API_KEY"},
 		{"gemini-3-flash", "$GEMINI_API_KEY"},
-		{"gpt-oss-20b-fireworks", "$FIREWORKS_API_KEY"},
+		{"deepseek-v4-flash-0731-fireworks", "$FIREWORKS_API_KEY"},
 	} {
 		b := findBuilt(bs, tt.id)
 		if b == nil {
@@ -122,7 +122,6 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 			{ID: "fireworks/kimi-k2p6", Provider: "fireworks", NativeID: "accounts/fireworks/models/kimi-k2p6", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4-pro", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-pro", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4-flash-0731", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-flash-0731", APIs: []string{"openai_chat"}},
-			{ID: "fireworks/gpt-oss-20b", Provider: "fireworks", NativeID: "accounts/fireworks/models/gpt-oss-20b", APIs: []string{"openai_chat"}},
 		},
 	}
 	bs := Build(models.All(), []Source{LLMIntegration(integ, ""), Predictable()}, &http.Client{}, nil)
@@ -140,7 +139,6 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"kimi-k2.6-fireworks",
 		"deepseek-v4-pro-fireworks",
 		"deepseek-v4-flash-0731-fireworks",
-		"gpt-oss-20b-fireworks",
 	} {
 		b := findBuilt(bs, id)
 		if b == nil {
@@ -159,7 +157,6 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"kimi-k2p6",
 		"deepseek-v4-pro",
 		"deepseek-v4-flash-0731",
-		"gpt-oss-20b",
 		"gemini-3-flash",
 	} {
 		if b := findBuilt(bs, id); b != nil {
@@ -940,7 +937,7 @@ func TestBuiltBaseURLResolution(t *testing.T) {
 	}{
 		{"claude-opus-4.6", "https://api.anthropic.com"},
 		{"gpt-5.5", "https://api.openai.com"},
-		{"gpt-oss-20b-fireworks", "https://api.fireworks.ai/inference"},
+		{"deepseek-v4-flash-0731-fireworks", "https://api.fireworks.ai/inference"},
 		{"gemini-3-flash", "https://generativelanguage.googleapis.com"},
 	} {
 		b := findBuilt(bs, tt.id)
@@ -978,7 +975,7 @@ func TestBuiltAPITypePopulated(t *testing.T) {
 	}{
 		{"claude-opus-4.6", models.APITypeAnthropicMessages},
 		{"gpt-5.5", models.APITypeOpenAIResponses},
-		{"gpt-oss-20b-fireworks", models.APITypeOpenAIChat},
+		{"deepseek-v4-flash-0731-fireworks", models.APITypeOpenAIChat},
 		{"gemini-3-flash", models.APITypeGemini},
 		{"predictable", models.APITypeBuiltIn},
 	} {
