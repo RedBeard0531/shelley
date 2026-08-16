@@ -434,11 +434,13 @@ import { coalesceMessages, type CoalescedItem } from "./coalesce";
 import type { RenderNode, RenderChunk, GenerationBlock } from "./renderNode";
 import type { EphemeralTerminal } from "./terminalTypes";
 import {
-  DEFAULT_THINKING_LEVEL,
   THINKING_LEVELS,
   normalizeThinkingLevelForModel,
+  THINKING_LEVEL_KEY,
+  storedThinkingLevel,
   type ThinkingLevel,
 } from "./thinkingLevel";
+import { SELECTED_MODEL_KEY, pickReadyModel, storedSelectedModel } from "./selectedModel";
 
 import MessageInput from "./MessageInput.vue";
 import ConversationTOC from "./ConversationTOC.vue";
@@ -612,28 +614,10 @@ function noModelErrorMessage(): string {
   return `${t(hint.title)}. ${t(hint.note)}`;
 }
 
-const THINKING_LEVEL_KEY = "shelley.thinkingLevel.v2";
-const thinkingLevel = ref<ThinkingLevel>(
-  (() => {
-    try {
-      const stored = localStorage.getItem(THINKING_LEVEL_KEY);
-      const valid = THINKING_LEVELS.map((level) => level.value);
-      if (stored !== null && valid.includes(stored as ThinkingLevel)) {
-        return stored as ThinkingLevel;
-      }
-    } catch {
-      /* ignore */
-    }
-    return DEFAULT_THINKING_LEVEL;
-  })(),
-);
+const thinkingLevel = ref<ThinkingLevel>(storedThinkingLevel());
 function setThinkingLevel(level: ThinkingLevel) {
   thinkingLevel.value = level;
-  try {
-    localStorage.setItem(THINKING_LEVEL_KEY, level);
-  } catch {
-    /* ignore */
-  }
+  localStorage.setItem(THINKING_LEVEL_KEY, level);
 }
 
 function thinkingLevelForModel(modelId: string, level: ThinkingLevel): ThinkingLevel {
@@ -647,24 +631,13 @@ function thinkingLevelForModel(modelId: string, level: ThinkingLevel): ThinkingL
 // "no models configured" state into a misleading "Unsupported model:
 // claude-sonnet-4.6" error from the server. Empty disables sending instead.
 const selectedModel = ref<string>(
-  (() => {
-    const storedModel = localStorage.getItem("shelley_selected_model");
-    const initModels = window.__SHELLEY_INIT__?.models || [];
-    if (storedModel) {
-      const modelInfo = initModels.find((m) => m.id === storedModel);
-      if (modelInfo?.ready) return storedModel;
-    }
-    const defaultModel = window.__SHELLEY_INIT__?.default_model;
-    if (defaultModel) return defaultModel;
-    const firstReady = initModels.find((m) => m.ready);
-    return firstReady?.id || "";
-  })(),
+  pickReadyModel(window.__SHELLEY_INIT__?.models || [], storedSelectedModel()),
 );
 // applyModel updates the picker's local state only (ref + localStorage).
 // Used both by user picks and by server echoes; never talks to the server.
 function applyModel(model: string) {
   selectedModel.value = model;
-  localStorage.setItem("shelley_selected_model", model);
+  localStorage.setItem(SELECTED_MODEL_KEY, model);
 }
 // In-flight picker PUT tracking. While a PUT for a draft is outstanding,
 // the conversation-model watch ignores echoes FOR THAT DRAFT: they are
@@ -2847,8 +2820,7 @@ watch(
     if (ready.includes(selectedModel.value)) return;
     // Prefer the server's default (or any ready model) over showing nothing,
     // so a mere catalog reshuffle doesn't strand the composer.
-    const fallback = window.__SHELLEY_INIT__?.default_model;
-    applyModel(fallback && ready.includes(fallback) ? fallback : ready[0] || "");
+    applyModel(pickReadyModel(models.value));
   },
   { immediate: true },
 );
