@@ -554,6 +554,20 @@ watch(showArchived, (sa) => {
   }
 });
 
+async function fetchSearchResults(query: string, seq: number) {
+  try {
+    const results = await api.searchConversationsFTS(query);
+    if (seq !== searchSeq) return;
+    searchResults.value = results;
+  } catch (err) {
+    if (seq !== searchSeq) return;
+    console.error("Conversation search failed:", err);
+    searchResults.value = [];
+  } finally {
+    if (seq === searchSeq) searching.value = false;
+  }
+}
+
 // Debounced FTS search across active + archived conversations. Only the free
 // text goes to the server; `tag:` terms are applied client-side.
 watch(searchText, () => {
@@ -562,27 +576,26 @@ watch(searchText, () => {
     searchTimeout = null;
   }
   const seq = ++searchSeq;
-  const q = searchText.value.trim();
-  if (!q) {
+  const query = searchText.value.trim();
+  if (!query) {
     searchResults.value = null;
     searching.value = false;
     return;
   }
   searching.value = true;
-  searchTimeout = setTimeout(async () => {
-    try {
-      const results = await api.searchConversationsFTS(q);
-      if (seq !== searchSeq) return;
-      searchResults.value = results;
-    } catch (err) {
-      if (seq !== searchSeq) return;
-      console.error("Conversation search failed:", err);
-      searchResults.value = [];
-    } finally {
-      if (seq === searchSeq) searching.value = false;
-    }
-  }, 150);
+  searchTimeout = setTimeout(() => void fetchSearchResults(query, seq), 150);
 });
+
+async function refreshSearchResults() {
+  const query = searchText.value.trim();
+  if (!query) return;
+  if (searchTimeout) {
+    clearTimeout(searchTimeout);
+    searchTimeout = null;
+  }
+  searching.value = true;
+  await fetchSearchResults(query, ++searchSeq);
+}
 
 // Switch back to active conversations when triggered externally.
 watch(
@@ -742,6 +755,18 @@ function sanitizeSlug(input: string): string {
     .replace(/-$/g, "");
 }
 
+async function refreshConversationSnapshots(updated: Conversation) {
+  const refreshes: Promise<void>[] = [];
+  if (searchText.value.trim()) refreshes.push(refreshSearchResults());
+  if (
+    showArchived.value ||
+    archivedConversations.value.some((c) => c.conversation_id === updated.conversation_id)
+  ) {
+    refreshes.push(loadArchivedConversations());
+  }
+  await Promise.all(refreshes);
+}
+
 // --- Tags ---
 function handleOpenTagEditor(e: MouseEvent, conversationId: string) {
   e.stopPropagation();
@@ -761,6 +786,7 @@ async function saveTags(conversationId: string, tags: string[]) {
   try {
     const updated = await api.updateConversationTags(conversationId, normalized);
     emit("renamed", updated);
+    await refreshConversationSnapshots(updated);
   } catch (err) {
     console.error("Failed to update tags:", err);
   }
@@ -804,6 +830,7 @@ function handleStartRename(e: MouseEvent, conversation: Conversation) {
   setTimeout(() => renameInputRef.value?.select(), 0);
 }
 async function handleRename(conversationId: string) {
+  if (editingId.value !== conversationId) return;
   const sanitized = sanitizeSlug(editingSlug.value);
   if (!sanitized) {
     editingId.value = null;
@@ -816,10 +843,11 @@ async function handleRename(conversationId: string) {
     alert(t("duplicateName"));
     return;
   }
+  editingId.value = null;
   try {
     const updated = await api.renameConversation(conversationId, sanitized);
     emit("renamed", updated);
-    editingId.value = null;
+    await refreshConversationSnapshots(updated);
   } catch (err) {
     console.error("Failed to rename conversation:", err);
   }

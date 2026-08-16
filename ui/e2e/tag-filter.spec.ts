@@ -10,6 +10,17 @@ async function setTags(
   expect(resp.ok()).toBeTruthy();
 }
 
+async function renameConversation(
+  request: APIRequestContext,
+  conversationId: string,
+  slug: string,
+): Promise<void> {
+  const resp = await request.post(`/api/conversation/${conversationId}/rename`, {
+    data: { slug },
+  });
+  expect(resp.ok()).toBeTruthy();
+}
+
 async function getGitRoot(request: APIRequestContext): Promise<string> {
   const resp = await request.get("/api/git/diffs?cwd=.");
   expect(resp.ok()).toBeTruthy();
@@ -194,6 +205,34 @@ test.describe("Tag filter", () => {
     // The free text survives; only the tag terms are dropped.
     await expect(search).toHaveValue("kumquat marker ");
     await expect(row(page, hit.conversationId)).toBeVisible();
+  });
+
+  test("renaming a search hit refetches its FTS membership", async ({ page, request }) => {
+    const conversation = await createConversationViaAPIWithDetails(request, "rename search hit", {
+      cwd: "/tmp",
+    });
+    const suffix = conversation.conversationId.slice(0, 8);
+    const oldSlug = `fts-old-${suffix}`;
+    const newSlug = `fts-new-${suffix}`;
+    await renameConversation(request, conversation.conversationId, oldSlug);
+
+    await page.goto(`/c/${oldSlug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
+    await openDrawer(page);
+    const search = await openSearch(page);
+    await search.fill(oldSlug);
+
+    const result = row(page, conversation.conversationId);
+    await expect(result).toBeVisible();
+    await result.hover();
+    await result.getByRole("button", { name: "Rename" }).click();
+    const input = result.locator(".drawer-rename-input");
+    await input.fill(newSlug);
+    await input.press("Enter");
+
+    await expect(result).toHaveCount(0);
+    await search.fill(newSlug);
+    await expect(row(page, conversation.conversationId)).toBeVisible();
   });
 
   test("row tag chips write into the query and compose with git-repo grouping", async ({
