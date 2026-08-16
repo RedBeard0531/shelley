@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -31,6 +32,7 @@ import (
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/slug"
+	"shelley.exe.dev/subpub"
 	"shelley.exe.dev/ui"
 	"shelley.exe.dev/version"
 )
@@ -1779,6 +1781,49 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	s.runStream(w, r, r.URL.Query().Get("conversation"), true)
 }
 
+const streamUpdatesQueueCapacity = 200
+
+type streamUpdatesQueue struct {
+	ch      chan StreamResponse
+	logFull func()
+	fullLog sync.Once
+}
+
+func newStreamUpdatesQueue(logFull func()) *streamUpdatesQueue {
+	return &streamUpdatesQueue{
+		ch:      make(chan StreamResponse, streamUpdatesQueueCapacity),
+		logFull: logFull,
+	}
+}
+
+func (q *streamUpdatesQueue) enqueue(ctx context.Context, streamData StreamResponse) bool {
+	select {
+	case q.ch <- streamData:
+		return true
+	default:
+		if ctx.Err() != nil {
+			return false
+		}
+		q.fullLog.Do(q.logFull)
+	}
+	select {
+	case q.ch <- streamData:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *Server) newStreamUpdatesQueue(ctx context.Context, conversationID string) *streamUpdatesQueue {
+	return newStreamUpdatesQueue(func() {
+		s.logger.WarnContext(
+			ctx, "SSE updates queue saturated; subscriber may be disconnected",
+			"capacity", streamUpdatesQueueCapacity,
+			"conversationID", conversationID,
+		)
+	})
+}
+
 func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationID string, includeConversationListPatches bool) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1786,7 +1831,19 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 	}
 
 	ctx, cancelStream := context.WithCancel(r.Context())
-	defer cancelStream()
+	responseController := http.NewResponseController(w)
+	var streamInterruptResult <-chan bool
+	defer func() {
+		cancelStream()
+		if streamInterruptResult == nil || !<-streamInterruptResult {
+			return
+		}
+		// SetWriteDeadline applies to the connection, not just this response.
+		// Clear the forced deadline before net/http can reuse the connection.
+		if err := responseController.SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			s.logger.Debug("failed to clear unified stream write deadline", "error", err)
+		}
+	}()
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1964,8 +2021,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 		}
 	}
 
-	updates := make(chan StreamResponse, 10)
-
+	updates := s.newStreamUpdatesQueue(ctx, conversationID)
 	if listNext != nil {
 		go func() {
 			for {
@@ -1974,9 +2030,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 					return
 				}
 				patch := event
-				select {
-				case updates <- StreamResponse{ConversationListPatch: &patch}:
-				case <-ctx.Done():
+				if !updates.enqueue(ctx, StreamResponse{ConversationListPatch: &patch}) {
 					return
 				}
 			}
@@ -1987,17 +2041,50 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 	// events for ALL active conversations on the same connection. The optional
 	// ?conversation= parameter governs only backfill of that conversation's
 	// initial history (handled below).
+	//
+	// SubPub disconnects a subscriber whose bounded queue fills. Surface that
+	// as an ended HTTP response: if we silently leave this handler alive, its
+	// local heartbeats keep EventSource OPEN even though conversation updates
+	// have stopped forever. Closing lets EventSource reconnect and the UI
+	// backfill anything missed while the client/proxy was backpressured.
+	var subscriptionDone <-chan struct{}
+	watchSubscription := func(status *subpub.SubscriptionStatus, queue string) {
+		subscriptionDone = status.Done()
+		interruptResult := make(chan bool, 1)
+		streamInterruptResult = interruptResult
+		go func() {
+			<-status.Done()
+			if !status.FellBehind() {
+				interruptResult <- false
+				return
+			}
+			s.logger.WarnContext(
+				ctx, "SSE subscriber queue full; reconnecting",
+				"queue", queue,
+				"capacity", subpub.SubscriberQueueCapacity,
+				"conversationID", conversationID,
+			)
+			// The handler may currently be blocked in Write because the client or
+			// proxy stopped reading. Expire that write immediately; otherwise we
+			// cannot reach the select below that notices subscriptionDone.
+			err := responseController.SetWriteDeadline(time.Now())
+			if err != nil && !errors.Is(err, http.ErrNotSupported) {
+				s.logger.Debug("failed to interrupt dropped SSE stream", "error", err)
+			}
+			interruptResult <- err == nil
+		}()
+	}
+
 	if includeConversationListPatches && s.streamPub != nil {
-		next := s.streamPub.Subscribe(ctx, -1)
+		next, status := s.streamPub.SubscribeWithStatus(ctx, -1)
+		watchSubscription(status, "global")
 		go func() {
 			for {
 				streamData, cont := next()
 				if !cont {
 					return
 				}
-				select {
-				case updates <- streamData:
-				case <-ctx.Done():
+				if !updates.enqueue(ctx, streamData) {
 					return
 				}
 			}
@@ -2014,11 +2101,13 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 			select {
 			case <-ctx.Done():
 				return
+			case <-subscriptionDone:
+				return
 			case <-ticker.C:
 				if !writeStreamData(StreamResponse{Heartbeat: true}) {
 					return
 				}
-			case streamData := <-updates:
+			case streamData := <-updates.ch:
 				if !writeStreamData(streamData) {
 					return
 				}
@@ -2112,11 +2201,23 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 	//
 	// Subscribe BEFORE sending initial data so we don't miss broadcasts that
 	// happen between the DB query and the start of the event loop. The subpub
-	// channel is buffered (10), so events arriving while we write the initial
+	// channel is buffered, so events arriving while we write the initial
 	// response are queued rather than lost.
 	var next func() (StreamResponse, bool)
 	if !includeConversationListPatches {
-		next = manager.subpub.Subscribe(ctx, lastSeqID)
+		var status *subpub.SubscriptionStatus
+		next, status = manager.subpub.SubscribeWithStatus(ctx, lastSeqID)
+		go func() {
+			<-status.Done()
+			if status.FellBehind() {
+				s.logger.WarnContext(
+					ctx, "SSE subscriber queue full; legacy stream stalled",
+					"queue", "conversation",
+					"capacity", subpub.SubscriberQueueCapacity,
+					"conversationID", conversationID,
+				)
+			}
+		}()
 	}
 
 	if len(messages) > 0 {
@@ -2210,9 +2311,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 				if !cont {
 					return
 				}
-				select {
-				case updates <- streamData:
-				case <-ctx.Done():
+				if !updates.enqueue(ctx, streamData) {
 					return
 				}
 			}
@@ -2225,6 +2324,8 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 		select {
 		case <-ctx.Done():
 			return
+		case <-subscriptionDone:
+			return
 		case <-ticker.C:
 			// Local heartbeat keeps the connection alive even when no active
 			// manager is broadcasting one (e.g., on /api/stream2 with no
@@ -2232,7 +2333,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 			if !writeStreamData(StreamResponse{Heartbeat: true}) {
 				return
 			}
-		case streamData := <-updates:
+		case streamData := <-updates.ch:
 			// Always forward updates, even if only the conversation changed (e.g., slug added).
 			if !writeStreamData(streamData) {
 				return

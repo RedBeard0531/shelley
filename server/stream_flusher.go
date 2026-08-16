@@ -9,7 +9,7 @@ import (
 
 // streamFlusher batches LLM stream deltas and flushes them periodically.
 // Anthropic's SSE stream emits hundreds of tiny text_delta events per second.
-// Broadcasting each one individually overwhelms the subpub channel (buffer=10),
+// Broadcasting each one individually overwhelms the bounded subpub queue,
 // causing subscriber disconnections. Instead, we accumulate deltas and flush
 // the combined text every interval (e.g., 50ms), yielding ~20 updates/second.
 type streamFlusher struct {
