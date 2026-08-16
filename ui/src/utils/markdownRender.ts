@@ -24,6 +24,7 @@ const MARKDOWN_HIGHLIGHT_URL = "/markdown-highlight.js";
 
 interface MarkdownHighlightAPI {
   highlightCodeBlock(code: string, lang: string): string | null;
+  highlightShellCommand(code: string): string | null;
 }
 
 let markdownHighlightURL = MARKDOWN_HIGHLIGHT_URL;
@@ -39,8 +40,9 @@ export function resetMarkdownHighlightURLForTests(): void {
 let highlightModulePromise: Promise<MarkdownHighlightAPI | null> | undefined;
 // Loads the highlight chunk once. Failure is not fatal: the renderer falls
 // back to plain <pre><code> blocks (identical code text, no colors), but the
-// error is surfaced to the console rather than swallowed.
-function loadHighlightModule(): Promise<MarkdownHighlightAPI | null> {
+// error is surfaced to the console rather than swallowed. Exported so the
+// Vue tool cards can reuse the same lazy loader for shell command syntax.
+export function loadHighlightModule(): Promise<MarkdownHighlightAPI | null> {
   highlightModulePromise ??= import(/* @vite-ignore */ markdownHighlightURL)
     .then((m) => m as unknown as MarkdownHighlightAPI)
     .catch((err) => {

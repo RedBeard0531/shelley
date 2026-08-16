@@ -1607,6 +1607,10 @@ body {
   min-width: 0;
 }
 
+.bash-tool-summary-ellipsis {
+  color: var(--text-tertiary);
+}
+
 .bash-tool-cwd {
   font-family: var(--font-mono);
   font-size: 0.75rem;
@@ -1700,6 +1704,27 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
+}
+
+/* Shell command syntax highlighting (see src/vue/composables/shellHighlighting.ts).
+   Tokens carry only --shiki-* custom properties, so the same command markup
+   resolves in both app themes, matching markdown code blocks. */
+.bash-tool-command .shiki-token,
+.bash-tool-code .shiki-token {
+  color: var(--shiki-light);
+  font-style: var(--shiki-light-font-style, normal);
+  font-weight: var(--shiki-light-font-weight, normal);
+  text-decoration: var(--shiki-light-text-decoration, none);
+  background-color: var(--shiki-light-bg, transparent);
+}
+
+.dark .bash-tool-command .shiki-token,
+.dark .bash-tool-code .shiki-token {
+  color: var(--shiki-dark);
+  font-style: var(--shiki-dark-font-style, normal);
+  font-weight: var(--shiki-dark-font-weight, normal);
+  text-decoration: var(--shiki-dark-text-decoration, none);
+  background-color: var(--shiki-dark-bg, transparent);
 }
 
 /* See note on .tool-code.error: error output boxes get no red fill. */

@@ -7,7 +7,15 @@
     <div class="bash-tool-header" @click="isExpanded = !isExpanded">
       <div class="bash-tool-summary">
         <span class="bash-tool-emoji" :class="{ running: isRunning }">🛠️</span>
-        <span class="bash-tool-command" :title="command">{{ displayCommand }}</span>
+        <span v-if="!highlightedCommandSummaryHtml" class="bash-tool-command" :title="command">{{
+          displayCommand
+        }}</span>
+        <span
+          v-else
+          class="bash-tool-command"
+          :title="command"
+          v-html="highlightedCommandSummaryHtml"
+        ></span>
         <span v-if="displayData?.workingDir" class="bash-tool-cwd" :title="displayData.workingDir">
           in {{ displayData.workingDir }}
         </span>
@@ -47,7 +55,8 @@
       </div>
       <div class="bash-tool-section">
         <div class="bash-tool-label">Command:</div>
-        <pre class="bash-tool-code">{{ command }}</pre>
+        <pre v-if="!highlightedCommand" class="bash-tool-code">{{ command }}</pre>
+        <pre v-else class="bash-tool-code" v-html="highlightedCommand"></pre>
       </div>
 
       <div v-if="isRunning && streamingOutput" class="bash-tool-section">
@@ -78,6 +87,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import type { LLMContent } from "../../../types";
 import AnsiText from "./AnsiText.vue";
 import { useToolExpanded, useInToolDetail } from "../../composables/toolDetail";
+import { useShellCommandHighlighting } from "../../composables/shellHighlighting";
 import ToolChevron from "./ToolChevron.vue";
 import ToolStatusIcon from "./ToolStatusIcon.vue";
 
@@ -164,11 +174,30 @@ const isCancelled = computed(
   () => props.hasError && output.value.includes("Tool execution cancelled by user"),
 );
 
-const displayCommand = computed(() => {
+const SUMMARY_MAX_LEN = 300;
+
+const summarySource = computed(() => {
   const cmd = command.value;
-  const maxLen = 300;
-  return cmd.length <= maxLen ? cmd : cmd.substring(0, maxLen) + "...";
+  return cmd.length <= SUMMARY_MAX_LEN ? cmd : cmd.substring(0, SUMMARY_MAX_LEN);
 });
+
+const summaryTruncated = computed(() => command.value.length > SUMMARY_MAX_LEN);
+
+const displayCommand = computed(() => summarySource.value + (summaryTruncated.value ? "..." : ""));
+
+// Lazy shiki bash highlighting for the header summary (truncated so the
+// visible text stays within its budget) and the expanded command block.
+// The appended ellipsis is plain text, not part of the bash command being
+// tokenized.
+const highlightedCommandSummary = useShellCommandHighlighting(() => summarySource.value);
+const highlightedCommandSummaryHtml = computed(() => {
+  if (!highlightedCommandSummary.value) return null;
+  return (
+    highlightedCommandSummary.value +
+    (summaryTruncated.value ? '<span class="bash-tool-summary-ellipsis">...</span>' : "")
+  );
+});
+const highlightedCommand = useShellCommandHighlighting(() => command.value);
 
 const isComplete = computed(() => !props.isRunning && props.toolResult !== undefined);
 
