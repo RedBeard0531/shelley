@@ -783,33 +783,50 @@ func TestHasSketchWipBranchChangesEdgeCases(t *testing.T) {
 	}
 }
 
-func TestChainsCdWithCommand(t *testing.T) {
+func TestChainedCd(t *testing.T) {
 	tests := []struct {
-		name   string
-		script string
-		want   bool
+		name       string
+		script     string
+		wantOk     bool
+		wantTarget string
 	}{
-		{"cd and command", "cd /tmp && ls", true},
-		{"cd semicolon command", "cd /tmp; ls", true},
-		{"cd and multiple commands", "cd foo/bar && make && ./run", true},
-		{"cd with relative path", "cd ../sibling && go test ./...", true},
-		{"cd inside explicit block", "{ cd /tmp; ls; }", true},
-		{"bare cd", "cd", false},
-		{"cd no chain", "cd /tmp", false},
-		{"no cd", "ls -la", false},
-		{"pushd not flagged", "pushd /tmp && ls", false},
-		{"cd or fallback", "cd /tmp || exit 1", false},
+		{"cd and command", "cd /tmp && ls", true, "/tmp"},
+		{"cd semicolon command", "cd /tmp; ls", true, "/tmp"},
+		{"cd and multiple commands", "cd foo/bar && make && ./run", true, "foo/bar"},
+		{"cd current dir", "cd . && ls", true, "."},
+		{"cd with relative path", "cd ../sibling && go test ./...", true, "../sibling"},
+		{"cd inside explicit block", "{ cd /tmp; ls; }", true, "/tmp"},
+		{"cd quoted dot", `cd "." && ls`, true, "."},
+		{"cd single-quoted abs", "cd '/abs/path' && ls", true, "/abs/path"},
+		{"cd double-quoted abs", `cd "/abs/path" && ls`, true, "/abs/path"},
+		{"cd with -P flag", "cd -P /tmp && ls", true, "/tmp"},
+		{"cd with -- flag", "cd -- . && ls", true, "."},
+		{"cd oldpwd dash", "cd - && ls", true, "-"},
+		{"cd tilde subdir", "cd ~/sub && ls", true, "~/sub"},
+		{"cd expansion", "cd $HOME && ls", true, ""},
+		{"cd quoted expansion", `cd "$HOME" && ls`, true, ""},
+		{"cd bareword concat", `cd /base"dir" && ls`, true, "/basedir"},
+		{"multiple chained cds", "cd x && cd y && ls", true, "x"},
+		{"cd chained with pipeline", "cd /tmp && ls | grep x", true, "/tmp"},
+		{"bare cd", "cd", false, ""},
+		{"cd no chain", "cd /tmp", false, ""},
+		{"no cd", "ls -la", false, ""},
+		{"pushd not flagged", "pushd /tmp && ls", false, ""},
+		{"cd or fallback", "cd /tmp || exit 1", false, ""},
 		// Subshells scope the cd; treat as intentional and do not flag.
-		{"cd in subshell and", "(cd /tmp && ls)", false},
-		{"cd in subshell semi", "(cd /tmp; ls)", false},
-		{"subshell then top-level cmd", "(cd /tmp && ls) && echo done", false},
-		{"unparseable", "cd /tmp &&", false},
+		{"cd in subshell and", "(cd /tmp && ls)", false, ""},
+		{"cd in subshell semi", "(cd /tmp; ls)", false, ""},
+		{"subshell then top-level cmd", "(cd /tmp && ls) && echo done", false, ""},
+		{"unparseable", "cd /tmp &&", false, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ChainsCdWithCommand(tc.script)
-			if got != tc.want {
-				t.Errorf("ChainsCdWithCommand(%q) = %v, want %v", tc.script, got, tc.want)
+			target, ok := ChainedCd(tc.script)
+			if ok != tc.wantOk {
+				t.Errorf("ChainedCd(%q) ok = %v, want %v", tc.script, ok, tc.wantOk)
+			}
+			if target != tc.wantTarget {
+				t.Errorf("ChainedCd(%q) target = %q, want %q", tc.script, target, tc.wantTarget)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package claudetool
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -479,6 +480,46 @@ func TestIsNoTrailerSet(t *testing.T) {
 			t.Error("Expected isNoTrailerSet() to be false when shelley.no-trailer=false")
 		}
 	})
+}
+
+func TestChainedCdTargetsCurrentDir(t *testing.T) {
+	wd := "/home/user/project"
+	tests := []struct {
+		name   string
+		target string
+		wd     string
+		want   bool
+	}{
+		{"dot", ".", wd, true},
+		{"slash dot", "./", wd, true},
+		{"absolute same", "/home/user/project", wd, true},
+		{"absolute with trailing slash", "/home/user/project/", wd, true},
+		{"absolute different", "/home/user/other", wd, false},
+		{"relative subdir", "sub", wd, false},
+		{"parent", "..", wd, false},
+		{"tilde", "~", wd, false},
+		{"empty", "", wd, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := chainedCdTargetsCurrentDir(tc.target, tc.wd)
+			if got != tc.want {
+				t.Errorf("chainedCdTargetsCurrentDir(%q, %q) = %v, want %v", tc.target, tc.wd, got, tc.want)
+			}
+		})
+	}
+
+	// `~` resolves to the real home dir, so it matches when wd is $HOME.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !chainedCdTargetsCurrentDir("~", home) {
+		t.Error("expected ~ to match home dir")
+	}
+	if !chainedCdTargetsCurrentDir("~/", home) {
+		t.Error("expected ~/ to match home dir")
+	}
 }
 
 func TestShellHasCommand(t *testing.T) {

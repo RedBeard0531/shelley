@@ -92,6 +92,27 @@ func (b *BashTool) getWorkingDir() string {
 	return b.WorkingDir.Get()
 }
 
+// chainedCdTargetsCurrentDir reports whether a chained cd target (as written
+// in the script, possibly relative, `.`, or `~`) resolves to wd. If so, the
+// command is already running there and the cd is a no-op.
+func chainedCdTargetsCurrentDir(target, wd string) bool {
+	if target == "" {
+		return false
+	}
+	resolved := target
+	if resolved == "~" || strings.HasPrefix(resolved, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		resolved = filepath.Join(home, strings.TrimPrefix(resolved, "~"))
+	}
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(wd, resolved)
+	}
+	return filepath.Clean(resolved) == filepath.Clean(wd)
+}
+
 // isNoTrailerSet checks if user has disabled co-author trailer via git config.
 func isNoTrailerSet() bool {
 	out, err := exec.Command("git", "config", "--get", "shelley.no-trailer").Output()
@@ -206,8 +227,11 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 	if execErr != nil {
 		return llm.ErrorToolOut(execErr)
 	}
-	if bashkit.ChainsCdWithCommand(req.Command) {
+	if target, ok := bashkit.ChainedCd(req.Command); ok {
 		hint := "[shelley hint: this command chained `cd <path>` with another command. `cd` inside a bash invocation does not persist across tool calls. Prefer calling the change_dir tool once, then running subsequent commands directly.]"
+		if chainedCdTargetsCurrentDir(target, wd) {
+			hint = fmt.Sprintf("[shelley hint: this command chained `cd %s` with another command, but that is already the current working directory. Future commands already run there without a `cd`, so stop chaining `cd %s` into your commands.]", target, target)
+		}
 		out = hint + "\n\n" + out
 	}
 	return llm.ToolOut{LLMContent: llm.TextContent(out), Display: display}

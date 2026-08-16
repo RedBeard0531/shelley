@@ -103,74 +103,138 @@ func WillRunGitCommit(bashScript string) (bool, error) {
 	return willCommit, nil
 }
 
-// ChainsCdWithCommand reports whether bashScript chains a top-level
-// `cd <path>` with a subsequent command via `&&` or `;`, e.g.
-// `cd /tmp && ls` or `cd /tmp; ls`. Such patterns are better expressed by
-// calling the change_dir tool first, since `cd` inside a bash invocation
-// does not persist across tool calls.
+// ChainedCd returns the target of a top-level `cd <path>` that is chained
+// with a subsequent command via `&&` or `;`, e.g. `cd /tmp && ls` or
+// `cd /tmp; ls`. Such patterns are better expressed by calling the
+// change_dir tool first, since `cd` inside a bash invocation does not
+// persist across tool calls. It returns the target exactly as written
+// in the script, and ok=false if no chained cd is found.
 //
 // Patterns intentionally NOT flagged:
 //   - bare `cd` or a standalone `cd <path>` with nothing chained;
 //   - `cd <path> || ...` (fallback/error path);
 //   - `cd` inside a subshell like `(cd /tmp && ls)`, which is the
 //     idiomatic way to scope a directory change without persistence.
-func ChainsCdWithCommand(bashScript string) bool {
+func ChainedCd(bashScript string) (target string, ok bool) {
 	r := strings.NewReader(bashScript)
 	parser := syntax.NewParser()
 	file, err := parser.Parse(r, "")
 	if err != nil {
-		return false
+		return "", false
 	}
-	isCdWithArg := func(s *syntax.Stmt) bool {
+	cdTarget := func(s *syntax.Stmt) (string, bool) {
 		if s == nil || s.Cmd == nil {
-			return false
+			return "", false
 		}
-		call, ok := s.Cmd.(*syntax.CallExpr)
-		if !ok || len(call.Args) < 2 {
-			return false
+		call, isCall := s.Cmd.(*syntax.CallExpr)
+		if !isCall || len(call.Args) < 2 {
+			return "", false
 		}
-		return call.Args[0].Lit() == "cd"
+		if call.Args[0].Lit() != "cd" {
+			return "", false
+		}
+		// Skip flags like `-P` or `--`; note `-` alone is OLDPWD, a real target.
+		for i := 1; i < len(call.Args); i++ {
+			arg := call.Args[i]
+			if v := arg.Lit(); strings.HasPrefix(v, "-") && v != "-" {
+				continue
+			}
+			if t, ok := staticWordValue(arg); ok {
+				return t, true
+			}
+			// Non-static target (e.g. expansion): flag the pattern, no target.
+			return "", true
+		}
+		return "", false
 	}
-	var checkStmts func(stmts []*syntax.Stmt) bool
-	var checkStmt func(s *syntax.Stmt) bool
-	checkStmts = func(stmts []*syntax.Stmt) bool {
+	var checkStmts func(stmts []*syntax.Stmt) (string, bool)
+	var checkStmt func(s *syntax.Stmt) (string, bool)
+	checkStmts = func(stmts []*syntax.Stmt) (string, bool) {
 		// `a; b` at the same level: flag if any non-final stmt is `cd <path>`.
 		for i := 0; i+1 < len(stmts); i++ {
-			if isCdWithArg(stmts[i]) {
-				return true
+			if t, isCd := cdTarget(stmts[i]); isCd {
+				return t, true
 			}
 		}
 		for _, s := range stmts {
-			if checkStmt(s) {
-				return true
+			if t, isCd := checkStmt(s); isCd {
+				return t, true
 			}
 		}
-		return false
+		return "", false
 	}
-	checkStmt = func(s *syntax.Stmt) bool {
+	checkStmt = func(s *syntax.Stmt) (string, bool) {
 		if s == nil || s.Cmd == nil {
-			return false
+			return "", false
 		}
 		switch c := s.Cmd.(type) {
 		case *syntax.BinaryCmd:
-			if c.Op == syntax.AndStmt && isCdWithArg(c.X) {
-				return true
+			if c.Op == syntax.AndStmt {
+				if t, isCd := cdTarget(c.X); isCd {
+					return t, true
+				}
 			}
-			if checkStmt(c.X) || checkStmt(c.Y) {
-				return true
+			if t, isCd := checkStmt(c.X); isCd {
+				return t, true
 			}
+			return checkStmt(c.Y)
 		case *syntax.Block:
-			if checkStmts(c.Stmts) {
-				return true
-			}
+			return checkStmts(c.Stmts)
 		case *syntax.Subshell:
 			// Intentionally do not recurse: `(cd ... && ...)` is scoped
 			// and does not affect the caller's working directory.
-			return false
+			return "", false
 		}
-		return false
+		return "", false
 	}
 	return checkStmts(file.Stmts)
+}
+
+// staticWordValue extracts a statically-known string value from a shell word:
+// plain literals (including backslash escapes), single quotes, and double
+// quotes containing only literal parts. It reports ok=false for words with
+// expansions, command substitutions, or concatenated parts, whose value
+// cannot be known without running the shell.
+func staticWordValue(w *syntax.Word) (string, bool) {
+	if w == nil || len(w.Parts) == 0 {
+		return "", false
+	}
+	if len(w.Parts) == 1 {
+		switch p := w.Parts[0].(type) {
+		case *syntax.Lit:
+			return p.Value, true
+		case *syntax.SglQuoted:
+			return p.Value, true
+		case *syntax.DblQuoted:
+			return staticDblQuoted(p)
+		}
+		return "", false
+	}
+	switch p := w.Parts[0].(type) {
+	case *syntax.Lit:
+		// Bareword concatenation like foo"bar" is still static.
+		if v, ok := staticWordValue(&syntax.Word{Parts: w.Parts[1:]}); ok {
+			return p.Value + v, true
+		}
+	}
+	return "", false
+}
+
+// staticDblQuoted returns the value of a double-quoted word part when all of
+// its parts are static, e.g. "foo" or "/tmp/". Part of staticWordValue.
+func staticDblQuoted(q *syntax.DblQuoted) (string, bool) {
+	var sb strings.Builder
+	for _, part := range q.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			sb.WriteString(p.Value)
+		case *syntax.SglQuoted:
+			sb.WriteString(p.Value)
+		default:
+			return "", false
+		}
+	}
+	return sb.String(), true
 }
 
 // noDangerousRmRf checks for rm -rf commands that could delete critical directories.
