@@ -376,8 +376,8 @@ func All() []Model {
 			Build: gemSvc("gemini-3-flash-preview"),
 		},
 		{
-			ID: "deepseek-v4-flash-fireworks", Provider: ProviderFireworks,
-			Description: "DeepSeek V4 Flash on Fireworks", APIModelName: oai.DeepseekV4FlashFireworks.ModelName,
+			ID: "deepseek-v4-flash-0731-fireworks", Provider: ProviderFireworks,
+			Description: "DeepSeek V4 Flash 0731 on Fireworks", APIModelName: oai.DeepseekV4FlashFireworks.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
 			Build: oaiChatSvc(oai.DeepseekV4FlashFireworks, "fireworks"),
 		},

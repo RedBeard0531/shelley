@@ -267,8 +267,8 @@ var (
 	}
 
 	DeepseekV4FlashFireworks = Model{
-		UserName:           "deepseek-v4-flash-fireworks",
-		ModelName:          "accounts/fireworks/models/deepseek-v4-flash",
+		UserName:           "deepseek-v4-flash-0731-fireworks",
+		ModelName:          "accounts/fireworks/models/deepseek-v4-flash-0731",
 		TextVerbosity:      "",
 		URL:                FireworksURL,
 		APIKeyEnv:          FireworksAPIKeyEnv,
@@ -1155,7 +1155,7 @@ func (s *Service) TokenContextWindow() int {
 		return 256000
 	case "gpt-oss-20b", "gpt-oss-120b":
 		return 128000
-	case "accounts/fireworks/models/deepseek-v4-pro", "accounts/fireworks/models/deepseek-v4-flash":
+	case "accounts/fireworks/models/deepseek-v4-pro", "accounts/fireworks/models/deepseek-v4-flash", "accounts/fireworks/models/deepseek-v4-flash-0731":
 		return 1048576
 	case "accounts/fireworks/models/kimi-k2p7-code", "accounts/fireworks/models/kimi-k2p6":
 		return 262144
