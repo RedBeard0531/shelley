@@ -200,7 +200,12 @@
             class="message message-agent streaming-message"
           >
             <div class="message-content" data-testid="message-content">
-              <ThinkingContent v-if="showStreamingThinking" :thinking="streamingThinking" />
+              <ThinkingContent
+                v-if="showStreamingThinking"
+                :thinking="streamingThinking"
+                show-tail
+                :expansion-key="STREAMING_THINKING_KEY"
+              />
               <div
                 v-if="showStreamingPreview && markdownMode === 'off'"
                 class="whitespace-pre-wrap break-words"
@@ -652,6 +657,10 @@ import ChatStatusContent from "./ChatStatusContent.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import InlineText from "./InlineText.vue";
 import ThinkingContent from "./tools/ThinkingContent.vue";
+import {
+  clearStreamingThinkingExpansion,
+  STREAMING_THINKING_KEY,
+} from "../../services/thinkingExpansion";
 
 // Props mirror ChatInterfaceProps in the React source. Callbacks that
 // ChatInterface awaits or simply invokes are passed as function props
@@ -3375,6 +3384,7 @@ async function sendMessage(message: string) {
       agentWorking.value = true;
       streamingText.value = "";
       streamingThinking.value = "";
+      clearStreamingThinkingExpansion();
       await sendFirstMessage(prompt);
     } catch (err) {
       console.error("Failed to send /new message:", err);
@@ -3418,6 +3428,7 @@ async function sendMessage(message: string) {
     agentWorking.value = true;
     streamingText.value = "";
     streamingThinking.value = "";
+    clearStreamingThinkingExpansion();
 
     // A pending autosave now finishes without pulling navigation back to its
     // origin. Bind normal sends just like recordings before waiting for it.
@@ -3485,6 +3496,10 @@ async function handleCancel() {
     await api.cancelConversation(props.conversationId);
     if (!draftText && queuedText) seedComposer(queuedText);
     agentWorking.value = false;
+    // A cancelled stream never reaches the finalize handoff, so forget any
+    // live expansion here: the next streamed turn must start collapsed again
+    // (the user's "only open/close on click" requirement).
+    clearStreamingThinkingExpansion();
   } catch (err) {
     console.error("Failed to cancel conversation:", err);
     error.value = "Failed to cancel. Please try again.";
@@ -4297,6 +4312,7 @@ watch(
       toolProgress.value = {};
       streamingText.value = "";
       streamingThinking.value = "";
+      clearStreamingThinkingExpansion();
       agentWorking.value = false;
       resumingInterrupted.value = false;
       if (loadingProgressDelay) {
@@ -4321,6 +4337,7 @@ watch(
     toolProgress.value = {};
     streamingText.value = "";
     streamingThinking.value = "";
+    clearStreamingThinkingExpansion();
 
     unsubStore = messageStore.subscribe(focusedId, () => syncFromStore(focusedId));
     unsubTransient = messageStore.subscribeTransient(focusedId, () =>
