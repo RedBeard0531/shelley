@@ -2025,11 +2025,14 @@ func TestServiceDoFireworksDeepSeekRoundTripsReasoningContent(t *testing.T) {
 	}))
 	defer server.Close()
 
+	u, _ := url.Parse(server.URL)
+	httpc := &http.Client{Transport: rewriteHostTransport{addr: u.Host}}
 	svc := &Service{
 		APIKey:       "k",
 		Model:        DeepseekV4Flash0731Fireworks,
-		ModelURL:     server.URL + "/v1",
-		ProviderName: "fireworks",
+		ModelURL:     "https://gateway.exe.dev/_/gateway/openai/v1",
+		HTTPC:        httpc,
+		ProviderName: "openai",
 	}
 	_, err := svc.Do(context.Background(), &llm.Request{
 		Messages: []llm.Message{

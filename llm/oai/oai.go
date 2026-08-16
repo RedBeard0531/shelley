@@ -871,15 +871,21 @@ func isFireworksBaseURL(baseURL string) bool {
 	return host == "fireworks.ai" || strings.HasSuffix(host, ".fireworks.ai")
 }
 
+// isFireworksModel reports whether the model itself is a Fireworks model.
+// This remains true when ModelURL redirects the request through a gateway.
+func isFireworksModel(model Model) bool {
+	return isFireworksBaseURL(model.URL) || strings.HasPrefix(strings.ToLower(model.ModelName), "accounts/fireworks/models/")
+}
+
 // forwardsReasoningContent reports whether assistant reasoning_content should
 // be sent back on subsequent turns. Fireworks uses the same field for
 // interleaved reasoning, including tool turns.
-func forwardsReasoningContent(baseURL, providerName string) bool {
-	return isDeepSeekBaseURL(baseURL) || isFireworksBaseURL(baseURL) || strings.EqualFold(providerName, "fireworks")
+func forwardsReasoningContent(baseURL, providerName string, model Model) bool {
+	return isDeepSeekBaseURL(baseURL) || isFireworksBaseURL(baseURL) || isFireworksModel(model) || strings.EqualFold(providerName, "fireworks")
 }
 
-func supportsDeepSeekV4ReasoningControls(baseURL, providerName, modelName string) bool {
-	return forwardsReasoningContent(baseURL, providerName) && strings.Contains(strings.ToLower(modelName), "deepseek-v4")
+func supportsDeepSeekV4ReasoningControls(baseURL, providerName string, model Model) bool {
+	return forwardsReasoningContent(baseURL, providerName, model) && strings.Contains(strings.ToLower(model.ModelName), "deepseek-v4")
 }
 
 // fromLLMMessage converts llm.Message to OpenAI ChatCompletionMessage format
@@ -1493,7 +1499,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 	// this extension, so strip it there. Direct DeepSeek additionally requires
 	// a non-empty field on assistant tool-call messages; use a placeholder only
 	// for that API when old history has no saved thinking block.
-	if forwardsReasoningContent(baseURL, s.ProviderName) {
+	if forwardsReasoningContent(baseURL, s.ProviderName, model) {
 		for i := range allMessages {
 			m := &allMessages[i]
 			if isDeepSeekBaseURL(baseURL) && m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ReasoningContent == "" {
@@ -1550,7 +1556,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		// Fireworks DeepSeek V4 defaults to thinking on, so explicitly send
 		// `none` when the caller disables it. Other chat backends retain their
 		// existing provider-specific behavior unless configured with `none`.
-		if s.ReasoningEffort == "none" || supportsDeepSeekV4ReasoningControls(baseURL, s.ProviderName, model.ModelName) {
+		if s.ReasoningEffort == "none" || supportsDeepSeekV4ReasoningControls(baseURL, s.ProviderName, model) {
 			if s.ReasoningEffort == "none" {
 				req.ReasoningEffort = s.ReasoningEffort
 			} else {
@@ -1575,7 +1581,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			req.ReasoningEffort = "low"
 		case "xhigh":
 			// Fireworks DeepSeek V4 accepts xhigh and promotes it to max.
-			if !supportsDeepSeekV4ReasoningControls(baseURL, s.ProviderName, model.ModelName) {
+			if !supportsDeepSeekV4ReasoningControls(baseURL, s.ProviderName, model) {
 				req.ReasoningEffort = "high"
 			}
 		}
