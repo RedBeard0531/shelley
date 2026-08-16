@@ -184,17 +184,21 @@
             class="message message-agent streaming-message"
           >
             <div class="message-content" data-testid="message-content">
-              <ThinkingContent v-if="showStreamingThinking" :thinking="streamingThinking" />
-              <div
-                v-if="showStreamingPreview && markdownMode === 'off'"
-                class="whitespace-pre-wrap break-words"
-              >
-                {{ streamingText }}<span class="streaming-cursor">▊</span>
-              </div>
-              <div v-else-if="showStreamingPreview" class="streaming-markdown">
-                <MarkdownContent :text="streamingText" />
-                <span class="streaming-cursor">▊</span>
-              </div>
+              <ThinkingContent
+                v-if="streamingThinking"
+                :thinking="streamingThinking"
+                show-tail
+                :expansion-key="STREAMING_THINKING_KEY"
+              />
+              <template v-if="streamingText">
+                <div v-if="markdownMode === 'off'" class="whitespace-pre-wrap break-words">
+                  {{ streamingText }}<span class="streaming-cursor">▊</span>
+                </div>
+                <div v-else class="streaming-markdown">
+                  <MarkdownContent :text="streamingText" />
+                  <span class="streaming-cursor">▊</span>
+                </div>
+              </template>
             </div>
           </div>
           <!-- ghost pending (queued) messages at the bottom -->
@@ -486,6 +490,10 @@ import QueuedGhostMessage from "./QueuedGhostMessage.vue";
 import ChatStatusContent from "./ChatStatusContent.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import ThinkingContent from "./tools/ThinkingContent.vue";
+import {
+  clearStreamingThinkingExpansion,
+  STREAMING_THINKING_KEY,
+} from "../../services/thinkingExpansion";
 
 // Props mirror ChatInterfaceProps in the React source. Callbacks that
 // ChatInterface awaits or simply invokes are passed as function props
@@ -2633,6 +2641,7 @@ async function sendMessage(message: string) {
       agentWorking.value = true;
       streamingText.value = "";
       streamingThinking.value = "";
+      clearStreamingThinkingExpansion();
       await sendFirstMessage(prompt);
     } catch (err) {
       console.error("Failed to send /new message:", err);
@@ -2678,6 +2687,7 @@ async function sendMessage(message: string) {
     agentWorking.value = true;
     streamingText.value = "";
     streamingThinking.value = "";
+    clearStreamingThinkingExpansion();
 
     if (!props.conversationId && inflightCreate) {
       try {
@@ -2735,6 +2745,10 @@ async function handleCancel() {
     await api.cancelConversation(props.conversationId);
     if (!draftText && queuedText) seedComposer(queuedText);
     agentWorking.value = false;
+    // A cancelled stream never reaches the finalize handoff, so forget any
+    // live expansion here: the next streamed turn must start collapsed again
+    // (the user's "only open/close on click" requirement).
+    clearStreamingThinkingExpansion();
   } catch (err) {
     console.error("Failed to cancel conversation:", err);
     error.value = "Failed to cancel. Please try again.";
@@ -3412,6 +3426,7 @@ watch(
       toolProgress.value = {};
       streamingText.value = "";
       streamingThinking.value = "";
+      clearStreamingThinkingExpansion();
       agentWorking.value = false;
       if (loadingProgressDelay) {
         clearTimeout(loadingProgressDelay);
@@ -3430,6 +3445,7 @@ watch(
     toolProgress.value = {};
     streamingText.value = "";
     streamingThinking.value = "";
+    clearStreamingThinkingExpansion();
 
     unsubStore = messageStore.subscribe(focusedId, () => syncFromStore(focusedId));
     unsubTransient = messageStore.subscribeTransient(focusedId, () =>
