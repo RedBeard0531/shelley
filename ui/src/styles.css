@@ -10160,21 +10160,66 @@ kbd {
 }
 
 .thinking-text {
-  flex: 0 1 auto;
+  flex: 1;
   min-width: 0;
   font-style: italic;
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
+  /* Pin the line-height so both collapsed caps (head line-clamp and tail
+     max-height) measure the same 10 lines on every engine — the `lh` unit
+     is not universal (Safari < 16.4). 1.6 matches the app root. */
+  line-height: 1.6;
 }
 
-/* Collapsed preview: single line, ellipsis at the edge instead of a
-   mid-line "..." cutoff. min-width lets the flex item shrink. */
-.thinking-text-collapsed {
-  white-space: nowrap;
+/* Collapsed thinking is capped at 10 rendered lines (mirrors
+   MAX_THINKING_PREVIEW_LINES in utils/thinkingText.ts) in both the live
+   preview and the finalized message, so the streaming→finalized swap has the
+   same height and never shifts the conversation's scroll position. Head mode
+   clamps to the first lines with an ellipsis; tail mode pins the last lines
+   to the bottom of the block so the newest streamed thought stays visible
+   while the block never grows taller. */
+.thinking-text-collapsed-head {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 10;
+  line-clamp: 10;
   overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
+}
+
+.thinking-text-collapsed-tail {
+  display: flex;
+  flex-direction: column-reverse;
+  /* 10 lines at the pinned line-height. The em form is a fallback for
+     engines without the `lh` unit (Safari < 16.4); both are identical once
+     line-height is pinned to 1.6em. */
+  max-height: calc(10 * 1.6em);
+  max-height: 10lh;
+  overflow: hidden;
+}
+
+/* Fade at the clip edge that hides content: top for the bottom-pinned
+   streaming tail (more lines above), bottom for the finalized head (more
+   lines below). Only applied while collapsed and when there is genuinely
+   more to reveal (see collapsedThinkingHasMore + the component's visual
+   clip check). The fade is 2 full lines: 2lh, or 3.2em (2 lines at the
+   pinned 1.6em line-height) as the fallback for engines without the `lh`
+   unit (Safari < 16.4). */
+.thinking-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 3.2em);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 2lh);
+  mask-image: linear-gradient(to bottom, transparent 0, black 2lh);
+}
+
+.thinking-fade-bottom {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 3.2em),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(to bottom, black 0, black calc(100% - 2lh), transparent 100%);
+  mask-image: linear-gradient(to bottom, black 0, black calc(100% - 2lh), transparent 100%);
 }
 
 .thinking-toggle-button {

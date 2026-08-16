@@ -11,7 +11,11 @@
   </div>
 
   <!-- thinking -->
-  <ThinkingContent v-else-if="ct === 'thinking' && thinkingText" :thinking="thinkingText" />
+  <ThinkingContent
+    v-else-if="ct === 'thinking' && thinkingText"
+    :thinking="thinkingText"
+    :expansion-key="thinkingExpansionKey"
+  />
 
   <!-- unknown content type -->
   <div v-else-if="ct === 'unknown'" class="msg-unknown-content">
@@ -49,10 +53,17 @@ import ThinkingContent from "./tools/ThinkingContent.vue";
 
 const props = defineProps<{
   content: LLMContent;
+  messageId?: string;
 }>();
 
 const ct = computed(() => getContentType(props.content.Type));
 const thinkingText = computed(() => props.content.Thinking || props.content.Text || "");
+
+
+// Thinking blocks have no content ID of their own, so expanded state is keyed
+// per message — the streaming preview hands its key off to the message's block
+// when the turn finalizes (see services/thinkingExpansion.ts).
+const thinkingExpansionKey = computed(() => (props.messageId ? props.messageId : undefined));
 const displayText = computed(() => props.content.Text || props.content.Data || "");
 const hasOtherData = computed(() =>
   Object.keys(props.content).some(
