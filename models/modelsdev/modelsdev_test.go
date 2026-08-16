@@ -17,7 +17,7 @@ func TestLookupImageSupport(t *testing.T) {
 	}{
 		// First-party hosts (models.dev omits their "api" field; seeded via
 		// knownHosts).
-		{"anthropic", "https://api.anthropic.com", "claude-opus-4-1-20250805", true, true},
+		{"anthropic", "https://api.anthropic.com", "claude-opus-4-5-20251101", true, true},
 		{"openai", "https://api.openai.com/v1", "gpt-5.4", true, true},
 		{"gemini", "https://generativelanguage.googleapis.com", "gemini-3.1-pro-preview", true, true},
 
@@ -39,7 +39,7 @@ func TestLookupImageSupport(t *testing.T) {
 
 		// Unknown / empty endpoints yield no information.
 		{"unknown host", "https://made-up.example.com", "x", false, false},
-		{"empty endpoint", "", "claude-opus-4-1-20250805", false, false},
+		{"empty endpoint", "", "claude-opus-4-5-20251101", false, false},
 		{"known host unknown model", "https://api.fireworks.ai/inference/v1", "made-up-model", false, false},
 
 		// Last-segment fallback within a host-matched provider.
