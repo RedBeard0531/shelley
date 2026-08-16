@@ -148,30 +148,24 @@ large overwrite. Prefer incremental replace operations over full file overwrites
 
 	PatchStandardSimplifiedSchema = `{
   "type": "object",
-  "required": ["path", "patch"],
+  "required": ["path", "operation", "newText"],
   "properties": {
     "path": {
       "type": "string",
       "description": "Path to the file to patch"
     },
-    "patch": {
-      "type": "object",
-      "required": ["operation", "newText"],
-      "properties": {
-        "operation": {
-          "type": "string",
-          "enum": ["replace", "append_eof", "prepend_bof", "overwrite"],
-          "description": "Type of operation to perform"
-        },
-        "oldText": {
-          "type": "string",
-          "description": "Text to locate for the operation (must be unique in file, required for replace)"
-        },
-        "newText": {
-          "type": "string",
-          "description": "The new text to use (empty for deletions)"
-        }
-      }
+    "operation": {
+      "type": "string",
+      "enum": ["replace", "append_eof", "prepend_bof", "overwrite"],
+      "description": "Type of operation to perform"
+    },
+    "oldText": {
+      "type": "string",
+      "description": "Text to locate for the operation (must be unique in file, required for replace)"
+    },
+    "newText": {
+      "type": "string",
+      "description": "The new text to use (empty for deletions)"
     }
   }
 }`
@@ -241,6 +235,12 @@ large overwrite. Prefer incremental replace operations over full file overwrites
 type PatchInput struct {
 	Path    string         `json:"path"`
 	Patches []PatchRequest `json:"patches"`
+}
+
+// PatchInputFlat is the simplified single-patch input format.
+type PatchInputFlat struct {
+	Path string `json:"path"`
+	PatchRequest
 }
 
 // PatchInputOne is a simplified version of PatchInput for single patch operations.
@@ -313,6 +313,10 @@ func (p *PatchTool) patchParse(m json.RawMessage) (PatchInput, error) {
 	originalErr := json.Unmarshal(m, &input)
 	if originalErr == nil && len(input.Patches) > 0 {
 		return input, nil
+	}
+	var inputFlat PatchInputFlat
+	if err := json.Unmarshal(m, &inputFlat); err == nil && inputFlat.Operation != "" {
+		return PatchInput{Path: inputFlat.Path, Patches: []PatchRequest{inputFlat.PatchRequest}}, nil
 	}
 	var inputOne PatchInputOne
 	if err := json.Unmarshal(m, &inputOne); err == nil && inputOne.Patches != nil {

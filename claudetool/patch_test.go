@@ -327,6 +327,44 @@ func TestPatchTool_ErrorCases(t *testing.T) {
 	}
 }
 
+func TestPatchTool_SimplifiedSchemaIsFlat(t *testing.T) {
+	tempDir := t.TempDir()
+	patch := &PatchTool{Simplified: true, WorkingDir: NewMutableWorkingDir(tempDir)}
+
+	var schema map[string]any
+	if err := json.Unmarshal(patch.Tool().InputSchema, &schema); err != nil {
+		t.Fatalf("failed to parse schema: %v", err)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("schema properties are missing")
+	}
+	if _, ok := properties["patch"]; ok {
+		t.Fatal("simplified schema must not nest the patch operation")
+	}
+	for _, name := range []string{"path", "operation", "oldText", "newText"} {
+		if _, ok := properties[name]; !ok {
+			t.Errorf("simplified schema is missing %q", name)
+		}
+	}
+
+	testFile := filepath.Join(tempDir, "flat.txt")
+	if err := os.WriteFile(testFile, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	input := []byte(`{"path":"` + testFile + `","operation":"replace","oldText":"before","newText":"after"}`)
+	if result := patch.Run(context.Background(), input); result.Error != nil {
+		t.Fatalf("flat patch input failed: %v", result.Error)
+	}
+	content, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "after\n" {
+		t.Fatalf("flat patch input wrote %q", content)
+	}
+}
+
 func TestPatchTool_FlexibleInputParsing(t *testing.T) {
 	tempDir := t.TempDir()
 	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
