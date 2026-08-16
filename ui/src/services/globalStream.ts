@@ -23,6 +23,7 @@ import type {
 } from "../types";
 import { api } from "./api";
 import { messageStore } from "./messageStore";
+import { handoffStreamingThinking } from "./thinkingExpansion";
 
 export type StreamStatus = "connected" | "reconnecting" | "disconnected";
 
@@ -187,7 +188,16 @@ export function connectGlobalStream({
         if (m.sequence_id > maxSeq) maxSeq = m.sequence_id;
       }
       if (toolIds.length > 0) messageStore.clearToolProgress(convId, toolIds);
-      if (sawAgentMsg) messageStore.resetStreamingText(convId);
+      if (sawAgentMsg) {
+        // The streaming preview's ThinkingContent unmounts here and the
+        // finalized message's block mounts in its place: carry an in-progress
+        // expansion over so the swap neither collapses a block the user
+        // opened nor shrinks the layout under them (which would yank their
+        // scroll position). Runs before resetStreamingText so the Map is
+        // already updated by the time the preview's unmount is scheduled.
+        handoffStreamingThinking(data.messages);
+        messageStore.resetStreamingText(convId);
+      }
       messageStore.upsertMessages(convId, data.messages);
       if (maxSeq > 0) messageStore.setMaxSequenceIdKnown(convId, maxSeq);
     }
