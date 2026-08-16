@@ -202,7 +202,7 @@
         @comment="onEditorComment"
       />
 
-      <div v-if="drawerOpen" class="backdrop hide-on-desktop" @click="drawerOpen = false" />
+      <div class="backdrop hide-on-desktop" :class="{ 'backdrop-visible': drawerOpen }" @click="drawerOpen = false" />
     </div>
 
     <!-- Recomputation-counter overlay (performance-hud flag). -->
@@ -245,6 +245,7 @@ import { useI18n } from "./composables/i18n";
 import { ConversationsListKey, CurrentConversationIdKey } from "./composables/subagentLive";
 import { provideOpenFileEditor } from "./composables/fileEditor";
 import { useFeatureFlag } from "./composables/featureFlags";
+import { useDrawerSwipe } from "./composables/drawerSwipe";
 import PerfHud from "./components/PerfHud.vue";
 
 const perfHudEnabled = useFeatureFlag("performance-hud");
@@ -317,6 +318,8 @@ const viewedConversation = ref<Conversation | null>(null);
 const drawerOpen = ref(false);
 // The drawer starts expanded unless the user collapsed it last time.
 const drawerCollapsed = ref(initialDrawerCollapsed(localStorage));
+// Swipe right to open / swipe left to close the drawer on touch devices.
+useDrawerSwipe(drawerOpen);
 const commandPaletteOpen = ref(false);
 const diffViewerTrigger = ref(0);
 const gitGraphTrigger = ref(0);

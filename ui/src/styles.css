@@ -665,6 +665,14 @@ body {
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
   z-index: 40;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.backdrop.backdrop-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Group By */
