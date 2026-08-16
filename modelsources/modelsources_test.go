@@ -74,6 +74,9 @@ func TestEnvSourceLabels(t *testing.T) {
 			t.Errorf("missing %q", tt.id)
 			continue
 		}
+		if b.ReleaseDate == "" {
+			t.Errorf("model %q has no models.dev release date", tt.id)
+		}
 		if b.Source != tt.want {
 			t.Errorf("%s source = %q, want %q", tt.id, b.Source, tt.want)
 		}

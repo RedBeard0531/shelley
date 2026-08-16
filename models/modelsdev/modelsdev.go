@@ -23,6 +23,7 @@ var apiJSON []byte
 type modelEntry struct {
 	Reasoning        bool              `json:"reasoning"`
 	ReasoningOptions []reasoningOption `json:"reasoning_options"`
+	ReleaseDate      string            `json:"release_date"`
 	Modalities       struct {
 		Input  []string `json:"input"`
 		Output []string `json:"output"`
@@ -223,6 +224,13 @@ var reasoningLevels = []llm.ThinkingLevel{
 	llm.ThinkingLevelHigh,
 	llm.ThinkingLevelXHigh,
 	llm.ThinkingLevelMax,
+}
+
+// LookupReleaseDate returns the ISO release date models.dev records for a
+// model. Gateway endpoints fall back to first-party catalogs by model name.
+func LookupReleaseDate(endpoint, modelName string) (string, bool) {
+	m, found := lookupBroad(endpoint, modelName, func(m modelEntry) bool { return m.ReleaseDate != "" })
+	return m.ReleaseDate, found
 }
 
 // LookupCost returns models.dev pricing (USD per million tokens) for

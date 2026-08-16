@@ -104,6 +104,7 @@ type Built struct {
 	Provider    Provider
 	Source      string // human-readable origin ("exe.dev gateway", "$ANTHROPIC_API_KEY", "custom", ...)
 	Tags        string
+	ReleaseDate string // ISO date from models.dev; empty when unknown
 	Service     llm.Service
 
 	// APIType is the wire protocol used to talk to this model.
@@ -443,6 +444,7 @@ type serviceEntry struct {
 	source      string
 	displayName string
 	tags        string
+	releaseDate string
 	baseURL     string
 	apiType     APIType
 }
@@ -581,6 +583,7 @@ func (m *Manager) registerBuiltModelsLocked(built []Built) {
 			source:      b.Source,
 			displayName: dn,
 			tags:        b.Tags,
+			releaseDate: b.ReleaseDate,
 			baseURL:     b.BaseURL,
 			apiType:     b.APIType,
 		}
@@ -701,11 +704,12 @@ func (m *Manager) HasModel(modelID string) bool {
 	return ok
 }
 
-// ModelInfo contains display name, tags, source, base URL, and API type for a model.
+// ModelInfo contains display name, provider metadata, and release date for a model.
 type ModelInfo struct {
 	DisplayName string
 	Tags        string
 	Source      string
+	ReleaseDate string
 	BaseURL     string
 	APIType     string
 }
@@ -717,7 +721,7 @@ func (m *Manager) GetModelInfo(modelID string) *ModelInfo {
 	if !ok {
 		return nil
 	}
-	return &ModelInfo{DisplayName: entry.displayName, Tags: entry.tags, Source: entry.source, BaseURL: entry.baseURL, APIType: string(entry.apiType)}
+	return &ModelInfo{DisplayName: entry.displayName, Tags: entry.tags, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType)}
 }
 
 type reasoningMapping struct {

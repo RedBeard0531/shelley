@@ -215,6 +215,23 @@ func TestLookupReasoningCapabilities(t *testing.T) {
 	}
 }
 
+func TestLookupReleaseDate(t *testing.T) {
+	for _, test := range []struct {
+		endpoint string
+		model    string
+		want     string
+	}{
+		{"https://llm.int.exe.xyz/v1/messages", "claude-haiku-4-5", "2025-10-15"},
+		{"https://llm.int.exe.xyz/v1", "gpt-5.6-luna", "2026-07-09"},
+		{"https://llm.int.exe.xyz/v1", "accounts/fireworks/models/deepseek-v4-flash-0731", "2026-07-31"},
+	} {
+		got, found := LookupReleaseDate(test.endpoint, test.model)
+		if !found || got != test.want {
+			t.Errorf("LookupReleaseDate(%q, %q) = (%q, %v), want (%q, true)", test.endpoint, test.model, got, found, test.want)
+		}
+	}
+}
+
 func TestLookupCost(t *testing.T) {
 	cases := []struct {
 		name      string
