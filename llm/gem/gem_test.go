@@ -1437,7 +1437,7 @@ func TestThinkingConfigRequestOverride(t *testing.T) {
 					t.Errorf("thinkingBudget = %v, want %d", tc.ThinkingBudget, *tt.wantBudget)
 				}
 			}
-			wantThoughts := tt.wantBudget == nil || *tt.wantBudget != 0
+			wantThoughts := tt.reqLevel != llm.ThinkingLevelOff && (tt.wantBudget == nil || *tt.wantBudget != 0)
 			if tc.IncludeThoughts != wantThoughts {
 				t.Errorf("includeThoughts = %v, want %v (thought summaries are only returned when requested)", tc.IncludeThoughts, wantThoughts)
 			}

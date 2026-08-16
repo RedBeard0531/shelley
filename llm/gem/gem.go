@@ -396,6 +396,7 @@ func (s *Service) thinkingConfig(req *llm.Request) *gemini.ThinkingConfig {
 		default:
 			genericLevel = level
 		}
+		includeThoughts := genericLevel != llm.ThinkingLevelOff && effort != "none" && effort != "off"
 		if effort == "" && genericLevel != llm.ThinkingLevelDefault {
 			if found && len(caps.Levels) > 0 {
 				genericLevel = llm.ClampThinkingLevel(genericLevel, caps.Levels)
@@ -413,7 +414,7 @@ func (s *Service) thinkingConfig(req *llm.Request) *gemini.ThinkingConfig {
 		if effort == "" {
 			return nil
 		}
-		return &gemini.ThinkingConfig{ThinkingLevel: effort, IncludeThoughts: true}
+		return &gemini.ThinkingConfig{ThinkingLevel: effort, IncludeThoughts: includeThoughts}
 	}
 
 	// Gemini 2.5 (and earlier) uses an integer thinkingBudget. Explicit off
