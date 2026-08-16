@@ -167,13 +167,20 @@
           <!-- streaming preview -->
           <div v-if="showStreamingPreview" class="message message-agent streaming-message">
             <div class="message-content" data-testid="message-content">
-              <div v-if="markdownMode === 'off'" class="whitespace-pre-wrap break-words">
-                {{ streamingText }}<span class="streaming-cursor">▊</span>
-              </div>
-              <div v-else class="streaming-markdown">
-                <MarkdownContent :text="streamingText" />
-                <span class="streaming-cursor">▊</span>
-              </div>
+              <ThinkingContent
+                v-if="streamingThinking"
+                :thinking="streamingThinking"
+                initially-expanded
+              />
+              <template v-if="streamingText">
+                <div v-if="markdownMode === 'off'" class="whitespace-pre-wrap break-words">
+                  {{ streamingText }}<span class="streaming-cursor">▊</span>
+                </div>
+                <div v-else class="streaming-markdown">
+                  <MarkdownContent :text="streamingText" />
+                  <span class="streaming-cursor">▊</span>
+                </div>
+              </template>
             </div>
           </div>
           <!-- ghost pending (queued) messages at the bottom -->
@@ -452,6 +459,7 @@ import MessageRenderNode from "./MessageRenderNode.vue";
 import QueuedGhostMessage from "./QueuedGhostMessage.vue";
 import ChatStatusContent from "./ChatStatusContent.vue";
 import MarkdownContent from "./MarkdownContent.vue";
+import ThinkingContent from "./tools/ThinkingContent.vue";
 
 // Props mirror ChatInterfaceProps in the React source. Callbacks that
 // ChatInterface awaits or simply invokes are passed as function props
@@ -828,6 +836,8 @@ const toolProgress = ref<Record<string, ToolProgress>>({});
 // via a changed prop identity (see composables/toolProgress.ts).
 provideToolProgress(toolProgress);
 const streamingText = ref("");
+/** Reasoning text shown live in the streaming preview as it streams in. */
+const streamingThinking = ref("");
 const showAdvancedSettings = ref(false);
 const advancedSettingsRef = ref<HTMLDivElement | null>(null);
 const availableTools = ref<Array<{ name: string; summary: string; default_on: boolean }>>([]);
@@ -1545,7 +1555,10 @@ function chunkRenderNodes(nodes: RenderNode[]): RenderChunk[] {
 }
 
 const showStreamingPreview = computed(
-  () => conversationViewMode.value === "all" && !!streamingText.value && agentWorking.value,
+  () =>
+    conversationViewMode.value === "all" &&
+    (!!streamingText.value || !!streamingThinking.value) &&
+    agentWorking.value,
 );
 
 // ---- scroll ----
@@ -1639,6 +1652,7 @@ function syncTransientFromStore(focusedId: string) {
   perfCount("chat.syncTransient");
   toolProgress.value = tr.toolProgress;
   streamingText.value = tr.streamingText;
+  streamingThinking.value = tr.streamingThinking;
   agentWorking.value = tr.agentWorking;
 }
 
@@ -2194,6 +2208,7 @@ async function sendMessage(message: string) {
       error.value = null;
       agentWorking.value = true;
       streamingText.value = "";
+      streamingThinking.value = "";
       await sendFirstMessage(prompt);
     } catch (err) {
       console.error("Failed to send /new message:", err);
@@ -2238,6 +2253,7 @@ async function sendMessage(message: string) {
     error.value = null;
     agentWorking.value = true;
     streamingText.value = "";
+    streamingThinking.value = "";
 
     if (!props.conversationId && inflightCreate) {
       try {
@@ -2950,6 +2966,7 @@ watch(
       contextWindowSize.value = 0;
       toolProgress.value = {};
       streamingText.value = "";
+      streamingThinking.value = "";
       agentWorking.value = false;
       if (loadingProgressDelay) {
         clearTimeout(loadingProgressDelay);
@@ -2967,6 +2984,7 @@ watch(
     agentWorking.value = initialTransient.agentWorking;
     toolProgress.value = {};
     streamingText.value = "";
+    streamingThinking.value = "";
 
     unsubStore = messageStore.subscribe(focusedId, () => syncFromStore(focusedId));
     unsubTransient = messageStore.subscribeTransient(focusedId, () =>

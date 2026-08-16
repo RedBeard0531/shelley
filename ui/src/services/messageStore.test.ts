@@ -1606,17 +1606,29 @@ async function main(): Promise<void> {
     },
   );
 
+  await run("appendStreamThinking accumulates reasoning deltas", async () => {
+    const s = freshStore();
+    const id = "c-stream-thinking";
+    s.appendStreamThinking(id, "hmm");
+    s.appendStreamThinking(id, ", let me");
+    const t = s.getTransient(id);
+    assert(t.streamingThinking === "hmm, let me", "thinking deltas should concatenate");
+    assert(t.streamingText === "", "text stream should stay empty");
+  });
+
   await run("resetTransient clears toolProgress and streamingText", async () => {
     const s = freshStore();
     const id = "c-reset-ephemera";
     s.setToolProgress(id, { tool_use_id: "tool-1", tool_name: "shell", output: "x" });
     s.appendStreamDelta(id, "hello");
+    s.appendStreamThinking(id, "hmm");
     s.setAgentWorking(id, true);
     s.resetTransient(id);
     const t = s.getTransient(id);
     assert(t.agentWorking === true, "agentWorking should still be preserved");
     assert(Object.keys(t.toolProgress).length === 0, "toolProgress should be wiped on reset");
     assert(t.streamingText === "", "streamingText should be wiped on reset");
+    assert(t.streamingThinking === "", "streamingThinking should be wiped on reset");
   });
 
   // ── Multi-tab liveness ──────────────────────────────────────────────────────

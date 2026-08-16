@@ -229,8 +229,12 @@ export function connectGlobalStream({
     if (data.tool_progress) {
       messageStore.setToolProgress(convId, data.tool_progress);
     }
-    if (data.stream_delta && data.stream_delta.type === "text") {
-      messageStore.appendStreamDelta(convId, data.stream_delta.text);
+    if (data.stream_delta) {
+      if (data.stream_delta.type === "text") {
+        messageStore.appendStreamDelta(convId, data.stream_delta.text);
+      } else if (data.stream_delta.type === "thinking") {
+        messageStore.appendStreamThinking(convId, data.stream_delta.text);
+      }
     }
   };
 

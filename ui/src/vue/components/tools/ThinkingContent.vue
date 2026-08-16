@@ -24,9 +24,9 @@
 import { computed, ref } from "vue";
 import ToolChevron from "./ToolChevron.vue";
 
-const props = defineProps<{ thinking: string }>();
+const props = defineProps<{ thinking: string; initiallyExpanded?: boolean }>();
 
-const isExpanded = ref(false);
+const isExpanded = ref(!!props.initiallyExpanded);
 
 // Collapsed preview: first line only, capped to keep the DOM light.
 // Visual truncation (ellipsis at the edge of the line) is done in CSS

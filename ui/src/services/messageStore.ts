@@ -292,11 +292,13 @@ export interface ConversationCacheRecord {
 export interface TransientState {
   toolProgress: Record<string, ToolProgress>;
   streamingText: string;
+  /** Reasoning/chain-of-thought text accumulated from `thinking` stream deltas. */
+  streamingThinking: string;
   agentWorking: boolean;
 }
 
 function emptyTransient(): TransientState {
-  return { toolProgress: {}, streamingText: "", agentWorking: false };
+  return { toolProgress: {}, streamingText: "", streamingThinking: "", agentWorking: false };
 }
 
 function emptyRecord(id: string): ConversationCacheRecord {
@@ -1659,10 +1661,18 @@ export class MessageStore {
     this.notifyTransient(id);
   }
 
+  appendStreamThinking(id: string, text: string): void {
+    if (!text) return;
+    const t = this.getTransient(id);
+    t.streamingThinking = t.streamingThinking + text;
+    this.notifyTransient(id);
+  }
+
   resetStreamingText(id: string): void {
     const t = this.getTransient(id);
-    if (!t.streamingText) return;
+    if (!t.streamingText && !t.streamingThinking) return;
     t.streamingText = "";
+    t.streamingThinking = "";
     this.notifyTransient(id);
   }
 
@@ -1678,9 +1688,9 @@ export class MessageStore {
     // (conversations.agent_working) and is authoritative across the
     // lifetime of the conversation, not per-session transient.
     //
-    // toolProgress and streamingText, on the other hand, are stream-only
-    // ephemera that don't survive a tab switch / refresh and would be
-    // misleading if carried across a focus change.
+    // toolProgress, streamingText and streamingThinking, on the other hand,
+    // are stream-only ephemera that don't survive a tab switch / refresh and
+    // would be misleading if carried across a focus change.
     //
     // Seed agentWorking from the cached conversation row when available so
     // switching into a working conversation immediately reflects the
