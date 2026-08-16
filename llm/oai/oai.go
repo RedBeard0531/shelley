@@ -877,11 +877,72 @@ func isFireworksModel(model Model) bool {
 	return isFireworksBaseURL(model.URL) || strings.HasPrefix(strings.ToLower(model.ModelName), "accounts/fireworks/models/")
 }
 
+// isFireworksRequest reports whether the request targets the Fireworks API,
+// whether directly, through a gateway URL, or via a Fireworks-hosted model.
+func isFireworksRequest(baseURL, providerName string, model Model) bool {
+	return isFireworksBaseURL(baseURL) || isFireworksModel(model) || strings.EqualFold(providerName, "fireworks")
+}
+
+// isGLMModel reports whether the model is a Zhipu GLM model.
+func isGLMModel(model Model) bool {
+	return strings.Contains(strings.ToLower(model.ModelName), "glm")
+}
+
+// fireworksStreamBufferMS coalesces streamed SSE chunks for up to this many
+// milliseconds (Fireworks vLLM backend stream_options.buffer_ms).
+const fireworksStreamBufferMS = 55
+
+// marshalChatBody serializes a chat request, merging in provider-specific
+// extension fields that go-openai's typed structs don't model: top-level
+// fields (e.g. reasoning_history) and stream_options fields (e.g. buffer_ms).
+// The original body is kept as raw JSON fragments so existing number
+// literals round-trip byte-for-byte (no float32->float64 drift).
+func marshalChatBody(req openai.ChatCompletionRequest, top, streamOptions map[string]any) ([]byte, error) {
+	body, err := json.Marshal(req)
+	if err != nil || (len(top) == 0 && len(streamOptions) == 0) {
+		return body, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
+	if len(streamOptions) > 0 {
+		var so map[string]json.RawMessage
+		if m["stream_options"] != nil {
+			if err := json.Unmarshal(m["stream_options"], &so); err != nil {
+				return nil, err
+			}
+		} else {
+			so = make(map[string]json.RawMessage)
+		}
+		for k, v := range streamOptions {
+			raw, err := json.Marshal(v)
+			if err != nil {
+				return nil, err
+			}
+			so[k] = raw
+		}
+		merged, err := json.Marshal(so)
+		if err != nil {
+			return nil, err
+		}
+		m["stream_options"] = merged
+	}
+	for k, v := range top {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		m[k] = raw
+	}
+	return json.Marshal(m)
+}
+
 // forwardsReasoningContent reports whether assistant reasoning_content should
 // be sent back on subsequent turns. Fireworks uses the same field for
 // interleaved reasoning, including tool turns.
 func forwardsReasoningContent(baseURL, providerName string, model Model) bool {
-	return isDeepSeekBaseURL(baseURL) || isFireworksBaseURL(baseURL) || isFireworksModel(model) || strings.EqualFold(providerName, "fireworks")
+	return isDeepSeekBaseURL(baseURL) || isFireworksRequest(baseURL, providerName, model)
 }
 
 func supportsDeepSeekV4ReasoningControls(baseURL, providerName string, model Model) bool {
@@ -1346,16 +1407,13 @@ func shouldRetryStreamError(err error) bool {
 // truncated stream is indistinguishable from a clean end. Requiring [DONE]
 // lets the retry loop recover from truncated streams instead of returning
 // partial content as if it were final.
-func streamChatCompletion(ctx context.Context, httpc *http.Client, fullURL, apiKey, org string, req openai.ChatCompletionRequest, onStream func(llm.StreamDelta)) (*openai.ChatCompletionResponse, http.Header, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, nil, err
-	}
+func streamChatCompletion(ctx context.Context, httpc *http.Client, fullURL, apiKey, org, model string, body []byte, onStream func(llm.StreamDelta)) (*openai.ChatCompletionResponse, http.Header, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	if org != "" {
 		httpReq.Header.Set("OpenAI-Organization", org)
@@ -1368,21 +1426,14 @@ func streamChatCompletion(ctx context.Context, httpc *http.Client, fullURL, apiK
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		var apiErr openai.APIError
-		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Message != "" {
-			apiErr.HTTPStatusCode = resp.StatusCode
-			apiErr.HTTPStatus = resp.Status
-			return nil, nil, &apiErr
-		}
-		return nil, nil, &openai.RequestError{HTTPStatusCode: resp.StatusCode, HTTPStatus: resp.Status, Body: raw}
+		return nil, nil, classifyChatError(resp)
 	}
 
 	hdrs := resp.Header.Clone()
 	out := &openai.ChatCompletionResponse{
-		ID:      req.Model,
+		ID:      model,
 		Object:  "chat.completion",
-		Model:   req.Model,
+		Model:   model,
 		Created: time.Now().Unix(),
 	}
 	current := openai.ChatCompletionChoice{
@@ -1461,24 +1512,68 @@ func streamChatCompletion(ctx context.Context, httpc *http.Client, fullURL, apiK
 	return out, hdrs, nil
 }
 
-// Do sends a request to OpenAI using the go-openai package.
+// createChatCompletion issues a non-streamed chat completion exactly like
+// streamChatCompletion, but with a plain JSON response body. Response headers
+// are retained on the result so header-carried cost (Exedev-Gateway-Cost)
+// survives, mirroring go-openai's sendRequest.
+func createChatCompletion(ctx context.Context, httpc *http.Client, fullURL, apiKey, org string, body []byte) (*openai.ChatCompletionResponse, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	if org != "" {
+		httpReq.Header.Set("OpenAI-Organization", org)
+	}
+
+	resp, err := httpc.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyChatError(resp)
+	}
+
+	var full openai.ChatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&full); err != nil {
+		return nil, err
+	}
+	full.SetHeader(resp.Header)
+	return &full, nil
+}
+
+// classifyChatError converts a non-2xx chat response into the same error
+// types go-openai's client would produce: *APIError when the body carries an
+// `error` object (even with an empty message), otherwise *RequestError whose
+// Body keeps the raw text for proxy error surfaces.
+func classifyChatError(resp *http.Response) error {
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response body: %w", err)
+	}
+	var errRes openai.ErrorResponse
+	if json.Unmarshal(raw, &errRes) == nil && errRes.Error != nil {
+		errRes.Error.HTTPStatus = resp.Status
+		errRes.Error.HTTPStatusCode = resp.StatusCode
+		return errRes.Error
+	}
+	return &openai.RequestError{HTTPStatus: resp.Status, HTTPStatusCode: resp.StatusCode, Body: raw}
+}
+
+// Do sends an OpenAI-compatible chat completion request, using go-openai
+// types but our own HTTP transport so provider extension fields (e.g.
+// Fireworks buffer_ms / reasoning_history) can ride in the JSON body.
 func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error) {
 	// Configure the OpenAI client
 	httpc := cmp.Or(s.HTTPC, http.DefaultClient)
 	model := cmp.Or(s.Model, DefaultModel)
 
 	// TODO: do this one during Service setup? maybe with a constructor instead?
-	config := openai.DefaultConfig(s.APIKey)
 	baseURL := cmp.Or(s.ModelURL, model.URL)
-	if baseURL != "" {
-		config.BaseURL = baseURL
-	}
-	if s.Org != "" {
-		config.OrgID = s.Org
-	}
-	config.HTTPClient = httpc
-
-	client := openai.NewClientWithConfig(config)
 
 	// Start with system messages if provided
 	var allMessages []openai.ChatCompletionMessage
@@ -1544,6 +1639,20 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		}
 	}
 
+	// Fireworks extensions that go-openai's typed request struct doesn't
+	// model; marshalChatBody merges them into the JSON body. buffer_ms
+	// coalesces streamed SSE chunks for up to 55ms (vLLM backend), and
+	// reasoning_history keeps GLM thinking blocks in multi-turn prompts.
+	var topExtras, streamExtras map[string]any
+	if isFireworksRequest(baseURL, s.ProviderName, model) {
+		if streaming {
+			streamExtras = map[string]any{"buffer_ms": fireworksStreamBufferMS}
+		}
+		if isGLMModel(model) {
+			topExtras = map[string]any{"reasoning_history": "preserved"}
+		}
+	}
+
 	// Reasoning effort. Precedence:
 	//   1. ir.ThinkingLevel (request-level override)
 	//   2. s.ReasoningEffort (verbatim per-model config)
@@ -1586,8 +1695,19 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			}
 		}
 	}
-	// Construct the full URL for logging and debugging
-	fullURL := baseURL + "/chat/completions"
+	// Construct the full URL. baseURL may be empty (the go-openai client used
+	// to apply the OpenAIURL fallback internally; our raw client must too),
+	// and may carry a trailing slash (go-openai trims it, so must we to avoid
+	// "//chat/completions").
+	fullURL := strings.TrimRight(cmp.Or(baseURL, OpenAIURL), "/") + "/chat/completions"
+
+	// Marshal once; the body is identical across retries. The merge of
+	// Fireworks extension fields happens here so both the streaming and
+	// non-streaming paths send the same body.
+	body, err := marshalChatBody(req, topExtras, streamExtras)
+	if err != nil {
+		return nil, err
+	}
 
 	// Retry mechanism
 	backoff := s.Backoff
@@ -1641,11 +1761,9 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			hdrs http.Header
 		)
 		if streaming {
-			resp, hdrs, err = streamChatCompletion(ctx, httpc, fullURL, s.APIKey, s.Org, req, ir.OnStream)
+			resp, hdrs, err = streamChatCompletion(ctx, httpc, fullURL, s.APIKey, s.Org, req.Model, body, ir.OnStream)
 		} else {
-			var full openai.ChatCompletionResponse
-			full, err = client.CreateChatCompletion(ctx, req)
-			resp = &full
+			resp, err = createChatCompletion(ctx, httpc, fullURL, s.APIKey, s.Org, body)
 		}
 
 		// Handle successful response
@@ -1658,11 +1776,9 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			if streaming && result.Usage.CostUSD == 0 && hdrs != nil {
 				result.Usage.CostUSD = llm.CostUSDFromResponse(hdrs)
 			}
-			// Record the endpoint actually used. baseURL omits the
-			// OpenAIURL fallback (the go-openai client applies it
-			// internally), so apply it here to avoid recording a
-			// relative "/chat/completions" path.
-			result.URL = cmp.Or(s.ModelURL, model.URL, OpenAIURL) + "/chat/completions"
+			// Record the endpoint actually used, applying the same trim/fallback
+			// as fullURL above.
+			result.URL = strings.TrimRight(cmp.Or(s.ModelURL, model.URL, OpenAIURL), "/") + "/chat/completions"
 			return result, nil
 		}
 
@@ -1748,7 +1864,7 @@ func (s *Service) ConfigDetails() map[string]string {
 	return map[string]string{
 		"base_url":        baseURL,
 		"model_name":      model.ModelName,
-		"full_url":        baseURL + "/chat/completions",
+		"full_url":        strings.TrimRight(baseURL, "/") + "/chat/completions",
 		"api_key_env":     model.APIKeyEnv,
 		"has_api_key_set": fmt.Sprintf("%v", s.APIKey != ""),
 	}

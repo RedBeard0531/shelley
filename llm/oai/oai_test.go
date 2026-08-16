@@ -3,6 +3,7 @@ package oai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -2250,6 +2251,300 @@ func streamSSE(w http.ResponseWriter, chunks ...string) {
 	io.WriteString(w, "data: [DONE]\n\n")
 	if flusher != nil {
 		flusher.Flush()
+	}
+}
+
+func TestServiceDoFireworksExtensions(t *testing.T) {
+	tests := []struct {
+		name        string
+		model       Model
+		provider    string
+		stream      bool
+		wantBuffer  bool
+		wantHistory bool
+	}{
+		{name: "fireworks stream gets buffer_ms", model: DeepseekV4Flash0731Fireworks, provider: "fireworks", stream: true, wantBuffer: true},
+		{name: "fireworks GLM stream gets buffer_ms and preserved reasoning", model: GLM52Fireworks, provider: "fireworks", stream: true, wantBuffer: true, wantHistory: true},
+		{name: "fireworks GLM non-stream gets preserved reasoning", model: GLM52Fireworks, provider: "fireworks", stream: false, wantHistory: true},
+		{name: "gateway-routed fireworks model gets extensions even with openai provider", model: GLM52Fireworks, provider: "openai", stream: true, wantBuffer: true, wantHistory: true},
+		{name: "openai gets neither", model: GPT41, provider: "openai", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				json.Unmarshal(body, &got)
+				if tt.stream {
+					streamSSE(w, `{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`)
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{
+						Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
+						FinishReason: "stop",
+					}}})
+				}
+			}))
+			defer server.Close()
+
+			svc := &Service{
+				APIKey:       "k",
+				Model:        tt.model,
+				ModelURL:     server.URL + "/v1",
+				ProviderName: tt.provider,
+			}
+			req := &llm.Request{
+				Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+			}
+			if tt.stream {
+				req.OnStream = func(llm.StreamDelta) {}
+			}
+			if _, err := svc.Do(context.Background(), req); err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+
+			so, _ := got["stream_options"].(map[string]any)
+			if tt.wantBuffer && (so == nil || so["buffer_ms"] != float64(55)) {
+				t.Errorf("stream_options = %v, want buffer_ms 55", got["stream_options"])
+			}
+			if !tt.wantBuffer && so != nil && so["buffer_ms"] != nil {
+				t.Errorf("stream_options = %v, want no buffer_ms", got["stream_options"])
+			}
+			if tt.wantHistory && got["reasoning_history"] != "preserved" {
+				t.Errorf("reasoning_history = %v, want preserved", got["reasoning_history"])
+			}
+			if !tt.wantHistory && got["reasoning_history"] != nil {
+				t.Errorf("reasoning_history = %v, want absent", got["reasoning_history"])
+			}
+		})
+	}
+}
+
+func TestServiceDoNonStreamingCapturesHeadersAndTrimsSlash(t *testing.T) {
+	// Non-streaming responses must retain response headers (the go-openai
+	// client used to set them on the result; header-carried gateway cost
+	// depends on it), and a trailing slash on the base URL must not yield
+	// "//chat/completions" (go-openai trimmed it).
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Exedev-Gateway-Cost", "0.0042")
+		json.NewEncoder(w).Encode(openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{
+			Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
+			FinishReason: "stop",
+		}}})
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey:       "k",
+		Model:        GPT41,
+		ModelURL:     server.URL + "/v1/",
+		ProviderName: "openai",
+	}
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("request path = %q, want /v1/chat/completions", gotPath)
+	}
+	if resp.Usage.CostUSD != 0.0042 {
+		t.Errorf("CostUSD = %v, want 0.0042", resp.Usage.CostUSD)
+	}
+	if resp.URL != server.URL+"/v1/chat/completions" {
+		t.Errorf("resp.URL = %q, want %q", resp.URL, server.URL+"/v1/chat/completions")
+	}
+}
+
+func TestServiceDoOpenAIURLFallback(t *testing.T) {
+	// Empty ModelURL and model.URL fall back to OpenAIURL, exactly like the
+	// go-openai client's fullURL applied internally.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("request path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{
+			Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
+			FinishReason: "stop",
+		}}})
+	}))
+	defer server.Close()
+
+	u, _ := url.Parse(server.URL)
+	svc := &Service{
+		APIKey: "k",
+		Model:  modelForTest("fallback-model"),
+		HTTPC:  &http.Client{Transport: rewriteHostTransport{addr: u.Host}},
+	}
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if resp.URL != OpenAIURL+"/chat/completions" {
+		t.Errorf("resp.URL = %q, want %q", resp.URL, OpenAIURL+"/chat/completions")
+	}
+}
+
+func TestServiceDoNonStreamingJSONErrorClassification(t *testing.T) {
+	// Non-streaming error bodies carrying an `error` object must surface as
+	// *openai.APIError — parity with go-openai's handleErrorResp — so the
+	// retry switch in Do still classifies 4xx as terminal and 5xx as
+	// retryable.
+	t.Run("400 JSON error is APIError and terminal", func(t *testing.T) {
+		attempts := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":{"message":"bad request","type":"invalid_request_error"}}`)
+		}))
+		defer server.Close()
+
+		svc := &Service{
+			APIKey:       "k",
+			Model:        GPT41,
+			ModelURL:     server.URL + "/v1",
+			ProviderName: "openai",
+		}
+		_, err := svc.Do(context.Background(), &llm.Request{
+			Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "bad request") {
+			t.Errorf("error = %v, want message text", err)
+		}
+		if attempts != 1 {
+			t.Errorf("attempts = %d, want 1 (400 terminal)", attempts)
+		}
+	})
+
+	t.Run("500 JSON error retries then succeeds", func(t *testing.T) {
+		attempts := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			if attempts == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				io.WriteString(w, `{"error":{"message":"upstream boom","type":"server_error"}}`)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{
+				Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "recovered"},
+				FinishReason: "stop",
+			}}})
+		}))
+		defer server.Close()
+
+		svc := &Service{
+			APIKey:       "k",
+			Model:        GPT41,
+			ModelURL:     server.URL + "/v1",
+			ProviderName: "openai",
+			Backoff:      []time.Duration{time.Millisecond},
+		}
+		resp, err := svc.Do(context.Background(), &llm.Request{
+			Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		})
+		if err != nil {
+			t.Fatalf("Do() error = %v", err)
+		}
+		if attempts != 2 {
+			t.Errorf("attempts = %d, want 2", attempts)
+		}
+		if len(resp.Content) != 1 || resp.Content[0].Text != "recovered" {
+			t.Errorf("final content = %+v, want text 'recovered'", resp.Content)
+		}
+	})
+}
+
+func TestClassifyChatError(t *testing.T) {
+	t.Run("JSON error object is APIError", func(t *testing.T) {
+		resp := &http.Response{
+			Status: "400 Bad Request", StatusCode: 400,
+			Body: io.NopCloser(strings.NewReader(`{"error":{"message":"bad request","type":"invalid_request_error"}}`)),
+		}
+		var apiErr *openai.APIError
+		if !errors.As(classifyChatError(resp), &apiErr) {
+			t.Fatalf("err = %T, want *openai.APIError", classifyChatError(resp))
+		}
+		if apiErr.HTTPStatusCode != 400 || apiErr.Message != "bad request" {
+			t.Errorf("apiErr = %+v, want status 400 message 'bad request'", apiErr)
+		}
+	})
+	t.Run("error object with empty message string is still APIError", func(t *testing.T) {
+		// go-openai keys on the presence of the error object, not on a
+		// non-empty message (its UnmarshalJSON succeeds for "" but fails
+		// when the message key is absent, which falls back to RequestError).
+		resp := &http.Response{
+			Status: "422 Unprocessable Entity", StatusCode: 422,
+			Body: io.NopCloser(strings.NewReader(`{"error":{"message":"","type":"invalid_request_error"}}`)),
+		}
+		var apiErr *openai.APIError
+		if !errors.As(classifyChatError(resp), &apiErr) {
+			t.Fatalf("err = %T, want *openai.APIError", classifyChatError(resp))
+		}
+		if apiErr.Message != "" || apiErr.HTTPStatusCode != 422 {
+			t.Errorf("apiErr = %+v, want empty message, status 422", apiErr)
+		}
+	})
+	t.Run("non-JSON body is RequestError with body preserved", func(t *testing.T) {
+		resp := &http.Response{
+			Status: "502 Bad Gateway", StatusCode: 502,
+			Body: io.NopCloser(strings.NewReader("plain text proxy error")),
+		}
+		var reqErr *openai.RequestError
+		if !errors.As(classifyChatError(resp), &reqErr) {
+			t.Fatalf("err = %T, want *openai.RequestError", classifyChatError(resp))
+		}
+		if string(reqErr.Body) != "plain text proxy error" {
+			t.Errorf("reqErr.Body = %q, want 'plain text proxy error'", reqErr.Body)
+		}
+	})
+}
+
+func TestMarshalChatBody(t *testing.T) {
+	req := openai.ChatCompletionRequest{
+		Model:               "m",
+		Temperature:         0.7,
+		MaxCompletionTokens: 32768,
+		Stream:              true,
+		StreamOptions:       &openai.StreamOptions{IncludeUsage: true},
+	}
+	body, err := marshalChatBody(req,
+		map[string]any{"reasoning_history": "preserved"},
+		map[string]any{"buffer_ms": 55},
+	)
+	if err != nil {
+		t.Fatalf("marshalChatBody() error = %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	so, _ := got["stream_options"].(map[string]any)
+	if so == nil || so["buffer_ms"] != float64(55) || so["include_usage"] != true {
+		t.Errorf("stream_options = %v, want include_usage + buffer_ms 55", got["stream_options"])
+	}
+	if got["reasoning_history"] != "preserved" {
+		t.Errorf("reasoning_history = %v, want preserved", got["reasoning_history"])
+	}
+	// Pre-existing number literals must pass through unchanged (no
+	// float32->float64 drift from a map round-trip).
+	if !strings.Contains(string(body), `"temperature":0.7`) {
+		t.Errorf("temperature literal changed: %s", body)
+	}
+	if !strings.Contains(string(body), `"max_completion_tokens":32768`) {
+		t.Errorf("max_completion_tokens literal changed: %s", body)
 	}
 }
 
