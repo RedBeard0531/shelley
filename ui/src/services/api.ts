@@ -595,15 +595,20 @@ class ApiService {
   // findFiles fuzzy-searches files under `dir` server-side. `query` is the
   // fuzzy pattern (empty returns the first files alphabetically); whitespace
   // splits it into terms that are ANDed, so "vm storage s3" matches
-  // vm-storage-s3-design.md. `signal` lets callers abort superseded requests
-  // while the user types.
+  // vm-storage-s3-design.md. A query that announces itself as a path (a
+  // leading /, ~, ./ or ../) re-roots the search at the directory it names:
+  // `search_dir` is then the directory matches are relative to, and
+  // `match_query` the part of the query matched within it. `signal` lets
+  // callers abort superseded requests while the user types.
   async findFiles(
     dir: string,
     query: string,
     signal?: AbortSignal,
   ): Promise<{
     dir: string;
+    search_dir: string;
     query: string;
+    match_query: string;
     matches: Array<{ path: string; matched_indexes?: number[] }>;
     total: number;
     truncated: boolean;

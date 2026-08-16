@@ -341,6 +341,52 @@ func TestFileListCacheEviction(t *testing.T) {
 	}
 }
 
+// TestFileListCacheFileCap verifies the cache bounds retained paths, not just
+// directory count: typing an absolute path re-roots the search per keystroke,
+// and a few huge listings cost far more than many small ones.
+func TestFileListCacheFileCap(t *testing.T) {
+	t.Parallel()
+	c := newFileListCache()
+
+	big := make([]string, fileListCacheMaxFiles/4)
+	for i := range big {
+		big[i] = fmt.Sprintf("file-%d", i)
+	}
+	for i := 0; i < 10; i++ {
+		dir := fmt.Sprintf("/big/%d", i)
+		c.get(dir, func() ([]string, bool, bool) { return big, false, true })
+	}
+	if c.files > fileListCacheMaxFiles {
+		t.Errorf("cache retained %d files, cap is %d", c.files, fileListCacheMaxFiles)
+	}
+	if len(c.entries) == 0 {
+		t.Error("cache evicted everything; the newest entry should survive")
+	}
+
+	t.Run("count_tracks_the_map", func(t *testing.T) {
+		total := 0
+		for _, e := range c.entries {
+			total += len(e.files)
+		}
+		if total != c.files {
+			t.Errorf("tracked count %d != actual %d", c.files, total)
+		}
+	})
+
+	t.Run("single_oversized_listing_is_kept", func(t *testing.T) {
+		// One directory bigger than the whole cap must still be served: it's
+		// what the user is looking at.
+		huge := make([]string, fileListCacheMaxFiles+1)
+		got, _ := c.get("/huge", func() ([]string, bool, bool) { return huge, false, true })
+		if len(got) != len(huge) {
+			t.Fatalf("got %d files, want %d", len(got), len(huge))
+		}
+		if _, ok := c.entries["/huge"]; !ok {
+			t.Error("the just-computed entry was evicted")
+		}
+	})
+}
+
 // TestFindFilesNonGit verifies the filesystem-walk fallback works outside a
 // git repo and skips heavy directories.
 func TestFindFilesNonGit(t *testing.T) {
@@ -390,6 +436,362 @@ func TestFindFilesBadRequests(t *testing.T) {
 		h.server.handleFindFiles(w, req)
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("expected 405, got %d", w.Code)
+		}
+	})
+}
+
+// TestFindFilesPathQuery verifies that a query which is itself a path escapes
+// the working directory: typing an absolute path (or a ./ ../ ~ relative one)
+// re-roots the search at that directory, so the file can be opened in the
+// editor even though it lives nowhere near the conversation's cwd.
+func TestFindFilesPathQuery(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	// The finder's working directory: a git repo that knows nothing about the
+	// files the user is about to type a path to. `deep/` gives the whole-tree
+	// fuzzy cases somewhere to hit that a re-rooted search would miss.
+	cwd := t.TempDir()
+	mustGitInit(t, cwd)
+	writeFile(t, filepath.Join(cwd, "main.go"), "package main\n")
+	writeFile(t, filepath.Join(cwd, "deep", "sub", "handler.go"), "package sub\n")
+	writeFile(t, filepath.Join(cwd, "deep", "sub-notes.md"), "x\n")
+
+	elsewhere := t.TempDir()
+	writeFile(t, filepath.Join(elsewhere, "handoff.md"), "notes\n")
+	writeFile(t, filepath.Join(elsewhere, "sub", "handler.go"), "package sub\n")
+
+	t.Run("absolute_prefix_reroots", func(t *testing.T) {
+		resp := findFiles(t, h, cwd, filepath.Join(elsewhere, "hando"))
+		if resp.SearchDir != elsewhere {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, elsewhere)
+		}
+		if resp.Dir != cwd {
+			t.Errorf("dir = %q, want the requested %q", resp.Dir, cwd)
+		}
+		// Only the trailing segment is matched within the re-rooted directory.
+		if resp.MatchQuery != "hando" {
+			t.Errorf("match_query = %q, want %q", resp.MatchQuery, "hando")
+		}
+		if !hasPath(resp.Matches, "handoff.md") {
+			t.Errorf("expected handoff.md relative to %s, got %+v", elsewhere, resp.Matches)
+		}
+	})
+
+	t.Run("absolute_directory_lists_it", func(t *testing.T) {
+		for _, q := range []string{elsewhere, elsewhere + "/"} {
+			resp := findFiles(t, h, cwd, q)
+			if resp.SearchDir != elsewhere {
+				t.Errorf("%q: search_dir = %q, want %q", q, resp.SearchDir, elsewhere)
+			}
+			// Naming a directory matches nothing in particular within it, which
+			// is what tells the UI to say "no files here" rather than "no match".
+			if resp.MatchQuery != "" {
+				t.Errorf("%q: match_query = %q, want empty", q, resp.MatchQuery)
+			}
+			if !hasPath(resp.Matches, "handoff.md") || !hasPath(resp.Matches, "sub/handler.go") {
+				t.Errorf("%q: expected the directory listing, got %+v", q, resp.Matches)
+			}
+		}
+	})
+
+	t.Run("dot_relative_reroots", func(t *testing.T) {
+		resp := findFiles(t, h, filepath.Join(elsewhere, "sub"), "../handoff.md")
+		if resp.SearchDir != elsewhere {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, elsewhere)
+		}
+		if !hasPath(resp.Matches, "handoff.md") {
+			t.Errorf("expected handoff.md, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("missing_directory_finds_nothing", func(t *testing.T) {
+		// A path whose directory doesn't exist has no sensible fuzzy reading:
+		// answering it with matches from the working directory would be noise.
+		// The reported search_dir names where it looked, so the UI can say so.
+		resp := findFiles(t, h, cwd, "/nonexistent/xyz/main")
+		if resp.SearchDir != "/nonexistent/xyz" {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, "/nonexistent/xyz")
+		}
+		if len(resp.Matches) != 0 {
+			t.Errorf("expected no matches for a bogus path, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("embedded_slash_is_not_a_path", func(t *testing.T) {
+		// "sub/handler" is the finder's partial-path idiom, matched against the
+		// whole tree. Re-rooting it at ./sub would hide every match elsewhere,
+		// which is exactly what makes a slash too weak a signal on its own.
+		resp := findFiles(t, h, cwd, "sub/handler")
+		if resp.SearchDir != cwd {
+			t.Errorf("search_dir = %q, want the working dir %q", resp.SearchDir, cwd)
+		}
+		if !hasPath(resp.Matches, "deep/sub/handler.go") {
+			t.Errorf("expected the whole-tree hit, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("bare_directory_name_is_not_a_path", func(t *testing.T) {
+		// A word that happens to name a subdirectory ("shelley" at a repo root)
+		// is still a fuzzy pattern: re-rooting into it would replace every
+		// match elsewhere in the tree with that directory's listing.
+		resp := findFiles(t, h, filepath.Join(cwd, "deep"), "sub")
+		if resp.SearchDir != filepath.Join(cwd, "deep") {
+			t.Errorf("search_dir = %q, want the working dir %q", resp.SearchDir, filepath.Join(cwd, "deep"))
+		}
+		if !hasPath(resp.Matches, "sub-notes.md") {
+			t.Errorf("expected the whole-tree hit, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("explicit_dot_slash_is_a_path", func(t *testing.T) {
+		// The same text with a "./" prefix asks for the re-rooted reading.
+		resp := findFiles(t, h, filepath.Join(elsewhere), "./sub/handler")
+		if resp.SearchDir != filepath.Join(elsewhere, "sub") {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, filepath.Join(elsewhere, "sub"))
+		}
+		if !hasPath(resp.Matches, "handler.go") {
+			t.Errorf("expected handler.go, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("plain_query_keeps_working_dir", func(t *testing.T) {
+		resp := findFiles(t, h, cwd, "main")
+		if resp.SearchDir != cwd {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, cwd)
+		}
+		if !hasPath(resp.Matches, "main.go") {
+			t.Errorf("expected main.go, got %+v", resp.Matches)
+		}
+	})
+}
+
+// TestFindFilesExactPathPinned verifies a query naming an existing file always
+// yields that file, even when the listing can't surface it: `git ls-files`
+// hides .gitignore'd files, but the user typing the path clearly means to edit
+// that one.
+func TestFindFilesExactPathPinned(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	writeFile(t, filepath.Join(dir, ".gitignore"), "secret.env\n")
+	writeFile(t, filepath.Join(dir, "secret.env"), "TOKEN=1\n")
+
+	t.Run("ignored_file_absent_from_listing", func(t *testing.T) {
+		// Establishes what makes pinning necessary: a bare fuzzy query can't
+		// reach a .gitignore'd file, because `git ls-files` never lists it.
+		resp := findFiles(t, h, dir, "secret")
+		if hasPath(resp.Matches, "secret.env") {
+			t.Errorf("expected the ignored file to be absent from the listing, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("absolute_path", func(t *testing.T) {
+		resp := findFiles(t, h, dir, filepath.Join(dir, "secret.env"))
+		if !hasPath(resp.Matches, "secret.env") {
+			t.Errorf("expected the typed file, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("relative_path", func(t *testing.T) {
+		resp := findFiles(t, h, dir, "secret.env")
+		if len(resp.Matches) == 0 || resp.Matches[0].Path != "secret.env" {
+			t.Errorf("expected secret.env first, got %+v", resp.Matches)
+		}
+		if resp.SearchDir != dir {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, dir)
+		}
+	})
+
+	t.Run("ignored_subtree_is_walked", func(t *testing.T) {
+		// Re-rooting into an ignored directory must list it: `git ls-files`
+		// returns nothing there, which means "ignored", not "empty". Pinning
+		// only rescues a fully typed filename, not browsing.
+		writeFile(t, filepath.Join(dir, "node_modules", "pkg", "index.js"), "x\n")
+		writeFile(t, filepath.Join(dir, ".gitignore"), "secret.env\nnode_modules/\n")
+		resp := findFiles(t, h, dir, filepath.Join(dir, "node_modules", "pkg")+"/")
+		if !hasPath(resp.Matches, "index.js") {
+			t.Errorf("expected index.js from the ignored subtree, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("ignored_files_stay_hidden_elsewhere", func(t *testing.T) {
+		// The flip side: a directory that merely looks empty to `git ls-files`
+		// because everything in it is ignored is NOT itself ignored, so its
+		// contents must stay hidden rather than get walked.
+		logs := filepath.Join(dir, "logs")
+		writeFile(t, filepath.Join(logs, "debug.log"), "x\n")
+		writeFile(t, filepath.Join(dir, ".gitignore"), "secret.env\nnode_modules/\n*.log\n")
+		resp := findFiles(t, h, logs, "")
+		if len(resp.Matches) != 0 {
+			t.Errorf("expected the ignored .log to stay hidden, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("directory_not_pinned", func(t *testing.T) {
+		// A directory isn't editable; naming one lists it instead.
+		resp := findFiles(t, h, dir, dir)
+		for _, m := range resp.Matches {
+			if m.Path == "" || m.Path == "." {
+				t.Errorf("directory leaked into matches: %+v", resp.Matches)
+			}
+		}
+	})
+}
+
+// TestFindFilesTildeQuery verifies ~ expands to $HOME. It sets HOME (so it
+// can't be parallel) to a small temp tree rather than walking the real one.
+func TestFindFilesTildeQuery(t *testing.T) {
+	h := NewTestHarness(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFile(t, filepath.Join(home, "notes", "todo.md"), "x\n")
+
+	cwd := t.TempDir()
+
+	resp := findFiles(t, h, cwd, "~/notes/todo")
+	if resp.SearchDir != filepath.Join(home, "notes") {
+		t.Errorf("search_dir = %q, want %q", resp.SearchDir, filepath.Join(home, "notes"))
+	}
+	if !hasPath(resp.Matches, "todo.md") {
+		t.Errorf("expected todo.md, got %+v", resp.Matches)
+	}
+}
+
+// TestFindFilesPathQueryEdges covers path-query shapes that shouldn't be
+// mistaken for one another: spaces inside an explicitly path-rooted query,
+// trailing slashes, and a query naming the search directory itself.
+func TestFindFilesPathQueryEdges(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	spaced := filepath.Join(dir, "My Project")
+	writeFile(t, filepath.Join(spaced, "design doc.md"), "x\n")
+	writeFile(t, filepath.Join(dir, "plain.md"), "x\n")
+
+	t.Run("spaces_inside_a_rooted_path", func(t *testing.T) {
+		// A leading "/" (or ~/ ./ ../) declares the query a path, so its spaces
+		// belong to the path rather than splitting it into fuzzy terms.
+		resp := findFiles(t, h, dir, filepath.Join(spaced, "design"))
+		if resp.SearchDir != spaced {
+			t.Fatalf("search_dir = %q, want %q", resp.SearchDir, spaced)
+		}
+		if !hasPath(resp.Matches, "design doc.md") {
+			t.Errorf("expected design doc.md, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("trailing_slash_never_pins_a_file", func(t *testing.T) {
+		// "plain.md/" asserts a directory; there is no such directory, so this
+		// stays an ordinary fuzzy query and must not open the file.
+		resp := findFiles(t, h, dir, "plain.md/")
+		if resp.SearchDir != dir {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, dir)
+		}
+		if len(resp.Matches) != 0 {
+			t.Errorf("expected no matches for %q, got %+v", "plain.md/", resp.Matches)
+		}
+	})
+
+	t.Run("search_dir_itself_is_not_a_match", func(t *testing.T) {
+		// filepath.Rel(dir, dir) is ".", which is not a file to open.
+		resp := findFiles(t, h, dir, dir+"/")
+		for _, m := range resp.Matches {
+			if m.Path == "." || m.Path == "" {
+				t.Errorf("the directory itself leaked into matches: %+v", resp.Matches)
+			}
+		}
+	})
+
+	t.Run("multi_term_query_is_not_a_path", func(t *testing.T) {
+		// Without a path-ish prefix, whitespace still means "fuzzy terms", even
+		// with a slash in the query: "My Project/design" would name a real
+		// directory under dir, but a bare multi-word query stays fuzzy so
+		// "vm storage s3"-style searching keeps working.
+		resp := findFiles(t, h, dir, "My Project/design")
+		if resp.SearchDir != dir {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, dir)
+		}
+		if !hasPath(resp.Matches, "My Project/design doc.md") {
+			t.Errorf("expected the fuzzy hit under the working dir, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("dot_prefix_makes_spaces_part_of_the_path", func(t *testing.T) {
+		// "./" declares a path, so the same text re-roots instead.
+		resp := findFiles(t, h, dir, "./My Project/design")
+		if resp.SearchDir != spaced {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, spaced)
+		}
+		if !hasPath(resp.Matches, "design doc.md") {
+			t.Errorf("expected design doc.md, got %+v", resp.Matches)
+		}
+	})
+}
+
+// TestFindFilesPinTruncates verifies that pinning an exact match into a full
+// result page reports the truncation it causes rather than silently dropping
+// the last row.
+func TestFindFilesPinTruncates(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	t.Run("handler_reports_truncation", func(t *testing.T) {
+		// A limit of 1 with a fuzzy hit that isn't the pinned file: the pin
+		// takes the only slot, so the response must say it was truncated.
+		dir := t.TempDir()
+		mustGitInit(t, dir)
+		writeFile(t, filepath.Join(dir, ".gitignore"), "target.env\n")
+		writeFile(t, filepath.Join(dir, "target.env"), "x\n")
+		writeFile(t, filepath.Join(dir, "target.envoy"), "x\n")
+
+		u := "/api/find-files?dir=" + url.QueryEscape(dir) + "&q=target.env&limit=1"
+		req := httptest.NewRequest(http.MethodGet, u, nil)
+		w := httptest.NewRecorder()
+		h.server.handleFindFiles(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp FindFilesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(resp.Matches) != 1 || resp.Matches[0].Path != "target.env" {
+			t.Fatalf("expected the pinned file alone, got %+v", resp.Matches)
+		}
+		if !resp.Truncated {
+			t.Error("expected truncated=true: the pin displaced a match")
+		}
+	})
+
+	t.Run("drops_and_reports", func(t *testing.T) {
+		matches := []FindFilesMatch{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}}
+		out, dropped := pinMatch(matches, "pinned.go", len(matches))
+		if !dropped {
+			t.Error("expected dropped=true when the pin pushes a match past the limit")
+		}
+		if len(out) != len(matches) || out[0].Path != "pinned.go" {
+			t.Errorf("out = %+v", out)
+		}
+	})
+
+	t.Run("existing_match_moves_and_keeps_highlights", func(t *testing.T) {
+		withHits := []FindFilesMatch{{Path: "a.go"}, {Path: "b.go", MatchedIndexes: []int{0}}}
+		out, dropped := pinMatch(withHits, "b.go", len(withHits))
+		if dropped {
+			t.Error("expected dropped=false: the pin replaced an existing row")
+		}
+		if len(out) != 2 || out[0].Path != "b.go" || out[1].Path != "a.go" {
+			t.Fatalf("out = %+v", out)
+		}
+		// Its fuzzy highlights survive the move, rather than being replaced by
+		// fabricated ones (which would have to be UTF-16 offsets for the UI).
+		if !slices.Equal(out[0].MatchedIndexes, []int{0}) {
+			t.Errorf("highlights = %v, want [0]", out[0].MatchedIndexes)
 		}
 	})
 }

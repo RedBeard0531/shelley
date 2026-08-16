@@ -11262,6 +11262,26 @@ kbd {
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 
+/* Fuzzy file finder: the scope line appears only when a path query moved the
+   search off the working directory shown in the header chip. */
+.ff-scope {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.ff-scope-path {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Mobile: keep the finder title compact so the directory chip fits on the
    same row instead of wrapping the title across three lines. */
 @media (max-width: 768px) {
