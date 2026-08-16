@@ -8479,6 +8479,41 @@ kbd {
   font-size: 0.875rem;
 }
 
+/* Syntax highlighted code blocks (see src/markdown-highlight.ts). The chunk
+   emits only CSS custom properties — --shiki-light/--shiki-dark per token,
+   plus -bg variants on the <pre> — so the same HTML resolves correctly in
+   both app themes: light mode reads --shiki-light, .dark reads --shiki-dark.
+   `.shiki` out-specifies `.markdown-content pre` above, swapping the flat
+   --code-bg for the theme's own block background. */
+.markdown-content pre.shiki {
+  background-color: var(--shiki-light-bg);
+}
+
+/* Emphasis (italic / bold / underline) arrives as -font-* / -text-decoration
+   custom props on the token spans. The var() fallbacks keep decorations off
+   plain tokens, which don't define the properties. */
+.markdown-content pre.shiki,
+.markdown-content pre.shiki code,
+.markdown-content pre.shiki span {
+  color: var(--shiki-light);
+  font-style: var(--shiki-light-font-style, normal);
+  font-weight: var(--shiki-light-font-weight, normal);
+  text-decoration: var(--shiki-light-text-decoration, none);
+}
+
+.dark .markdown-content pre.shiki {
+  background-color: var(--shiki-dark-bg);
+}
+
+.dark .markdown-content pre.shiki,
+.dark .markdown-content pre.shiki code,
+.dark .markdown-content pre.shiki span {
+  color: var(--shiki-dark);
+  font-style: var(--shiki-dark-font-style, normal);
+  font-weight: var(--shiki-dark-font-weight, normal);
+  text-decoration: var(--shiki-dark-text-decoration, none);
+}
+
 .inline-code {
   /* Same reasoning as .markdown-content code: stay inline despite the diffs
      global pre/code reset to display:block. */

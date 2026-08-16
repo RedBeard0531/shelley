@@ -18,10 +18,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { ref, watch } from "vue";
 import { COMMENT_ICON } from "../../utils/icons";
-import { renderMarkdownToSafeHTML } from "../../utils/markdownRender";
-import { perfWrap } from "../../utils/perf";
+import { renderMarkdownToSafeHTML, renderMarkdownToSafeHTMLSync } from "../../utils/markdownRender";
+import { perfCount } from "../../utils/perf";
 import { handleImageCommentClick, openImageComment } from "../composables/imageComment";
 
 const props = defineProps<{
@@ -48,16 +48,34 @@ const props = defineProps<{
 
 const containerRef = ref<HTMLDivElement | null>(null);
 
-const html = computed(
-  perfWrap("markdown.render", () =>
-    renderMarkdownToSafeHTML(
+// Rendering settles in two phases. The synchronous pass renders plain
+// markdown in the same tick the component renders, so the message list's
+// geometry (and scroll tracking / the bottom pin) behaves exactly as before
+// the syntax-highlighting feature. The async pass then upgrades fenced blocks
+// to highlighted HTML when the lazily-loaded shiki chunk is available for a
+// run; cached runs resolve on the next microtask. A monotonically increasing
+// generation drops async results superseded by newer renders (e.g. streaming
+// chunks resolving out of order).
+const html = ref("");
+let renderGen = 0;
+watch(
+  [() => props.text, () => props.messageId, () => props.cacheOwner, () => props.runKey],
+  async () => {
+    const gen = ++renderGen;
+    const start = performance.now();
+    html.value = renderMarkdownToSafeHTMLSync(props.text, props.messageId);
+    const out = await renderMarkdownToSafeHTML(
       props.text,
       props.messageId,
       props.cacheOwner && props.runKey !== undefined
         ? { owner: props.cacheOwner, runKey: props.runKey }
         : undefined,
-    ),
-  ),
+    );
+    perfCount("markdown.render", performance.now() - start);
+    if (gen !== renderGen) return; // a newer render superseded this one
+    html.value = out;
+  },
+  { immediate: true },
 );
 
 // Images inside a link are excluded throughout: there the image is the link's

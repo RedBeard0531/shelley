@@ -77,6 +77,24 @@ test.describe("Markdown rendering", () => {
     expect(await user.locator("em").count()).toBe(0);
   });
 
+  test("syntax-highlights fenced code blocks in agent messages", async ({ page, request }) => {
+    const slug = await createConversationViaAPI(
+      request,
+      "markdown: ```go\nfmt.Println(\"hi\")\n```",
+    );
+    await page.goto(`/c/${slug}`);
+    await page.waitForLoadState("domcontentloaded");
+
+    const agent = page.locator(".message-agent").last();
+    // The shiki chunk is fetched lazily on first use; the block ends up as
+    // shiki markup with dual-theme token colors.
+    const code = agent.locator("pre.shiki");
+    await expect(code).toBeVisible({ timeout: 30000 });
+    await expect(code.locator("span")).not.toHaveCount(0);
+    await expect(code.locator('span[style*="--shiki-light"]').first()).toBeVisible();
+    await expect(code).toContainText("fmt.Println");
+  });
+
   test("coalesces web-search citation blocks into one paragraph with markers", async ({
     page,
     request,

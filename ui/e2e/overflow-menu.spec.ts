@@ -114,7 +114,13 @@ test.describe("Overflow menu (PrimeVue)", () => {
     await expect(page.getByText("Turn 1:", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("I'll work on turn 1.", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("Done with turn 1.", { exact: false }).first()).toBeVisible();
-    await expect(page.locator('[data-testid="tool-call-completed"]').first()).toBeVisible();
+    // The conversation pins to the newest messages on load, so the first
+    // completed tool card (turn 1) starts far above the viewport. Bring it
+    // into view before asserting it rendered, instead of racing the auto-
+    // scroll that moves it out of the way.
+    const firstCompleted = page.locator('[data-testid="tool-call-completed"]').first();
+    await firstCompleted.scrollIntoViewIfNeeded();
+    await expect(firstCompleted).toBeVisible();
 
     await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
     const viewToggle = page.getByTestId("conversation-view-toggle");

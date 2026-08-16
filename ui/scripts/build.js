@@ -81,6 +81,21 @@ async function build() {
       sourcemap: !noSourceMaps,
     });
 
+    // Build the markdown syntax-highlighting chunk (ESM, fine-grained shiki).
+    // markdownRender.ts fetches it lazily via import("/markdown-highlight.js")
+    // the first time a message contains a fenced code block, so the textmate
+    // grammars stay out of main.js and out of the initial page load.
+    log("Building markdown-highlight chunk (shiki)...");
+    await esbuild.build({
+      entryPoints: ["src/markdown-highlight.ts"],
+      bundle: true,
+      outfile: "dist/markdown-highlight.js",
+      format: "esm",
+      minify: isProd,
+      sourcemap: !noSourceMaps,
+      platform: "browser",
+    });
+
     // Build Monaco editor as a separate chunk (JS + CSS).
     // We bundle through src/monaco-bundle-entry.js so we can also surface
     // the internal modules monaco-vim depends on (ShiftCommand) as named
@@ -212,6 +227,7 @@ async function build() {
       "monaco-editor.js",
       "editor.worker.js",
       "diffs-worker.js",
+      "markdown-highlight.js",
       "monaco-editor.css",
       "styles.css",
       "main.js",
