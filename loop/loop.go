@@ -217,19 +217,6 @@ func (l *Loop) GetUsage() llm.Usage {
 	return l.totalUsage
 }
 
-// CancelAndGetHistory atomically cancels the loop relative to tool-result
-// publication, then returns a history snapshot. A tool batch that claimed
-// publication before cancellation finishes persisting first; a later batch
-// observes cancellation and publishes nothing.
-func (l *Loop) CancelAndGetHistory(cancel context.CancelFunc) []llm.Message {
-	l.toolResultMu.Lock()
-	defer l.toolResultMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	return l.GetHistory()
-}
-
 // GetHistory returns a copy of the current conversation history
 func (l *Loop) GetHistory() []llm.Message {
 	l.mu.Lock()
@@ -285,6 +272,10 @@ func (l *Loop) Go(ctx context.Context) error {
 			if err := l.processLLMRequest(ctx); err != nil {
 				if errors.Is(err, errMessagePersistence) {
 					return err
+				}
+				if ctx.Err() != nil {
+					l.logger.Info("conversation loop canceled")
+					return ctx.Err()
 				}
 				l.logger.Error("failed to process LLM request", "error", err)
 				time.Sleep(time.Second)
@@ -808,6 +799,16 @@ func (l *Loop) handleRefusal(ctx context.Context, resp *llm.Response) error {
 	return nil
 }
 
+const (
+	// cancelledToolResultText is the final line of a result cancelled by the user.
+	// The UI matches this trailing sentinel in ui/src/vue/utils/toolStatus.ts.
+	cancelledToolResultText   = "Tool execution cancelled by user"
+	notExecutedToolResultText = "Tool not executed because cancellation happened before it started\n\n" + cancelledToolResultText
+	abandonedToolResultText   = "Tool did not stop within the grace period after cancellation; its output was discarded\n\n" + cancelledToolResultText
+)
+
+const toolCancelGrace = time.Second
+
 func (l *Loop) findTool(name string) *llm.Tool {
 	for _, tool := range l.tools {
 		if tool.Name == name {
@@ -819,18 +820,24 @@ func (l *Loop) findTool(name string) *llm.Tool {
 
 // executeToolCall runs one client-side tool call.
 func (l *Loop) executeToolCall(ctx context.Context, c llm.Content) llm.Content {
-	l.logger.Debug("executing tool", "name", c.ToolName, "id", c.ID)
+	if ctx.Err() != nil {
+		return llm.Content{
+			Type:       llm.ContentTypeToolResult,
+			ToolUseID:  c.ID,
+			ToolError:  true,
+			ToolResult: llm.TextContent(notExecutedToolResultText),
+		}
+	}
 
+	l.logger.Debug("executing tool", "name", c.ToolName, "id", c.ID)
 	tool := l.findTool(c.ToolName)
 	if tool == nil {
 		l.logger.Error("tool not found", "name", c.ToolName)
 		return llm.Content{
-			Type:      llm.ContentTypeToolResult,
-			ToolUseID: c.ID,
-			ToolError: true,
-			ToolResult: []llm.Content{
-				{Type: llm.ContentTypeText, Text: fmt.Sprintf("Tool '%s' not found", c.ToolName)},
-			},
+			Type:       llm.ContentTypeToolResult,
+			ToolUseID:  c.ID,
+			ToolError:  true,
+			ToolResult: llm.TextContent(fmt.Sprintf("Tool '%s' not found", c.ToolName)),
 		}
 	}
 
@@ -844,13 +851,49 @@ func (l *Loop) executeToolCall(ctx context.Context, c llm.Content) llm.Content {
 	toolCtx = llm.WithToolUseID(toolCtx, c.ID)
 	toolCtx = llm.WithLLMService(toolCtx, l.llm)
 	startTime := time.Now()
-	result := tool.Run(toolCtx, c.ToolInput)
+
+	resultCh := make(chan llm.ToolOut, 1)
+	go func() { resultCh <- tool.Run(toolCtx, c.ToolInput) }()
+
+	var result llm.ToolOut
+	abandoned := false
+	select {
+	case result = <-resultCh:
+	case <-ctx.Done():
+		grace := time.NewTimer(toolCancelGrace)
+		select {
+		case result = <-resultCh:
+			if !grace.Stop() {
+				<-grace.C
+			}
+		case <-grace.C:
+			abandoned = true
+		}
+	}
 	endTime := time.Now()
+
+	if abandoned {
+		l.logger.Warn("tool ignored cancellation; abandoning", "name", c.ToolName, "id", c.ID)
+		return llm.Content{
+			Type:             llm.ContentTypeToolResult,
+			ToolUseID:        c.ID,
+			ToolError:        true,
+			ToolResult:       llm.TextContent(abandonedToolResultText),
+			ToolUseStartTime: &startTime,
+			ToolUseEndTime:   &endTime,
+		}
+	}
 
 	toolResultContent := result.LLMContent
 	if result.Error != nil {
-		l.logger.Error("tool execution failed", "name", c.ToolName, "error", result.Error)
-		toolResultContent = llm.TextContent(result.Error.Error())
+		text := result.Error.Error()
+		if ctx.Err() != nil {
+			l.logger.Info("tool cancelled by user", "name", c.ToolName)
+			text = strings.TrimRight(text, "\r\n") + "\n\n" + cancelledToolResultText
+		} else {
+			l.logger.Error("tool execution failed", "name", c.ToolName, "error", result.Error)
+		}
+		toolResultContent = llm.TextContent(text)
 	} else {
 		l.logger.Debug("tool executed successfully", "name", c.ToolName, "duration", endTime.Sub(startTime))
 	}
@@ -890,9 +933,6 @@ func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) erro
 
 	l.toolResultMu.Lock()
 	defer l.toolResultMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	recordCtx := context.WithoutCancel(ctx)
 
 	if len(toolResults) > 0 {
@@ -923,7 +963,7 @@ func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) erro
 		l.mu.Unlock()
 	}
 
-	return nil
+	return ctx.Err()
 }
 
 // insertMissingToolResults fixes tool_result issues in the conversation history:

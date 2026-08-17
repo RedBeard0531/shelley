@@ -89,10 +89,14 @@ type ConversationManager struct {
 	loop                *loop.Loop
 	loopCancel          context.CancelFunc
 	loopCtx             context.Context
-	mu                  sync.Mutex
-	lastActivity        time.Time
-	modelID             string
-	recordMessage       loop.MessageRecordFunc
+	// loopLifecycleMu serializes cancellation, loop reset, and new user work.
+	loopLifecycleMu sync.Mutex
+	// loopDone closes after the current loop goroutine has stopped writing.
+	loopDone      chan struct{}
+	mu            sync.Mutex
+	lastActivity  time.Time
+	modelID       string
+	recordMessage loop.MessageRecordFunc
 	// recordMessageBatch persists several messages in one Tx (consecutive
 	// sequence ids). Used by mid-turn injection of subagent-done pairs.
 	recordMessageBatch messageBatchRecordFunc
@@ -774,6 +778,9 @@ func (cm *ConversationManager) AcceptUserMessage(ctx context.Context, service ll
 		return false, fmt.Errorf("llm service is required")
 	}
 
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+
 	if err := cm.Hydrate(ctx); err != nil {
 		return false, err
 	}
@@ -1006,6 +1013,8 @@ func (cm *ConversationManager) ResumeInterruptedTurn(ctx context.Context, servic
 
 	cm.retryMu.Lock()
 	defer cm.retryMu.Unlock()
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
 
 	if err := cm.Hydrate(ctx); err != nil {
 		return fmt.Errorf("failed to hydrate before resuming: %w", err)
@@ -1037,6 +1046,9 @@ func (cm *ConversationManager) ResumeInterruptedTurn(ctx context.Context, servic
 // broadcast so the new queued entry reaches subscribers via stream2 diffs.
 func (cm *ConversationManager) QueueMessage(ctx context.Context, s *Server, modelID string, message llm.Message) error {
 	cm.waitDistillingSetup()
+
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
 
 	llmJSON, err := json.Marshal(message)
 	if err != nil {
@@ -1211,6 +1223,11 @@ func (cm *ConversationManager) takeInjectableSubagentDone(ctx context.Context) [
 // batches for the winning drainer to pick up.
 func (cm *ConversationManager) enqueueBatch(s *Server, b pendingBatch) {
 	cm.mu.Lock()
+	if cm.cancelling {
+		cm.mu.Unlock()
+		cm.logger.Info("Dropping queued batch during cancellation", "kind", b.Kind)
+		return
+	}
 	// Producer-side invalidation (see pendingBatch.isStale): a subagent-done
 	// batch whose result has already reached the parent via a synchronous
 	// wait=true tool call is discarded rather than enqueued. Evaluated under
@@ -1929,6 +1946,8 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	cm.loop = loopInstance
 	cm.loopCancel = cancel
 	cm.loopCtx = processCtx
+	loopDone := make(chan struct{})
+	cm.loopDone = loopDone
 	cm.modelID = modelID
 	cm.toolSet = toolSet
 	// The cwd was read at the top of this function and baked into the toolset,
@@ -1953,6 +1972,7 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	}
 
 	go func() {
+		defer close(loopDone)
 		err := loopInstance.Go(processCtx)
 		if err == nil || err == context.DeadlineExceeded || err == context.Canceled {
 			return
@@ -1978,6 +1998,7 @@ func (cm *ConversationManager) handleFatalLoopExit(loopInstance *loop.Loop) {
 	toolSet := cm.toolSet
 	cm.loopCancel = nil
 	cm.loopCtx = nil
+	cm.loopDone = nil
 	cm.loop = nil
 	cm.modelID = ""
 	cm.toolSet = nil
@@ -2009,6 +2030,9 @@ func (cm *ConversationManager) ResetLoop() {
 }
 
 func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+
 	cm.mu.Lock()
 	cancel := cm.loopCancel
 	toolSet := cm.toolSet
@@ -2031,86 +2055,26 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 	}
 }
 
-type unresolvedToolCall struct {
-	id   string
-	name string
-}
-
-func lastUnresolvedToolCalls(history []llm.Message) []unresolvedToolCall {
-	lastToolUseAssistantIdx := -1
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role != llm.MessageRoleAssistant {
-			continue
-		}
-		for _, content := range history[i].Content {
-			if content.Type == llm.ContentTypeToolUse {
-				lastToolUseAssistantIdx = i
-				break
-			}
-		}
-		if lastToolUseAssistantIdx >= 0 {
-			break
-		}
-	}
-	if lastToolUseAssistantIdx < 0 {
-		return nil
-	}
-
-	toolResultIDs := make(map[string]bool)
-	for _, msg := range history[lastToolUseAssistantIdx+1:] {
-		if msg.Role != llm.MessageRoleUser {
-			continue
-		}
-		for _, content := range msg.Content {
-			if content.Type == llm.ContentTypeToolResult {
-				toolResultIDs[content.ToolUseID] = true
-			}
-		}
-	}
-
-	var unresolved []unresolvedToolCall
-	for _, content := range history[lastToolUseAssistantIdx].Content {
-		if content.Type == llm.ContentTypeToolUse && !toolResultIDs[content.ID] {
-			unresolved = append(unresolved, unresolvedToolCall{id: content.ID, name: content.ToolName})
-		}
-	}
-	return unresolved
-}
-
-func cancelledToolResults(tools []unresolvedToolCall, cancelTime time.Time) []llm.Content {
-	contents := make([]llm.Content, 0, len(tools))
-	for _, tool := range tools {
-		contents = append(contents, llm.Content{
-			Type:             llm.ContentTypeToolResult,
-			ToolUseID:        tool.id,
-			ToolError:        true,
-			ToolResult:       []llm.Content{{Type: llm.ContentTypeText, Text: "Tool execution cancelled by user"}},
-			ToolUseStartTime: &cancelTime,
-			ToolUseEndTime:   &cancelTime,
-		})
-	}
-	return contents
-}
-
-// CancelConversation cancels the current conversation loop and records cancelled results for tools in progress.
+// CancelConversation cancels the active loop and synchronously ends its turn.
+// The loop records the complete tool-result batch, including partial output from
+// cancelled tools, before this method writes the end-of-turn marker.
 func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+
 	cm.mu.Lock()
 	loopInstance := cm.loop
+	loopDone := cm.loopDone
 	cancel := cm.loopCancel
+	if loopInstance != nil {
+		cm.cancelling = true
+	}
 	cm.mu.Unlock()
 
 	if loopInstance == nil {
 		cm.logger.Info("No active loop to cancel")
 		return nil
 	}
-
-	// Mark the manager as cancelling so the synthetic "[Operation cancelled]"
-	// end-of-turn message recorded below does not fire onDone — a cancellation
-	// is not a subagent completion and must not notify the parent. Cleared
-	// once teardown finishes.
-	cm.mu.Lock()
-	cm.cancelling = true
-	cm.mu.Unlock()
 	defer func() {
 		cm.mu.Lock()
 		cm.cancelling = false
@@ -2118,83 +2082,45 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 	}()
 
 	cm.logger.Info("Cancelling conversation")
-
-	// Cancel atomically relative to tool-result publication, then snapshot every
-	// call from the latest assistant tool-use message without a matching result.
-	// Results claimed before cancellation are persisted first; later results are
-	// suppressed so cancellation can record exactly one result per call.
-	unresolvedTools := lastUnresolvedToolCalls(loopInstance.CancelAndGetHistory(cancel))
-
-	var cancelledMessage *llm.Message
-	if len(unresolvedTools) > 0 {
-		cancelTime := time.Now()
-		for _, tool := range unresolvedTools {
-			cm.logger.Info("Recording cancelled tool result", "tool_id", tool.id, "tool_name", tool.name)
-		}
-		message := llm.Message{
-			Role:    llm.MessageRoleUser,
-			Content: cancelledToolResults(unresolvedTools, cancelTime),
-		}
-		cancelledMessage = &message
-	}
-
-	// Clear pending queued batches BEFORE recording the end-of-turn message.
-	// The end-of-turn message triggers drainPendingMessages via
-	// notifySubscribers; clearing first ensures the drain finds nothing to
-	// process. We DROP everything on cancel — including pending
-	// subagent-done notifications — because a cancelled turn means the user
-	// is taking over; any followups they want to ask about subagents will
-	// arrive as new user messages.
 	cm.mu.Lock()
 	cm.pendingBatches = nil
 	cm.mu.Unlock()
 
-	// Clear the persistent queued_messages array when it actually holds
-	// entries. We must NOT gate this on the in-memory pendingBatches, which can
-	// diverge from the array (e.g. after a restart the manager may be re-created
-	// with an empty queue while the array still holds entries) — instead we read
-	// the persisted column (cheap reader-pool query) and only issue the
-	// writer-pool clear when there is something to clear. The common cancel case
-	// has an empty queue, so this avoids an extra transaction on SQLite's single
-	// writer connection in the cancel hot path.
-	if conv, err := cm.db.GetConversationByID(ctx, cm.conversationID); err != nil {
+	persistCtx := context.WithoutCancel(ctx)
+	if conv, err := cm.db.GetConversationByID(persistCtx, cm.conversationID); err != nil {
 		cm.logger.Error("Failed to read queued messages on cancel", "error", err)
 	} else if conv.QueuedMessages != "" && conv.QueuedMessages != "[]" {
-		if _, err := cm.db.ClearQueuedMessages(ctx, cm.conversationID); err != nil {
+		if _, err := cm.db.ClearQueuedMessages(persistCtx, cm.conversationID); err != nil {
 			cm.logger.Error("Failed to clear queued messages on cancel", "error", err)
 		}
 	}
 
-	// Always record an assistant message with EndOfTurn to properly end the turn
-	// This ensures agentWorking() returns false, even if no tool was executing
+	if cancel != nil {
+		cancel()
+	}
+	if loopDone != nil {
+		<-loopDone
+	}
+
 	endTurnMessage := llm.Message{
 		Role:      llm.MessageRoleAssistant,
 		Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "[Operation cancelled]"}},
 		EndOfTurn: true,
 	}
-
-	inputs := make([]recordMessageInput, 0, 2)
-	if cancelledMessage != nil {
-		inputs = append(inputs, recordMessageInput{message: *cancelledMessage})
-	}
-	inputs = append(inputs, recordMessageInput{message: endTurnMessage})
-	if cm.recordMessageBatch == nil {
-		return errors.New("conversation manager has no batch message recorder")
-	}
-	if err := cm.recordMessageBatch(context.WithoutCancel(ctx), inputs); err != nil {
-		cm.logger.Error("Failed to record cancellation messages", "error", err)
-		return fmt.Errorf("failed to record cancellation messages: %w", err)
+	if err := cm.recordMessage(persistCtx, endTurnMessage, llm.Usage{}, nil); err != nil {
+		cm.logger.Error("Failed to record end turn message", "error", err)
+		return fmt.Errorf("failed to record end turn message: %w", err)
 	}
 
+	cm.SetAgentWorking(false)
 	cm.mu.Lock()
 	cm.loopCancel = nil
 	cm.loopCtx = nil
+	cm.loopDone = nil
 	cm.loop = nil
 	cm.modelID = ""
-	// Reset hydrated so that the next AcceptUserMessage will reload history from the database
 	cm.hydrated = false
 	cm.mu.Unlock()
-
 	return nil
 }
 
