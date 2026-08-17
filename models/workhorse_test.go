@@ -135,6 +135,7 @@ func TestWorkhorseDoDisablesReasoning(t *testing.T) {
 		t.Fatalf("caller request was mutated: (%v, %q)", req.ThinkingLevel, req.ReasoningEffort)
 	}
 }
+
 func TestWorkhorseDoFallsBackToConversationModel(t *testing.T) {
 	workhorse := &recordingService{err: errors.New("retired")}
 	conversation := &recordingService{}

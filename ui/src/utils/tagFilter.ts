@@ -284,8 +284,7 @@ export function parseSearchQuery(raw: string): ParsedQuery {
 export function completeTermInQuery(raw: string, term: string): string {
   const { terms, endsMidTerm } = tokenize(raw);
   const last = terms[terms.length - 1];
-  const replacing =
-    last !== undefined && last.toLowerCase().startsWith(TAG_PREFIX) && endsMidTerm;
+  const replacing = last !== undefined && last.toLowerCase().startsWith(TAG_PREFIX) && endsMidTerm;
   const kept = replacing ? terms.slice(0, -1) : terms;
   return [...kept, term].join(" ") + " ";
 }

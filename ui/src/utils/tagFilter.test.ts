@@ -128,10 +128,7 @@ run("matchTags matches anywhere and ranks prefix hits first", () => {
   assertEqual(names(""), ["integration", "terminal-work", "in-progress"], "empty offers all");
   // `work` appears mid-string in terminal-work, and as a prefix in workflow;
   // the prefix hit ranks first even though it is less used.
-  const pool2 = [
-    conv("1", ["terminal-work", "workflow"]),
-    conv("2", ["terminal-work"]),
-  ];
+  const pool2 = [conv("1", ["terminal-work", "workflow"]), conv("2", ["terminal-work"])];
   assertEqual(
     matchTags(pool2, "work", []).map((o) => o.tag),
     ["workflow", "terminal-work"],
@@ -149,7 +146,11 @@ run("matchTags matches anywhere and ranks prefix hits first", () => {
   );
   // Tags already on the conversation are excluded from its own suggestions.
   assertEqual(names("in", ["in-progress"]), ["integration", "terminal-work"], "own tags excluded");
-  assertEqual(names("in", ["In-Progress"]), ["integration", "terminal-work"], "exclusion folds case");
+  assertEqual(
+    names("in", ["In-Progress"]),
+    ["integration", "terminal-work"],
+    "exclusion folds case",
+  );
 });
 
 run("offered tags sort by count descending then alphabetically", () => {

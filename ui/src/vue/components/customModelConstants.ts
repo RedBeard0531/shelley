@@ -61,7 +61,15 @@ export const REASONING_EFFORT_SUGGESTIONS = [
   "max",
 ];
 
-export const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export const REASONING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
 export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
 export type ReasoningMap = Record<ReasoningLevel, string>;
 export const DEFAULT_REASONING_MAP: ReasoningMap = Object.fromEntries(
