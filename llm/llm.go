@@ -68,9 +68,12 @@ func FirstText(resp *Response) string {
 	return ""
 }
 
-// ClampThinkingLevel rounds an unsupported generic level to the nearest
-// supported level. Off is a mode rather than an effort tier: non-off values
-// only consider non-off candidates. Equal distances choose the lower effort.
+// ClampThinkingLevel rounds an unsupported level to one that is supported,
+// preferring a HIGHER effort: an exact match wins, else the closest supported
+// level above, else the closest supported level below. Rounding up keeps a
+// user's intent from silently degrading when a model advertises a sparser
+// list (e.g. xhigh lands on max, not on high). Off is a mode rather than an
+// effort tier: non-off levels only consider non-off candidates.
 func ClampThinkingLevel(level ThinkingLevel, supported []ThinkingLevel) ThinkingLevel {
 	if level == ThinkingLevelDefault || len(supported) == 0 {
 		return level
@@ -80,25 +83,29 @@ func ClampThinkingLevel(level ThinkingLevel, supported []ThinkingLevel) Thinking
 			return level
 		}
 	}
-	best := ThinkingLevelDefault
-	bestDistance := int(^uint(0) >> 1)
+	closestHigher := ThinkingLevelDefault
+	closestLower := ThinkingLevelDefault
 	for _, candidate := range supported {
 		if level != ThinkingLevelOff && candidate == ThinkingLevelOff {
 			continue
 		}
-		distance := int(candidate) - int(level)
-		if distance < 0 {
-			distance = -distance
-		}
-		if distance < bestDistance || distance == bestDistance && candidate < best {
-			best = candidate
-			bestDistance = distance
+		if candidate > level {
+			if closestHigher == ThinkingLevelDefault || candidate < closestHigher {
+				closestHigher = candidate
+			}
+		} else if candidate < level {
+			if closestLower == ThinkingLevelDefault || candidate > closestLower {
+				closestLower = candidate
+			}
 		}
 	}
-	if best == ThinkingLevelDefault {
-		return level
+	if closestHigher != ThinkingLevelDefault {
+		return closestHigher
 	}
-	return best
+	if closestLower != ThinkingLevelDefault {
+		return closestLower
+	}
+	return level
 }
 
 type PatchProfiler interface {

@@ -638,8 +638,10 @@ func TestClampThinkingLevel(t *testing.T) {
 	}{
 		{name: "supported unchanged", level: ThinkingLevelHigh, supported: []ThinkingLevel{ThinkingLevelLow, ThinkingLevelHigh}, want: ThinkingLevelHigh},
 		{name: "unknown levels unchanged", level: ThinkingLevelMax, want: ThinkingLevelMax},
-		{name: "max rounds down", level: ThinkingLevelMax, supported: []ThinkingLevel{ThinkingLevelOff, ThinkingLevelHigh, ThinkingLevelXHigh}, want: ThinkingLevelXHigh},
-		{name: "tie rounds lower", level: ThinkingLevelXHigh, supported: []ThinkingLevel{ThinkingLevelHigh, ThinkingLevelMax}, want: ThinkingLevelHigh},
+		{name: "max rounds down when nothing higher", level: ThinkingLevelMax, supported: []ThinkingLevel{ThinkingLevelOff, ThinkingLevelHigh, ThinkingLevelXHigh}, want: ThinkingLevelXHigh},
+		{name: "higher wins ties (xhigh rounds up to max)", level: ThinkingLevelXHigh, supported: []ThinkingLevel{ThinkingLevelHigh, ThinkingLevelMax}, want: ThinkingLevelMax},
+		{name: "rounds up to closest higher", level: ThinkingLevelMedium, supported: []ThinkingLevel{ThinkingLevelHigh, ThinkingLevelMax}, want: ThinkingLevelHigh},
+		{name: "rounds up across gaps", level: ThinkingLevelLow, supported: []ThinkingLevel{ThinkingLevelOff, ThinkingLevelMax}, want: ThinkingLevelMax},
 		{name: "non-off never rounds to off", level: ThinkingLevelMinimal, supported: []ThinkingLevel{ThinkingLevelOff, ThinkingLevelLow}, want: ThinkingLevelLow},
 		{name: "unsupported off uses lowest tier", level: ThinkingLevelOff, supported: []ThinkingLevel{ThinkingLevelLow, ThinkingLevelHigh}, want: ThinkingLevelLow},
 	}

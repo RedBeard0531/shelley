@@ -1486,17 +1486,16 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		genericEffort = true
 	}
 	// Exact models.dev effort lists use one rounding rule. Models without an
-	// exact list retain the historical conservative chat-completions clamps.
+	// exact list are reasoning toggles: any generic level collapses to bare
+	// "on" — omit the effort and let the provider reason at its default.
 	// Provider-verbatim values from the service or request are never clamped.
 	if genericEffort && req.ReasoningEffort != "" {
 		if len(levels) > 0 {
 			req.ReasoningEffort = clampKnownReasoningEffort(req.ReasoningEffort, levels)
 		} else {
 			switch req.ReasoningEffort {
-			case "minimal":
-				req.ReasoningEffort = "low"
-			case "xhigh", "max":
-				req.ReasoningEffort = "high"
+			case "minimal", "low", "medium", "high", "xhigh", "max":
+				req.ReasoningEffort = ""
 			}
 		}
 	}
