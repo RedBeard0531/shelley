@@ -81,11 +81,11 @@ func TestConversationStreamFlushesEarlyHeartbeat(t *testing.T) {
 	<-done
 }
 
-// TestConversationListOnlyStreamDoesNotSendEarlyHeartbeat preserves the
-// existing contract for the list-only stream: when the client supplies a
-// conversation_list_hash that matches the current snapshot and no conversation,
-// the server stays silent until something actually changes.
-func TestConversationListOnlyStreamDoesNotSendEarlyHeartbeat(t *testing.T) {
+// TestConversationListOnlyStreamFlushesEarlyHeartbeat verifies that a caught-up
+// list-only stream still commits its headers immediately. Android bounds the
+// response-header wait, so leaving this path silent until the 30s periodic
+// heartbeat makes a healthy resume indistinguishable from a hung proxy.
+func TestConversationListOnlyStreamFlushesEarlyHeartbeat(t *testing.T) {
 	t.Parallel()
 	server, _, _ := newTestServer(t)
 	if err := server.conversationListStream.recompute(context.Background()); err != nil {
@@ -105,8 +105,20 @@ func TestConversationListOnlyStreamDoesNotSendEarlyHeartbeat(t *testing.T) {
 
 	select {
 	case <-rec.flushed:
-		t.Fatalf("list-only stream should be silent until a change; got body=%q", rec.getString())
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(2 * time.Second):
+		t.Fatalf("list-only stream did not flush an early heartbeat; body=%q", rec.getString())
+	}
+
+	parts := strings.SplitN(rec.getString(), "\n\n", 2)
+	if len(parts) < 1 || !strings.HasPrefix(parts[0], "data: ") {
+		t.Fatalf("expected first chunk to start with 'data: ', got %q", rec.getString())
+	}
+	var first StreamResponse
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(parts[0], "data: ")), &first); err != nil {
+		t.Fatalf("unmarshal first chunk: %v; body=%q", err, rec.getString())
+	}
+	if !first.Heartbeat || len(first.Messages) != 0 || first.Conversation != nil || first.ConversationListPatch != nil {
+		t.Fatalf("list-only first chunk should be a bare heartbeat, got %+v", first)
 	}
 
 	cancel()
@@ -253,26 +265,17 @@ func TestUnifiedStreamClosesWhenItsSubscriptionFallsBehind(t *testing.T) {
 		close(done)
 	}()
 
-	// Broadcast slowly until the handler has subscribed and blocks writing its
-	// first event. The pacing prevents setup itself from overflowing the
-	// subscription before the writer can signal that it was reached.
-	setupTicker := time.NewTicker(10 * time.Millisecond)
-	defer setupTicker.Stop()
-	setupTimeout := time.NewTimer(2 * time.Second)
-	defer setupTimeout.Stop()
-setup:
-	for {
-		select {
-		case <-w.entered:
-			break setup
-		case <-setupTicker.C:
-			server.streamPub.Broadcast(StreamResponse{Heartbeat: true})
-		case <-setupTimeout.C:
-			w.releaseWrite()
-			cancel()
-			<-done
-			t.Fatal("stream never started writing")
-		}
+	// The caught-up stream writes its early heartbeat immediately. Wait for that
+	// write to block, then overflow streamPub. This is also an ordering check:
+	// the handler must subscribe before writing the heartbeat, or the burst has
+	// no subscriber to drop and the response stays falsely healthy forever.
+	select {
+	case <-w.entered:
+	case <-time.After(2 * time.Second):
+		w.releaseWrite()
+		cancel()
+		<-done
+		t.Fatal("stream never started writing")
 	}
 
 	// With the response blocked, this burst exceeds both bounded queues and
