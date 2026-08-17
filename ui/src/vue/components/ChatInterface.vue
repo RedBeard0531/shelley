@@ -466,6 +466,7 @@ import {
   normalizeThinkingLevelForModel,
   THINKING_LEVEL_KEY,
   storedThinkingLevel,
+  type ReasoningModelCapabilities,
   type ThinkingLevel,
 } from "./thinkingLevel";
 import { SELECTED_MODEL_KEY, pickReadyModel, storedSelectedModel } from "./selectedModel";
@@ -668,9 +669,13 @@ function setThinkingLevel(level: ThinkingLevel) {
   localStorage.setItem(THINKING_LEVEL_KEY, level);
 }
 
-function thinkingLevelForModel(modelId: string, level: ThinkingLevel): ThinkingLevel {
+function thinkingLevelForModel(
+  modelId: string,
+  level: ThinkingLevel,
+  source?: ReasoningModelCapabilities | undefined,
+): ThinkingLevel {
   const model = models.value.find((candidate) => candidate.id === modelId);
-  return normalizeThinkingLevelForModel(level, model);
+  return normalizeThinkingLevelForModel(level, model, source);
 }
 
 // selectedModel is "" when the server serves no models. Deliberately no
@@ -747,7 +752,7 @@ async function sendModelCommand(arg: string) {
 
 function switchConversationModel(model: string) {
   if (model === selectedModel.value) return;
-  const rounded = thinkingLevelForModel(model, thinkingLevel.value);
+  const rounded = thinkingLevelForModel(model, thinkingLevel.value, selectedModelInfo.value);
   const arg =
     rounded !== "default" && rounded !== thinkingLevel.value ? `${model} ${rounded}` : model;
   return sendModelCommand(arg);
@@ -783,7 +788,7 @@ function switchConversationThinkingLevel(level: ThinkingLevel) {
 // would drop a legitimate re-pick of the original model made while a previous
 // pick's PUT was still in flight.
 function setSelectedModel(model: string) {
-  const rounded = thinkingLevelForModel(model, thinkingLevel.value);
+  const rounded = thinkingLevelForModel(model, thinkingLevel.value, selectedModelInfo.value);
   if (rounded !== thinkingLevel.value) setThinkingLevel(rounded);
   applyModel(model);
   // Keep the server-side draft row in sync with the picker. Without this,
@@ -1513,9 +1518,9 @@ const otherUsageRows = computed<OtherUsageRow[]>(() => usageData.value.otherRows
 
 watch(
   selectedModelInfo,
-  (model) => {
+  (model, prev) => {
     if (!model) return;
-    const rounded = thinkingLevelForModel(model.id, thinkingLevel.value);
+    const rounded = thinkingLevelForModel(model.id, thinkingLevel.value, prev);
     if (rounded !== thinkingLevel.value) setThinkingLevel(rounded);
   },
   { immediate: true },

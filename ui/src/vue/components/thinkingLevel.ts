@@ -39,8 +39,12 @@ export function supportedThinkingLevels(
   return CONCRETE_THINKING_LEVELS.filter((level) => level !== "max");
 }
 
-// Round to the nearest supported level. Off is a mode rather than an effort
-// tier, so non-off values never round to off. Equal distances round lower.
+// roundThinkingLevel rounds an unsupported level to a supported one,
+// preferring a HIGHER effort: an exact match wins, else the closest supported
+// level above, else the closest supported level below. Rounding up keeps a
+// user's intent from silently degrading when a model advertises a sparser
+// list (e.g. xhigh lands on max, not on high). Off is a mode rather than an
+// effort tier: non-off values never round to off.
 export function roundThinkingLevel(
   level: Exclude<ThinkingLevel, "default">,
   supported: readonly Exclude<ThinkingLevel, "default">[],
@@ -51,11 +55,27 @@ export function roundThinkingLevel(
   );
   if (candidates.length === 0) return level;
   const target = CONCRETE_THINKING_LEVELS.indexOf(level);
-  return candidates.reduce((best, candidate) => {
-    const candidateDistance = Math.abs(CONCRETE_THINKING_LEVELS.indexOf(candidate) - target);
-    const bestDistance = Math.abs(CONCRETE_THINKING_LEVELS.indexOf(best) - target);
-    return candidateDistance < bestDistance ? candidate : best;
-  });
+  const higher = CONCRETE_THINKING_LEVELS.filter(
+    (candidate) => candidates.includes(candidate) && CONCRETE_THINKING_LEVELS.indexOf(candidate) > target,
+  );
+  if (higher.length > 0) {
+    return higher.reduce((best, candidate) =>
+      CONCRETE_THINKING_LEVELS.indexOf(candidate) < CONCRETE_THINKING_LEVELS.indexOf(best)
+        ? candidate
+        : best,
+    );
+  }
+  const lower = candidates.filter(
+    (candidate) => CONCRETE_THINKING_LEVELS.indexOf(candidate) < target,
+  );
+  if (lower.length > 0) {
+    return lower.reduce((best, candidate) =>
+      CONCRETE_THINKING_LEVELS.indexOf(candidate) > CONCRETE_THINKING_LEVELS.indexOf(best)
+        ? candidate
+        : best,
+    );
+  }
+  return level;
 }
 
 export interface ReasoningModelCapabilities {
@@ -63,22 +83,53 @@ export interface ReasoningModelCapabilities {
   reasoning_levels?: Exclude<ThinkingLevel, "default">[];
 }
 
+// isToggleOnlyReasoning reports whether a model reasons but advertises no
+// effort list, i.e. its reasoning is a bare on/off toggle.
+function isToggleOnlyReasoning(
+  model: ReasoningModelCapabilities | undefined,
+): model is ReasoningModelCapabilities {
+  return (
+    model !== undefined &&
+    model.supports_reasoning === true &&
+    !model.reasoning_levels?.length
+  );
+}
+
+// normalizeThinkingLevelForModel translates a stored reasoning level when the
+// active model changes. source is the model being left (undefined when
+// unknown); model is the model becoming active.
+//
+// Preferring a HIGHER effort: an exact match wins, then the closest supported
+// level above, then the closest below. A bare "on" (the "default"/auto state)
+// carried over from a reasoning toggle (a reasoning model with no advertised
+// effort list) names itself as "high" before clamping, so it lands in the
+// target's list. Toggle-only targets can't express efforts: any generic level
+// collapses to bare "on" regardless of its source; "off" stays meaningful.
 export function normalizeThinkingLevelForModel(
   level: ThinkingLevel,
   model: ReasoningModelCapabilities | undefined,
+  source?: ReasoningModelCapabilities | undefined,
 ): ThinkingLevel {
-  if (level === "default") return level;
   if (!model || model.supports_reasoning === false) return "default";
   if (model.reasoning_levels?.length) {
+    if (level === "default") {
+      // Bare "on" picked up on a toggle-only model: name it as high before
+      // landing in this model's effort list.
+      if (isToggleOnlyReasoning(source)) {
+        const rounded = roundThinkingLevel("high", model.reasoning_levels);
+        return model.reasoning_levels.includes(rounded) ? rounded : "default";
+      }
+      return "default";
+    }
     const rounded = roundThinkingLevel(level, model.reasoning_levels);
     // Rounding can fail to land on a supported level (e.g. an off-only
     // model never attracts non-off levels); reset rather than send a level
     // the server would reject.
     return model.reasoning_levels.includes(rounded) ? rounded : "default";
   }
-  // Unknown models keep the historical standard set through xhigh. Max must
-  // be explicitly advertised.
-  return level === "max" ? "default" : level;
+  // Toggle-only target: efforts aren't expressible. Any generic level is a
+  // bare "on" regardless of where it came from; off stays meaningful.
+  return level === "off" ? "off" : "default";
 }
 
 export const THINKING_LEVEL_KEY = "shelley.thinkingLevel.v2";

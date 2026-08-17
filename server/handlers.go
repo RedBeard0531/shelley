@@ -2534,7 +2534,7 @@ func (s *Server) handleModelCommand(ctx context.Context, w http.ResponseWriter, 
 			return reply(msg)
 		}
 	} else if modelSet {
-		if rounded, changed := roundModelReasoningLevel(targetInfo, currentReasoning); changed {
+		if rounded, changed := roundModelReasoningLevel(findModelInfo(currentModel, modelList), targetInfo, currentReasoning); changed {
 			reasoningSet = true
 			newReasoning = rounded
 		}
@@ -3999,15 +3999,41 @@ func findModelInfo(id string, models []ModelInfo) *ModelInfo {
 	return nil
 }
 
-func roundModelReasoningLevel(model *ModelInfo, level string) (string, bool) {
-	if level == "" || model == nil {
+// roundModelReasoningLevel translates a conversation's reasoning level when
+// the active model changes to one with a different vocabulary. source is the
+// model the level was chosen on (nil when unknown), target is the model
+// becoming active; level "" is a bare "on" (reasoning enabled, no effort).
+//
+// Effort-list targets clamp via llm.ClampThinkingLevel (exact match, then the
+// closest higher level, then the closest lower). A bare "on" carried over
+// from a reasoning toggle (a reasoning model with no advertised effort list)
+// names itself as "high" before clamping, so it lands in the target's list.
+// Toggle-only targets can't express efforts: any generic level collapses to
+// bare "on" regardless of its source; "off" stays meaningful.
+func roundModelReasoningLevel(source, model *ModelInfo, level string) (string, bool) {
+	if model == nil {
 		return level, false
+	}
+	original := level
+	if level == "" {
+		// Bare "on": only meaningful once an effort list is involved, and
+		// only spelled "high" when it genuinely came from a reasoning toggle
+		// (a reasoning model with no advertised effort list). A source that
+		// doesn't reason at all isn't a bare "on" — it's no reasoning.
+		if len(model.ReasoningLevels) > 0 && source != nil && source.SupportsReasoning && len(source.ReasoningLevels) == 0 {
+			level = "high"
+		} else {
+			return level, false
+		}
 	}
 	if !model.SupportsReasoning {
 		return "", true
 	}
 	if len(model.ReasoningLevels) == 0 {
-		if level == "max" {
+		// Toggle-only target: efforts aren't expressible. Any generic level
+		// is a bare "on" regardless of where it came from; off stays
+		// meaningful.
+		if level != "off" {
 			return "", true
 		}
 		return level, false
@@ -4025,7 +4051,7 @@ func roundModelReasoningLevel(model *ModelInfo, level string) (string, bool) {
 		// of persisting an unsendable level.
 		return "", true
 	}
-	return rounded, rounded != level
+	return rounded, rounded != original
 }
 
 func validateModelReasoningLevel(model *ModelInfo, level string) string {

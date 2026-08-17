@@ -24,22 +24,32 @@ import (
 // the shared clamp; the rounding rules themselves are pinned by
 // llm.TestClampThinkingLevel.
 func TestRoundModelReasoningLevel(t *testing.T) {
+	effort := &ModelInfo{SupportsReasoning: true, ReasoningLevels: []string{"off", "high", "max"}}
+	toggle := &ModelInfo{SupportsReasoning: true}
 	tests := []struct {
-		name  string
-		model *ModelInfo
-		level string
-		want  string
-		moved bool
+		name   string
+		source *ModelInfo
+		model  *ModelInfo
+		level  string
+		want   string
+		moved  bool
 	}{
-		{name: "supported unchanged", model: &ModelInfo{SupportsReasoning: true, ReasoningLevels: []string{"low", "high"}}, level: "high", want: "high"},
-		{name: "off-only model resets non-off", model: &ModelInfo{SupportsReasoning: true, ReasoningLevels: []string{"off"}}, level: "high", want: "", moved: true},
-		{name: "unsupported model resets", model: &ModelInfo{}, level: "high", want: "", moved: true},
-		{name: "unadvertised max resets", model: &ModelInfo{SupportsReasoning: true}, level: "max", want: "", moved: true},
-		{name: "unknown levels keep standard", model: &ModelInfo{SupportsReasoning: true}, level: "xhigh", want: "xhigh"},
+		{name: "supported unchanged", source: nil, model: &ModelInfo{SupportsReasoning: true, ReasoningLevels: []string{"low", "high"}}, level: "high", want: "high"},
+		{name: "off-only model resets non-off", source: nil, model: &ModelInfo{SupportsReasoning: true, ReasoningLevels: []string{"off"}}, level: "high", want: "", moved: true},
+		{name: "unsupported model resets", source: nil, model: &ModelInfo{}, level: "high", want: "", moved: true},
+		{name: "max resets on toggle target", source: nil, model: &ModelInfo{SupportsReasoning: true}, level: "max", want: "", moved: true},
+		{name: "effort collapses on toggle target regardless of source", source: nil, model: &ModelInfo{SupportsReasoning: true}, level: "xhigh", want: "", moved: true},
+		{name: "xhigh rounds up when max advertised", source: nil, model: effort, level: "xhigh", want: "max", moved: true},
+		{name: "bare on from toggle source names itself high", source: toggle, model: effort, level: "", want: "high", moved: true},
+		{name: "bare on from toggle source rounds up", source: toggle, model: &ModelInfo{SupportsReasoning: true, ReasoningLevels: []string{"off", "max"}}, level: "", want: "max", moved: true},
+		{name: "bare on from effort source stays bare", source: effort, model: effort, level: "", want: "", moved: false},
+		{name: "bare on from non-reasoning source stays bare", source: &ModelInfo{}, model: effort, level: "", want: "", moved: false},
+		{name: "off survives onto toggle target", source: effort, model: toggle, level: "off", want: "off", moved: false},
+		{name: "toggle-sourced effort collapses on toggle target", source: toggle, model: toggle, level: "xhigh", want: "", moved: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, moved := roundModelReasoningLevel(tt.model, tt.level)
+			got, moved := roundModelReasoningLevel(tt.source, tt.model, tt.level)
 			if got != tt.want || moved != tt.moved {
 				t.Fatalf("roundModelReasoningLevel() = (%q, %v), want (%q, %v)", got, moved, tt.want, tt.moved)
 			}

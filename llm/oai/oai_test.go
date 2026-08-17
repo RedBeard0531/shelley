@@ -2219,26 +2219,29 @@ func TestServiceReasoningEffort(t *testing.T) {
 		wantEffort string // "" means absent
 	}{
 		{name: "all zero", wantEffort: ""},
-		{name: "svc default medium", svcLevel: llm.ThinkingLevelMedium, wantEffort: "medium"},
-		{name: "svc high", svcLevel: llm.ThinkingLevelHigh, wantEffort: "high"},
-		{name: "svc xhigh clamped to high", svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
-		{name: "svc max clamped to high", svcLevel: llm.ThinkingLevelMax, wantEffort: "high"},
+		// Models without an advertised effort list are reasoning toggles: any
+		// generic level collapses to bare "on" (effort omitted, provider
+		// default applies). GPT41 (the zero-value test model) has no list.
+		{name: "svc default medium collapses to bare on", svcLevel: llm.ThinkingLevelMedium, wantEffort: ""},
+		{name: "svc high collapses to bare on", svcLevel: llm.ThinkingLevelHigh, wantEffort: ""},
+		{name: "svc xhigh collapses to bare on", svcLevel: llm.ThinkingLevelXHigh, wantEffort: ""},
+		{name: "svc max collapses to bare on", svcLevel: llm.ThinkingLevelMax, wantEffort: ""},
 		{name: "gpt-5.6 minimal rounds to low", model: GPT56Sol, svcLevel: llm.ThinkingLevelMinimal, wantEffort: "low"},
 		{name: "gpt-5.6 off sends none", model: GPT56Sol, reqLevel: llm.ThinkingLevelOff, wantEffort: "none"},
 		{name: "GLM low rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelLow, wantEffort: "high"},
-		{name: "GLM xhigh tie rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
-		{name: "Kimi xhigh tie rounds to high", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
+		{name: "GLM xhigh rounds up to max", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "max"},
+		{name: "Kimi K3 xhigh rounds up to max", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "max"},
 		{name: "DeepSeek V4 Pro keeps max", model: DeepseekV4ProFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "DeepSeek V4 Flash keeps max", model: DeepseekV4FlashFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "GLM 5.2 keeps max", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "Kimi K3 keeps max", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "svc off, svc verbatim wins", svcLevel: llm.ThinkingLevelOff, svcEffort: "verbatim", wantEffort: "verbatim"},
-		{name: "req override beats svc default", svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelLow, wantEffort: "low"},
+		{name: "req override beats svc default", svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelLow, wantEffort: ""},
 		{name: "req off wins", svcLevel: llm.ThinkingLevelMedium, svcEffort: "v", reqLevel: llm.ThinkingLevelOff, wantEffort: ""},
-		{name: "req level overrides configured none", svcEffort: "none", reqLevel: llm.ThinkingLevelMedium, wantEffort: "medium"},
+		{name: "req level overrides configured none", svcEffort: "none", reqLevel: llm.ThinkingLevelMedium, wantEffort: ""},
 		{name: "default uses configured none", svcEffort: "none", wantEffort: "none"},
 		{name: "req off sends configured none", svcEffort: "none", reqLevel: llm.ThinkingLevelOff, wantEffort: "none"},
-		{name: "req xhigh beats svc verbatim, clamped to high", svcLevel: llm.ThinkingLevelMedium, svcEffort: "v", reqLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
+		{name: "req xhigh beats svc verbatim, collapses to bare on", svcLevel: llm.ThinkingLevelMedium, svcEffort: "v", reqLevel: llm.ThinkingLevelXHigh, wantEffort: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2278,5 +2281,105 @@ func TestServiceReasoningEffort(t *testing.T) {
 				t.Errorf("reasoning_effort = %q, want %q", gotEffort, tt.wantEffort)
 			}
 		})
+	}
+}
+func TestServiceDoFireworksDeepSeekV4ReasoningControls(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		level llm.ThinkingLevel
+		want  string
+	}{
+		{name: "off", level: llm.ThinkingLevelOff, want: "none"},
+		// xhigh isn't advertised for DeepSeek V4; the clamp rounds UP to the
+		// closest advertised level above, which is max.
+		{name: "xhigh rounds up to max", level: llm.ThinkingLevelXHigh, want: "max"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req openai.ChatCompletionRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				got = req.ReasoningEffort
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{
+					Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
+					FinishReason: "stop",
+				}}})
+			}))
+			defer server.Close()
+
+			svc := &Service{
+				APIKey:       "k",
+				Model:        DeepseekV4Flash0731Fireworks,
+				ModelURL:     server.URL + "/v1",
+				ProviderName: "fireworks",
+			}
+			if _, err := svc.Do(context.Background(), &llm.Request{
+				Messages:      []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+				ThinkingLevel: tt.level,
+			}); err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("reasoning_effort = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServiceDoToggleModelCollapsesEffortToBareOn(t *testing.T) {
+	// Kimi K2.6 has no advertised effort list (a reasoning toggle): any
+	// generic level sent to it collapses to bare "on" — the reasonig_effort
+	// field is omitted and the provider reasons at its default.
+	var got string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openai.ChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		got = req.ReasoningEffort
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{
+			Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
+			FinishReason: "stop",
+		}}})
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey:       "k",
+		Model:        KimiK26Fireworks,
+		ModelURL:     server.URL + "/v1",
+		ProviderName: "fireworks",
+	}
+	for _, level := range []llm.ThinkingLevel{
+		llm.ThinkingLevelLow, llm.ThinkingLevelHigh, llm.ThinkingLevelXHigh, llm.ThinkingLevelMax,
+	} {
+		if _, err := svc.Do(context.Background(), &llm.Request{
+			Messages:      []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+			ThinkingLevel: level,
+		}); err != nil {
+			t.Fatalf("Do(%s) error = %v", level.Name(), err)
+		}
+		if got != "" {
+			t.Errorf("ThinkingLevel=%s: reasoning_effort = %q, want bare on (empty)", level.Name(), got)
+		}
+	}
+}
+
+func streamSSE(w http.ResponseWriter, chunks ...string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	flusher, _ := w.(http.Flusher)
+	for _, c := range chunks {
+		io.WriteString(w, "data: "+c+"\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	io.WriteString(w, "data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
 	}
 }
