@@ -8,16 +8,20 @@ import (
 )
 
 // streamFlusher batches LLM stream deltas and flushes them periodically.
-// Anthropic's SSE stream emits hundreds of tiny text_delta events per second.
-// Broadcasting each one individually overwhelms the bounded subpub queue,
-// causing subscriber disconnections. Instead, we accumulate deltas and flush
-// the combined text every interval (e.g., 50ms), yielding ~20 updates/second.
+// Anthropic's SSE stream emits hundreds of tiny text_delta/thinking_delta
+// events per second. Broadcasting each one individually overwhelms the bounded
+// subpub queue, causing subscriber disconnections (and, on the unified
+// /api/stream2 endpoint, forced SSE reconnect loops that make the UI look
+// frozen while the agent keeps working). Instead, we accumulate deltas and
+// flush the combined text every interval (e.g., 50ms), yielding ~20
+// updates/second regardless of provider chattiness.
 type streamFlusher struct {
 	cm       *ConversationManager
 	interval time.Duration
 
 	mu      sync.Mutex
-	buf     string // accumulated text since last flush
+	buf     string // accumulated delta text since last flush
+	typ     string // kind of accumulated deltas: "text" or "thinking"
 	index   int    // content block index of accumulated text
 	timer   *time.Timer
 	running bool
@@ -38,57 +42,78 @@ func newStreamFlusher(cm *ConversationManager, interval time.Duration) *streamFl
 }
 
 // Push adds a stream delta to the buffer and schedules a flush.
+//
+// Both "text" and "thinking" deltas are batched: reasoning models emit
+// thinking deltas at the same token-by-token rate as text, and passing them
+// through unbatched used to flood the bounded subscriber queues (the exact
+// stampede batching exists to prevent). A delta of a different kind or block
+// index flushes the previous buffer first so ordering is preserved.
 func (sf *streamFlusher) Push(delta llm.StreamDelta) {
+	var out []llm.StreamDelta
 	sf.mu.Lock()
-	defer sf.mu.Unlock()
-
-	if delta.Type == "text" {
+	switch delta.Type {
+	case "text", "thinking":
+		if sf.buf != "" && (sf.typ != delta.Type || sf.index != delta.Index) {
+			out = append(out, sf.takeLocked())
+		}
 		sf.buf += delta.Text
+		sf.typ = delta.Type
 		sf.index = delta.Index
-	} else {
-		// For non-text deltas (thinking, etc.), broadcast immediately.
+		if !sf.running {
+			sf.running = true
+			sf.timer = time.AfterFunc(sf.interval, sf.flush)
+		}
+	default:
+		// Unknown delta kinds pass through immediately; emit anything
+		// buffered first so relative order is preserved.
+		if sf.buf != "" {
+			out = append(out, sf.takeLocked())
+		}
 		delta.Seq = sf.nextSeq()
-		sf.cm.broadcastStream(StreamResponse{
-			StreamDelta: &delta,
-		})
-		return
+		out = append(out, delta)
 	}
+	sf.mu.Unlock()
 
-	if !sf.running {
-		sf.running = true
-		sf.timer = time.AfterFunc(sf.interval, sf.flush)
+	for i := range out {
+		sf.cm.broadcastStream(StreamResponse{StreamDelta: &out[i]})
 	}
+}
+
+// takeLocked drains the buffer into a broadcast-ready delta, assigning its
+// seq while sf.mu is held so seq order matches accumulation order. The caller
+// must hold sf.mu and broadcast the result after releasing it; the window
+// between seq assignment and broadcast means a concurrent emitter can, in
+// principle, put seq N+1 on the wire before N. That reordering window is
+// pre-existing (the old flush had the same shape), providers deliver deltas
+// single-threaded from inside Do, and Seq exists precisely so clients can
+// detect it — accepted.
+func (sf *streamFlusher) takeLocked() llm.StreamDelta {
+	d := llm.StreamDelta{
+		Type:  sf.typ,
+		Text:  sf.buf,
+		Index: sf.index,
+		Seq:   sf.nextSeq(),
+	}
+	sf.buf = ""
+	return d
 }
 
 func (sf *streamFlusher) flush() {
 	sf.mu.Lock()
-	text := sf.buf
-	idx := sf.index
-	sf.buf = ""
+	var out *llm.StreamDelta
+	if sf.buf != "" {
+		d := sf.takeLocked()
+		out = &d
+	}
 	sf.running = false
 	if sf.timer != nil {
 		sf.timer.Stop()
 		sf.timer = nil
 	}
-	// Assign the seq while still holding sf.mu so its order matches the order
-	// text was accumulated. (nextSeq itself is atomic and doesn't require the
-	// lock; the lock here only orders assignment relative to concurrent
-	// Push calls.)
-	var seq int64
-	if text != "" {
-		seq = sf.nextSeq()
-	}
 	sf.mu.Unlock()
 
-	if text != "" {
-		sf.cm.broadcastStream(StreamResponse{
-			StreamDelta: &llm.StreamDelta{
-				Type:  "text",
-				Text:  text,
-				Index: idx,
-				Seq:   seq,
-			},
-		})
+	if out != nil {
+		sf.cm.broadcastStream(StreamResponse{StreamDelta: out})
 	}
 }
 

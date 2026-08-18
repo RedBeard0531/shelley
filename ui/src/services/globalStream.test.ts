@@ -341,6 +341,52 @@ await run("online event recovers from the long backoff fast", () => {
   s.handle.close();
 });
 
+await run("accept-then-drop cycles keep escalating backoff", () => {
+  reset();
+  markAllStaleCalls = 0;
+  const s = newStream();
+  latest().emitOpen();
+
+  // The server accepts each stream and drops it moments later (e.g.
+  // subscriber-queue overflow under a stream flood). Pre-fix, every
+  // short-lived open reset the attempt counter, so the client hammered the
+  // server at the minimum 1s delay forever — replaying the full list
+  // snapshot and a REST backfill on every cycle. Each connect→quick-drop
+  // must instead count as a consecutive failure: 1s→2s→5s→30s.
+  latest().emitError(); // died instantly: attempt 1
+  advance(1000);
+  assert(FakeEventSource.instances.length === 2, "retried after 1s");
+  latest().emitOpen(); // accepted...
+  advance(3000); // ...but only lived 3s (< stability window)
+  latest().emitError(); // attempt 2
+  advance(2000);
+  assert(FakeEventSource.instances.length === 3, "second retry waited 2s");
+  latest().emitOpen();
+  advance(3000);
+  latest().emitError(); // attempt 3
+  advance(2000);
+  assert(FakeEventSource.instances.length === 3, "third retry not due before 5s");
+  advance(3000);
+  assert(FakeEventSource.instances.length === 4, "third retry waited 5s");
+  latest().emitOpen();
+  advance(3000);
+  latest().emitError(); // attempt 4 -> 30s tier
+  assert(s.statuses.includes("disconnected"), "status reflects the persistent failure");
+  advance(29000);
+  assert(FakeEventSource.instances.length === 4, "fourth retry not due before 30s");
+  advance(1000);
+  assert(FakeEventSource.instances.length === 5, "fourth retry waited 30s");
+
+  // A connection that survives the stability window earns a fresh ladder:
+  // the next drop retries at 1s again.
+  latest().emitOpen();
+  advance(31000);
+  latest().emitError();
+  advance(1000);
+  assert(FakeEventSource.instances.length === 6, "stable connection reset backoff to 1s");
+  s.handle.close();
+});
+
 await run("close() removes listeners and stops reconnecting", () => {
   reset();
   const s = newStream();

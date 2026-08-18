@@ -451,8 +451,24 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		}
 
 		if err != nil {
-			// Record the error as a message so it can be displayed in the UI
-			// EndOfTurn must be true so the agent working state is properly updated
+			// If the loop's own context was CANCELLED, the turn's bookkeeping
+			// belongs to whoever cancelled us: CancelConversation records its
+			// own "[Operation cancelled]" end-of-turn message and clears
+			// agent_working itself. Recording an error bubble here would
+			// duplicate that — and, because ctx is already dead, the write
+			// failed anyway ("failed to create message: Tx: context canceled"),
+			// producing a scary log line on every user cancel. Skip it.
+			if errors.Is(ctx.Err(), context.Canceled) {
+				l.logger.Info("LLM request aborted by loop cancellation", "error", err)
+				return fmt.Errorf("LLM request failed: %w", err)
+			}
+			// Record the error as a message so it can be displayed in the UI.
+			// EndOfTurn must be true so the agent working state is properly
+			// updated. WithoutCancel: this row's MarkAgentDone is what clears
+			// the persisted agent_working flag; losing the write to a context
+			// that expired (e.g. the 12-hour conversation-loop ceiling) or was
+			// cancelled between the failure above and this write would wedge
+			// the conversation in "Agent working..." forever.
 			errorMessage := llm.Message{
 				Role: llm.MessageRoleAssistant,
 				Content: []llm.Content{
@@ -465,7 +481,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 				ErrorType:      llm.ErrorTypeLLMRequest,
 				ErrorRetryable: IsRetryableLLMError(err),
 			}
-			if recordErr := l.recordMessage(ctx, errorMessage, llm.Usage{}, nil); recordErr != nil {
+			if recordErr := l.recordMessage(context.WithoutCancel(ctx), errorMessage, llm.Usage{}, nil); recordErr != nil {
 				l.logger.Error("failed to record error message", "error", recordErr)
 			}
 			return fmt.Errorf("LLM request failed: %w", err)
