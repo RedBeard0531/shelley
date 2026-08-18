@@ -76,6 +76,7 @@ export const zhTW: TranslationKeys = {
   archiveConversationAction: "封存對話",
   archiveCurrentConversation: "封存目前對話",
   newConversationInMainRepo: "在主倉庫中新建對話",
+  newConversationInHomeDirectory: "在主目錄中新建對話",
   newConversationInNewWorktree: "在新工作樹中新建對話",
   createNewWorktree: "為此對話建立新的 Git 工作樹",
   setWorkingDirToRepoRoot: "將工作目錄設定為 git 儲存庫根目錄",

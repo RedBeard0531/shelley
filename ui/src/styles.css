@@ -4725,14 +4725,14 @@ svg {
   font-weight: 500;
 }
 
-.directory-picker-git-root-row {
+.directory-picker-shortcuts {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
   margin-bottom: 0.5rem;
 }
 
-.directory-picker-git-root-btn {
+.directory-picker-shortcut {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -4747,16 +4747,16 @@ svg {
   text-align: left;
 }
 
-.directory-picker-git-root-btn:hover {
+.directory-picker-shortcut:hover {
   background: var(--bg-tertiary);
   border-color: var(--accent-color, #f97316);
 }
 
-.directory-picker-git-root-btn .directory-picker-icon {
+.directory-picker-shortcut .directory-picker-icon {
   flex-shrink: 0;
 }
 
-.directory-picker-git-root-path {
+.directory-picker-shortcut-path {
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;

@@ -76,6 +76,7 @@ export const upgoer5: TranslationKeys = {
   archiveConversationAction: "Put Away Talk",
   archiveCurrentConversation: "Put away the talk you are in",
   newConversationInMainRepo: "New Talk in Home Place",
+  newConversationInHomeDirectory: "New Talk in Your Home Place",
   newConversationInNewWorktree: "New Talk in New Work Place",
   createNewWorktree: "Make a new work place for this talk",
   setWorkingDirToRepoRoot: "Set work place to the top of this git code home",

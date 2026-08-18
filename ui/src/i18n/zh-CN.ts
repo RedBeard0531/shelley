@@ -76,6 +76,7 @@ export const zhCN: TranslationKeys = {
   archiveConversationAction: "归档对话",
   archiveCurrentConversation: "归档当前对话",
   newConversationInMainRepo: "在主仓库中新建对话",
+  newConversationInHomeDirectory: "在主目录中新建对话",
   newConversationInNewWorktree: "在新工作树中新建对话",
   createNewWorktree: "为此对话创建新的 Git 工作树",
   setWorkingDirToRepoRoot: "将工作目录设置为 git 仓库根目录",
