@@ -12510,8 +12510,8 @@ kbd {
 
 /* =========================================================================
    ChatOverflowMenu.vue — the top-right kebab menu rebuilt on PrimeVue
-   (Popover + SelectButton + Select). Scoped under .overflow-menu-panel so it
-   never touches the legacy React menu, which still uses .overflow-menu and the
+   (Popover + Select). Scoped under .overflow-menu-panel so it never touches
+   the legacy React menu, which still uses .overflow-menu and the
    hand-rolled .theme-toggle-* / .md-toggle-* / .language-dropdown-* classes.
    ========================================================================= */
 
@@ -12581,7 +12581,7 @@ kbd {
   margin: 0.25rem 0;
 }
 
-/* Rows that hold a SelectButton / Select control. */
+/* Row that holds the language Select control. */
 .overflow-menu-control {
   padding: 0.5rem;
 }
@@ -12595,42 +12595,21 @@ kbd {
   font-weight: 500;
 }
 
-/* One compact row of stateful choice buttons. The current choice is large and
-   centered; the remaining choices sit below it as a preview of the cycle. */
+/* One compact row of stateful controls. Every choice stays visible; the
+   selected icon is the only one given full weight and contrast. */
 .overflow-quick-controls {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  gap: 0.5rem;
-  padding: 0.5rem;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem;
 }
 .overflow-quick-control {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   min-width: 0;
-  height: 6.25rem;
-  padding: 0.4rem 0.25rem 0.35rem;
-  color: var(--text-primary);
-  background: var(--bg-primary);
-  border: 1px solid transparent;
-  border-radius: 0.5rem;
-  cursor: pointer;
-  transition:
-    background-color 0.15s,
-    border-color 0.15s;
-}
-.overflow-quick-control:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-.overflow-quick-control:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-.overflow-quick-control:disabled {
-  color: var(--text-tertiary);
-  cursor: not-allowed;
+  gap: 0.3rem;
 }
 .overflow-quick-label {
   color: var(--text-secondary);
@@ -12639,52 +12618,57 @@ kbd {
   line-height: 1;
   text-align: center;
 }
-.overflow-choice-stage {
-  display: grid;
-  flex: 1;
-  place-items: center;
-  min-height: 0;
-}
-.overflow-choice-current {
-  grid-area: 1 / 1;
-  width: 2rem;
-  height: 2rem;
-  font-size: 2rem;
-}
-.overflow-choice-alternatives {
+.overflow-choice-options {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 1rem;
-  gap: 0.35rem;
+  gap: 0.1rem;
+}
+.overflow-choice-option {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
   color: var(--text-tertiary);
-}
-.overflow-choice-alternatives > i {
-  font-size: 0.8rem;
-}
-.overflow-choice-alternatives > svg {
-  width: 0.9rem;
-  height: 0.9rem;
-}
-.choice-rotate-enter-active,
-.choice-rotate-leave-active {
+  background: transparent;
+  border: 0;
+  border-radius: 0.3rem;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 400;
+  opacity: 0.65;
   transition:
-    opacity 0.16s ease,
-    transform 0.2s ease;
+    color 0.15s,
+    opacity 0.15s;
 }
-.choice-rotate-enter-from {
-  opacity: 0;
-  transform: rotate(-90deg) scale(0.55);
+.overflow-choice-option:hover:not(:disabled) {
+  color: var(--text-secondary);
+  opacity: 1;
 }
-.choice-rotate-leave-to {
-  opacity: 0;
-  transform: rotate(90deg) scale(0.55);
+.overflow-choice-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
-@media (prefers-reduced-motion: reduce) {
-  .choice-rotate-enter-active,
-  .choice-rotate-leave-active {
-    transition: none;
-  }
+.overflow-choice-option.is-selected {
+  color: var(--text-primary);
+  font-weight: 700;
+  opacity: 1;
+}
+.overflow-choice-option.is-selected > i {
+  -webkit-text-stroke: 0.25px currentColor;
+}
+.overflow-choice-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+.overflow-choice-option > svg {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 1.6;
+}
+.overflow-choice-option.is-selected > svg {
+  stroke-width: 2.2;
 }
 
 /* The language Select fills the row. */
@@ -12695,19 +12679,6 @@ kbd {
   font-size: 1rem;
   line-height: 1;
   margin-right: 0.4rem;
-}
-
-/* Visually-hidden label kept for screen readers on icon-only toggle options. */
-.overflow-menu-panel .sr-only-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 /* =========================================================================

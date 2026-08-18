@@ -60,7 +60,7 @@
           </svg>
         </button>
 
-        <!-- Overflow menu (PrimeVue Popover + SelectButton/Select) -->
+        <!-- Overflow menu (PrimeVue Popover + Select) -->
         <ChatOverflowMenu
           :has-cwd="hasCwd"
           :links="links"
