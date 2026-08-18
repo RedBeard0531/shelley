@@ -4355,6 +4355,8 @@ svg {
      rightward from its left edge. Anchoring to the right overflowed off the
      left viewport edge and got clipped. */
   left: 0;
+  /* Kept in sync with POPOVER_GAP in ChatStatusContent.vue, which subtracts it
+     from the room above the gear when it caps max-height. */
   margin-bottom: 4px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
