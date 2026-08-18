@@ -371,10 +371,12 @@ type Server struct {
 	// streamPub is the server-wide subpub that fans out per-conversation
 	// events to every /api/stream2 subscriber. Events are tagged with their
 	// ConversationID so clients can route them.
-	streamPub  *subpub.SubPub[StreamResponse]
-	shutdownCh chan struct{} // Signals background routines to stop
-	listenPort int           // TCP port the server is listening on
-	terminals  *TerminalSessions
+	streamPub   *subpub.SubPub[StreamResponse]
+	shutdownCh  chan struct{} // Signals background routines to stop
+	listenPort  int           // TCP port the server is listening on
+	terminals   *TerminalSessions
+	exitDelay   time.Duration
+	exitProcess func(int)
 
 	// Banner, when non-empty, is shown in a full-width bar at the top of
 	// the UI. Useful for marking demo instances so they're not confused
@@ -415,6 +417,8 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		notifDispatcher:     notifications.NewDispatcher(logger),
 		shutdownCh:          make(chan struct{}),
 		hooksDir:            defaultHooksDir(),
+		exitDelay:           500 * time.Millisecond,
+		exitProcess:         os.Exit,
 	}
 
 	s.conversationListStream = newConversationListStream(s)

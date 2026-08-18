@@ -14,7 +14,7 @@ const maxConcurrentResumes = 4
 // resumeWarningText is written to every resumed conversation. Resuming re-sends
 // the request the old process was in the middle of, so a tool call whose result
 // was never persisted runs a second time; the user has to be able to see that.
-const resumeWarningText = "Shelley restarted to install an upgrade while this turn was in flight. The turn has been resumed; any tool call whose result was not saved before the restart may run again."
+const resumeWarningText = "Shelley restarted to install a new binary while this turn was in flight. The turn has been resumed; any tool call whose result was not saved before the restart may run again."
 
 // resumeInterruptedConversations re-fires the LLM request for each conversation
 // that db.ConsumeResumeAfterUpgrade reported as mid-turn when the process exited

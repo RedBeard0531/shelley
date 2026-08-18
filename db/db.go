@@ -1063,10 +1063,10 @@ func (db *DB) ResetAllAgentWorking(ctx context.Context) error {
 }
 
 // ResumeAfterUpgradeSettingKey marks that the current process is exiting to
-// install an upgraded binary and that the next process should resume the
-// conversations that were mid-turn instead of clearing their agent_working
-// flags. Written by the upgrade-with-restart handler, consumed exactly once by
-// ConsumeResumeAfterUpgrade on the next startup.
+// install an upgraded or customized binary and that the next process should
+// resume the conversations that were mid-turn instead of clearing their
+// agent_working flags. Written by restart paths that promise continuation,
+// consumed exactly once by ConsumeResumeAfterUpgrade on the next startup.
 const ResumeAfterUpgradeSettingKey = "resume_after_upgrade_restart"
 
 // ConsumeResumeAfterUpgrade decides, in a single transaction, what startup does

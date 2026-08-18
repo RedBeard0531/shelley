@@ -3321,7 +3321,7 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if restart {
-		if err := s.db.SetSetting(r.Context(), db.ResumeAfterUpgradeSettingKey, "1"); err != nil {
+		if err := s.markResumeAfterRestart(r.Context()); err != nil {
 			s.logger.Error("Failed to mark resume-after-upgrade; continuing restart", "error", err)
 		}
 
@@ -3482,22 +3482,47 @@ func (s *Server) handleUpgradeHeadlessShell(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleExit exits the process, expecting systemd or similar to restart it
-func (s *Server) handleExit(w http.ResponseWriter, r *http.Request) {
-	// Send response before exiting
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Exiting..."})
+// markResumeAfterRestart makes the next server process continue conversations
+// that are still mid-turn when this process exits. The startup path consumes
+// the marker exactly once.
+func (s *Server) markResumeAfterRestart(ctx context.Context) error {
+	return s.db.SetSetting(ctx, db.ResumeAfterUpgradeSettingKey, "1")
+}
 
-	// Flush the response
+// restartExitCode makes systemd's Restart=on-failure immediately start the
+// replacement process. A clean exit may leave Shelley stopped until its socket
+// receives another request, which cannot resume a headless conversation.
+const restartExitCode = 1
+
+// handleExit exits the process, expecting systemd or similar to restart it.
+// With ?resume=true, in-flight conversations continue on the next process.
+func (s *Server) handleExit(w http.ResponseWriter, r *http.Request) {
+	resume := r.URL.Query().Get("resume") == "true"
+	message := "Exiting..."
+	exitCode := 0
+	if resume {
+		if err := s.markResumeAfterRestart(r.Context()); err != nil {
+			s.logger.Error("Failed to mark conversations for resume after restart", "error", err)
+			http.Error(w, fmt.Sprintf("Failed to prepare conversations for restart: %v", err), http.StatusInternalServerError)
+			return
+		}
+		message = "Exiting; active conversations will resume after restart..."
+		exitCode = restartExitCode
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": message})
+
+	// Flush the response before exiting. The delay also gives an agent that
+	// invoked this endpoint as a tool time to persist the tool result before
+	// the process is replaced.
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-
-	// Exit after a short delay to allow response to be sent
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		s.logger.Info("Exiting Shelley via /exit endpoint")
-		os.Exit(0)
+		time.Sleep(s.exitDelay)
+		s.logger.Info("Exiting Shelley via /exit endpoint", "resume", resume, "exit_code", exitCode)
+		s.exitProcess(exitCode)
 	}()
 }
 
