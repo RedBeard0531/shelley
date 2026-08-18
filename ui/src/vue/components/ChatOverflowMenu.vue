@@ -52,6 +52,29 @@
       @show="open = true"
       @hide="open = false"
     >
+      <!-- Command palette (search everything / quick actions) -->
+      <button class="overflow-menu-item" @click="onCommandPalette">
+        <svg
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          viewBox="0 0 24 24"
+          class="chat-menu-icon"
+          aria-hidden="true"
+        >
+          <path
+            d="M7 9a2 2 0 1 1 2 -2v10a2 2 0 1 1 -2 -2h10a2 2 0 1 1 -2 2v-10a2 2 0 1 1 2 2h-10"
+          />
+        </svg>
+        {{ t("commandMenu") }}
+        <span class="overflow-menu-shortcut"
+          ><kbd>{{ menuShortcutLabel("commandPalette") }}</kbd></span
+        >
+      </button>
+      <div class="overflow-menu-divider" />
+
       <!-- Conversation / workspace actions -->
       <button v-if="hasCwd" class="overflow-menu-item" @click="onDiffs">
         <!-- Diffs: two rows of +/- changes -->
@@ -342,6 +365,7 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (e: "open-command-palette"): void;
   (e: "open-diffs"): void;
   (e: "open-git-graph"): void;
   (e: "open-terminal"): void;
@@ -376,6 +400,7 @@ function hide() {
 // Each action emits its event, then closes the Popover. Kept as explicit
 // one-liners (rather than a union-typed helper) so defineEmits' per-event
 // overloads type-check cleanly.
+const onCommandPalette = () => (emit("open-command-palette"), hide());
 const onDiffs = () => (emit("open-diffs"), hide());
 const onGitGraph = () => (emit("open-git-graph"), hide());
 const onTerminal = () => (emit("open-terminal"), hide());

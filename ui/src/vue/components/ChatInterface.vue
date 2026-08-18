@@ -69,6 +69,7 @@
           "
           :can-export="!!(conversationId && messages.length > 0)"
           :has-update="hasUpdate"
+          @open-command-palette="props.onOpenCommandPalette?.()"
           @open-diffs="showDiffViewer = true"
           @open-git-graph="showGitGraph = true"
           @open-terminal="openInAppTerminal"
@@ -499,6 +500,7 @@ const props = withDefaults(
     cwdSyncTrigger?: number;
     onOpenModelsModal?: () => void;
     onOpenFileFinder?: () => void;
+    onOpenCommandPalette?: () => void;
     ephemeralTerminals: EphemeralTerminal[];
     setEphemeralTerminals: (
       next: EphemeralTerminal[] | ((prev: EphemeralTerminal[]) => EphemeralTerminal[]),

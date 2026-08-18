@@ -275,6 +275,7 @@ export const upgoer5: TranslationKeys = {
   editFileShortcutFirefox:
     "This computer program keeps this key press for its own hidden window — use the big command box (Cmd/Ctrl+K) instead",
   openConversations: "Open talks",
+  commandMenu: "Do-stuff box",
   expandSidebar: "Make side bigger",
 
   // Language

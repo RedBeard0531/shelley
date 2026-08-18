@@ -275,6 +275,7 @@ export const vi: TranslationKeys = {
   editFileShortcutFirefox:
     "Firefox dành phím tắt này cho cửa sổ riêng tư — hãy dùng bảng lệnh (Cmd/Ctrl+K)",
   openConversations: "Mở lịch sử trò chuyện",
+  commandMenu: "Menu lệnh",
   expandSidebar: "Mở rộng sidebar",
 
   // Language

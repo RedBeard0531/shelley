@@ -278,6 +278,7 @@ export const fr: TranslationKeys = {
   editFileShortcutFirefox:
     "Firefox réserve ce raccourci pour une fenêtre privée — utilisez la palette de commandes (Cmd/Ctrl+K)",
   openConversations: "Ouvrir les conversations",
+  commandMenu: "Menu de commandes",
   expandSidebar: "Développer la barre latérale",
 
   // Language

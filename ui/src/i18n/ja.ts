@@ -274,6 +274,7 @@ export const ja: TranslationKeys = {
   editFileShortcutFirefox:
     "Firefox はこのショートカットをプライベートウィンドウ用に予約しています。コマンドパレット（Cmd/Ctrl+K）を使用してください",
   openConversations: "会話を開く",
+  commandMenu: "コマンドメニュー",
   expandSidebar: "サイドバーを展開",
 
   // Language

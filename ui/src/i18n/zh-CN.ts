@@ -272,6 +272,7 @@ export const zhCN: TranslationKeys = {
   editFileShortcut: "打开文件查找器",
   editFileShortcutFirefox: "Firefox 将此快捷键保留用于隐私窗口——请改用命令面板 (Cmd/Ctrl+K)",
   openConversations: "打开对话",
+  commandMenu: "命令菜单",
   expandSidebar: "展开侧边栏",
 
   // Language

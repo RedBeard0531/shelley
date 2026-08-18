@@ -268,6 +268,7 @@ export interface TranslationKeys {
 
   // Sidebar buttons
   openConversations: string;
+  commandMenu: string;
   expandSidebar: string;
 
   // Language

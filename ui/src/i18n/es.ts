@@ -277,6 +277,7 @@ export const es: TranslationKeys = {
   editFileShortcutFirefox:
     "Firefox reserva este atajo para una ventana privada; usa la paleta de comandos (Cmd/Ctrl+K)",
   openConversations: "Abrir conversaciones",
+  commandMenu: "Menú de comandos",
   expandSidebar: "Expandir barra lateral",
 
   // Language

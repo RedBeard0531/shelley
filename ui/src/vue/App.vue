@@ -68,6 +68,7 @@
           :cwd-sync-trigger="cwdSyncTrigger"
           :on-open-models-modal="() => (modelsModalOpen = true)"
           :on-open-file-finder="openFileFinder"
+          :on-open-command-palette="() => (commandPaletteOpen = true)"
           :ephemeral-terminals="ephemeralTerminals"
           :set-ephemeral-terminals="setEphemeralTerminals"
           :on-terminal-attached="handleTerminalAttached"
