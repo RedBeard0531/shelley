@@ -735,8 +735,10 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 		faviconKey = fmt.Sprintf("%s:%d", hostname, s.listenPort)
 	}
 	faviconSVG := generateFaviconSVG(faviconKey)
-	if emoji := cachedReflectionEmoji(r.Context()); emoji != "" {
-		faviconSVG = generateEmojiFaviconSVG(emoji)
+	if s.featureFlagBool(r.Context(), FlagReflectionEmojiFavicon) {
+		if emoji := cachedReflectionEmoji(r.Context()); emoji != "" {
+			faviconSVG = generateEmojiFaviconSVG(emoji)
+		}
 	}
 	faviconDataURI := "data:image/svg+xml," + url.PathEscape(faviconSVG)
 	faviconLink := fmt.Sprintf(`<link rel="icon" type="image/svg+xml" href="%s"/>`, faviconDataURI)
