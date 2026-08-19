@@ -125,6 +125,8 @@
       :data-message-id="message.message_id"
       :data-commentable="isCommentable ? 'true' : undefined"
       role="article"
+      @mouseenter="hoveredRow = true"
+      @mouseleave="hoveredRow = false"
     >
       <div class="message-content message-content-entities" data-testid="message-content">
         <div v-if="authorEmail" class="message-author-email" data-testid="message-author-email">
@@ -305,14 +307,16 @@ const isCwdChange = computed(() => cwdChange(props.message) !== null);
 // single-region error and display_data branches).
 const pinnedActionKey = ref<string | null>(null);
 const hoveredActionKey = ref<string | null>(null);
+const hoveredRow = ref(false);
 const showUsageModal = ref(false);
 const showInfoModal = ref(false);
 const messageRef = ref<HTMLDivElement | null>(null);
 
 // Hover temporarily takes precedence over a pinned region, so two sibling
-// action bars can never be visible at once.
+// action bars can never be visible at once. rowActionKey is the fallback for a
+// single-entity message, whose entity can be far narrower than the row.
 function actionBarVisible(key: string): boolean {
-  return key === (hoveredActionKey.value ?? pinnedActionKey.value);
+  return key === (hoveredActionKey.value ?? rowActionKey.value ?? pinnedActionKey.value);
 }
 
 // ---- Parsed message payloads ----
@@ -565,6 +569,16 @@ const contentEntities = computed(() =>
         },
       ]
     : splitContentEntities(coalescedContent.value),
+);
+
+// A message with one content region shows at most one action bar, so hovering
+// anywhere on the row can reveal it. This matters because an entity is only as
+// wide as its content: a user bubble is shrink-to-fit and right-aligned
+// (margin-left: auto; max-width: 80%), so most of the row is outside it and
+// pointing at the row's centre never enters the entity at all. With two or more
+// regions there is no single bar to show, and per-entity hover decides.
+const rowActionKey = computed(() =>
+  hoveredRow.value && contentEntities.value.length === 1 ? contentEntities.value[0].key : null,
 );
 
 // Whether the main path has anything to render (mirrors the React early-returns
