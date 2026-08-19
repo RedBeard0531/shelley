@@ -136,8 +136,14 @@ function tool(): LLMContent {
     entities[2]?.copyText === "answer before and after",
     entities[2],
   );
-  check("thinking-only input is one entity", splitContentEntities(coalesceContent([thinking("only")])).length === 1);
-  check("answer-only input is one entity", splitContentEntities(coalesceContent([text("only")])).length === 1);
+  check(
+    "thinking-only input is one entity",
+    splitContentEntities(coalesceContent([thinking("only")])).length === 1,
+  );
+  check(
+    "answer-only input is one entity",
+    splitContentEntities(coalesceContent([text("only")])).length === 1,
+  );
 }
 
 console.log(`\ncoalesceContent Tests: ${passed} passed, ${failed} failed\n`);
