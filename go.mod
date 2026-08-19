@@ -1,6 +1,6 @@
 module shelley.exe.dev
 
-go 1.26.6
+go 1.27.0
 
 require (
 	github.com/boldsoftware/shelley/lazycue v0.0.0-00010101000000-000000000000
