@@ -3,13 +3,213 @@ package claudetool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"shelley.exe.dev/llm"
 )
+
+func TestPatchToolAliasesSharePathLock(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "file.txt")
+	if err := os.WriteFile(path, []byte("text"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(tempDir, "symlink.txt")
+	if err := os.Symlink(path, symlink); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	hardlink := filepath.Join(tempDir, "hardlink.txt")
+	if err := os.Link(path, hardlink); err != nil {
+		t.Skipf("hard link unavailable: %v", err)
+	}
+
+	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
+	for _, alias := range []string{path, symlink, hardlink} {
+		unlock := patch.lockPath(alias)
+		unlock()
+	}
+
+	created := filepath.Join(tempDir, "created.txt")
+	unlock := patch.lockPath(created)
+	if err := os.WriteFile(created, []byte("created"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	createdHardlink := filepath.Join(tempDir, "created-hardlink.txt")
+	if err := os.Link(created, createdHardlink); err != nil {
+		t.Skipf("hard link unavailable: %v", err)
+	}
+	unlock = patch.lockPath(createdHardlink)
+	unlock()
+
+	patch.pathLocksMu.Lock()
+	defer patch.pathLocksMu.Unlock()
+	if len(patch.pathLocks) != 2 {
+		t.Fatalf("aliases created %d path locks, want 2", len(patch.pathLocks))
+	}
+}
+
+func TestPatchToolConcurrentSameFilePreservesIndependentEdits(t *testing.T) {
+	tempDir := t.TempDir()
+	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
+	path := filepath.Join(tempDir, "shared.txt")
+	var original strings.Builder
+	for i := range 40 {
+		fmt.Fprintf(&original, "[token-%d]\n", i)
+	}
+	if err := os.WriteFile(path, []byte(original.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 40)
+	var wg sync.WaitGroup
+	for i := range 40 {
+		wg.Go(func() {
+			<-start
+			input, err := json.Marshal(PatchInput{
+				Path: path,
+				Patches: []PatchRequest{{
+					Operation: "replace",
+					OldText:   fmt.Sprintf("[token-%d]", i),
+					NewText:   fmt.Sprintf("[done-%d]", i),
+				}},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if result := patch.Run(context.Background(), input); result.Error != nil {
+				errs <- result.Error
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 40 {
+		if !strings.Contains(string(content), fmt.Sprintf("[done-%d]", i)) {
+			t.Errorf("concurrent edit %d was lost", i)
+		}
+	}
+}
+
+func TestPatchToolConcurrentSharedClipboardTransactions(t *testing.T) {
+	tempDir := t.TempDir()
+	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
+	errs := make(chan error, 40)
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+	for i := range 40 {
+		wg.Go(func() {
+			name := fmt.Sprintf("value-%d", i)
+			path := filepath.Join(tempDir, fmt.Sprintf("shared-clipboard-%d.txt", i))
+			if err := os.WriteFile(path, []byte(name), 0o600); err != nil {
+				errs <- err
+				return
+			}
+			input, err := json.Marshal(PatchInput{
+				Path: path,
+				Patches: []PatchRequest{
+					{Operation: "replace", OldText: name, NewText: "updated", ToClipboard: "shared"},
+					{Operation: "append_eof", FromClipboard: "shared"},
+				},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			<-start
+			if result := patch.Run(context.Background(), input); result.Error != nil {
+				errs <- result.Error
+				return
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if got, want := string(content), "updated"+name; got != want {
+				errs <- fmt.Errorf("%s = %q, want %q", path, got, want)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestPatchToolConcurrentClipboardAccess(t *testing.T) {
+	tempDir := t.TempDir()
+	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
+	errs := make(chan error, 20)
+
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Go(func() {
+			name := fmt.Sprintf("item-%d", i)
+			source := filepath.Join(tempDir, name+"-source.txt")
+			if err := os.WriteFile(source, []byte(name), 0o600); err != nil {
+				errs <- err
+				return
+			}
+			copyInput, err := json.Marshal(PatchInput{
+				Path: source,
+				Patches: []PatchRequest{{
+					Operation:   "replace",
+					OldText:     name,
+					NewText:     "updated",
+					ToClipboard: name,
+				}},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if result := patch.Run(context.Background(), copyInput); result.Error != nil {
+				errs <- result.Error
+				return
+			}
+
+			pasteInput, err := json.Marshal(PatchInput{
+				Path: filepath.Join(tempDir, name+"-dest.txt"),
+				Patches: []PatchRequest{{
+					Operation:     "overwrite",
+					FromClipboard: name,
+				}},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if result := patch.Run(context.Background(), pasteInput); result.Error != nil {
+				errs <- result.Error
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
 
 func TestPatchTool_BasicOperations(t *testing.T) {
 	tempDir := t.TempDir()

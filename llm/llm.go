@@ -15,7 +15,7 @@ import (
 )
 
 type Service interface {
-	// Do sends a request to an LLM.
+	// Do sends a request to an LLM. Implementations must support concurrent calls.
 	Do(context.Context, *Request) (*Response, error)
 	// Provider returns the provider name (e.g., "anthropic", "openai", "fireworks", "gemini").
 	Provider() string
@@ -303,7 +303,8 @@ type Tool struct {
 	ServerSide bool
 
 	// The Run function is automatically called when the tool is used.
-	// Run functions may be called concurrently with each other and themselves.
+	// Run functions may be called concurrently with adjacent tools, including
+	// other calls to the same tool.
 	// The input to Run function is the input to the tool, as provided by Claude, in compliance with the input schema.
 	// The outputs from Run will be sent back to Claude.
 	// If you do not want to respond to the tool call request from Claude, return ErrDoNotRespond.
@@ -334,6 +335,7 @@ type ToolProgress struct {
 }
 
 // ToolProgressFunc is called by tools to report progress during execution.
+// It must support concurrent calls from sibling tools.
 type ToolProgressFunc func(ToolProgress)
 
 // ToolOut represents the output of a tool run.

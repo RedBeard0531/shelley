@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1796,6 +1797,182 @@ func TestCheckGitStateChange(t *testing.T) {
 
 	if len(gitStateChanges) != 1 {
 		t.Errorf("expected still 1 git state change (no new changes), got %d", len(gitStateChanges))
+	}
+}
+
+func TestExecuteToolCallsDoesNotPublishUnpersistedResults(t *testing.T) {
+	testTool := &llm.Tool{
+		Name:        "test",
+		Description: "Returns immediately",
+		InputSchema: llm.EmptySchema(),
+		Run: func(context.Context, json.RawMessage) llm.ToolOut {
+			return llm.ToolOut{LLMContent: llm.TextContent("result")}
+		},
+	}
+	toolUse := llm.Content{ID: "tool-1", Type: llm.ContentTypeToolUse, ToolName: testTool.Name, ToolInput: json.RawMessage(`{}`)}
+	loop := NewLoop(Config{
+		Tools: []*llm.Tool{testTool},
+		History: []llm.Message{{
+			Role:    llm.MessageRoleAssistant,
+			Content: []llm.Content{toolUse},
+		}},
+		RecordMessage: func(context.Context, llm.Message, llm.Usage, []llm.PurposedUsage) error {
+			return errors.New("database unavailable")
+		},
+	})
+
+	err := loop.executeToolCalls(context.Background(), []llm.Content{toolUse})
+	if err == nil || !strings.Contains(err.Error(), "database unavailable") {
+		t.Fatalf("executeToolCalls error = %v", err)
+	}
+	if history := loop.GetHistory(); len(history) != 1 {
+		t.Fatalf("history length = %d, want unpersisted result omitted", len(history))
+	}
+}
+
+func TestCancelAndGetHistorySuppressesLateToolResults(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	testTool := &llm.Tool{
+		Name:        "blocking_test",
+		Description: "Blocks until released",
+		InputSchema: llm.EmptySchema(),
+		Run: func(context.Context, json.RawMessage) llm.ToolOut {
+			close(started)
+			<-release
+			return llm.ToolOut{LLMContent: llm.TextContent("late result")}
+		},
+	}
+	toolUse := llm.Content{ID: "tool-1", Type: llm.ContentTypeToolUse, ToolName: testTool.Name, ToolInput: json.RawMessage(`{}`)}
+	var recordedMessages []llm.Message
+	loop := NewLoop(Config{
+		Tools: []*llm.Tool{testTool},
+		History: []llm.Message{{
+			Role:    llm.MessageRoleAssistant,
+			Content: []llm.Content{toolUse},
+		}},
+		RecordMessage: func(_ context.Context, message llm.Message, _ llm.Usage, _ []llm.PurposedUsage) error {
+			recordedMessages = append(recordedMessages, message)
+			return nil
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- loop.executeToolCalls(ctx, []llm.Content{toolUse})
+	}()
+	<-started
+
+	history := loop.CancelAndGetHistory(cancel)
+	if len(history) != 1 {
+		t.Fatalf("history length after cancel = %d, want 1", len(history))
+	}
+	close(release)
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("executeToolCalls error = %v, want context canceled", err)
+	}
+	if len(recordedMessages) != 0 {
+		t.Fatalf("recorded %d late tool-result messages", len(recordedMessages))
+	}
+}
+
+func TestExecuteToolCallsRunsConcurrently(t *testing.T) {
+	started := make(chan string, 2)
+	finished := make(chan string, 2)
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	testTool := &llm.Tool{
+		Name:        "parallel_test",
+		Description: "Waits until both calls have started",
+		InputSchema: llm.MustSchema(`{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}`),
+		Run: func(ctx context.Context, input json.RawMessage) llm.ToolOut {
+			var req struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(input, &req); err != nil {
+				return llm.ErrorToolOut(err)
+			}
+			started <- req.Name
+			var release <-chan struct{}
+			switch req.Name {
+			case "first":
+				release = releaseFirst
+			case "second":
+				release = releaseSecond
+			default:
+				return llm.ErrorfToolOut("unexpected call %q", req.Name)
+			}
+			select {
+			case <-release:
+				finished <- req.Name
+				return llm.ToolOut{LLMContent: llm.TextContent(req.Name)}
+			case <-ctx.Done():
+				return llm.ErrorToolOut(ctx.Err())
+			}
+		},
+	}
+
+	var recordedMessages []llm.Message
+	loop := NewLoop(Config{
+		LLM:   NewPredictableService(),
+		Tools: []*llm.Tool{testTool},
+		RecordMessage: func(_ context.Context, message llm.Message, _ llm.Usage, _ []llm.PurposedUsage) error {
+			recordedMessages = append(recordedMessages, message)
+			return nil
+		},
+	})
+	content := []llm.Content{
+		{ID: "first", Type: llm.ContentTypeToolUse, ToolName: testTool.Name, ToolInput: json.RawMessage(`{"name":"first"}`)},
+		{ID: "second", Type: llm.ContentTypeToolUse, ToolName: testTool.Name, ToolInput: json.RawMessage(`{"name":"second"}`)},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- loop.executeToolCalls(ctx, content)
+	}()
+
+	for range 2 {
+		select {
+		case <-started:
+		case err := <-done:
+			close(releaseFirst)
+			close(releaseSecond)
+			t.Fatalf("executeToolCalls returned before both calls started: %v", err)
+		case <-ctx.Done():
+			close(releaseFirst)
+			close(releaseSecond)
+			<-done
+			t.Fatal("tool calls did not run concurrently")
+		}
+	}
+	close(releaseSecond)
+	select {
+	case name := <-finished:
+		if name != "second" {
+			t.Fatalf("%q finished while first call was blocked", name)
+		}
+	case <-ctx.Done():
+		close(releaseFirst)
+		<-done
+		t.Fatal("second call did not finish independently")
+	}
+	close(releaseFirst)
+	if err := <-done; err != nil {
+		t.Fatalf("executeToolCalls failed: %v", err)
+	}
+
+	if len(recordedMessages) != 1 {
+		t.Fatalf("recorded %d messages, want 1", len(recordedMessages))
+	}
+	results := recordedMessages[0].Content
+	if len(results) != 2 {
+		t.Fatalf("recorded %d tool results, want 2", len(results))
+	}
+	if results[0].ToolUseID != "first" || results[1].ToolUseID != "second" {
+		t.Errorf("tool results out of request order: %q, %q", results[0].ToolUseID, results[1].ToolUseID)
 	}
 }
 

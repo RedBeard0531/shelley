@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"shelley.exe.dev/llm"
@@ -64,6 +65,14 @@ type SubagentTool struct {
 	// or "" for the service default). Subagents inherit this when the "reasoning"
 	// parameter is not specified.
 	ParentReasoning string
+	slugLocks       sync.Map // map[string]*sync.Mutex
+}
+
+func (s *SubagentTool) lockSlug(slug string) func() {
+	lockValue, _ := s.slugLocks.LoadOrStore(slug, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
 }
 
 const subagentName = "subagent"
@@ -198,6 +207,9 @@ func (s *SubagentTool) run(ctx context.Context, req subagentInput) llm.ToolOut {
 	if req.Prompt == "" {
 		return llm.ErrorfToolOut("prompt is required")
 	}
+
+	unlockSlug := s.lockSlug(req.Slug)
+	defer unlockSlug()
 
 	// Set defaults. The default wait is generous (15 min) because subagents
 	// commonly run review/analysis tasks that take several minutes; a short

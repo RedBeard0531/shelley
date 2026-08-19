@@ -200,10 +200,10 @@ type ConversationManager struct {
 	// slug renaming ("rev1" → "rev1-4") that defeated the older,
 	// history-parsing suppression.
 	//
-	// In practice there is at most one waiter at a time: a parent runs its
-	// tool calls serially, a subagent has exactly one parent, and a re-send
-	// to a busy subagent cancels the prior run before registering. The count
-	// (rather than a bool) just makes register/finish robustly balanced; the
+	// In practice there is at most one waiter at a time: SubagentTool serializes
+	// calls to the same slug, a subagent has exactly one parent, and a re-send
+	// to a busy subagent waits for or queues behind the prior run. The count
+	// (rather than a bool) keeps register/finish robustly balanced; the
 	// "exactly one delivery" guarantee in finishSubagentWait assumes this
 	// single-waiter precondition.
 	subagentWaitOwners int
@@ -1953,16 +1953,50 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	}
 
 	go func() {
-		if err := loopInstance.Go(processCtx); err != nil && err != context.DeadlineExceeded && err != context.Canceled {
-			if logger != nil {
-				logger.Error("Conversation loop stopped", "error", err)
-			} else {
-				slog.Default().Error("Conversation loop stopped", "error", err)
-			}
+		err := loopInstance.Go(processCtx)
+		if err == nil || err == context.DeadlineExceeded || err == context.Canceled {
+			return
 		}
+		if logger != nil {
+			logger.Error("Conversation loop stopped", "error", err)
+		} else {
+			slog.Default().Error("Conversation loop stopped", "error", err)
+		}
+		cm.handleFatalLoopExit(loopInstance)
 	}()
 
 	return nil
+}
+
+func (cm *ConversationManager) handleFatalLoopExit(loopInstance *loop.Loop) {
+	cm.mu.Lock()
+	if cm.loop != loopInstance {
+		cm.mu.Unlock()
+		return
+	}
+	cancel := cm.loopCancel
+	toolSet := cm.toolSet
+	cm.loopCancel = nil
+	cm.loopCtx = nil
+	cm.loop = nil
+	cm.modelID = ""
+	cm.toolSet = nil
+	cm.hydrated = false
+	cm.hasConversationEvents = false
+	cm.cancelling = true
+	cm.mu.Unlock()
+
+	cm.SetAgentWorking(false)
+	if cancel != nil {
+		cancel()
+	}
+	if toolSet != nil {
+		toolSet.Cleanup()
+	}
+
+	cm.mu.Lock()
+	cm.cancelling = false
+	cm.mu.Unlock()
 }
 
 func (cm *ConversationManager) stopLoop() {
@@ -1997,11 +2031,71 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 	}
 }
 
-// CancelConversation cancels the current conversation loop and records a cancelled tool result if a tool was in progress
+type unresolvedToolCall struct {
+	id   string
+	name string
+}
+
+func lastUnresolvedToolCalls(history []llm.Message) []unresolvedToolCall {
+	lastToolUseAssistantIdx := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role != llm.MessageRoleAssistant {
+			continue
+		}
+		for _, content := range history[i].Content {
+			if content.Type == llm.ContentTypeToolUse {
+				lastToolUseAssistantIdx = i
+				break
+			}
+		}
+		if lastToolUseAssistantIdx >= 0 {
+			break
+		}
+	}
+	if lastToolUseAssistantIdx < 0 {
+		return nil
+	}
+
+	toolResultIDs := make(map[string]bool)
+	for _, msg := range history[lastToolUseAssistantIdx+1:] {
+		if msg.Role != llm.MessageRoleUser {
+			continue
+		}
+		for _, content := range msg.Content {
+			if content.Type == llm.ContentTypeToolResult {
+				toolResultIDs[content.ToolUseID] = true
+			}
+		}
+	}
+
+	var unresolved []unresolvedToolCall
+	for _, content := range history[lastToolUseAssistantIdx].Content {
+		if content.Type == llm.ContentTypeToolUse && !toolResultIDs[content.ID] {
+			unresolved = append(unresolved, unresolvedToolCall{id: content.ID, name: content.ToolName})
+		}
+	}
+	return unresolved
+}
+
+func cancelledToolResults(tools []unresolvedToolCall, cancelTime time.Time) []llm.Content {
+	contents := make([]llm.Content, 0, len(tools))
+	for _, tool := range tools {
+		contents = append(contents, llm.Content{
+			Type:             llm.ContentTypeToolResult,
+			ToolUseID:        tool.id,
+			ToolError:        true,
+			ToolResult:       []llm.Content{{Type: llm.ContentTypeText, Text: "Tool execution cancelled by user"}},
+			ToolUseStartTime: &cancelTime,
+			ToolUseEndTime:   &cancelTime,
+		})
+	}
+	return contents
+}
+
+// CancelConversation cancels the current conversation loop and records cancelled results for tools in progress.
 func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 	cm.mu.Lock()
 	loopInstance := cm.loop
-	loopCtx := cm.loopCtx
 	cancel := cm.loopCancel
 	cm.mu.Unlock()
 
@@ -2025,99 +2119,23 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 
 	cm.logger.Info("Cancelling conversation")
 
-	// Check if there's an in-progress tool call by examining the history
-	history := loopInstance.GetHistory()
-	var inProgressToolID string
-	var inProgressToolName string
+	// Cancel atomically relative to tool-result publication, then snapshot every
+	// call from the latest assistant tool-use message without a matching result.
+	// Results claimed before cancellation are persisted first; later results are
+	// suppressed so cancellation can record exactly one result per call.
+	unresolvedTools := lastUnresolvedToolCalls(loopInstance.CancelAndGetHistory(cancel))
 
-	// Find tool_uses that don't have corresponding tool_results.
-	// Strategy:
-	// 1. Find the last assistant message that contains tool_uses
-	// 2. Collect all tool_result IDs from user messages AFTER that assistant message
-	// 3. Find tool_uses that don't have matching results
-
-	// Step 1: Find the index of the last assistant message with tool_uses
-	lastToolUseAssistantIdx := -1
-	for i := len(history) - 1; i >= 0; i-- {
-		msg := history[i]
-		if msg.Role == llm.MessageRoleAssistant {
-			hasToolUse := false
-			for _, content := range msg.Content {
-				if content.Type == llm.ContentTypeToolUse {
-					hasToolUse = true
-					break
-				}
-			}
-			if hasToolUse {
-				lastToolUseAssistantIdx = i
-				break
-			}
-		}
-	}
-
-	if lastToolUseAssistantIdx >= 0 {
-		// Step 2: Collect all tool_result IDs from messages after the assistant message
-		toolResultIDs := make(map[string]bool)
-		for i := lastToolUseAssistantIdx + 1; i < len(history); i++ {
-			msg := history[i]
-			if msg.Role == llm.MessageRoleUser {
-				for _, content := range msg.Content {
-					if content.Type == llm.ContentTypeToolResult {
-						toolResultIDs[content.ToolUseID] = true
-					}
-				}
-			}
-		}
-
-		// Step 3: Find the first tool_use that doesn't have a result
-		assistantMsg := history[lastToolUseAssistantIdx]
-		for _, content := range assistantMsg.Content {
-			if content.Type == llm.ContentTypeToolUse {
-				if !toolResultIDs[content.ID] {
-					inProgressToolID = content.ID
-					inProgressToolName = content.ToolName
-					break
-				}
-			}
-		}
-	}
-
-	// Cancel the context
-	if cancel != nil {
-		cancel()
-	}
-
-	// Wait briefly for the loop to stop
-	if loopCtx != nil {
-		select {
-		case <-loopCtx.Done():
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-
-	// Record cancellation messages
-	if inProgressToolID != "" {
-		// If there was an in-progress tool, record a cancelled result
-		cm.logger.Info("Recording cancelled tool result", "tool_id", inProgressToolID, "tool_name", inProgressToolName)
+	var cancelledMessage *llm.Message
+	if len(unresolvedTools) > 0 {
 		cancelTime := time.Now()
-		cancelledMessage := llm.Message{
-			Role: llm.MessageRoleUser,
-			Content: []llm.Content{
-				{
-					Type:             llm.ContentTypeToolResult,
-					ToolUseID:        inProgressToolID,
-					ToolError:        true,
-					ToolResult:       []llm.Content{{Type: llm.ContentTypeText, Text: "Tool execution cancelled by user"}},
-					ToolUseStartTime: &cancelTime,
-					ToolUseEndTime:   &cancelTime,
-				},
-			},
+		for _, tool := range unresolvedTools {
+			cm.logger.Info("Recording cancelled tool result", "tool_id", tool.id, "tool_name", tool.name)
 		}
-
-		if err := cm.recordMessage(ctx, cancelledMessage, llm.Usage{}, nil); err != nil {
-			cm.logger.Error("Failed to record cancelled tool result", "error", err)
-			return fmt.Errorf("failed to record cancelled tool result: %w", err)
+		message := llm.Message{
+			Role:    llm.MessageRoleUser,
+			Content: cancelledToolResults(unresolvedTools, cancelTime),
 		}
+		cancelledMessage = &message
 	}
 
 	// Clear pending queued batches BEFORE recording the end-of-turn message.
@@ -2155,13 +2173,18 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 		EndOfTurn: true,
 	}
 
-	if err := cm.recordMessage(ctx, endTurnMessage, llm.Usage{}, nil); err != nil {
-		cm.logger.Error("Failed to record end turn message", "error", err)
-		return fmt.Errorf("failed to record end turn message: %w", err)
+	inputs := make([]recordMessageInput, 0, 2)
+	if cancelledMessage != nil {
+		inputs = append(inputs, recordMessageInput{message: *cancelledMessage})
 	}
-
-	// Mark agent as not working
-	cm.SetAgentWorking(false)
+	inputs = append(inputs, recordMessageInput{message: endTurnMessage})
+	if cm.recordMessageBatch == nil {
+		return errors.New("conversation manager has no batch message recorder")
+	}
+	if err := cm.recordMessageBatch(context.WithoutCancel(ctx), inputs); err != nil {
+		cm.logger.Error("Failed to record cancellation messages", "error", err)
+		return fmt.Errorf("failed to record cancellation messages: %w", err)
+	}
 
 	cm.mu.Lock()
 	cm.loopCancel = nil

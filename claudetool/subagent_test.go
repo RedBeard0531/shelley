@@ -3,10 +3,48 @@ package claudetool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type lockCheckingSubagentRunner struct {
+	tool *SubagentTool
+	slug string
+}
+
+func (r *lockCheckingSubagentRunner) RunSubagent(context.Context, string, string, bool, time.Duration, string, string) (string, error) {
+	value, ok := r.tool.slugLocks.Load(r.slug)
+	if !ok {
+		return "", errors.New("slug lock was not created")
+	}
+	lock := value.(*sync.Mutex)
+	if lock.TryLock() {
+		lock.Unlock()
+		return "", errors.New("slug lock was not held while running subagent")
+	}
+	return "ok", nil
+}
+
+func TestSubagentToolRunHoldsSlugLock(t *testing.T) {
+	tool := &SubagentTool{
+		DB:                   newMockSubagentDB(),
+		ParentConversationID: "parent-123",
+		WorkingDir:           NewMutableWorkingDir("/tmp"),
+	}
+	tool.Runner = &lockCheckingSubagentRunner{tool: tool, slug: "same-slug"}
+
+	defined := tool.Tool()
+	input, err := json.Marshal(subagentInput{Slug: "same-slug", Prompt: "do something"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := defined.Run(context.Background(), input); result.Error != nil {
+		t.Fatalf("subagent run failed: %v", result.Error)
+	}
+}
 
 // mockSubagentDB implements SubagentDB for testing.
 type mockSubagentDB struct {

@@ -11,7 +11,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/pkg/diff"
 	"shelley.exe.dev/llm"
@@ -25,10 +28,19 @@ import (
 // and returns a new, possibly altered tool output.
 type PatchCallback func(input PatchInput, output llm.ToolOut) llm.ToolOut
 
+type patchFileIdentity struct {
+	info os.FileInfo
+}
+
+type patchPathLock struct {
+	path     string
+	identity atomic.Pointer[patchFileIdentity]
+	mu       sync.Mutex
+}
+
 // PatchTool specifies an llm.Tool for patching files.
-// PatchTools are not concurrency-safe.
 type PatchTool struct {
-	Callback PatchCallback // may be nil
+	Callback PatchCallback // may be nil; must support concurrent calls
 	// WorkingDir is the shared mutable working directory.
 	WorkingDir *MutableWorkingDir
 	// Simplified indicates whether to use the simplified input schema.
@@ -39,8 +51,98 @@ type PatchTool struct {
 	// NB: The actual implementation of the patch tool is unchanged,
 	// this flag merely extends the description and input schema to include the clipboard operations.
 	ClipboardEnabled bool
-	// clipboards stores clipboard name -> text
-	clipboards map[string]string
+	clipboardMu      sync.RWMutex
+	clipboards       map[string]string
+	clipboardLocks   sync.Map // map[string]*sync.Mutex
+	pathLocksMu      sync.Mutex
+	pathLocks        []*patchPathLock
+}
+
+func canonicalPatchPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		return filepath.Join(parent, filepath.Base(path))
+	}
+	return path
+}
+
+func (p *PatchTool) lockPath(path string) func() {
+	path = canonicalPatchPath(path)
+	info, _ := os.Stat(path)
+
+	p.pathLocksMu.Lock()
+	var pathLock *patchPathLock
+	for _, candidate := range p.pathLocks {
+		identity := candidate.identity.Load()
+		if candidate.path == path || (info != nil && identity != nil && os.SameFile(info, identity.info)) {
+			pathLock = candidate
+			break
+		}
+	}
+	if pathLock == nil {
+		pathLock = &patchPathLock{path: path}
+		if info != nil {
+			pathLock.identity.Store(&patchFileIdentity{info: info})
+		}
+		p.pathLocks = append(p.pathLocks, pathLock)
+	}
+	p.pathLocksMu.Unlock()
+
+	pathLock.mu.Lock()
+	return func() {
+		if info, err := os.Stat(path); err == nil {
+			pathLock.identity.Store(&patchFileIdentity{info: info})
+		}
+		pathLock.mu.Unlock()
+	}
+}
+
+func (p *PatchTool) lockClipboards(patches []PatchRequest) func() {
+	namesSet := make(map[string]bool)
+	for _, patch := range patches {
+		if patch.ToClipboard != "" {
+			namesSet[patch.ToClipboard] = true
+		}
+		if patch.FromClipboard != "" {
+			namesSet[patch.FromClipboard] = true
+		}
+	}
+	names := make([]string, 0, len(namesSet))
+	for name := range namesSet {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	locks := make([]*sync.Mutex, 0, len(names))
+	for _, name := range names {
+		lockValue, _ := p.clipboardLocks.LoadOrStore(name, &sync.Mutex{})
+		lock := lockValue.(*sync.Mutex)
+		lock.Lock()
+		locks = append(locks, lock)
+	}
+	return func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			locks[i].Unlock()
+		}
+	}
+}
+
+func (p *PatchTool) setClipboard(name, text string) {
+	p.clipboardMu.Lock()
+	defer p.clipboardMu.Unlock()
+	if p.clipboards == nil {
+		p.clipboards = make(map[string]string)
+	}
+	p.clipboards[name] = text
+}
+
+func (p *PatchTool) getClipboard(name string) (string, bool) {
+	p.clipboardMu.RLock()
+	defer p.clipboardMu.RUnlock()
+	text, ok := p.clipboards[name]
+	return text, ok
 }
 
 // getWorkingDir returns the current working directory.
@@ -288,14 +390,19 @@ type Reindent struct {
 
 // Run implements the patch tool logic.
 func (p *PatchTool) Run(ctx context.Context, m json.RawMessage) llm.ToolOut {
-	if p.clipboards == nil {
-		p.clipboards = make(map[string]string)
-	}
 	input, err := p.patchParse(m)
 	var output llm.ToolOut
 	if err != nil {
 		output = llm.ErrorToolOut(err)
 	} else {
+		if !filepath.IsAbs(input.Path) {
+			input.Path = filepath.Join(p.getWorkingDir(), input.Path)
+		}
+		input.Path = filepath.Clean(input.Path)
+		unlockClipboards := p.lockClipboards(input.Patches)
+		defer unlockClipboards()
+		unlockPath := p.lockPath(input.Path)
+		defer unlockPath()
 		output = p.patchRun(ctx, &input)
 	}
 	if p.Callback != nil {
@@ -351,13 +458,6 @@ func (p *PatchTool) patchParse(m json.RawMessage) (PatchInput, error) {
 // patchRun implements the guts of the patch tool.
 // It populates input from m.
 func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut {
-	path := input.Path
-	if !filepath.IsAbs(input.Path) {
-		// Use shared WorkingDir if available, then context, then Pwd fallback
-		pwd := p.getWorkingDir()
-		path = filepath.Join(pwd, input.Path)
-	}
-	input.Path = path
 	if len(input.Patches) == 0 {
 		return llm.ErrorToolOut(fmt.Errorf("no patches provided"))
 	}
@@ -402,7 +502,7 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 		}
 		// Update clipboard with the actual matched text
 		matchedOldText := origStr[spec.Off : spec.Off+spec.Len]
-		p.clipboards[patch.ToClipboard] = matchedOldText
+		p.setClipboard(patch.ToClipboard, matchedOldText)
 		clipboardsModified = append(clipboardsModified, fmt.Sprintf(`<clipboard_modified name="%s"><message>clipboard contents altered in order to match uniquely</message><new_contents>%q</new_contents></clipboard_modified>`, patch.ToClipboard, matchedOldText))
 	}
 
@@ -415,13 +515,13 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 			if patch.OldText == "" {
 				return llm.ErrorfToolOut("toClipboard (%s): oldText cannot be empty when using toClipboard", patch.ToClipboard)
 			}
-			p.clipboards[patch.ToClipboard] = patch.OldText
+			p.setClipboard(patch.ToClipboard, patch.OldText)
 		}
 
 		// Handle fromClipboard
 		newText := patch.NewText
 		if patch.FromClipboard != "" {
-			clipboardText, ok := p.clipboards[patch.FromClipboard]
+			clipboardText, ok := p.getClipboard(patch.FromClipboard)
 			if !ok {
 				return llm.ErrorfToolOut("fromClipboard (%s): no clipboard with that name", patch.FromClipboard)
 			}

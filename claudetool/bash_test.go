@@ -227,6 +227,21 @@ func TestBashChainedCdHint(t *testing.T) {
 	}
 }
 
+func TestExecuteBashInDirUsesSnapshot(t *testing.T) {
+	original := t.TempDir()
+	bashTool := &BashTool{WorkingDir: NewMutableWorkingDir(original)}
+	snapshot := bashTool.getWorkingDir()
+	bashTool.WorkingDir.Set(t.TempDir())
+
+	output, err := bashTool.executeBashInDir(context.Background(), bashInput{Command: "pwd"}, 5*time.Second, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(output); got != original {
+		t.Fatalf("pwd = %q, want snapshotted directory %q", got, original)
+	}
+}
+
 func TestExecuteBash(t *testing.T) {
 	ctx := context.Background()
 	bashTool := &BashTool{WorkingDir: NewMutableWorkingDir("/")}

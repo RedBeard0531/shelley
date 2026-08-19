@@ -16,6 +16,8 @@ import (
 	"shelley.exe.dev/llm/llmhttp"
 )
 
+var errMessagePersistence = errors.New("message persistence failed")
+
 // maxTurnDuration is an absolute backstop on a single LLM request (including
 // its inner transport retries). The primary bound on a stuck stream is the
 // transport idle/stall timeout (llmhttp.DefaultIdleTimeout); this ceiling only
@@ -58,6 +60,7 @@ type Config struct {
 	// If nil, Config.WorkingDir is used as a static value.
 	GetWorkingDir func() string
 	// OnToolProgress is called when a tool reports progress (partial output).
+	// It may be called concurrently by sibling tools.
 	OnToolProgress llm.ToolProgressFunc
 	// OnStreamDelta is called when the LLM streams a partial content delta.
 	OnStreamDelta func(llm.StreamDelta)
@@ -87,6 +90,7 @@ type Loop struct {
 	messageQueue     []llm.Message
 	totalUsage       llm.Usage
 	mu               sync.Mutex
+	toolResultMu     sync.Mutex
 	logger           *slog.Logger
 	system           []llm.SystemContent
 	workingDir       string
@@ -213,6 +217,19 @@ func (l *Loop) GetUsage() llm.Usage {
 	return l.totalUsage
 }
 
+// CancelAndGetHistory atomically cancels the loop relative to tool-result
+// publication, then returns a history snapshot. A tool batch that claimed
+// publication before cancellation finishes persisting first; a later batch
+// observes cancellation and publishes nothing.
+func (l *Loop) CancelAndGetHistory(cancel context.CancelFunc) []llm.Message {
+	l.toolResultMu.Lock()
+	defer l.toolResultMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return l.GetHistory()
+}
+
 // GetHistory returns a copy of the current conversation history
 func (l *Loop) GetHistory() []llm.Message {
 	l.mu.Lock()
@@ -266,8 +283,11 @@ func (l *Loop) Go(ctx context.Context) error {
 			// Send request to LLM
 			l.logger.Debug("processing queued messages", "count", 1)
 			if err := l.processLLMRequest(ctx); err != nil {
+				if errors.Is(err, errMessagePersistence) {
+					return err
+				}
 				l.logger.Error("failed to process LLM request", "error", err)
-				time.Sleep(time.Second) // Wait before retrying
+				time.Sleep(time.Second)
 				continue
 			}
 			l.logger.Debug("finished processing queued messages")
@@ -512,15 +532,31 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 			return l.handleRefusal(ctx, resp)
 		}
 
-		// Convert response to message and add to history
 		assistantMessage := resp.ToMessage()
-		l.mu.Lock()
-		l.history = append(l.history, assistantMessage)
-		l.mu.Unlock()
-
-		// Record assistant message with model and timing metadata
-		if err := l.recordMessage(ctx, assistantMessage, resp.UsageWithMeta(), nil); err != nil {
-			l.logger.Error("failed to record assistant message", "error", err)
+		if resp.StopReason == llm.StopReasonToolUse {
+			// Publish assistant tool-use messages atomically relative to
+			// cancellation. Persist before exposing them in history so a cancel
+			// can never create results for a tool_use row that failed to commit.
+			l.toolResultMu.Lock()
+			if err := ctx.Err(); err != nil {
+				l.toolResultMu.Unlock()
+				return err
+			}
+			if err := l.recordMessage(context.WithoutCancel(ctx), assistantMessage, resp.UsageWithMeta(), nil); err != nil {
+				l.toolResultMu.Unlock()
+				return fmt.Errorf("%w: assistant tool-use message: %v", errMessagePersistence, err)
+			}
+			l.mu.Lock()
+			l.history = append(l.history, assistantMessage)
+			l.mu.Unlock()
+			l.toolResultMu.Unlock()
+		} else {
+			l.mu.Lock()
+			l.history = append(l.history, assistantMessage)
+			l.mu.Unlock()
+			if err := l.recordMessage(ctx, assistantMessage, resp.UsageWithMeta(), nil); err != nil {
+				l.logger.Error("failed to record assistant message", "error", err)
+			}
 		}
 
 		// If no tool calls, the turn is over
@@ -772,88 +808,105 @@ func (l *Loop) handleRefusal(ctx context.Context, resp *llm.Response) error {
 	return nil
 }
 
-// executeToolCalls runs the tools from an LLM response and appends the results
-// to l.history. It does NOT call processLLMRequest — the caller loops instead.
+func (l *Loop) findTool(name string) *llm.Tool {
+	for _, tool := range l.tools {
+		if tool.Name == name {
+			return tool
+		}
+	}
+	return nil
+}
+
+// executeToolCall runs one client-side tool call.
+func (l *Loop) executeToolCall(ctx context.Context, c llm.Content) llm.Content {
+	l.logger.Debug("executing tool", "name", c.ToolName, "id", c.ID)
+
+	tool := l.findTool(c.ToolName)
+	if tool == nil {
+		l.logger.Error("tool not found", "name", c.ToolName)
+		return llm.Content{
+			Type:      llm.ContentTypeToolResult,
+			ToolUseID: c.ID,
+			ToolError: true,
+			ToolResult: []llm.Content{
+				{Type: llm.ContentTypeText, Text: fmt.Sprintf("Tool '%s' not found", c.ToolName)},
+			},
+		}
+	}
+
+	toolCtx := ctx
+	if l.workingDir != "" {
+		toolCtx = llm.WithWorkingDir(toolCtx, l.workingDir)
+	}
+	if l.onToolProgress != nil {
+		toolCtx = llm.WithToolProgress(toolCtx, l.onToolProgress)
+	}
+	toolCtx = llm.WithToolUseID(toolCtx, c.ID)
+	toolCtx = llm.WithLLMService(toolCtx, l.llm)
+	startTime := time.Now()
+	result := tool.Run(toolCtx, c.ToolInput)
+	endTime := time.Now()
+
+	toolResultContent := result.LLMContent
+	if result.Error != nil {
+		l.logger.Error("tool execution failed", "name", c.ToolName, "error", result.Error)
+		toolResultContent = llm.TextContent(result.Error.Error())
+	} else {
+		l.logger.Debug("tool executed successfully", "name", c.ToolName, "duration", endTime.Sub(startTime))
+	}
+
+	return llm.Content{
+		Type:             llm.ContentTypeToolResult,
+		ToolUseID:        c.ID,
+		ToolError:        result.Error != nil,
+		ToolResult:       toolResultContent,
+		ToolUseStartTime: &startTime,
+		ToolUseEndTime:   &endTime,
+		Display:          result.Display,
+	}
+}
+
+// executeToolCalls runs sibling tools concurrently and appends the results to l.history
+// in request order. It does NOT call processLLMRequest — the caller loops instead.
 func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) error {
-	var toolResults []llm.Content
-	// Collect the usage of indirect LLM calls made by tools (keyword_search,
-	// llm_one_shot, tool install validation, subagent progress summaries, ...)
-	// so it can be attached to the tool-result message below. Tools run
-	// sequentially in this loop, but a tool may fan out goroutines internally;
-	// the accumulator is mutex-guarded.
 	var otherUsage llmhttp.UsageAccumulator
 	ctx = llmhttp.WithUsageCollector(ctx, otherUsage.Collect)
 
+	var toolUses []llm.Content
 	for _, c := range content {
-		if c.Type != llm.ContentTypeToolUse {
-			continue
+		if c.Type == llm.ContentTypeToolUse {
+			toolUses = append(toolUses, c)
 		}
+	}
 
-		l.logger.Debug("executing tool", "name", c.ToolName, "id", c.ID)
-
-		// Find the tool
-		var tool *llm.Tool
-		for _, t := range l.tools {
-			if t.Name == c.ToolName {
-				tool = t
-				break
-			}
-		}
-
-		if tool == nil {
-			l.logger.Error("tool not found", "name", c.ToolName)
-			toolResults = append(toolResults, llm.Content{
-				Type:      llm.ContentTypeToolResult,
-				ToolUseID: c.ID,
-				ToolError: true,
-				ToolResult: []llm.Content{
-					{Type: llm.ContentTypeText, Text: fmt.Sprintf("Tool '%s' not found", c.ToolName)},
-				},
-			})
-			continue
-		}
-
-		// Execute the tool with working directory and progress callback set in context
-		toolCtx := ctx
-		if l.workingDir != "" {
-			toolCtx = llm.WithWorkingDir(ctx, l.workingDir)
-		}
-		if l.onToolProgress != nil {
-			toolCtx = llm.WithToolProgress(toolCtx, l.onToolProgress)
-		}
-		toolCtx = llm.WithToolUseID(toolCtx, c.ID)
-		toolCtx = llm.WithLLMService(toolCtx, l.llm)
-		startTime := time.Now()
-		result := tool.Run(toolCtx, c.ToolInput)
-		endTime := time.Now()
-
-		var toolResultContent []llm.Content
-		if result.Error != nil {
-			l.logger.Error("tool execution failed", "name", c.ToolName, "error", result.Error)
-			toolResultContent = []llm.Content{
-				{Type: llm.ContentTypeText, Text: result.Error.Error()},
-			}
-		} else {
-			toolResultContent = result.LLMContent
-			l.logger.Debug("tool executed successfully", "name", c.ToolName, "duration", endTime.Sub(startTime))
-		}
-
-		toolResults = append(toolResults, llm.Content{
-			Type:             llm.ContentTypeToolResult,
-			ToolUseID:        c.ID,
-			ToolError:        result.Error != nil,
-			ToolResult:       toolResultContent,
-			ToolUseStartTime: &startTime,
-			ToolUseEndTime:   &endTime,
-			Display:          result.Display,
+	toolResults := make([]llm.Content, len(toolUses))
+	var wg sync.WaitGroup
+	for i, c := range toolUses {
+		wg.Go(func() {
+			toolResults[i] = l.executeToolCall(ctx, c)
 		})
 	}
+	wg.Wait()
+
+	l.toolResultMu.Lock()
+	defer l.toolResultMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	recordCtx := context.WithoutCancel(ctx)
 
 	if len(toolResults) > 0 {
 		// Add tool results to history as a user message
 		toolMessage := llm.Message{
 			Role:    llm.MessageRoleUser,
 			Content: toolResults,
+		}
+
+		// Persist before exposing the result in memory. Cancellation holds the
+		// same publication lock, so it either observes the committed result or
+		// records a synthetic cancellation result, never a half-published one.
+		if err := l.recordMessage(recordCtx, toolMessage, llm.Usage{}, otherUsage.Take()); err != nil {
+			return fmt.Errorf("%w: tool result message: %v", errMessagePersistence, err)
 		}
 
 		l.mu.Lock()
@@ -868,11 +921,6 @@ func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) erro
 			l.logger.Info("processing user interruption during tool execution")
 		}
 		l.mu.Unlock()
-
-		// Record tool result message
-		if err := l.recordMessage(ctx, toolMessage, llm.Usage{}, otherUsage.Take()); err != nil {
-			l.logger.Error("failed to record tool result message", "error", err)
-		}
 	}
 
 	return nil

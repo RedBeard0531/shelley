@@ -60,6 +60,44 @@ func newTestServer(t *testing.T) (*Server, *db.DB, *loop.PredictableService) {
 	return svr, database, ps
 }
 
+func TestLastUnresolvedToolCalls(t *testing.T) {
+	history := []llm.Message{
+		{
+			Role: llm.MessageRoleAssistant,
+			Content: []llm.Content{
+				{Type: llm.ContentTypeToolUse, ID: "first", ToolName: "subagent"},
+				{Type: llm.ContentTypeText, Text: "working"},
+				{Type: llm.ContentTypeToolUse, ID: "second", ToolName: "subagent"},
+			},
+		},
+	}
+
+	got := lastUnresolvedToolCalls(history)
+	if len(got) != 2 || got[0].id != "first" || got[1].id != "second" {
+		t.Fatalf("unresolved calls = %+v, want first then second", got)
+	}
+	results := cancelledToolResults(got, time.Now())
+	if len(results) != 2 || results[0].ToolUseID != "first" || results[1].ToolUseID != "second" {
+		t.Fatalf("cancelled results = %+v, want first then second", results)
+	}
+	for _, result := range results {
+		if !result.ToolError || len(result.ToolResult) != 1 || !strings.Contains(result.ToolResult[0].Text, "cancelled") {
+			t.Fatalf("invalid cancelled result: %+v", result)
+		}
+	}
+
+	history = append(history, llm.Message{
+		Role: llm.MessageRoleUser,
+		Content: []llm.Content{
+			{Type: llm.ContentTypeToolResult, ToolUseID: "first"},
+		},
+	})
+	got = lastUnresolvedToolCalls(history)
+	if len(got) != 1 || got[0].id != "second" {
+		t.Fatalf("unresolved calls after partial result = %+v, want second", got)
+	}
+}
+
 // TestCancelWithPredictableModel tests cancellation with the predictable model
 func TestCancelWithPredictableModel(t *testing.T) {
 	t.Parallel()

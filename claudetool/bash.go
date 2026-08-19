@@ -201,7 +201,7 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 
 	display := BashDisplayData{WorkingDir: wd}
 
-	out, execErr := b.executeBash(ctx, req, timeout)
+	out, execErr := b.executeBashInDir(ctx, req, timeout, wd)
 	if execErr != nil {
 		return llm.ErrorToolOut(execErr)
 	}
@@ -232,10 +232,9 @@ const (
 	maxLineLength        = 200 // truncate displayed lines to this length
 )
 
-func (b *BashTool) makeBashCommand(ctx context.Context, command string, out io.Writer) *exec.Cmd {
+func (b *BashTool) makeBashCommand(ctx context.Context, command string, out io.Writer, wd string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "bash", "--login", "-c", command)
-	// Use shared WorkingDir if available, then context, then Pwd fallback
-	cmd.Dir = b.getWorkingDir()
+	cmd.Dir = wd
 	cmd.Stdin = nil
 	cmd.Stdout = out
 	cmd.Stderr = out
@@ -362,6 +361,10 @@ func (pw *progressWriter) String() string {
 }
 
 func (b *BashTool) executeBash(ctx context.Context, req bashInput, timeout time.Duration) (string, error) {
+	return b.executeBashInDir(ctx, req, timeout, b.getWorkingDir())
+}
+
+func (b *BashTool) executeBashInDir(ctx context.Context, req bashInput, timeout time.Duration, wd string) (string, error) {
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -383,7 +386,7 @@ func (b *BashTool) executeBash(ctx context.Context, req bashInput, timeout time.
 		getOutput = buf.String
 	}
 
-	cmd := b.makeBashCommand(execCtx, req.Command, output)
+	cmd := b.makeBashCommand(execCtx, req.Command, output, wd)
 	cmd.Env = append(cmd.Env, `GIT_SEQUENCE_EDITOR=echo "To do an interactive rebase, run it in a tmux session." && exit 1`)
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("command failed: %w", err)
