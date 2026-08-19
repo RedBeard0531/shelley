@@ -263,3 +263,51 @@ func TestLookupCost(t *testing.T) {
 		})
 	}
 }
+
+func TestLookupModalities(t *testing.T) {
+	cases := []struct {
+		name     string
+		endpoint string
+		model    string
+		want     Modalities
+		wantOK   bool
+	}{
+		{
+			name:     "openai multimodal",
+			endpoint: "https://api.openai.com/v1",
+			model:    "gpt-4o",
+			want:     Modalities{Input: []string{"text", "image", "pdf"}, Output: []string{"text"}},
+			wantOK:   true,
+		},
+		{
+			name:     "custom base_url with rich modalities",
+			endpoint: "https://opencode.ai/zen/v1",
+			model:    "gemini-3-pro",
+			want:     Modalities{Input: []string{"text", "image", "video", "audio", "pdf"}, Output: []string{"text"}},
+			wantOK:   true,
+		},
+		{
+			name:     "unknown model",
+			endpoint: "https://api.openai.com/v1",
+			model:    "made-up-model",
+			wantOK:   false,
+		},
+		{
+			name:     "unknown host",
+			endpoint: "https://made-up.example.com/v1",
+			model:    "some-model",
+			wantOK:   false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := LookupModalities(c.endpoint, c.model)
+			if ok != c.wantOK {
+				t.Fatalf("LookupModalities(%q,%q) found = %v, want %v", c.endpoint, c.model, ok, c.wantOK)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("LookupModalities(%q,%q) = %+v, want %+v", c.endpoint, c.model, got, c.want)
+			}
+		})
+	}
+}
