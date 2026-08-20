@@ -948,3 +948,177 @@ func TestCancelSlowLoopWaitsForOrderedFinalization(t *testing.T) {
 		t.Fatalf("cancellation state not cleared: loop=%v cancelling=%v", manager.loop, manager.cancelling)
 	}
 }
+
+// TestResetLoopWaitsForExitBeforeReplacement verifies reset has the same hard
+// lifecycle boundary as cancellation: it invalidates the old generation,
+// cancels it, and waits for its final persistence before a replacement can be
+// created. The stalled write is deterministic; no timing sleeps are needed.
+
+// TestResetDoesNotDeadlockWithConcurrentFatalExit covers the ordering where a
+// loop has already failed but reaches handleFatalLoopExit only after ResetLoop
+// has invalidated it. handleFatalLoopExit runs before the loop goroutine's
+// deferred close(loopDone), so it must return as stale rather than wait for the
+// teardown that is itself waiting on loopDone.
+func TestResetDoesNotDeadlockWithConcurrentFatalExit(t *testing.T) {
+	t.Parallel()
+	server, database, _ := newTestServer(t)
+	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	if err != nil {
+		t.Fatalf("get manager: %v", err)
+	}
+
+	oldLoop := loop.NewLoop(loop.Config{})
+	processCtx, processCancel := context.WithCancel(context.Background())
+	loopDone := make(chan struct{})
+	cancelStarted := make(chan struct{})
+	var cancelOnce sync.Once
+	manager.mu.Lock()
+	manager.loop = oldLoop
+	manager.loopCancel = func() {
+		processCancel()
+		cancelOnce.Do(func() { close(cancelStarted) })
+	}
+	manager.loopCtx = processCtx
+	manager.loopDone = loopDone
+	manager.loopGeneration = 1
+	manager.modelID = "predictable"
+	manager.mu.Unlock()
+
+	fatalEntered := make(chan struct{})
+	fatalReturned := make(chan struct{})
+	go func() {
+		// Match ensureLoop's goroutine ordering: fatal cleanup happens before
+		// the deferred loopDone close.
+		<-cancelStarted
+		close(fatalEntered)
+		manager.handleFatalLoopExit(oldLoop, 1)
+		close(fatalReturned)
+		close(loopDone)
+	}()
+
+	resetDone := make(chan struct{})
+	go func() {
+		manager.ResetLoop()
+		close(resetDone)
+	}()
+	<-fatalEntered
+
+	select {
+	case <-resetDone:
+	case <-time.After(time.Second):
+		t.Fatal("ResetLoop deadlocked waiting for a fatal loop exit")
+	}
+	select {
+	case <-fatalReturned:
+	case <-time.After(time.Second):
+		t.Fatal("fatal exit did not return after reset invalidated its generation")
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.loopTearingDown || manager.loopLifecycleDone != nil || manager.loop != nil {
+		t.Fatalf("reset teardown state not cleared: tearingDown=%v done=%v loop=%p", manager.loopTearingDown, manager.loopLifecycleDone, manager.loop)
+	}
+}
+
+func TestResetLoopWaitsForExitBeforeReplacement(t *testing.T) {
+	t.Parallel()
+	server, database, _ := newTestServer(t)
+	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	if err != nil {
+		t.Fatalf("get manager: %v", err)
+	}
+
+	userMessage := llm.Message{Role: llm.MessageRoleUser, Content: llm.TextContent("reset while tool runs")}
+	if err := server.recordMessage(context.Background(), conversation.ConversationID, userMessage, llm.Usage{}, nil); err != nil {
+		t.Fatalf("record user: %v", err)
+	}
+
+	toolStarted := make(chan struct{})
+	tool := &llm.Tool{
+		Name:        "blocking",
+		Description: "wait for reset cancellation",
+		InputSchema: llm.EmptySchema(),
+		Run: func(ctx context.Context, _ json.RawMessage) llm.ToolOut {
+			close(toolStarted)
+			<-ctx.Done()
+			return llm.ErrorToolOut(fmt.Errorf("[command cancelled: %w]", ctx.Err()))
+		},
+	}
+	uses := []llm.Content{{ID: "reset-tool", Type: llm.ContentTypeToolUse, ToolName: tool.Name, ToolInput: json.RawMessage(`{}`)}}
+	service := &fixedMultiToolService{PredictableService: loop.NewPredictableService(), content: uses}
+
+	recordStarted := make(chan struct{})
+	releaseRecord := make(chan struct{})
+	var stallOnce sync.Once
+	oldLoop := loop.NewLoop(loop.Config{
+		LLM:     service,
+		History: []llm.Message{userMessage},
+		Tools:   []*llm.Tool{tool},
+		RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+			if message.Role == llm.MessageRoleUser {
+				stallOnce.Do(func() {
+					close(recordStarted)
+					<-releaseRecord
+				})
+			}
+			return server.recordMessage(ctx, conversation.ConversationID, message, usage, otherUsage)
+		},
+	})
+	processCtx, cancelProcess := context.WithCancel(context.Background())
+	loopDone := make(chan struct{})
+	processDone := make(chan error, 1)
+	manager.mu.Lock()
+	manager.loop = oldLoop
+	manager.loopCancel = cancelProcess
+	manager.loopCtx = processCtx
+	manager.loopDone = loopDone
+	manager.loopGeneration = 1
+	manager.modelID = "predictable"
+	manager.mu.Unlock()
+	manager.SetAgentWorking(true)
+	go func() {
+		processDone <- oldLoop.ProcessOneTurn(processCtx)
+		close(loopDone)
+	}()
+	<-toolStarted
+
+	resetDone := make(chan struct{})
+	go func() {
+		manager.ResetLoop()
+		close(resetDone)
+	}()
+	<-recordStarted
+	select {
+	case <-resetDone:
+		t.Fatal("ResetLoop returned while the old loop could still persist")
+	default:
+	}
+
+	close(releaseRecord)
+	if err := <-processDone; err != context.Canceled {
+		t.Fatalf("ProcessOneTurn error = %v, want context.Canceled", err)
+	}
+	<-resetDone
+
+	if err := manager.ensureLoop(loop.NewPredictableService(), "predictable"); err != nil {
+		t.Fatalf("ensure replacement loop: %v", err)
+	}
+	manager.mu.Lock()
+	replacement := manager.loop
+	generation := manager.loopGeneration
+	tearingDown := manager.loopTearingDown
+	manager.mu.Unlock()
+	if replacement == nil || replacement == oldLoop || generation <= 1 || tearingDown {
+		t.Fatalf("replacement lifecycle state = loop:%p old:%p generation:%d tearingDown:%v", replacement, oldLoop, generation, tearingDown)
+	}
+	manager.stopLoop()
+}

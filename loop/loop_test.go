@@ -2907,6 +2907,75 @@ func TestToolOtherUsageAttachedToToolResult(t *testing.T) {
 // keep their real results, interrupted tools preserve partial output with the
 // cancelled sentinel appended, and exactly one ordered result message is
 // recorded despite the cancelled context.
+
+// TestExecuteToolCallsBarrierStartsAllSiblings verifies the batch start
+// contract: once a sibling batch is released, cancellation by one tool cannot
+// make scheduler-late siblings look as though they never started. It also
+// verifies that ordinary errors from those siblings are not rewritten merely
+// because their shared context is now cancelled.
+func TestExecuteToolCallsBarrierStartsAllSiblings(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	started := make(chan string, 3)
+	tool := &llm.Tool{
+		Name:        "barrier",
+		Description: "test barrier semantics",
+		InputSchema: llm.EmptySchema(),
+		Run: func(_ context.Context, input json.RawMessage) llm.ToolOut {
+			var name string
+			if err := json.Unmarshal(input, &name); err != nil {
+				t.Fatalf("decode tool input: %v", err)
+			}
+			started <- name
+			if name == "cancel" {
+				cancel()
+				return llm.ErrorToolOut(context.Canceled)
+			}
+			return llm.ErrorToolOut(fmt.Errorf("ordinary %s failure", name))
+		},
+	}
+
+	var recorded llm.Message
+	l := NewLoop(Config{
+		Tools: []*llm.Tool{tool},
+		RecordMessage: func(_ context.Context, message llm.Message, _ llm.Usage, _ []llm.PurposedUsage) error {
+			recorded = message
+			return nil
+		},
+	})
+	content := []llm.Content{
+		{ID: "one", Type: llm.ContentTypeToolUse, ToolName: tool.Name, ToolInput: json.RawMessage(`"cancel"`)},
+		{ID: "two", Type: llm.ContentTypeToolUse, ToolName: tool.Name, ToolInput: json.RawMessage(`"two"`)},
+		{ID: "three", Type: llm.ContentTypeToolUse, ToolName: tool.Name, ToolInput: json.RawMessage(`"three"`)},
+	}
+
+	if err := l.executeToolCalls(ctx, content); err != context.Canceled {
+		t.Fatalf("executeToolCalls error = %v, want context.Canceled", err)
+	}
+
+	seen := map[string]bool{}
+	for range 3 {
+		seen[<-started] = true
+	}
+	for _, name := range []string{"cancel", "two", "three"} {
+		if !seen[name] {
+			t.Fatalf("%q did not run; siblings were not started as a cohort: %v", name, seen)
+		}
+	}
+	if len(recorded.Content) != 3 {
+		t.Fatalf("recorded results = %d, want 3", len(recorded.Content))
+	}
+	for _, result := range recorded.Content[1:] {
+		if !result.ToolError || !strings.Contains(result.ToolResult[0].Text, "ordinary") {
+			t.Errorf("ordinary sibling result = %+v", result)
+		}
+		if strings.Contains(result.ToolResult[0].Text, cancelledToolResultText) {
+			t.Errorf("ordinary sibling was misclassified as cancelled: %+v", result)
+		}
+	}
+}
+
 func TestExecuteToolCallsCancellationPreservesOutput(t *testing.T) {
 	var recordedMessages []llm.Message
 	recordFunc := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {

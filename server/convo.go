@@ -89,8 +89,19 @@ type ConversationManager struct {
 	loop                *loop.Loop
 	loopCancel          context.CancelFunc
 	loopCtx             context.Context
-	// loopLifecycleMu serializes cancellation, loop reset, and new user work.
+	// loopLifecycleMu serializes loop creation and lifecycle transitions. A
+	// transition releases this mutex while waiting for a loop goroutine, then
+	// re-acquires and revalidates its generation before publishing teardown.
 	loopLifecycleMu sync.Mutex
+	// loopGeneration identifies the currently installed loop. It advances
+	// before a loop is cancelled or reset, so callbacks and delayed work can
+	// reject stale generations.
+	loopGeneration uint64
+	// loopTearingDown prevents a replacement loop from being installed while
+	// cancellation/reset is waiting for the prior loop to exit. Closed once the
+	// lifecycle boundary (including cancellation bookkeeping) is complete.
+	loopTearingDown   bool
+	loopLifecycleDone chan struct{}
 	// loopDone closes after the current loop goroutine has stopped writing.
 	loopDone      chan struct{}
 	mu            sync.Mutex
@@ -780,12 +791,13 @@ func (cm *ConversationManager) AcceptUserMessage(ctx context.Context, service ll
 
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
 
 	if err := cm.Hydrate(ctx); err != nil {
 		return false, err
 	}
 
-	if err := cm.ensureLoop(service, modelID); err != nil {
+	if err := cm.ensureLoopLocked(service, modelID); err != nil {
 		return false, err
 	}
 
@@ -854,6 +866,10 @@ func (cm *ConversationManager) RetryLastLLMRequest(ctx context.Context) error {
 	// state changes for the duration of the DB update + broadcast).
 	cm.retryMu.Lock()
 	defer cm.retryMu.Unlock()
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
+
 	cm.mu.Lock()
 	loopInstance := cm.loop
 	logger := cm.logger
@@ -974,10 +990,15 @@ func (cm *ConversationManager) ContinueAfterRefusal(ctx context.Context, ch Mode
 	}
 
 	// Rebuild the loop against the new model and re-fire the refused request.
+	// This is a lifecycle operation: once the lock is held, cancellation/reset
+	// cannot replace the loop between selecting it and Retry().
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
 	if err := cm.Hydrate(ctx); err != nil {
 		return fmt.Errorf("failed to hydrate before continuing: %w", err)
 	}
-	if err := cm.ensureLoop(service, modelID); err != nil {
+	if err := cm.ensureLoopLocked(service, modelID); err != nil {
 		return fmt.Errorf("failed to build loop before continuing: %w", err)
 	}
 
@@ -1015,11 +1036,12 @@ func (cm *ConversationManager) ResumeInterruptedTurn(ctx context.Context, servic
 	defer cm.retryMu.Unlock()
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
 
 	if err := cm.Hydrate(ctx); err != nil {
 		return fmt.Errorf("failed to hydrate before resuming: %w", err)
 	}
-	if err := cm.ensureLoop(service, modelID); err != nil {
+	if err := cm.ensureLoopLocked(service, modelID); err != nil {
 		return fmt.Errorf("failed to build loop before resuming: %w", err)
 	}
 
@@ -1049,6 +1071,7 @@ func (cm *ConversationManager) QueueMessage(ctx context.Context, s *Server, mode
 
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
 
 	llmJSON, err := json.Marshal(message)
 	if err != nil {
@@ -1175,9 +1198,18 @@ func (cm *ConversationManager) DropPendingSubagentDone(subagentConversationID st
 // the OLD generation after the compaction snapshot was taken and thus be
 // absent from the new generation's context (visible in the transcript, not
 // re-fed) — an accepted, pre-existing loss mode of the drain path too.
-func (cm *ConversationManager) takeInjectableSubagentDone(ctx context.Context) []llm.Message {
+func (cm *ConversationManager) takeInjectableSubagentDone(ctx context.Context, generation uint64) []llm.Message {
+	// This callback runs inside a loop goroutine. Never wait for an in-progress
+	// teardown here: cancellation is waiting for this goroutine to exit. Taking
+	// the lifecycle lock only long enough to validate/persist makes the winner
+	// deterministic—either injection commits before cancellation begins, or the
+	// stale loop injects nothing.
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+
 	cm.mu.Lock()
-	if cm.distilling || cm.cancelling || len(cm.pendingBatches) == 0 || cm.recordMessageBatch == nil {
+	if cm.loopTearingDown || cm.loop == nil || cm.loopGeneration != generation ||
+		cm.distilling || cm.cancelling || len(cm.pendingBatches) == 0 || cm.recordMessageBatch == nil {
 		cm.mu.Unlock()
 		return nil
 	}
@@ -1417,6 +1449,12 @@ func (cm *ConversationManager) drainPendingMessages(s *Server) {
 
 	ctx := context.Background()
 
+	// Feeding a batch is a lifecycle publication: cancellation/reset must not
+	// clear or replace the target loop between the DB insert and QueueMessages.
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
+
 restart:
 	cm.mu.Lock()
 	// Bail if distillation started while we were draining (or between the
@@ -1488,7 +1526,7 @@ restart:
 			cm.logger.Error("Failed to hydrate for queued batches", "error", err)
 			return
 		}
-		if err := cm.ensureLoop(svc, modelID); err != nil {
+		if err := cm.ensureLoopLocked(svc, modelID); err != nil {
 			cm.logger.Error("Failed to start loop for queued batches", "error", err)
 			return
 		}
@@ -1812,7 +1850,60 @@ func (cm *ConversationManager) logSystemPromptState(system []llm.SystemContent, 
 	cm.logger.Info("Loaded system prompt from database", "system_items", len(system), "total_length", length)
 }
 
+func (cm *ConversationManager) waitForLoopTeardownLocked() {
+	for {
+		cm.mu.Lock()
+		tearingDown := cm.loopTearingDown
+		done := cm.loopLifecycleDone
+		cm.mu.Unlock()
+		if !tearingDown {
+			return
+		}
+
+		// The loop being torn down can need cm.mu while it exits. Do not hold
+		// the lifecycle mutex while waiting, or cancellation/reset would turn
+		// that ordinary exit into a lock inversion.
+		cm.loopLifecycleMu.Unlock()
+		<-done
+		cm.loopLifecycleMu.Lock()
+	}
+}
+
+func (cm *ConversationManager) isCurrentLoopGeneration(generation uint64) bool {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return !cm.loopTearingDown && cm.loop != nil && cm.loopGeneration == generation
+}
+
+// finishLoopTeardownLocked reopens the lifecycle boundary after its owner has
+// cancelled/waited/recorded all required teardown state. expectedGeneration is
+// captured before the owner releases loopLifecycleMu; checking it on return
+// makes a stale teardown unable to reopen a newer lifecycle. The caller must
+// hold loopLifecycleMu.
+func (cm *ConversationManager) finishLoopTeardownLocked(expectedGeneration uint64) {
+	cm.mu.Lock()
+	if !cm.loopTearingDown || cm.loopGeneration != expectedGeneration {
+		cm.mu.Unlock()
+		return
+	}
+	done := cm.loopLifecycleDone
+	cm.loopTearingDown = false
+	cm.loopLifecycleDone = nil
+	cm.cancelling = false
+	cm.mu.Unlock()
+	close(done)
+}
+
+// ensureLoop creates a loop only after any prior lifecycle transition has
+// completed. Callers that already hold loopLifecycleMu use ensureLoopLocked.
 func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) error {
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
+	return cm.ensureLoopLocked(service, modelID)
+}
+
+func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID string) error {
 	cm.mu.Lock()
 	if cm.loop != nil {
 		existingModel := cm.modelID
@@ -1823,6 +1914,10 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 		return nil
 	}
 
+	// loopLifecycleMu is held, so this value remains reserved until we publish
+	// the new loop below. Capturing it in callbacks lets them reject events from
+	// this loop after a later cancellation or reset advances the generation.
+	generation := cm.loopGeneration + 1
 	recordMessage := cm.recordMessage
 	logger := cm.logger
 	cwd := cm.cwd
@@ -1900,7 +1995,9 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	// streamFlusher batches LLM stream deltas and flushes them periodically
 	// to avoid overwhelming the bounded subpub queue with hundreds
 	// of individual deltas per second from the Anthropic SSE stream.
-	sf := newStreamFlusher(cm, 50*time.Millisecond)
+	sf := newStreamFlusher(cm, 50*time.Millisecond, func() bool {
+		return cm.isCurrentLoopGeneration(generation)
+	})
 
 	loopInstance := loop.NewLoop(loop.Config{
 		LLM:           service,
@@ -1919,6 +2016,9 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 			cm.recordGitStateChange(ctx, state)
 		},
 		OnToolProgress: func(progress llm.ToolProgress) {
+			if !cm.isCurrentLoopGeneration(generation) {
+				return
+			}
 			cm.broadcastStream(StreamResponse{
 				ToolProgress: &progress,
 			})
@@ -1926,7 +2026,7 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 		OnStreamDelta: sf.Push,
 		OnStreamDone:  sf.Flush,
 		InjectMessages: func(ctx context.Context) []llm.Message {
-			return cm.takeInjectableSubagentDone(ctx)
+			return cm.takeInjectableSubagentDone(ctx, generation)
 		},
 	})
 
@@ -1943,6 +2043,7 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	}
 	// Check if we need to persist the model (for conversations created before model column existed)
 	needsPersist := cm.modelID == "" && modelID != ""
+	cm.loopGeneration = generation
 	cm.loop = loopInstance
 	cm.loopCancel = cancel
 	cm.loopCtx = processCtx
@@ -1982,20 +2083,33 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 		} else {
 			slog.Default().Error("Conversation loop stopped", "error", err)
 		}
-		cm.handleFatalLoopExit(loopInstance)
+		cm.handleFatalLoopExit(loopInstance, generation)
 	}()
 
 	return nil
 }
 
-func (cm *ConversationManager) handleFatalLoopExit(loopInstance *loop.Loop) {
+func (cm *ConversationManager) handleFatalLoopExit(loopInstance *loop.Loop, generation uint64) {
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+
+	// This runs inside the loop goroutine before its deferred close(loopDone).
+	// Never wait for an existing teardown here: cancel/reset may be waiting for
+	// that very loopDone. Their generation invalidation makes this exit stale,
+	// so the identity check below must simply return and let the defer unblock
+	// the owner.
+	var teardownGeneration uint64
 	cm.mu.Lock()
-	if cm.loop != loopInstance {
+	if cm.loop != loopInstance || cm.loopGeneration != generation {
 		cm.mu.Unlock()
 		return
 	}
 	cancel := cm.loopCancel
 	toolSet := cm.toolSet
+	cm.loopGeneration++ // invalidate callbacks from the failed loop
+	teardownGeneration = cm.loopGeneration
+	cm.loopTearingDown = true
+	cm.loopLifecycleDone = make(chan struct{})
 	cm.loopCancel = nil
 	cm.loopCtx = nil
 	cm.loopDone = nil
@@ -2004,20 +2118,17 @@ func (cm *ConversationManager) handleFatalLoopExit(loopInstance *loop.Loop) {
 	cm.toolSet = nil
 	cm.hydrated = false
 	cm.hasConversationEvents = false
-	cm.cancelling = true
+	cm.cancelling = true // suppress an onDone notification for a failed turn
 	cm.mu.Unlock()
 
-	cm.SetAgentWorking(false)
 	if cancel != nil {
 		cancel()
 	}
 	if toolSet != nil {
 		toolSet.Cleanup()
 	}
-
-	cm.mu.Lock()
-	cm.cancelling = false
-	cm.mu.Unlock()
+	cm.SetAgentWorking(false)
+	cm.finishLoopTeardownLocked(teardownGeneration)
 }
 
 func (cm *ConversationManager) stopLoop() {
@@ -2029,15 +2140,35 @@ func (cm *ConversationManager) ResetLoop() {
 	cm.resetLoop(true)
 }
 
+// resetLoop establishes a lifecycle boundary before cancelling the old loop.
+// It releases loopLifecycleMu while waiting so the dying loop can finish, but
+// loopTearingDown prevents any replacement from being installed in that gap.
 func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 	cm.loopLifecycleMu.Lock()
-	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
 
+	var teardownGeneration uint64
 	cm.mu.Lock()
+	loopInstance := cm.loop
+	loopDone := cm.loopDone
 	cancel := cm.loopCancel
 	toolSet := cm.toolSet
+	cm.loopGeneration++ // invalidate delayed callbacks before cancellation
+	teardownGeneration = cm.loopGeneration
+	if loopInstance == nil {
+		if markUnhydrated {
+			cm.hydrated = false
+			cm.hasConversationEvents = false
+		}
+		cm.mu.Unlock()
+		cm.loopLifecycleMu.Unlock()
+		return
+	}
+	cm.loopTearingDown = true
+	cm.loopLifecycleDone = make(chan struct{})
 	cm.loopCancel = nil
 	cm.loopCtx = nil
+	cm.loopDone = nil
 	cm.loop = nil
 	cm.modelID = ""
 	cm.toolSet = nil
@@ -2046,13 +2177,21 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 		cm.hasConversationEvents = false
 	}
 	cm.mu.Unlock()
+	cm.loopLifecycleMu.Unlock()
 
 	if cancel != nil {
 		cancel()
 	}
+	if loopDone != nil {
+		<-loopDone
+	}
 	if toolSet != nil {
 		toolSet.Cleanup()
 	}
+
+	cm.loopLifecycleMu.Lock()
+	cm.finishLoopTeardownLocked(teardownGeneration)
+	cm.loopLifecycleMu.Unlock()
 }
 
 // CancelConversation cancels the active loop and synchronously ends its turn.
@@ -2060,32 +2199,38 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 // cancelled tools, before this method writes the end-of-turn marker.
 func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 	cm.loopLifecycleMu.Lock()
-	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
 
+	var teardownGeneration uint64
 	cm.mu.Lock()
 	loopInstance := cm.loop
 	loopDone := cm.loopDone
 	cancel := cm.loopCancel
-	if loopInstance != nil {
-		cm.cancelling = true
-	}
-	cm.mu.Unlock()
-
+	toolSet := cm.toolSet
 	if loopInstance == nil {
+		cm.mu.Unlock()
+		cm.loopLifecycleMu.Unlock()
 		cm.logger.Info("No active loop to cancel")
 		return nil
 	}
-	defer func() {
-		cm.mu.Lock()
-		cm.cancelling = false
-		cm.mu.Unlock()
-	}()
+	cm.loopGeneration++ // stale queues/callbacks cannot target this loop
+	teardownGeneration = cm.loopGeneration
+	cm.loopTearingDown = true
+	cm.loopLifecycleDone = make(chan struct{})
+	cm.cancelling = true
+	cm.pendingBatches = nil
+	cm.loopCancel = nil
+	cm.loopCtx = nil
+	cm.loopDone = nil
+	cm.loop = nil
+	cm.modelID = ""
+	cm.toolSet = nil
+	cm.hydrated = false
+	cm.hasConversationEvents = false
+	cm.mu.Unlock()
+	cm.loopLifecycleMu.Unlock()
 
 	cm.logger.Info("Cancelling conversation")
-	cm.mu.Lock()
-	cm.pendingBatches = nil
-	cm.mu.Unlock()
-
 	persistCtx := context.WithoutCancel(ctx)
 	if conv, err := cm.db.GetConversationByID(persistCtx, cm.conversationID); err != nil {
 		cm.logger.Error("Failed to read queued messages on cancel", "error", err)
@@ -2101,6 +2246,16 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 	if loopDone != nil {
 		<-loopDone
 	}
+	if toolSet != nil {
+		toolSet.Cleanup()
+	}
+
+	// No replacement can have been installed while loopTearingDown was true.
+	// Reacquire the lifecycle lock before publishing the end marker and reopen
+	// the boundary only after that marker has committed.
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+	defer cm.finishLoopTeardownLocked(teardownGeneration)
 
 	endTurnMessage := llm.Message{
 		Role:      llm.MessageRoleAssistant,
@@ -2113,14 +2268,6 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 	}
 
 	cm.SetAgentWorking(false)
-	cm.mu.Lock()
-	cm.loopCancel = nil
-	cm.loopCtx = nil
-	cm.loopDone = nil
-	cm.loop = nil
-	cm.modelID = ""
-	cm.hydrated = false
-	cm.mu.Unlock()
 	return nil
 }
 
