@@ -5,7 +5,7 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   page,
   request,
 }) => {
-  const command = "if true; then echo bash-output-plain; fi";
+  const command = 'value=$(printf bash-output-plain); echo "outer $(printf inner) tail"';
   const slug = await createConversationViaAPI(request, `bash: ${command}`);
   await page.goto(`/c/${slug}`);
   await page.waitForLoadState("domcontentloaded");
@@ -20,6 +20,22 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   const tokenCount = await summaryTokens.count();
   const lightColor = await summaryTokens.first().evaluate((token) => getComputedStyle(token).color);
   const tokenHtml = await summary.innerHTML();
+  const shellPunctuation = await summaryTokens.evaluateAll((tokens) =>
+    tokens.map((token) => ({
+      text: token.textContent,
+      light: (token as HTMLElement).style.getPropertyValue("--shelley-code-light"),
+    })),
+  );
+  expect(shellPunctuation).toEqual(
+    expect.arrayContaining([
+      { text: "$(", light: "#B31D28" },
+      { text: ")", light: "#B31D28" },
+      { text: ";", light: "#9A6700" },
+    ]),
+  );
+  const innerTokens = shellPunctuation.filter(({ text }) => text?.trim() === "inner");
+  expect(innerTokens).toHaveLength(1);
+  expect(innerTokens.every(({ light }) => light === "#032F62")).toBeTruthy();
   await page.locator("html").evaluate((root) => root.classList.add("dark"));
   await expect
     .poll(() => summaryTokens.first().evaluate((token) => getComputedStyle(token).color))
@@ -35,7 +51,7 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   await expect(expandedCommand.locator(".shelley-code-token").first()).toBeAttached();
 
   const output = details.locator(".bash-tool-code").last();
-  await expect(output).toHaveText("bash-output-plain\n");
+  await expect(output).toHaveText("outer inner tail\n");
   await expect(output.locator(".shelley-code-token")).toHaveCount(0);
   expect(await output.innerHTML()).not.toContain("shelley-code-token");
 });
