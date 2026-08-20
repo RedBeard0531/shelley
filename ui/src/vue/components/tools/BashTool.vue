@@ -10,11 +10,12 @@
         <HighlightedCode
           v-if="command"
           class="bash-tool-command"
-          :source="displayCommand"
+          :source="summarySource"
           language="shellscript"
           :title="command"
         />
         <span v-else class="bash-tool-command">Output</span>
+        <span v-if="summaryTruncated" class="bash-tool-summary-ellipsis">...</span>
         <span
           v-if="displayData?.workingDir && !background"
           class="bash-tool-cwd"
@@ -208,11 +209,15 @@ const outputLabel = computed(() => {
   return props.hasError ? "Output (Error)" : "Output";
 });
 
-const displayCommand = computed(() => {
+// The header summary truncates long commands. The ellipsis is plain text
+// rendered OUTSIDE the highlighted source, so it is never tokenized as bash
+// code while the visible text stays identical to the old displayCommand.
+const SUMMARY_MAX_LEN = 300;
+const summarySource = computed(() => {
   const cmd = command.value;
-  const maxLen = 300;
-  return cmd.length <= maxLen ? cmd : cmd.substring(0, maxLen) + "...";
+  return cmd.length <= SUMMARY_MAX_LEN ? cmd : cmd.substring(0, SUMMARY_MAX_LEN);
 });
+const summaryTruncated = computed(() => command.value.length > SUMMARY_MAX_LEN);
 
 const isComplete = computed(() => !props.isRunning && props.toolResult !== undefined);
 
