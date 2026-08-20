@@ -73,13 +73,14 @@ type responsesText struct {
 
 type responsesInputItem struct {
 	ID               string              `json:"id,omitempty"`                // for replayed output items
-	Type             string              `json:"type"`                        // "message", "reasoning", "function_call", "function_call_output"
+	Type             string              `json:"type"`                        // "message", "reasoning", "function_call", "custom_tool_call", outputs
 	Role             string              `json:"role,omitempty"`              // for messages: "user", "assistant"
 	Content          []responsesContent  `json:"content,omitempty"`           // for messages
 	CallID           string              `json:"call_id,omitempty"`           // for function_call and function_call_output
 	Name             string              `json:"name,omitempty"`              // for function_call
 	Arguments        string              `json:"arguments,omitempty"`         // for function_call
-	Output           string              `json:"output,omitempty"`            // for function_call_output
+	Input            string              `json:"input,omitempty"`             // for custom_tool_call
+	Output           string              `json:"output,omitempty"`            // for tool outputs
 	Summary          *[]responsesSummary `json:"summary,omitempty"`           // for reasoning; pointer preserves an empty array
 	EncryptedContent string              `json:"encrypted_content,omitempty"` // for reasoning
 }
@@ -107,10 +108,17 @@ type responsesImageDetail string
 const responsesImageDetailAuto responsesImageDetail = "auto"
 
 type responsesTool struct {
-	Type        string          `json:"type"` // "function" or provider-hosted tool type
-	Name        string          `json:"name,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Type        string                `json:"type"` // function, custom, or provider-hosted type
+	Name        string                `json:"name,omitempty"`
+	Description string                `json:"description,omitempty"`
+	Parameters  json.RawMessage       `json:"parameters,omitempty"`
+	Format      *responsesToolGrammar `json:"format,omitempty"`
+}
+
+type responsesToolGrammar struct {
+	Type       string `json:"type"`
+	Syntax     string `json:"syntax"`
+	Definition string `json:"definition"`
 }
 
 type responsesResponse struct {
@@ -133,6 +141,7 @@ type responsesOutputItem struct {
 	CallID           string             `json:"call_id,omitempty"`           // for function_call
 	Name             string             `json:"name,omitempty"`              // for function_call
 	Arguments        string             `json:"arguments,omitempty"`         // for function_call
+	Input            string             `json:"input,omitempty"`             // for custom_tool_call
 	Summary          []responsesSummary `json:"summary,omitempty"`           // for reasoning
 	EncryptedContent string             `json:"encrypted_content,omitempty"` // for reasoning
 	Action           *responsesAction   `json:"action,omitempty"`            // for web_search_call (queries)
@@ -219,8 +228,12 @@ func fromLLMMessageResponses(msg llm.Message) []responsesInputItem {
 			}
 		}
 
+		outputType := "function_call_output"
+		if tr.ToolName == "apply_patch" {
+			outputType = "custom_tool_call_output"
+		}
 		items = append(items, responsesInputItem{
-			Type:   "function_call_output",
+			Type:   outputType,
 			CallID: tr.ToolUseID,
 			Output: cmp.Or(toolResultContent, " "),
 		})
@@ -290,12 +303,15 @@ func fromLLMMessageResponses(msg llm.Message) []responsesInputItem {
 				})
 			case llm.ContentTypeToolUse:
 				flushMessage()
-				items = append(items, responsesInputItem{
-					Type:      "function_call",
-					CallID:    c.ID,
-					Name:      c.ToolName,
-					Arguments: string(c.ToolInput),
-				})
+				if c.ToolName == "apply_patch" {
+					var input struct {
+						Input string `json:"input"`
+					}
+					_ = json.Unmarshal(c.ToolInput, &input)
+					items = append(items, responsesInputItem{Type: "custom_tool_call", CallID: c.ID, Name: c.ToolName, Input: input.Input})
+				} else {
+					items = append(items, responsesInputItem{Type: "function_call", CallID: c.ID, Name: c.ToolName, Arguments: string(c.ToolInput)})
+				}
 			}
 		}
 		flushMessage()
@@ -314,12 +330,19 @@ func responsesImageContent(c llm.Content) responsesContent {
 
 // fromLLMToolResponses converts llm.Tool to Responses API tool format
 func fromLLMToolResponses(t *llm.Tool) responsesTool {
-	return responsesTool{
-		Type:        "function",
-		Name:        t.Name,
-		Description: t.Description,
-		Parameters:  t.InputSchema,
+	if t.CustomGrammar != "" {
+		return responsesTool{
+			Type:        "custom",
+			Name:        t.Name,
+			Description: t.Description,
+			Format: &responsesToolGrammar{
+				Type:       "grammar",
+				Syntax:     "lark",
+				Definition: t.CustomGrammar,
+			},
+		}
 	}
+	return responsesTool{Type: "function", Name: t.Name, Description: t.Description, Parameters: t.InputSchema}
 }
 
 // responsesInstructionsFromLLMSystem converts llm.SystemContent to the
@@ -413,13 +436,11 @@ func (s *ResponsesService) toLLMResponseFromResponses(resp *responsesResponse, h
 				ToolInput: inputJSON,
 			})
 		case "function_call":
-			// Convert function call to tool use
-			contents = append(contents, llm.Content{
-				ID:        item.CallID,
-				Type:      llm.ContentTypeToolUse,
-				ToolName:  item.Name,
-				ToolInput: json.RawMessage(item.Arguments),
-			})
+			contents = append(contents, llm.Content{ID: item.CallID, Type: llm.ContentTypeToolUse, ToolName: item.Name, ToolInput: json.RawMessage(item.Arguments)})
+			stopReason = llm.StopReasonToolUse
+		case "custom_tool_call":
+			input, _ := json.Marshal(map[string]string{"input": item.Input})
+			contents = append(contents, llm.Content{ID: item.CallID, Type: llm.ContentTypeToolUse, ToolName: item.Name, ToolInput: input})
 			stopReason = llm.StopReasonToolUse
 		}
 	}
@@ -1109,8 +1130,11 @@ func shouldRetryResponsesDecodeError(err error, body []byte) bool {
 	return false
 }
 
-func (s *ResponsesService) UseSimplifiedPatch() bool {
-	return s.Model.UseSimplifiedPatch
+func (s *ResponsesService) PatchProfile() string {
+	if s.isOpenAIResponses() && s.Model.SupportsApplyPatch {
+		return "codex_apply_patch"
+	}
+	return "flat"
 }
 
 // ConfigDetails returns configuration information for logging

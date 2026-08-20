@@ -226,45 +226,6 @@ func TestMaxImageDimension(t *testing.T) {
 	}
 }
 
-func TestUseSimplifiedPatch(t *testing.T) {
-	// Test Service.UseSimplifiedPatch
-	tests := []struct {
-		name     string
-		model    Model
-		expected bool
-	}{
-		{
-			name:     "Default model (false)",
-			model:    GPT41,
-			expected: false,
-		},
-		{
-			name: "Model with UseSimplifiedPatch=true",
-			model: Model{
-				UserName:           "",
-				ModelName:          "",
-				TextVerbosity:      "",
-				URL:                "",
-				APIKeyEnv:          "",
-				IsReasoningModel:   false,
-				UseSimplifiedPatch: true,
-				SupportsImages:     false,
-			},
-			expected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			service := &Service{Model: tt.model}
-			result := service.UseSimplifiedPatch()
-			if result != tt.expected {
-				t.Errorf("Service.UseSimplifiedPatch() = %v, expected %v", result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestConfigDetails(t *testing.T) {
 	model := GPT41
 	service := &Service{Model: model}
@@ -288,25 +249,6 @@ func TestConfigDetails(t *testing.T) {
 
 	if details["api_key_env"] != model.APIKeyEnv {
 		t.Errorf("ConfigDetails()[api_key_env] = %s, expected %s", details["api_key_env"], model.APIKeyEnv)
-	}
-}
-
-func TestOAIResponsesServiceUseSimplifiedPatch(t *testing.T) {
-	model := Model{
-		UserName:           "",
-		ModelName:          "",
-		TextVerbosity:      "",
-		URL:                "",
-		APIKeyEnv:          "",
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: true,
-		SupportsImages:     false,
-	}
-	service := &ResponsesService{Model: model}
-
-	result := service.UseSimplifiedPatch()
-	if !result {
-		t.Errorf("ResponsesService.UseSimplifiedPatch() = %v, expected true", result)
 	}
 }
 

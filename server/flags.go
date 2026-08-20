@@ -40,3 +40,20 @@ var FlagPerformanceHUD = featureflags.Register(featureflags.Flag{
 	Description: "Show a heads-up display of UI recomputation counters (also available via __shelleyPerf in the console).",
 	Default:     false,
 })
+
+// FlagPatchSimple switches the patch tool from its full nested patches schema
+// to a simplified path-and-edits replacement schema.
+var FlagPatchSimple = featureflags.Register(featureflags.Flag{
+	Name:        "patch-simple",
+	Description: "Use a simplified path and edits array for atomic exact-text replacements. When off, use the full nested patches schema.",
+	Default:     false,
+})
+
+// FlagPatchOpenAIRaw lets capable direct OpenAI Responses models use the raw,
+// grammar-constrained Codex apply_patch tool. It overrides patch-simple when
+// both flags are enabled and has no effect on unsupported providers.
+var FlagPatchOpenAIRaw = featureflags.Register(featureflags.Flag{
+	Name:        "patch-openai-raw",
+	Description: "Use raw grammar-constrained apply_patch for capable direct OpenAI Responses models, overriding the full or simplified nested patch schema.",
+	Default:     false,
+})

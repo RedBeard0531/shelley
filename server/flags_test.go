@@ -25,3 +25,15 @@ func TestFlagReflectionEmojiFaviconRegistered(t *testing.T) {
 		t.Fatalf("default = %v, want true", f.Default)
 	}
 }
+
+func TestPatchStrategyFlagsRegisteredOff(t *testing.T) {
+	for _, name := range []string{"patch-simple", "patch-openai-raw"} {
+		flag, ok := featureflags.Lookup(name)
+		if !ok {
+			t.Fatalf("%s not registered", name)
+		}
+		if flag.Default != false {
+			t.Fatalf("%s default = %v, want false", name, flag.Default)
+		}
+	}
+}

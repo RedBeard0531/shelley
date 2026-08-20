@@ -101,16 +101,15 @@ func ClampThinkingLevel(level ThinkingLevel, supported []ThinkingLevel) Thinking
 	return best
 }
 
-type SimplifiedPatcher interface {
-	// UseSimplifiedPatch reports whether the service should use the simplified patch input schema.
-	UseSimplifiedPatch() bool
+type PatchProfiler interface {
+	PatchProfile() string
 }
 
-func UseSimplifiedPatch(svc Service) bool {
-	if sp, ok := svc.(SimplifiedPatcher); ok {
-		return sp.UseSimplifiedPatch()
+func PatchProfile(svc Service) string {
+	if profiler, ok := svc.(PatchProfiler); ok {
+		return profiler.PatchProfile()
 	}
-	return false
+	return "flat"
 }
 
 // DefaultReasoner is implemented by services that can report the reasoning
@@ -292,6 +291,9 @@ type Tool struct {
 	Type        string
 	Description string
 	InputSchema json.RawMessage
+	// CustomGrammar exposes this tool as an OpenAI custom tool whose raw input
+	// must match the supplied Lark grammar. Empty means a JSON function tool.
+	CustomGrammar string
 	// EndsTurn indicates that this tool should cause the model to end its turn when used
 	EndsTurn bool
 	// Cache indicates whether to use prompt caching for this tool

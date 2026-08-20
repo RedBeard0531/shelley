@@ -55,7 +55,8 @@ type Model struct {
 	URL                string
 	APIKeyEnv          string // environment variable name for the API key
 	IsReasoningModel   bool   // whether this model is a reasoning model (e.g. O3, O4-mini)
-	UseSimplifiedPatch bool   // whether to use the simplified patch input schema; defaults to false
+	UseSimplifiedPatch bool   // deprecated; retained in generated model literals until removed
+	SupportsApplyPatch bool   // whether this model is trained for Codex apply_patch custom tools
 	SupportsImages     bool   // whether this model accepts image inputs
 }
 
@@ -385,6 +386,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -396,6 +398,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -407,6 +410,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -418,6 +422,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   true,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -429,6 +434,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   true,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -440,6 +446,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   true,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -451,6 +458,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -462,6 +470,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -473,6 +482,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -484,6 +494,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -495,6 +506,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -506,6 +518,7 @@ var (
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
 		UseSimplifiedPatch: false,
+		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
 
@@ -1595,10 +1608,6 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			continue
 		}
 	}
-}
-
-func (s *Service) UseSimplifiedPatch() bool {
-	return s.Model.UseSimplifiedPatch
 }
 
 // ConfigDetails returns configuration information for logging

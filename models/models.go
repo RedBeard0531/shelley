@@ -508,12 +508,7 @@ func (l *loggingService) TokenContextWindow() int { return l.service.TokenContex
 func (l *loggingService) MaxImageDimension() int  { return l.service.MaxImageDimension() }
 func (l *loggingService) MaxImageBytes() int      { return l.service.MaxImageBytes() }
 
-func (l *loggingService) UseSimplifiedPatch() bool {
-	if sp, ok := l.service.(llm.SimplifiedPatcher); ok {
-		return sp.UseSimplifiedPatch()
-	}
-	return false
-}
+func (l *loggingService) PatchProfile() string { return llm.PatchProfile(l.service) }
 
 func (l *loggingService) SupportsServerSideWebSearch() bool {
 	type capable interface{ SupportsServerSideWebSearch() bool }
@@ -732,8 +727,8 @@ type reasoningService struct {
 	defaultSource llm.ThinkingLevel
 }
 
-func (s *reasoningService) SupportsReasoning() bool  { return s.supported }
-func (s *reasoningService) UseSimplifiedPatch() bool { return llm.UseSimplifiedPatch(s.Service) }
+func (s *reasoningService) SupportsReasoning() bool { return s.supported }
+func (s *reasoningService) PatchProfile() string    { return llm.PatchProfile(s.Service) }
 func (s *reasoningService) SupportsServerSideWebSearch() bool {
 	type capable interface{ SupportsServerSideWebSearch() bool }
 	c, ok := s.Service.(capable)

@@ -262,7 +262,6 @@ func (z *zeroUsageLLMService) Do(ctx context.Context, request *llm.Request) (*ll
 type mockLLMService struct {
 	tokenContextWindow int
 	maxImageDimension  int
-	useSimplifiedPatch bool
 }
 
 func (m *mockLLMService) Do(ctx context.Context, request *llm.Request) (*llm.Response, error) {
@@ -288,8 +287,7 @@ func (m *mockLLMService) MaxImageDimension() int {
 	return m.maxImageDimension
 }
 
-func (m *mockLLMService) MaxImageBytes() int       { return 5 * 1024 * 1024 }
-func (m *mockLLMService) UseSimplifiedPatch() bool { return m.useSimplifiedPatch }
+func (m *mockLLMService) MaxImageBytes() int { return 5 * 1024 * 1024 }
 
 func TestManagerGetService(t *testing.T) {
 	mgr, err := NewManager(&Config{Models: []Built{predictableBuilt()}})
@@ -331,25 +329,6 @@ func TestModelBuildSignature(t *testing.T) {
 		}
 	}
 }
-
-func TestUseSimplifiedPatch(t *testing.T) {
-	logger := slog.Default()
-	plain := &loggingService{service: &mockLLMService{}, logger: logger, modelID: "t1", provider: ProviderBuiltIn}
-	if plain.UseSimplifiedPatch() {
-		t.Error("plain mock should not implement SimplifiedPatcher")
-	}
-	with := &loggingService{service: &mockSimplifiedLLMService{useSimplified: true}, logger: logger, modelID: "t2", provider: ProviderBuiltIn}
-	if !with.UseSimplifiedPatch() {
-		t.Error("simplified mock should return true")
-	}
-}
-
-type mockSimplifiedLLMService struct {
-	mockLLMService
-	useSimplified bool
-}
-
-func (m *mockSimplifiedLLMService) UseSimplifiedPatch() bool { return m.useSimplified }
 
 func TestRefreshCustomModelsConcurrent(t *testing.T) {
 	testDB, err := db.New(db.Config{DSN: t.TempDir() + "/test.db"})
