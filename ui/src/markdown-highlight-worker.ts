@@ -4,6 +4,7 @@
 import { createHighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import { SHIKI_LANGUAGE_LOADERS } from "./generated-shiki-language-loaders";
+import { applyShellScopeColors } from "./shellTokenColors";
 import githubDark from "@shikijs/themes/github-dark";
 import githubLight from "@shikijs/themes/github-light";
 
@@ -60,17 +61,25 @@ self.addEventListener("message", async ({ data }: MessageEvent<HighlightRequest>
       return;
     }
 
+    // The shell palette re-colors bash-family tokens by TextMate scope, so
+    // the worker requests scope names for those; other languages skip the
+    // explanation cost. Both callers resolve bash/sh/shell/zsh to the
+    // canonical "shellscript" label before the request reaches this worker.
     const tokens = (await getHighlighter()).codeToTokensWithThemes(data.source, {
       lang: data.language,
       themes: { light: "github-light", dark: "github-dark" },
+      includeExplanation: data.language === "shellscript" ? "scopeName" : undefined,
     });
     const lines: HighlightToken[][] = tokens.map((line) =>
-      line.map((token) => ({
-        content: token.content,
-        light: token.variants.light.color ?? "",
-        dark: token.variants.dark.color ?? "",
-        fontStyle: token.variants.light.fontStyle ?? 0,
-      })),
+      line.map((token) => {
+        if (data.language === "shellscript") applyShellScopeColors(token);
+        return {
+          content: token.content,
+          light: token.variants.light.color ?? "",
+          dark: token.variants.dark.color ?? "",
+          fontStyle: token.variants.light.fontStyle ?? 0,
+        };
+      }),
     );
     self.postMessage({ id: data.id, kind: "highlighted", lines } satisfies HighlightResponse);
   } catch (error) {
