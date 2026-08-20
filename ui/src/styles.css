@@ -1774,6 +1774,16 @@ body {
   min-width: 0;
 }
 
+.bash-tool-summary-ellipsis {
+  /* Shown only when the command was truncated; deliberately not part of the
+     highlighted source. */
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .bash-tool-cwd {
   font-family: var(--font-mono);
   font-size: 0.75rem;
