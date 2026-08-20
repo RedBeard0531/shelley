@@ -8719,6 +8719,11 @@ kbd {
   overflow-x: auto;
 }
 
+.dark .markdown-content pre {
+  background: var(--bg-base);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 .markdown-content pre code {
   /* Code inside a fenced block fills the <pre>; keep it block-level (the diffs
      reset already makes it block, but assert it so it survives the rule above). */
@@ -8726,6 +8731,29 @@ kbd {
   background: none;
   padding: 0;
   font-size: 0.875rem;
+}
+
+/* Token colors are installed from Shiki's structured worker response, never
+   from model HTML. Both colors live on each token so flipping html.dark only
+   changes CSS and does not re-tokenize code. */
+.shelley-code-token {
+  color: var(--shelley-code-light);
+}
+
+.dark .shelley-code-token {
+  color: var(--shelley-code-dark);
+}
+
+.shelley-code-italic {
+  font-style: italic;
+}
+
+.shelley-code-bold {
+  font-weight: 700;
+}
+
+.shelley-code-underlined {
+  text-decoration: underline;
 }
 
 .inline-code {
