@@ -9,10 +9,11 @@
         <span class="bash-tool-emoji" :class="{ running: isRunning }">🛠️</span>
         <HighlightedCode
           class="bash-tool-command"
-          :source="displayCommand"
+          :source="summarySource"
           language="shellscript"
           :title="command"
         />
+        <span v-if="summaryTruncated" class="bash-tool-summary-ellipsis">...</span>
         <span v-if="displayData?.workingDir" class="bash-tool-cwd" :title="displayData.workingDir">
           in {{ displayData.workingDir }}
         </span>
@@ -174,11 +175,15 @@ const output = computed(() =>
 
 const isCancelled = computed(() => props.hasError && isCancelledToolResult(output.value));
 
-const displayCommand = computed(() => {
+// The header summary truncates long commands. The ellipsis is plain text
+// rendered OUTSIDE the highlighted source, so it is never tokenized as bash
+// code while the visible text stays identical to the old displayCommand.
+const SUMMARY_MAX_LEN = 300;
+const summarySource = computed(() => {
   const cmd = command.value;
-  const maxLen = 300;
-  return cmd.length <= maxLen ? cmd : cmd.substring(0, maxLen) + "...";
+  return cmd.length <= SUMMARY_MAX_LEN ? cmd : cmd.substring(0, SUMMARY_MAX_LEN);
 });
+const summaryTruncated = computed(() => command.value.length > SUMMARY_MAX_LEN);
 
 const isComplete = computed(() => !props.isRunning && props.toolResult !== undefined);
 
