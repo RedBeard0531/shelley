@@ -1,6 +1,8 @@
 package oai
 
 import (
+	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -11,6 +13,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -377,9 +380,9 @@ var (
 		TextVerbosity:      "",
 		URL:                FireworksURL,
 		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   true,  // models.dev: reasoning
+		IsReasoningModel:   true, // models.dev: reasoning
 		UseSimplifiedPatch: false,
-		SupportsImages:     true,  // models.dev: text, image, audio
+		SupportsImages:     true, // models.dev: text, image, audio
 	}
 
 	MuseGlimmer30BFireworks = Model{
@@ -850,6 +853,45 @@ func isDeepSeekBaseURL(baseURL string) bool {
 	return host == "deepseek.com" || strings.HasSuffix(host, ".deepseek.com")
 }
 
+// isFireworksBaseURL reports whether the given base URL points at the
+// Fireworks OpenAI-compatible API.
+func isFireworksBaseURL(baseURL string) bool {
+	if baseURL == "" {
+		return false
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "fireworks.ai" || strings.HasSuffix(host, ".fireworks.ai")
+}
+
+// isFireworksModel reports whether a model is hosted on Fireworks, matched by
+// its API model name. The request URL alone is not enough: gateway-routed
+// requests (e.g. the exe.dev LLM gateway) carry the gateway's host, not
+// fireworks.ai.
+func isFireworksModel(model Model) bool {
+	return strings.HasPrefix(strings.ToLower(model.ModelName), "accounts/fireworks/models/")
+}
+
+// forwardsReasoningContent reports whether assistant reasoning_content should
+// be sent back on subsequent turns. Fireworks mirrors DeepSeek's extension
+// for interleaved reasoning, including tool turns. Requests that reach
+// Fireworks — directly, through a gateway URL, or by provider/model identity
+// — preserve it; other providers may reject the extension, so it is stripped
+// there.
+func forwardsReasoningContent(baseURL, providerName string, model Model) bool {
+	return isDeepSeekBaseURL(baseURL) || isFireworksBaseURL(baseURL) || isFireworksModel(model) || strings.EqualFold(providerName, "fireworks")
+}
+
+// isGLMModel reports whether the model is a Zhipu GLM model (z.ai via
+// Fireworks), which accepts reasoning_history=preserved on the request so
+// thinking blocks survive multi-turn prompts.
+func isGLMModel(model Model) bool {
+	return strings.Contains(strings.ToLower(model.ModelName), "glm")
+}
+
 // fromLLMMessage converts llm.Message to OpenAI ChatCompletionMessage format
 func fromLLMMessage(msg llm.Message) []openai.ChatCompletionMessage {
 	// For OpenAI, we need to handle tool results differently than regular messages
@@ -1185,9 +1227,11 @@ type chatCompletionStreamResponse struct {
 	Usage *openai.Usage `json:"usage"`
 }
 
-func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStream, onStream func(llm.StreamDelta)) (*llm.Response, error) {
+// consumeChatCompletionChunks assembles a chat-completions streaming
+// response from a sequence of chunks, forwarding text/thinking/tool-call
+// deltas to onStream. next returns io.EOF for a clean end of stream.
+func (s *Service) consumeChatCompletionChunks(next func() (chatCompletionStreamResponse, error), headers http.Header, onStream func(llm.StreamDelta)) (*llm.Response, error) {
 	msg := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant}
-	headers := stream.Header()
 	var (
 		id           string
 		model        string
@@ -1197,18 +1241,11 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 	)
 
 	for {
-		raw, err := stream.RecvRaw()
+		chunk, err := next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			if started {
-				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
-			}
-			return nil, err
-		}
-		var chunk chatCompletionStreamResponse
-		if err := json.Unmarshal(raw, &chunk); err != nil {
 			if started {
 				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
 			}
@@ -1284,6 +1321,102 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 		StopReason: toStopReason(string(finishReason)),
 		Usage:      s.toLLMUsage(usage, headers),
 	}, nil
+}
+
+func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStream, onStream func(llm.StreamDelta)) (*llm.Response, error) {
+	headers := stream.Header()
+	return s.consumeChatCompletionChunks(func() (chatCompletionStreamResponse, error) {
+		raw, err := stream.RecvRaw()
+		if err != nil {
+			return chatCompletionStreamResponse{}, err // io.EOF ends the stream cleanly
+		}
+		var chunk chatCompletionStreamResponse
+		if err := json.Unmarshal(raw, &chunk); err != nil {
+			return chatCompletionStreamResponse{}, err
+		}
+		return chunk, nil
+	}, headers, onStream)
+}
+
+// streamChatCompletionWithExtensions runs a streaming chat-completions
+// request with extra top-level body fields that go-openai's typed request
+// cannot carry (e.g. GLM reasoning_history=preserved). The SSE body is read
+// directly and processed by the same chunk consumer as the go-openai stream,
+// so delta forwarding and response assembly are identical.
+func (s *Service) streamChatCompletionWithExtensions(ctx context.Context, httpc *http.Client, fullURL, apiKey string, req openai.ChatCompletionRequest, extensions map[string]any, onStream func(llm.StreamDelta)) (*llm.Response, error) {
+	req.Stream = true // go-openai sets this inside CreateChatCompletionStream; the raw path must too
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
+	for k, v := range extensions {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		m[k] = raw
+	}
+	body, err = json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := httpc.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		var apiErr openai.APIError
+		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Message != "" {
+			apiErr.HTTPStatusCode = resp.StatusCode
+			apiErr.HTTPStatus = resp.Status
+			return nil, &apiErr
+		}
+		return nil, &openai.RequestError{HTTPStatusCode: resp.StatusCode, HTTPStatus: resp.Status, Body: raw}
+	}
+
+	headers := resp.Header.Clone()
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	return s.consumeChatCompletionChunks(func() (chatCompletionStreamResponse, error) {
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				return chatCompletionStreamResponse{}, io.EOF
+			}
+			if data == "" {
+				continue
+			}
+			var chunk chatCompletionStreamResponse
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				return chatCompletionStreamResponse{}, err
+			}
+			return chunk, nil
+		}
+		if err := scanner.Err(); err != nil {
+			return chatCompletionStreamResponse{}, err
+		}
+		return chatCompletionStreamResponse{}, io.EOF
+	}, headers, onStream)
 }
 
 // toRoleFromString converts a role string to llm.MessageRole.
@@ -1461,22 +1594,26 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		allMessages = append(allMessages, msgs...)
 	}
 
-	// reasoning_content is a DeepSeek-specific extension to the OpenAI chat
-	// completions API. Other providers (OpenAI, Fireworks, Together, etc.) do
-	// not recognize it and may reject or silently mishandle the field. So we
-	// only forward it when talking to DeepSeek. For DeepSeek with thinking
-	// mode (the default for deepseek-v4-pro), assistant messages that include
-	// tool_calls must carry a reasoning_content field on subsequent turns or
-	// the API returns HTTP 400. If we have a real thinking block we use it
-	// (so the model can continue its prior CoT). Otherwise — e.g. for
-	// assistant turns replayed from history persisted before this fix — we
-	// inject a single-space placeholder so the request remains well-formed.
+	// reasoning_content is an extension to the OpenAI chat completions API
+	// understood by DeepSeek and Fireworks' OpenAI-compatible reasoning
+	// models; other providers (OpenAI, Together, etc.) do not recognize it
+	// and may reject or silently mishandle the field, so it is stripped for
+	// them. For DeepSeek with thinking mode (the default for deepseek-v4-pro),
+	// assistant messages that include tool_calls must carry a
+	// reasoning_content field on subsequent turns or the API returns HTTP
+	// 400. If we have a real thinking block we use it (so the model can
+	// continue its prior CoT). Otherwise — e.g. for assistant turns replayed
+	// from history persisted before this fix — we inject a single-space
+	// placeholder so the request remains well-formed. Fireworks uses the same
+	// field for interleaved reasoning but does not require the placeholder.
 	// See https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
-	if isDeepSeekBaseURL(baseURL) {
-		for i := range allMessages {
-			m := &allMessages[i]
-			if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ReasoningContent == "" {
-				m.ReasoningContent = " "
+	if forwardsReasoningContent(baseURL, s.ProviderName, model) {
+		if isDeepSeekBaseURL(baseURL) {
+			for i := range allMessages {
+				m := &allMessages[i]
+				if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ReasoningContent == "" {
+					m.ReasoningContent = " "
+				}
 			}
 		}
 	} else {
@@ -1603,13 +1740,20 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			err    error
 		)
 		if streaming {
-			var stream *openai.ChatCompletionStream
-			stream, err = client.CreateChatCompletionStream(ctx, req)
-			if err == nil {
-				result, err = s.consumeChatCompletionStream(stream, ir.OnStream)
-				closeErr := stream.Close()
-				if err == nil && closeErr != nil {
-					err = closeErr
+			if isGLMModel(model) {
+				// go-openai cannot carry reasoning_history; send the raw
+				// request for GLM models so thinking blocks survive
+				// multi-turn prompts.
+				result, err = s.streamChatCompletionWithExtensions(ctx, httpc, fullURL, cmp.Or(s.APIKey, os.Getenv(model.APIKeyEnv)), req, map[string]any{"reasoning_history": "preserved"}, ir.OnStream)
+			} else {
+				var stream *openai.ChatCompletionStream
+				stream, err = client.CreateChatCompletionStream(ctx, req)
+				if err == nil {
+					result, err = s.consumeChatCompletionStream(stream, ir.OnStream)
+					closeErr := stream.Close()
+					if err == nil && closeErr != nil {
+						err = closeErr
+					}
 				}
 			}
 		} else {

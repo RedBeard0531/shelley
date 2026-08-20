@@ -2170,6 +2170,130 @@ func TestServiceDoNonDeepSeekStripsReasoningContent(t *testing.T) {
 	}
 }
 
+func TestServiceDoFireworksRoundTripsReasoningContent(t *testing.T) {
+	// Fireworks mirrors DeepSeek's reasoning_content extension for its
+	// OpenAI-compatible reasoning models: assistant thinking must survive
+	// tool turns. Direct Fireworks URLs AND gateway-routed Fireworks models
+	// (whose URL is the gateway's, not fireworks.ai) both preserve it.
+	for _, tt := range []struct {
+		name     string
+		modelURL string
+		model    Model
+	}{
+		{name: "direct fireworks url", modelURL: "https://api.fireworks.ai/inference/v1", model: modelForTest("accounts/fireworks/models/deepseek-v4-pro")},
+		{name: "fireworks model via gateway url", modelURL: "https://gateway.example.com/_/gateway/openai/v1", model: modelForTest("accounts/fireworks/models/deepseek-v4-pro")},
+		{name: "fireworks provider name", modelURL: "https://anything.example/v1", model: modelForTest("custom-fw-model")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotBody []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBody, _ = io.ReadAll(r.Body)
+				resp := openai.ChatCompletionResponse{ID: "x", Choices: []openai.ChatCompletionChoice{{
+					Message: openai.ChatCompletionMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop",
+				}}}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+			}))
+			defer server.Close()
+
+			u, _ := url.Parse(server.URL)
+			httpc := &http.Client{Transport: rewriteHostTransport{addr: u.Host}}
+			svc := &Service{
+				APIKey:   "k",
+				Model:    tt.model,
+				ModelURL: tt.modelURL,
+				HTTPC:    httpc,
+			}
+			if tt.name == "fireworks provider name" {
+				svc.ProviderName = "fireworks"
+			}
+
+			req := &llm.Request{
+				Messages: []llm.Message{
+					{Role: llm.MessageRoleAssistant, Content: []llm.Content{
+						{Type: llm.ContentTypeThinking, Thinking: "I should call the weather tool."},
+						{Type: llm.ContentTypeToolUse, ID: "call_1", ToolName: "get_weather", ToolInput: []byte(`{"city":"Paris"}`)},
+					}},
+					{Role: llm.MessageRoleUser, Content: []llm.Content{{
+						Type: llm.ContentTypeToolResult, ToolUseID: "call_1",
+						ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "sunny"}},
+					}}},
+				},
+			}
+			if _, err := svc.Do(context.Background(), req); err != nil {
+				t.Fatalf("Do() error = %v", err)
+			}
+			if !strings.Contains(string(gotBody), `"reasoning_content":"I should call the weather tool."`) {
+				t.Errorf("expected real reasoning_content in request body, got: %s", gotBody)
+			}
+		})
+	}
+}
+
+func TestServiceDoGLMStreamsWithReasoningHistory(t *testing.T) {
+	// GLM models accept reasoning_history=preserved (which go-openai's typed
+	// request cannot carry) so thinking blocks survive multi-turn prompts.
+	// The raw streaming path must send it and otherwise behave exactly like
+	// the go-openai stream: same deltas, same assembled response.
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"id":"chatcmpl-glm","model":"accounts/fireworks/models/glm-5p2","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"think "},"finish_reason":""}]}`,
+			`{"id":"chatcmpl-glm","model":"accounts/fireworks/models/glm-5p2","choices":[{"index":0,"delta":{"reasoning_content":"more","content":"hello "},"finish_reason":""}]}`,
+			`{"id":"chatcmpl-glm","model":"accounts/fireworks/models/glm-5p2","choices":[{"index":0,"delta":{"content":"world"},"finish_reason":"stop"}]}`,
+		}
+		for _, event := range events {
+			if _, err := w.Write([]byte("data: " + event + "\n\n")); err != nil {
+				t.Fatalf("write event: %v", err)
+			}
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	var deltas []llm.StreamDelta
+	svc := &Service{
+		APIKey:   "test-key",
+		Model:    modelForTest("accounts/fireworks/models/glm-5p2"),
+		ModelURL: server.URL + "/v1",
+	}
+	resp, err := svc.Do(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(delta llm.StreamDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if !strings.Contains(string(gotBody), `"reasoning_history":"preserved"`) {
+		t.Errorf("expected reasoning_history=preserved in request body, got: %s", gotBody)
+	}
+	if !strings.Contains(string(gotBody), `"stream":true`) {
+		t.Errorf("expected stream=true in request body, got: %s", gotBody)
+	}
+	wantDeltas := []llm.StreamDelta{
+		{Type: "thinking", Text: "think ", Index: 0},
+		{Type: "thinking", Text: "more", Index: 0},
+		{Type: "text", Text: "hello ", Index: 1},
+		{Type: "text", Text: "world", Index: 1},
+	}
+	if !reflect.DeepEqual(deltas, wantDeltas) {
+		t.Fatalf("deltas = %#v, want %#v", deltas, wantDeltas)
+	}
+	if resp.StopReason != llm.StopReasonStopSequence || len(resp.Content) != 2 {
+		t.Fatalf("response = stop %q content %#v", resp.StopReason, resp.Content)
+	}
+	if resp.Content[0].Type != llm.ContentTypeThinking || resp.Content[0].Thinking != "think more" {
+		t.Fatalf("thinking = %#v", resp.Content[0])
+	}
+	if resp.Content[1].Type != llm.ContentTypeText || resp.Content[1].Text != "hello world" {
+		t.Fatalf("text = %#v", resp.Content[1])
+	}
+}
+
 func TestServiceSupportedReasoningLevels(t *testing.T) {
 	tests := []struct {
 		name  string
