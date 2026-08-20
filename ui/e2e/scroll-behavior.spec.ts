@@ -569,6 +569,270 @@ test.describe("Scroll behavior", () => {
   });
 });
 
+// Desktop viewport: PageUp/PageDown are reading controls for the conversation,
+// even though the composer deliberately keeps keyboard focus for fast replies.
+test.describe("Conversation page-key scrolling", () => {
+  test.use({ viewport: { width: 1280, height: 720 }, isMobile: false, hasTouch: false });
+
+  test("scrolls the conversation while the composer stays focused", async ({ page, request }) => {
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+
+    await page.goto(`/c/${conversationId}`);
+    const input = page.locator('[data-testid="message-input"]');
+    const messagesContainer = page.locator(".messages-container");
+    await expect(input).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    // Keep content-visibility estimates from changing scrollTop underneath the
+    // keypress; this test is about routing the key, not lazy-layout anchoring.
+    await page.addStyleTag({
+      content:
+        ".messages-chunk { content-visibility: visible !important; contain-intrinsic-size: none !important; }",
+    });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+
+    const draft = "keep this draft in the composer";
+    await input.fill(draft);
+    await input.evaluate((el: HTMLTextAreaElement) => {
+      el.selectionStart = el.selectionEnd = el.value.length;
+    });
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(input).toBeFocused();
+
+    const bottom = await messagesContainer.evaluate((el) => el.scrollTop);
+    await page.keyboard.press("PageUp");
+    await expect
+      .poll(() => messagesContainer.evaluate((el) => el.scrollTop), { timeout: 5000 })
+      .toBeLessThan(bottom - 100);
+    await expect(input).toBeFocused();
+    expect(await input.evaluate((el: HTMLTextAreaElement) => el.selectionEnd)).toBe(draft.length);
+
+    const pageUpPosition = await messagesContainer.evaluate((el) => el.scrollTop);
+    await page.keyboard.press("PageDown");
+    await expect
+      .poll(() => messagesContainer.evaluate((el) => el.scrollTop), { timeout: 5000 })
+      .toBeGreaterThan(pageUpPosition + 100);
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue(draft);
+  });
+
+  test("disarms auto-follow before same-frame conversation growth", async ({ page, request }) => {
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+
+    // Force the ResizeObserver growth callback to beat the scroll listener,
+    // reproducing the streaming race this test protects against.
+    await page.addInitScript(() => {
+      const addEventListener = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function (type, listener, options) {
+        if (
+          type === "scroll" &&
+          this instanceof HTMLElement &&
+          this.classList.contains("messages-container") &&
+          listener
+        ) {
+          const delayed: EventListener = (event) => {
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                if (typeof listener === "function") listener.call(this, event);
+                else listener.handleEvent(event);
+              }),
+            );
+          };
+          return addEventListener.call(this, type, delayed, options);
+        }
+        return addEventListener.call(this, type, listener, options);
+      };
+    });
+
+    await page.goto(`/c/${conversationId}`);
+    const input = page.locator('[data-testid="message-input"]');
+    const messagesContainer = page.locator(".messages-container");
+    await expect(input).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+    await page.addStyleTag({
+      content:
+        ".messages-chunk { content-visibility: visible !important; contain-intrinsic-size: none !important; }",
+    });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await input.focus();
+    await expect
+      .poll(
+        () =>
+          messagesContainer.evaluate(async (el) => {
+            const bottom = el.scrollHeight - el.clientHeight;
+            el.scrollTop = bottom - 1;
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            );
+            const pinStopped = el.scrollTop < bottom;
+            el.scrollTop = el.scrollHeight;
+            return pinStopped;
+          }),
+        { timeout: 5000 },
+      )
+      .toBe(true);
+
+    const positions = await input.evaluate((el) => {
+      const container = document.querySelector<HTMLElement>(".messages-container");
+      const list = container?.querySelector(".messages-list");
+      const sentinel = container?.querySelector(".messages-bottom-sentinel");
+      if (!container || !list || !sentinel) throw new Error("message scroll elements not found");
+      const before = container.scrollTop;
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+      const afterKey = container.scrollTop;
+      const filler = document.createElement("div");
+      filler.style.height = "800px";
+      list.insertBefore(filler, sentinel);
+      return { before, afterKey };
+    });
+    expect(positions.afterKey).toBeLessThan(positions.before - 100);
+
+    await expect
+      .poll(
+        () => messagesContainer.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop),
+        { timeout: 5000 },
+      )
+      .toBeGreaterThan(500);
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 5000 });
+  });
+
+  test("rearms auto-follow before same-frame growth at the bottom", async ({ page, request }) => {
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+
+    await page.goto(`/c/${conversationId}`);
+    const input = page.locator('[data-testid="message-input"]');
+    const messagesContainer = page.locator(".messages-container");
+    const scrollButton = page.locator(".scroll-to-bottom-button");
+    await expect(input).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+    await page.addStyleTag({
+      content:
+        ".messages-chunk { content-visibility: visible !important; contain-intrinsic-size: none !important; }",
+    });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await input.focus();
+    await expect
+      .poll(
+        () =>
+          messagesContainer.evaluate(async (el) => {
+            const bottom = el.scrollHeight - el.clientHeight;
+            el.scrollTop = bottom - 1;
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            );
+            const pinStopped = el.scrollTop < bottom;
+            el.scrollTop = el.scrollHeight;
+            return pinStopped;
+          }),
+        { timeout: 5000 },
+      )
+      .toBe(true);
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = el.scrollHeight - el.clientHeight - el.clientHeight / 2;
+    });
+    await expect(scrollButton).toBeVisible({ timeout: 5000 });
+
+    await input.evaluate((el) => {
+      const container = document.querySelector<HTMLElement>(".messages-container");
+      const list = container?.querySelector(".messages-list");
+      const sentinel = container?.querySelector(".messages-bottom-sentinel");
+      if (!container || !list || !sentinel) throw new Error("message scroll elements not found");
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }));
+      const filler = document.createElement("div");
+      filler.style.height = "800px";
+      list.insertBefore(filler, sentinel);
+    });
+
+    await expect
+      .poll(
+        () => messagesContainer.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop),
+        { timeout: 5000 },
+      )
+      .toBeLessThan(100);
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+  });
+
+  test("leaves composing page keys to the IME", async ({ page, request }) => {
+    const slug = await createConversationViaAPI(request, "echo page key IME");
+    await page.goto(`/c/${slug}`);
+    const input = page.locator('[data-testid="message-input"]');
+    await expect(input).toBeVisible({ timeout: 30000 });
+
+    const defaultPrevented = await input.evaluate((el) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "PageUp",
+        bubbles: true,
+        cancelable: true,
+        isComposing: true,
+      });
+      el.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+
+    expect(defaultPrevented).toBe(false);
+  });
+
+  test("keeps modified page keys as composer editing commands", async ({ page, request }) => {
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+
+    await page.goto(`/c/${conversationId}`);
+    const input = page.locator('[data-testid="message-input"]');
+    const messagesContainer = page.locator(".messages-container");
+    await expect(input).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    const draft = Array.from({ length: 20 }, (_, i) => `draft line ${i}`).join("\n");
+    await input.fill(draft);
+    await input.evaluate((el: HTMLTextAreaElement) => {
+      el.selectionStart = el.selectionEnd = el.value.length;
+    });
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+
+    await page.keyboard.press("Shift+PageUp");
+
+    expect(await messagesContainer.evaluate((el) => el.scrollTop)).toBe(0);
+    await expect
+      .poll(() => input.evaluate((el: HTMLTextAreaElement) => el.selectionStart))
+      .toBeLessThan(draft.length);
+    expect(await input.evaluate((el: HTMLTextAreaElement) => el.selectionEnd)).toBe(draft.length);
+  });
+});
+
 // Desktop viewport: the drawer is only rendered alongside the chat on desktop,
 // and the shortcut is a desktop-only affordance anyway.
 test.describe("Cmd/Ctrl+ArrowDown scroll-to-bottom shortcut", () => {
@@ -709,11 +973,9 @@ test.describe("Cmd/Ctrl+ArrowDown scroll-to-bottom shortcut", () => {
     await page.keyboard.press("ControlOrMeta+ArrowDown");
     // The menu consumed the key and advanced its selection: a positive signal,
     // so this doesn't green merely because the keypress went unprocessed.
-    await expect(menu.locator('[role="option"]').nth(1)).toHaveAttribute(
-      "aria-selected",
-      "true",
-      { timeout: 5000 },
-    );
+    await expect(menu.locator('[role="option"]').nth(1)).toHaveAttribute("aria-selected", "true", {
+      timeout: 5000,
+    });
     expect(await messagesContainer.evaluate((el) => el.scrollTop)).toBeLessThan(50);
   });
 

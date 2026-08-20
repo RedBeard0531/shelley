@@ -3,7 +3,7 @@
      bar, terminal/diff/git panels, model/thinking pickers, distill, TOC,
      scroll behavior. Preserves the e2e DOM/ARIA/CSS contract. -->
 <template>
-  <div class="full-height flex flex-col">
+  <div ref="chatRootRef" class="full-height flex flex-col">
     <!-- Header -->
     <div class="header">
       <div class="header-left">
@@ -413,6 +413,7 @@ import { useFeatureFlag } from "../composables/featureFlags";
 import { useVersionChecker } from "../composables/versionChecker";
 import { provideToolProgress } from "../composables/toolProgress";
 import { closeImageComment, useImageCommentTarget } from "../composables/imageComment";
+import { isImeComposing } from "../../utils/imeComposing";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import { buildMessageQuote } from "../../utils/messageQuote";
 import { hasMultipleUsers } from "../../utils/messageAuthors";
@@ -840,6 +841,7 @@ const terminalInjectedText = ref<string | null>(null);
 const terminalAutoFocusId = ref<string | null>(null);
 
 // ---- refs to DOM ----
+const chatRootRef = ref<HTMLDivElement | null>(null);
 const messagesContainerRef = ref<HTMLDivElement | null>(null);
 const messagesListRef = ref<HTMLDivElement | null>(null);
 const bottomSentinelRef = ref<HTMLDivElement | null>(null);
@@ -1563,11 +1565,16 @@ function stopBottomPin() {
   bottomPinFrame = null;
 }
 
-function releaseBottomPinForUser() {
-  if (!bottomPinActive) return;
+function markUserScrolledUp() {
   stopBottomPin();
   userScrolled = true;
+  atBottom = false;
   showScrollToBottom.value = true;
+}
+
+function releaseBottomPinForUser() {
+  if (!bottomPinActive) return;
+  markUserScrolledUp();
 }
 
 function handleBottomPinWheel(e: WheelEvent) {
@@ -3458,9 +3465,33 @@ function targetOwnsArrowDown(target: HTMLElement): boolean {
   return false;
 }
 
+// Plain PageUp/PageDown belong to the visible reading surface. The composer is
+// deliberately exempt even though it owns focus; modified page keys and other
+// editable or independently scrollable controls keep their native behavior.
+function targetOwnsPageKey(target: HTMLElement, container: HTMLElement): boolean {
+  if (target.closest(".terminal-panel")) return true;
+  if (target.classList.contains("message-textarea")) return false;
+  if (target.isContentEditable) return true;
+  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+    return true;
+  }
+
+  for (let el: HTMLElement | null = target; el && el !== chatRootRef.value; el = el.parentElement) {
+    if (el === container) return false;
+    const overflowY = getComputedStyle(el).overflowY;
+    if (
+      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+      el.scrollHeight > el.clientHeight + 1
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // True when something is drawn over the message list: the diff viewer, git
 // graph, command palette, a modal dialog. Scrolling a list the user cannot see
-// is never what they meant, and those overlays have their own ArrowDown
+// is never what they meant, and those overlays have their own keyboard
 // bindings. Hit-testing covers every overlay without this component having to
 // know about any of them, and can't be fooled by one that renders into a
 // portal outside our subtree.
@@ -3487,6 +3518,40 @@ function messageListCovered(container: HTMLElement): boolean {
 }
 
 function handleScrollKeyDown(e: KeyboardEvent) {
+  if (isImeComposing(e)) return;
+  if (e.key === "PageUp" || e.key === "PageDown") {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.defaultPrevented) return;
+    const container = messagesContainerRef.value;
+    if (!container) return;
+    const target = e.target as HTMLElement | null;
+    const root = chatRootRef.value;
+    const direction: -1 | 1 = e.key === "PageUp" ? -1 : 1;
+    if (
+      target &&
+      target !== document.body &&
+      (!root?.contains(target) || targetOwnsPageKey(target, container))
+    ) {
+      return;
+    }
+    if (messageListCovered(container)) return;
+
+    e.preventDefault();
+    const pageDistance = Math.round(container.clientHeight * 0.85);
+    if (direction > 0 && lastListHeight > 0 && lastContainerHeight > 0) {
+      const bottomScrollTop = observedBottomScrollTop(lastListHeight, lastContainerHeight);
+      if (container.scrollTop + pageDistance >= bottomScrollTop) {
+        scrollToBottom();
+        return;
+      }
+    }
+    if (direction < 0 && container.scrollTop > 0) {
+      lastScrollGestureAt = performance.now();
+      markUserScrolledUp();
+    }
+    container.scrollBy({ top: direction * pageDistance });
+    return;
+  }
+
   if (e.key !== "ArrowDown") return;
   const mod = e.metaKey || e.ctrlKey;
   if (!mod || e.altKey || e.shiftKey) return;
