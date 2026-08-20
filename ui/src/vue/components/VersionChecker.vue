@@ -203,6 +203,7 @@ import type { VersionInfo, CommitInfo, Model } from "../../types";
 import Modal from "./Modal.vue";
 import ModelPicker from "./ModelPicker.vue";
 import { pickReadyModel, storedSelectedModel } from "./selectedModel";
+import { createVersionChangelogLoader, versionChangelogTags } from "./versionChangelog";
 import {
   DEFAULT_THINKING_LEVEL,
   normalizeThinkingLevelForModel,
@@ -218,6 +219,9 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: "close"): void }>();
 
 const commits = ref<CommitInfo[]>([]);
+const changelogLoader = createVersionChangelogLoader((currentTag, latestTag) =>
+  api.getChangelog(currentTag, latestTag),
+);
 const loadingCommits = ref(false);
 const commitsError = ref(false);
 const upgrading = ref(false);
@@ -289,16 +293,18 @@ async function handleAutoUpgradeChange(enabled: boolean) {
 async function loadCommits(currentTag: string, latestTag: string) {
   loadingCommits.value = true;
   commitsError.value = false;
-  try {
-    const result = await api.getChangelog(currentTag, latestTag);
-    commits.value = result || [];
-  } catch (err) {
-    console.error("Failed to load changelog:", err);
-    commits.value = [];
-    commitsError.value = true;
-  } finally {
-    loadingCommits.value = false;
+  const result = await changelogLoader.load(currentTag, latestTag);
+  if (!result) return;
+
+  loadingCommits.value = false;
+  if (result.ok) {
+    commits.value = result.commits;
+    return;
   }
+
+  console.error("Failed to load changelog:", result.error);
+  commits.value = [];
+  commitsError.value = true;
 }
 
 async function handleUpgradeAndRestart() {
@@ -391,15 +397,26 @@ watch(
   (open) => {
     if (open) {
       initializeRebase();
-      if (
-        props.versionInfo?.has_update &&
-        props.versionInfo.current_tag &&
-        props.versionInfo.latest_tag
-      ) {
-        loadCommits(props.versionInfo.current_tag, props.versionInfo.latest_tag);
-      }
       loadAutoUpgradeSetting();
     }
+  },
+  { immediate: true },
+);
+
+watch(
+  [
+    () => props.isOpen,
+    () => props.versionInfo?.has_update,
+    () => props.versionInfo?.current_tag,
+    () => props.versionInfo?.latest_tag,
+  ],
+  ([isOpen, hasUpdate, currentTag, latestTag]) => {
+    changelogLoader.invalidate();
+    loadingCommits.value = false;
+    commits.value = [];
+    commitsError.value = false;
+    const tags = versionChangelogTags(isOpen, hasUpdate, currentTag, latestTag);
+    if (tags) loadCommits(tags[0], tags[1]);
   },
   { immediate: true },
 );
