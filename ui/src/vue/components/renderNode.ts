@@ -22,6 +22,9 @@ export type RenderNode =
 export interface RenderChunk {
   key: string;
   nodes: RenderNode[];
+  // Trailing chunks render without content-visibility (see LIVE_TAIL_CHUNKS):
+  // real layout from birth, so their heights are never estimates.
+  live?: boolean;
 }
 
 export interface GenerationBlock {

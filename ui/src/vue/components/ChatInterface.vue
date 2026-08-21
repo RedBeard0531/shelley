@@ -167,7 +167,12 @@
                 :key="sp.key"
                 :message="sp.message"
               />
-              <div v-for="chunk in block.chunks" :key="chunk.key" class="messages-chunk">
+              <div
+                v-for="chunk in block.chunks"
+                :key="chunk.key"
+                class="messages-chunk"
+                :class="{ 'messages-chunk--live': chunk.live }"
+              >
                 <MessageRenderNode
                   v-for="node in chunk.nodes"
                   :key="node.key"
@@ -1537,6 +1542,23 @@ function buildRenderModel(): GenerationBlock[] {
     });
   });
 
+  // The trailing chunks — where following, streaming, and most reading happen —
+  // render live (no content-visibility). A chunk booked at its
+  // contain-intrinsic-size estimate can be thousands of pixels off until real
+  // layout corrects it (WebKit clamps scrollTop when that happens, see the
+  // .messages-chunk comment in styles.css); live chunks have real heights from
+  // birth, so the follow path never does math on estimates. Older chunks flip
+  // back to content-visibility:auto as they leave the window, keeping their
+  // real laid-out size via contain-intrinsic-size:auto's last-remembered-size.
+  let remaining = LIVE_TAIL_CHUNKS;
+  for (let b = blocks.length - 1; b >= 0 && remaining > 0; b--) {
+    const chunks = blocks[b].chunks;
+    for (let c = chunks.length - 1; c >= 0 && remaining > 0; c--) {
+      chunks[c].live = true;
+      remaining--;
+    }
+  }
+
   return blocks;
 }
 
@@ -1551,6 +1573,13 @@ function buildRenderModel(): GenerationBlock[] {
 // the last chunk, so earlier chunk elements (and their laid-out sizes,
 // remembered via contain-intrinsic-size:auto) stay stable.
 const RENDER_CHUNK_SIZE = 50;
+// How many trailing chunks render live (see buildRenderModel), i.e. the last
+// LIVE_TAIL_CHUNKS * RENDER_CHUNK_SIZE rows. One would suffice for the follow
+// math (only the newborn tail chunk is ever booked at its estimate); a few
+// more keep recent history estimate-free for near-bottom scrolling at
+// negligible cost (measured on real Safari 26.4, 17k-message conversation:
+// see the commit message).
+const LIVE_TAIL_CHUNKS = 5;
 function chunkRenderNodes(nodes: RenderNode[]): RenderChunk[] {
   const chunks: RenderChunk[] = [];
   for (let i = 0; i < nodes.length; i += RENDER_CHUNK_SIZE) {
@@ -3038,6 +3067,7 @@ watch(
     sentinelAtBottom = true;
     inferredScrollUpAt = -Infinity;
     inferredScrollUpDelta = 0;
+    lastScrollGestureAt = -Infinity;
     atBottom = true;
     // Per-message memo caches are keyed by message_id, which is globally
     // unique, so stale entries are never *wrong* — they'd just accumulate for
@@ -3471,7 +3501,48 @@ function setupScrollObservers() {
       else listHeight = entry.contentRect.height;
     }
     if (listHeight < lastListHeight) {
-      clampBudget += lastListHeight - listHeight;
+      // A list shrink means the imminent — or just-landed — scroll event is a
+      // clamp, not a gesture. Same two orderings as container growth below,
+      // handled the same way: when this shrink report arrives before the
+      // clamp's scroll event, budget the pixels for handleScroll to discount;
+      // when the clamp's scroll event landed first and handleScroll already
+      // misread it as a scroll-up, retroactively undo the misread.
+      //
+      // The scroll-event-first ordering is not exotic — it is how WebKit
+      // resolves content-visibility estimate deflation, and it is what made
+      // Safari silently stop following streaming conversations while Chrome
+      // kept scrolling. While following, the follow branch below writes a
+      // scrollTop computed from list heights that include off-screen
+      // .messages-chunk boxes at their contain-intrinsic-size ESTIMATES.
+      // WebKit's estimates drift far from real heights (measured: a 150136px
+      // target clamped to 146906 — a 3230px jump), so resolving the write
+      // lays the chunks out, deflates the estimates, clamps scrollTop to the
+      // real bottom, and fires the scroll event — all before this observer
+      // runs. handleScroll saw an upward jump far past the unambiguous-
+      // gesture threshold with clampBudget still 0 and disarmed auto-follow;
+      // the viewport sat exactly at the real bottom, so the sentinel never
+      // left view and the IntersectionObserver never corrected it.
+      //
+      // The undo's guards: the sentinel must still be at the bottom (a clamp
+      // that big necessarily leaves us there; a genuine scroll-up of that
+      // size does not), no real wheel/touch gesture nearby, and the misread
+      // delta must be explained by this shrink.
+      const listShrink = lastListHeight - listHeight;
+      const now = performance.now();
+      if (
+        sentinelAtBottom &&
+        now - inferredScrollUpAt < CLAMP_MISREAD_UNDO_WINDOW_MS &&
+        now - lastScrollGestureAt > CLAMP_MISREAD_UNDO_WINDOW_MS &&
+        inferredScrollUpDelta <= listShrink + 1
+      ) {
+        userScrolled = false;
+        atBottom = true;
+        showScrollToBottom.value = false;
+        inferredScrollUpAt = -Infinity;
+        inferredScrollUpDelta = 0;
+      } else {
+        clampBudget += listShrink;
+      }
     }
     // Container growth clamps scrollTop down too (the viewport got taller, so
     // the max offset got smaller). When we were following the bottom, that

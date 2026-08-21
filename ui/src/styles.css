@@ -1118,8 +1118,19 @@ body {
   gap: 0.25rem;
   content-visibility: auto;
   /* ~50 rows x 80px estimate; `auto` remembers the real laid-out size after
-     first paint so the estimate only matters for never-visited chunks. */
+     first paint so the estimate only matters for never-visited chunks. The
+     estimate is systematically low (real chunks measure ~7000px median), and
+     when real layout corrects it the browser clamps scrollTop — WebKit fires
+     that clamp's scroll event before the ResizeObserver's report, which the
+     scroll code must compensate for. Trailing chunks (--live) opt out: they
+     hold the streaming tail the user is actually watching, so skipping buys
+     nothing there and estimates would poison the follow math. */
   contain-intrinsic-size: auto 4000px;
+}
+
+.messages-chunk--live {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 
 .messages-bottom-sentinel {

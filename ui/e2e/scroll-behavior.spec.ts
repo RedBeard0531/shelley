@@ -311,6 +311,136 @@ test.describe("Scroll behavior", () => {
     await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
   });
 
+  test("a clamped follow write does not disarm auto-follow (Safari estimate deflation)", async ({
+    page,
+    request,
+  }) => {
+    // Regression for "Safari stops following the conversation while Chrome
+    // keeps scrolling". .messages-chunk rows use content-visibility:auto with
+    // contain-intrinsic-size estimates, and WebKit's estimates drift far from
+    // real heights. While following, the ResizeObserver's follow branch writes
+    // a scrollTop computed from those estimates; resolving the write lays the
+    // chunks out for real, the estimates deflate (measured: a 150136px target
+    // clamped to 146906 — a 3230px jump), and the clamp's scroll event lands
+    // BEFORE the ResizeObserver's shrink report, so no clampBudget could have
+    // absorbed it. handleScroll saw an upward delta far past the 100px
+    // unambiguous-gesture threshold and disarmed auto-follow: the view stopped
+    // following mid-stream and the scroll-to-bottom button stranded, while the
+    // viewport sat exactly at the (real) bottom — the sentinel never left
+    // view, so the IntersectionObserver never corrected anything.
+    //
+    // The fix mirrors the container-growth retroactive undo for list shrinks:
+    // the ResizeObserver's late shrink report recognizes the just-misread
+    // scroll-up as its clamp and re-arms auto-follow.
+    //
+    // Chromium's estimates track real heights closely and its rendering
+    // pipeline delivered the shrink report first, which is why the bug was
+    // Safari-only. Simulate WebKit's behavior deterministically: grow the
+    // list (inflated estimate), and when the follow branch writes the
+    // now-stale bottom target, deflate the list inside the scrollTop setter —
+    // the browser clamps the write against the deflated layout exactly like
+    // WebKit resolving content-visibility estimates, and the shrink report
+    // reaches the ResizeObserver only after the clamp's scroll event.
+    const slug = await createConversationViaAPI(request, "echo message 0");
+    await page.goto(`/c/${slug}`);
+    await page.waitForLoadState("domcontentloaded");
+
+    const input = page.locator('[data-testid="message-input"]');
+    const sendButton = page.locator('[data-testid="send-button"]');
+    const scrollButton = page.locator(".scroll-to-bottom-button");
+    const messagesContainer = page.locator(".messages-container");
+    await expect(input).toBeVisible({ timeout: 30000 });
+
+    // Enough content that the list actually scrolls.
+    for (let i = 1; i < 4; i++) {
+      await input.fill(`echo message ${i}`);
+      await sendButton.click();
+      await expect(page.locator(`text=echo message ${i}`).last()).toBeVisible({ timeout: 30000 });
+      await expect(page.getByTestId("agent-thinking")).toBeHidden({ timeout: 30000 });
+    }
+    await expect
+      .poll(() =>
+        messagesContainer.evaluate(
+          (el) => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) <= 1,
+        ),
+      )
+      .toBe(true);
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+
+    // Retry until the trap actually fires: scrollToBottom's rAF pin rewrites
+    // scrollTop every frame for ~120 frames after load, but its writes target
+    // the CURRENT bottom (delta ~0), so the >300px-jump guard ignores them and
+    // only the estimate-inflated follow write can spring the trap.
+    await expect
+      .poll(
+        () =>
+          messagesContainer.evaluate(async (container) => {
+            const list = container.querySelector(".messages-list");
+            const sentinel = container.querySelector(".messages-bottom-sentinel");
+            if (!list || !sentinel) throw new Error("message list sentinel not found");
+            const proto = Object.getPrototypeOf(container);
+            const desc =
+              Object.getOwnPropertyDescriptor(proto, "scrollTop") ||
+              Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+            if (!desc?.get || !desc.set) throw new Error("scrollTop accessors not found");
+            const spacer = document.createElement("div");
+            spacer.style.height = "600px";
+            let fired = false;
+            Object.defineProperty(container, "scrollTop", {
+              configurable: true,
+              get() {
+                return desc.get!.call(this);
+              },
+              set(value: number) {
+                // A follow write targeting far past the current offset is the
+                // one computed from the inflated estimate. Deflate the list
+                // BEFORE the write applies: the browser then clamps the write
+                // against the real layout, exactly like WebKit resolving
+                // content-visibility estimates, and fires a scroll event with
+                // a large upward delta before any ResizeObserver report.
+                if (!fired && value - desc.get!.call(this) > 300) {
+                  fired = true;
+                  spacer.style.height = "0px";
+                }
+                desc.set!.call(this, value);
+              },
+            });
+            list.insertBefore(spacer, sentinel);
+            // Let the ResizeObserver see the growth and follow it down.
+            await new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve)),
+            );
+            await new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve)),
+            );
+            spacer.remove();
+            // @ts-expect-error restoring the native accessor
+            delete container.scrollTop;
+            return fired;
+          }),
+        { timeout: 15000 },
+      )
+      .toBe(true);
+
+    // Settled state: the clamp left us at the true bottom, so the button must
+    // be hidden and auto-follow still armed.
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+    await input.fill("echo after deflation");
+    await sendButton.click();
+    await expect(page.locator("text=echo after deflation").last()).toBeVisible({
+      timeout: 30000,
+    });
+    // Still following: pinned back to the bottom, button hidden.
+    await expect
+      .poll(() =>
+        messagesContainer.evaluate(
+          (el) => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) <= 1,
+        ),
+      )
+      .toBe(true);
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+  });
+
   test("a sub-margin scrollTop clamp does not strand the scroll-to-bottom button", async ({
     page,
     request,
