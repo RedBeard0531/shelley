@@ -2152,6 +2152,79 @@ body {
   contain: content;
 }
 
+.patch-tool-file-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.patch-file-diff {
+  min-width: 0;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border);
+}
+
+.patch-file-diff:last-child {
+  border-bottom: 0;
+}
+
+.patch-file-diff-header {
+  min-height: 2.125rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.patch-file-diff-header code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+}
+
+.patch-file-status {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.patch-file-status-modified {
+  background: #d99c19;
+}
+
+.patch-file-status-added {
+  background: #36a761;
+}
+
+.patch-file-status-deleted {
+  background: #d65b5b;
+}
+
+.patch-file-stats {
+  display: flex;
+  gap: 0.375rem;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.patch-file-additions {
+  color: var(--success-text);
+}
+
+.patch-file-deletions {
+  color: var(--error-text);
+}
+
 /* Screenshot Tool */
 .screenshot-tool {
   background: var(--gray-100);

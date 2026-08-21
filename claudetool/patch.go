@@ -250,22 +250,21 @@ large overwrite. Prefer incremental replace operations over full file overwrites
 }
 `
 
-	PatchSimpleDescription = `Edit one file with one or more precise text replacements.
+	PatchSimpleDescription = `Edit one file with precise text replacements and optional content appended at EOF.
 
 Each oldText must match exactly once in the original file. Edits must not overlap
-or depend on text produced by another edit in the same call. The file is written
-only after every edit validates.`
+or depend on text produced by another edit in the same call. Append does not need
+an oldText anchor. The file is written only after every edit validates.`
 
 	PatchSimpleInputSchema = `
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["path", "edits"],
+  "required": ["path"],
   "properties": {
     "path": {"type": "string", "description": "Path to the file to edit"},
     "edits": {
       "type": "array",
-      "minItems": 1,
       "description": "Non-overlapping replacements matched against the original file",
       "items": {
         "type": "object",
@@ -276,7 +275,8 @@ only after every edit validates.`
           "newText": {"type": "string", "description": "Replacement text"}
         }
       }
-    }
+    },
+    "append": {"type": "string", "description": "Content to append at the end of the file"}
   }
 }
 `
@@ -291,8 +291,9 @@ type PatchInput struct {
 }
 
 type PatchSimpleInput struct {
-	Path  string            `json:"path"`
-	Edits []PatchSimpleEdit `json:"edits"`
+	Path   string            `json:"path"`
+	Edits  []PatchSimpleEdit `json:"edits"`
+	Append *string           `json:"append"`
 }
 
 type PatchSimpleEdit struct {
@@ -627,11 +628,14 @@ func (p *PatchTool) patchParse(m json.RawMessage) (PatchInput, error) {
 	if p.Profile == "simple" {
 		var simple PatchSimpleInput
 		if err := decoder.Decode(&simple); err != nil {
-			return PatchInput{}, fmt.Errorf("invalid patch input: %w; expected path and edits fields", err)
+			return PatchInput{}, fmt.Errorf("invalid patch input: %w; expected path, edits, and append fields", err)
 		}
-		patches := make([]PatchRequest, len(simple.Edits))
+		patches := make([]PatchRequest, len(simple.Edits), len(simple.Edits)+1)
 		for i, edit := range simple.Edits {
 			patches[i] = PatchRequest{Operation: "replace", OldText: edit.OldText, NewText: edit.NewText}
+		}
+		if simple.Append != nil {
+			patches = append(patches, PatchRequest{Operation: "append_eof", NewText: *simple.Append})
 		}
 		return validatePatchInput(PatchInput{Path: simple.Path, Patches: patches})
 	}

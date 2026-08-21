@@ -101,7 +101,23 @@
 
     <div v-if="isExpanded" class="patch-tool-details">
       <div v-if="isComplete && !hasError && hasDiff" class="patch-tool-section">
-        <div class="patch-tool-diffs-container">
+        <div
+          v-if="patchFiles.length > 1"
+          class="patch-tool-diffs-container patch-tool-file-list"
+        >
+          <PatchFileDiff
+            v-for="file in patchFiles"
+            :key="file.path"
+            :path="file.path"
+            :diff="file.diff"
+            :status="file.status"
+            :additions="file.additions"
+            :deletions="file.deletions"
+            :side-by-side="sideBySide"
+            :theme-type="themeType"
+          />
+        </div>
+        <div v-else class="patch-tool-diffs-container">
           <!-- The FileDiff renderer (driven by useFileDiffInstance) creates its
                own <diffs-container> custom element here and renders into its
                shadow root, so the diff's scoped <style> blocks never leak into
@@ -150,6 +166,7 @@ import { useNearViewport } from "../../composables/nearViewport";
 import { useOpenFileEditor } from "../../composables/fileEditor";
 import ToolChevron from "./ToolChevron.vue";
 import ToolStatusIcon from "./ToolStatusIcon.vue";
+import PatchFileDiff from "./PatchFileDiff.vue";
 
 // LocalStorage key for side-by-side preference
 const STORAGE_KEY_SIDE_BY_SIDE = "shelley-diff-side-by-side";
@@ -179,6 +196,14 @@ interface PatchDisplayData {
   diff?: string;
   oldContent?: string;
   newContent?: string;
+}
+
+interface PatchFile {
+  path: string;
+  diff: string;
+  status: "added" | "deleted" | "modified";
+  additions: number;
+  deletions: number;
 }
 
 const DIFF_THEMES: ThemesType = { dark: "github-dark", light: "github-light" };
@@ -337,7 +362,33 @@ const hasDiff = computed(
       (displayData.value.oldContent != null && displayData.value.newContent != null)),
 );
 
-const filename = computed(() => displayData.value?.path || path.value || "patch");
+function parsePatchFiles(diff: string): PatchFile[] {
+  const starts = [...diff.matchAll(/(?:^|\n)--- ([^\n]+)\n\+\+\+ ([^\n]+)\n/g)];
+  return starts.map((match, index) => {
+    const start = match.index! + (match[0].startsWith("\n") ? 1 : 0);
+    const end = index + 1 < starts.length ? starts[index + 1].index! + 1 : diff.length;
+    const fileDiff = diff.slice(start, end);
+    const oldPath = match[1];
+    const newPath = match[2];
+    const status =
+      oldPath === "/dev/null" ? "added" : newPath === "/dev/null" ? "deleted" : "modified";
+    const lines = fileDiff.split("\n");
+    return {
+      path: status === "deleted" ? oldPath : newPath,
+      diff: fileDiff,
+      status,
+      additions: lines.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length,
+      deletions: lines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length,
+    };
+  });
+}
+
+const patchFiles = computed(() => parsePatchFiles(displayData.value?.diff || ""));
+const filename = computed(() =>
+  patchFiles.value.length > 1
+    ? `${patchFiles.value.length} files changed`
+    : displayData.value?.path || path.value || "patch",
+);
 
 const showDiffToggle = computed(
   () => !isMobile.value && isExpanded.value && isComplete.value && !props.hasError && hasDiff.value,
@@ -347,7 +398,9 @@ const showDiffToggle = computed(
 // tool) falling back to the tool input's path — which is whatever the agent
 // passed, so possibly relative. Not the "patch" placeholder `filename` uses
 // when neither is known.
-const editorPath = computed(() => displayData.value?.path || path.value);
+const editorPath = computed(() =>
+  patchFiles.value.length > 1 ? "" : displayData.value?.path || path.value,
+);
 
 // "Open in editor" opens that file in the standalone Monaco editor modal (the
 // same one the fuzzy finder opens). Hidden when we don't know the path, or

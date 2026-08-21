@@ -283,11 +283,16 @@ class ApiService {
     return response.json();
   }
 
-  async sendMessage(conversationId: string, request: ChatRequest): Promise<void> {
+  async sendMessage(
+    conversationId: string,
+    request: ChatRequest,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/chat`, {
       method: "POST",
       headers: this.postHeaders,
       body: JSON.stringify(request),
+      signal,
     });
     if (!response.ok) {
       throw await responseError(response, "Failed to send message");

@@ -404,6 +404,7 @@ import {
   isDistillStatusMessage,
   distillStatus,
   parseQueuedMessages,
+  queuedMessageText,
 } from "../../types";
 import { api } from "../../services/api";
 import { messageStore } from "../../services/messageStore";
@@ -2040,6 +2041,12 @@ async function loadMessages(focusedId: string) {
 }
 
 // ---- sending / actions ----
+const pendingQueuedMessages: {
+  conversationId: string;
+  text: string;
+  controller: AbortController;
+}[] = [];
+
 async function queueMessage(message: string) {
   if (!message.trim() || !props.conversationId) return;
   // Same guard as sendMessage: a queued turn runs the LLM later, so an
@@ -2050,15 +2057,29 @@ async function queueMessage(message: string) {
     error.value = err.message;
     throw err;
   }
+  const pending = {
+    conversationId: props.conversationId,
+    text: message,
+    controller: new AbortController(),
+  };
+  pendingQueuedMessages.push(pending);
   try {
-    await api.sendMessage(props.conversationId, {
-      message: message.trim(),
-      model: selectedModel.value,
-      queue: true,
-    });
+    await api.sendMessage(
+      props.conversationId,
+      {
+        message: message.trim(),
+        model: selectedModel.value,
+        queue: true,
+      },
+      pending.controller.signal,
+    );
   } catch (err) {
+    if (pending.controller.signal.aborted) return;
     console.error("Failed to queue message:", err);
     throw err;
+  } finally {
+    const index = pendingQueuedMessages.indexOf(pending);
+    if (index !== -1) pendingQueuedMessages.splice(index, 1);
   }
 }
 
@@ -2346,13 +2367,25 @@ async function sendMessage(message: string) {
 
 async function handleCancel() {
   if (!props.conversationId || cancelling.value) return;
+  const queued = queuedGhosts.value;
+  const pending = pendingQueuedMessages.filter(
+    ({ conversationId }) => conversationId === props.conversationId,
+  );
+  const pendingText = pending.map(({ text }) => text).join("\n");
+  const queuedText = [
+    ...queued.map(queuedMessageText),
+    ...pending.map(({ text }) => text),
+  ].join("\n");
+  pending.forEach(({ controller }) => controller.abort());
   try {
     cancelling.value = true;
     await api.cancelConversation(props.conversationId);
+    if (queuedText) seedComposer(queuedText);
     agentWorking.value = false;
   } catch (err) {
     console.error("Failed to cancel conversation:", err);
     error.value = "Failed to cancel. Please try again.";
+    if (pendingText) seedComposer(pendingText);
   } finally {
     cancelling.value = false;
   }
