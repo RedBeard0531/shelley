@@ -109,6 +109,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   (e: "scroll-bottom"): void;
+  (e: "scroll-away"): void;
 }>();
 
 const open = ref(false);
@@ -569,13 +570,14 @@ function handleGoto(entry: TOCEntry) {
   const container = props.containerRef;
   if (!container) return;
   popoverRef.value?.hide();
-  if (entry.kind === "top") {
-    container.scrollTo({ top: 0, behavior: "smooth" });
+  if (entry.kind === "bottom") {
+    if (!props.nearBottom) emit("scroll-bottom");
     history.replaceState(null, "", window.location.pathname + window.location.search);
     return;
   }
-  if (entry.kind === "bottom") {
-    if (!props.nearBottom) emit("scroll-bottom");
+  emit("scroll-away");
+  if (entry.kind === "top") {
+    container.scrollTo({ top: 0, behavior: "smooth" });
     history.replaceState(null, "", window.location.pathname + window.location.search);
     return;
   }
@@ -617,6 +619,7 @@ function resolveFragmentWithRetry() {
   if (!container) return;
   const fragment = window.location.hash.slice(1);
   if (!fragment) return;
+  emit("scroll-away");
   let tries = 0;
   const tryScroll = () => {
     if (scrollToFragment(container, fragment)) return;
@@ -633,7 +636,10 @@ function onHashChange() {
   const container = props.containerRef;
   if (!container) return;
   const fragment = window.location.hash.slice(1);
-  if (fragment) scrollToFragment(container, fragment);
+  if (fragment) {
+    emit("scroll-away");
+    scrollToFragment(container, fragment);
+  }
 }
 window.addEventListener("hashchange", onHashChange);
 

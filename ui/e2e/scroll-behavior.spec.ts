@@ -225,6 +225,23 @@ test.describe("Scroll behavior", () => {
     // Button should disappear once we're back at bottom
     await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
 
+    // A slow touch/scrollbar drag must release the RAF pin even when its first
+    // scroll event moves less than the pin's 128px jump threshold.
+    await messagesContainer.evaluate(async (el) => {
+      el.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, bubbles: true }));
+      el.scrollTop = Math.max(0, el.scrollTop - 50);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      el.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, bubbles: true }));
+    });
+    await expect
+      .poll(() =>
+        messagesContainer.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop),
+      )
+      .toBeGreaterThan(20);
+    await expect(scrollButton).toBeVisible({ timeout: 5000 });
+    await scrollButton.click();
+    await expect(scrollButton).not.toBeVisible({ timeout: 5000 });
+
     // An upward wheel gesture must immediately release lazy-layout pinning.
     await messagesContainer.evaluate((el) => {
       el.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
@@ -569,6 +586,136 @@ test.describe("Scroll behavior", () => {
   });
 });
 
+// Desktop keeps the conversation drawer visible, which makes this a direct
+// regression test for the row-click behavior rather than a mobile drawer test.
+test.describe("Conversation drawer selection", () => {
+  test.use({ viewport: { width: 1280, height: 720 }, isMobile: false, hasTouch: false });
+
+  test("opens a previously read conversation at the bottom", async ({ page, request }) => {
+    const firstResponse = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    const secondResponse = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    const thirdResponse = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "15", model: "predictable" },
+    });
+    expect(firstResponse.ok()).toBeTruthy();
+    expect(secondResponse.ok()).toBeTruthy();
+    expect(thirdResponse.ok()).toBeTruthy();
+    const { conversation_id: first } = await firstResponse.json();
+    const { conversation_id: second } = await secondResponse.json();
+    const { conversation_id: third } = await thirdResponse.json();
+
+    await page.goto(`/c/${first}`);
+    const messagesContainer = page.locator(".messages-container");
+    await expect(page.locator('[data-testid="message-input"]')).toBeVisible({ timeout: 30000 });
+    await expect.poll(() => page.getByTestId("message").count()).toBeGreaterThan(100);
+
+    await messagesContainer.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+    await expect
+      .poll(() => page.evaluate((id) => localStorage.getItem(`shelley_scroll_${id}`), first))
+      .toBe("0");
+
+    await page.locator(`.conversation-item[data-conversation-id="${second}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`/c/[^/]*${second}`), { timeout: 30000 });
+    await expect.poll(() => page.getByTestId("message").count()).toBeGreaterThan(100);
+
+    await page.locator(`.conversation-item[data-conversation-id="${first}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`/c/[^/]*${first}`), { timeout: 30000 });
+    await expect.poll(() => page.getByTestId("message").count()).toBeGreaterThan(100);
+
+    await expect
+      .poll(
+        () =>
+          messagesContainer.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        { timeout: 10000 },
+      )
+      .toBeLessThan(120);
+    await expect(page.locator(".scroll-to-bottom-button")).not.toBeVisible({ timeout: 10000 });
+    await expect
+      .poll(() => page.evaluate((id) => localStorage.getItem(`shelley_scroll_${id}`), first))
+      .toBe("bottom");
+
+    // Explicit in-conversation navigation must release the open-at-bottom
+    // follow state rather than being snapped back by late layout protection.
+    await page.locator(".toc-button").click();
+    await page.locator(".toc-entry-top").click();
+    await expect
+      .poll(() => messagesContainer.evaluate((element) => element.scrollTop), { timeout: 10000 })
+      .toBeLessThan(50);
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+
+    // Clicking the already-active conversation is also a selection: it should
+    // return to the latest content without leaving pending scroll state behind.
+    await page.locator(`.conversation-item[data-conversation-id="${first}"]`).click();
+    await expect
+      .poll(
+        () =>
+          messagesContainer.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        { timeout: 10000 },
+      )
+      .toBeLessThan(120);
+    await expect(page.locator(".scroll-to-bottom-button")).not.toBeVisible({ timeout: 10000 });
+
+    // Browser find/accessibility jumps do not carry wheel or pointer markers.
+    // Once the selected conversation reaches bottom, a raw upward scroll must
+    // be treated as navigation rather than late layout growth.
+    await messagesContainer.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect
+      .poll(() => messagesContainer.evaluate((element) => element.scrollTop), { timeout: 10000 })
+      .toBeLessThan(50);
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });
+    await page.locator(`.conversation-item[data-conversation-id="${first}"]`).click();
+    await expect(page.locator(".scroll-to-bottom-button")).not.toBeVisible({ timeout: 10000 });
+
+    // Reselecting while a saved-position load is still pending must replace
+    // that restoration with the explicit bottom request.
+    await page.evaluate(
+      ([id, top]) => localStorage.setItem(`shelley_scroll_${id}`, top),
+      [third, "1000"],
+    );
+    let sawThirdLoad = false;
+    let releaseThirdLoad = () => {};
+    const thirdLoadGate = new Promise<void>((resolve) => {
+      releaseThirdLoad = resolve;
+    });
+    await page.route(new RegExp(`/api/conversation/${third}$`), async (route) => {
+      sawThirdLoad = true;
+      await thirdLoadGate;
+      await route.continue();
+    });
+    try {
+      await page.goto(`/c/${third}`);
+      await expect.poll(() => sawThirdLoad).toBeTruthy();
+      await page.locator(`.conversation-item[data-conversation-id="${third}"]`).click();
+      releaseThirdLoad();
+      await expect.poll(() => page.getByTestId("message").count()).toBeGreaterThan(20);
+      await expect
+        .poll(
+          () =>
+            messagesContainer.evaluate(
+              (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            ),
+          { timeout: 10000 },
+        )
+        .toBeLessThan(120);
+    } finally {
+      releaseThirdLoad();
+    }
+  });
+});
+
 // Desktop viewport: PageUp/PageDown are reading controls for the conversation,
 // even though the composer deliberately keeps keyboard focus for fast replies.
 test.describe("Conversation page-key scrolling", () => {
@@ -877,6 +1024,7 @@ test.describe("Cmd/Ctrl+ArrowDown scroll-to-bottom shortcut", () => {
       .toBe("TEXTAREA");
 
     await messagesContainer.evaluate((el) => {
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
       el.scrollTop = 0;
     });
     await expect(page.locator(".scroll-to-bottom-button")).toBeVisible({ timeout: 10000 });

@@ -75,6 +75,7 @@
           :on-terminal-scope-change="handleTerminalScopeChange"
           :on-terminal-close="handleTerminalClose"
           :navigate-user-message-trigger="navigateUserMessageTrigger"
+          :scroll-to-bottom-trigger="conversationSelectionTrigger"
           :on-conversation-unarchived="handleConversationUnarchived"
           :external-comment-text="editorCommentText"
         />
@@ -340,6 +341,7 @@ const editorCommentText = ref<{ text: string } | null>(null);
 const modelsRefreshTrigger = ref(0);
 const cwdSyncTrigger = ref(0);
 const navigateUserMessageTrigger = ref(0);
+const conversationSelectionTrigger = ref(0);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const ephemeralTerminals = ref<EphemeralTerminal[]>([]);
@@ -599,6 +601,7 @@ function setConversationCwd(cwd: string) {
 }
 
 function selectConversation(conversation: Conversation) {
+  conversationSelectionTrigger.value++;
   currentConversationId.value = conversation.conversation_id;
   viewedConversation.value = conversation;
   drawerOpen.value = false;

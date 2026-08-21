@@ -229,6 +229,7 @@
           :near-bottom="!showScrollToBottom"
           :conversation-slug="currentConversation?.slug"
           @scroll-bottom="scrollToBottom"
+          @scroll-away="markUserScrolledUp"
         />
         <button
           v-if="showScrollToBottom"
@@ -518,6 +519,8 @@ const props = withDefaults(
     onTerminalScopeChange?: (id: string, conversationId: string | null) => void;
     onTerminalClose?: (id: string) => void;
     navigateUserMessageTrigger?: number;
+    /** Incremented when app navigation explicitly selects a conversation. */
+    scrollToBottomTrigger?: number;
     onConversationUnarchived?: (conversation: Conversation) => void;
     onDraftCreated?: (conversation: Conversation) => void;
     /** Comment block from the standalone file editor (App-level modal) to
@@ -854,6 +857,8 @@ let loadingFlag = false;
 let pendingScroll: number | null | undefined = undefined;
 let loadingProgressDelay: number | null = null;
 let currentConversationId: string | null = props.conversationId;
+let conversationWatchInitialized = false;
+let lastScrollToBottomTrigger = props.scrollToBottomTrigger ?? 0;
 let conversationLoadEpoch = 0;
 let catchingUp = false;
 // Layout-free "is the viewport at/near the bottom" signal, maintained by the
@@ -1556,6 +1561,13 @@ const BOTTOM_SENTINEL_MARGIN_PX = 100;
 // scroll event land within a rendering update or two of each other; anything
 // older is stale and must not affect genuine gestures.
 const CLAMP_MISREAD_UNDO_WINDOW_MS = 250;
+// Conversation-list selection means "show me the latest". Large transcripts
+// keep hydrating syntax highlighting and diff widgets after the first bottom
+// paint, so keep following explicit selection until a real user or navigation
+// gesture moves away.
+let followExplicitSelectionToBottom = false;
+let suppressExplicitSelectionClamp = false;
+let scrollPointerActive = false;
 let bottomPinFrame: number | null = null;
 let bottomPinActive = false;
 
@@ -1567,13 +1579,15 @@ function stopBottomPin() {
 
 function markUserScrolledUp() {
   stopBottomPin();
+  followExplicitSelectionToBottom = false;
+  suppressExplicitSelectionClamp = false;
   userScrolled = true;
   atBottom = false;
   showScrollToBottom.value = true;
 }
 
 function releaseBottomPinForUser() {
-  if (!bottomPinActive) return;
+  if (!bottomPinActive && !followExplicitSelectionToBottom) return;
   markUserScrolledUp();
 }
 
@@ -1586,7 +1600,18 @@ function handleBottomPinWheel(e: WheelEvent) {
 
 function handleBottomPinTouch() {
   lastScrollGestureAt = performance.now();
-  releaseBottomPinForUser();
+  scrollPointerActive = true;
+  stopBottomPin();
+}
+
+function handleScrollPointerDown() {
+  lastScrollGestureAt = performance.now();
+  scrollPointerActive = true;
+  stopBottomPin();
+}
+
+function handleScrollPointerUp() {
+  scrollPointerActive = false;
 }
 
 function scrollToBottom() {
@@ -1595,6 +1620,10 @@ function scrollToBottom() {
   stopBottomPin();
   userScrolled = false;
   showScrollToBottom.value = false;
+  if (followExplicitSelectionToBottom) {
+    atBottom = true;
+    saveScroll(container.scrollTop);
+  }
   let framesRemaining = 120;
   bottomPinActive = true;
   const step = () => {
@@ -1613,6 +1642,21 @@ function scrollToBottom() {
     bottomPinFrame = requestAnimationFrame(step);
   };
   step();
+}
+
+function requestCurrentConversationBottom() {
+  followExplicitSelectionToBottom = true;
+  suppressExplicitSelectionClamp = pendingScroll !== undefined;
+  pendingScroll = null;
+  userScrolled = false;
+  atBottom = true;
+  showScrollToBottom.value = false;
+  nextTick(() => {
+    // A same-row selection may interrupt an in-flight numeric restoration.
+    // Consume that override here even when no message/load watcher will run.
+    if (pendingScroll === null) pendingScroll = undefined;
+    scrollToBottom();
+  });
 }
 
 function syncFromStore(focusedId: string) {
@@ -2903,10 +2947,25 @@ function teardownSubscriptions() {
 }
 
 watch(
-  () => props.conversationId,
-  (id) => {
+  [() => props.conversationId, () => props.scrollToBottomTrigger ?? 0],
+  ([id, scrollToBottomTrigger]) => {
+    const conversationChanged = !conversationWatchInitialized || id !== currentConversationId;
+    const explicitlySelected =
+      conversationWatchInitialized && scrollToBottomTrigger !== lastScrollToBottomTrigger;
+    conversationWatchInitialized = true;
+    lastScrollToBottomTrigger = scrollToBottomTrigger;
+
+    // Selecting the already-open row is still an explicit request for its
+    // latest content. Avoid tearing down subscriptions or reloading it.
+    if (!conversationChanged) {
+      if (explicitlySelected && id) requestCurrentConversationBottom();
+      return;
+    }
+
     currentConversationId = id;
-    pendingScroll = id ? loadScroll() : undefined;
+    followExplicitSelectionToBottom = explicitlySelected;
+    suppressExplicitSelectionClamp = explicitlySelected;
+    pendingScroll = id ? (explicitlySelected ? null : loadScroll()) : undefined;
     teardownSubscriptions();
     // An annotation view belongs to the image it was opened from; switching
     // conversations leaves it stranded.
@@ -3143,6 +3202,7 @@ watch(
     }
     targetIdx = Math.max(0, Math.min(targetIdx, userMessageEls.length - 1));
     const targetEl = userMessageEls[targetIdx] as HTMLElement;
+    markUserScrolledUp();
     targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
     if (highlightTimeout) {
       clearTimeout(highlightTimeout);
@@ -3237,6 +3297,18 @@ function handleScroll() {
     upwardDelta -= absorbed;
     clampBudget -= absorbed;
   }
+  const switchingConversation = pendingScroll !== undefined;
+  const guardedLayoutShift =
+    upwardDelta > 0 && suppressExplicitSelectionClamp && !scrollPointerActive;
+  if (switchingConversation || guardedLayoutShift) {
+    // Replacing one transcript with another clamps the shared scroll container
+    // before the pending destination is applied. Likewise, lazy renderers can
+    // change height just after an explicit open. Neither is a user scroll.
+    clampBudget = 0;
+    lastObservedScrollTop = container.scrollTop;
+    if (guardedLayoutShift) scrollToBottom();
+    return;
+  }
   if (bottomPinActive && upwardDelta >= BOTTOM_PIN_SCROLL_RELEASE_DELTA) {
     stopBottomPin();
   }
@@ -3250,7 +3322,7 @@ function handleScroll() {
   // while sentinelAtBottom is still stale-true and yanks the reader back down
   // (measured: scrollTop 0 -> 1607). The wheel/touch handlers only cover this
   // while the bottom pin is active, so they are not a substitute.
-  const definitelyGesture = upwardDelta > BOTTOM_SENTINEL_MARGIN_PX;
+  const definitelyGesture = scrollPointerActive || upwardDelta > BOTTOM_SENTINEL_MARGIN_PX;
   if (!bottomPinActive && upwardDelta > 0 && (!sentinelAtBottom || definitelyGesture)) {
     // Below the gesture threshold, only act when the bottom sentinel has
     // actually left the near-bottom zone. While it still intersects we are
@@ -3276,9 +3348,7 @@ function handleScroll() {
         ? inferredScrollUpDelta + upwardDelta
         : upwardDelta;
     inferredScrollUpAt = now;
-    userScrolled = true;
-    atBottom = false;
-    showScrollToBottom.value = true;
+    markUserScrolledUp();
   }
   // A layout clamp emits its scroll event synchronously right after the resize
   // that caused it, so any unconsumed budget now is stale; drop it so it can't
@@ -3298,6 +3368,11 @@ function setupScrollObservers() {
   container.addEventListener("scroll", handleScroll);
   container.addEventListener("wheel", handleBottomPinWheel, { passive: true });
   container.addEventListener("touchstart", handleBottomPinTouch, { passive: true });
+  container.addEventListener("touchend", handleScrollPointerUp, { passive: true });
+  container.addEventListener("touchcancel", handleScrollPointerUp, { passive: true });
+  container.addEventListener("pointerdown", handleScrollPointerDown, { passive: true });
+  window.addEventListener("pointerup", handleScrollPointerUp, { passive: true });
+  window.addEventListener("pointercancel", handleScrollPointerUp, { passive: true });
   bottomObserver = new IntersectionObserver(
     ([entry]) => {
       const nearBottom = entry?.isIntersecting ?? false;
@@ -3306,21 +3381,24 @@ function setupScrollObservers() {
       showScrollToBottom.value = !nearBottom;
       if (nearBottom) {
         userScrolled = false;
+        suppressExplicitSelectionClamp = false;
         stopBottomPin();
+        if (!loadingFlag && followExplicitSelectionToBottom) {
+          saveScroll(container.scrollTop);
+        }
       } else if (!bottomPinActive) {
-        // The sentinel left the near-bottom zone, so we are no longer following
-        // the conversation and must stop auto-scrolling. handleScroll cannot be
-        // relied on to have noticed: it defers to sentinelAtBottom (so that
-        // routine sub-margin clamps don't strand the button), and this callback
-        // is async, so a genuine gesture's scroll event can land while that flag
-        // is still stale-true. Showing the button without arming userScrolled
-        // left auto-follow on, and the next list growth yanked the reader back
-        // to the bottom.
-        //
-        // Excluded while the bottom pin is active: the pin scrolls the container
-        // itself and briefly moves the sentinel out of view, which is not a
-        // gesture. The pin releases via wheel/touch or a real upward delta.
-        userScrolled = true;
+        if (!userScrolled && followExplicitSelectionToBottom) {
+          // An explicitly selected conversation may grow after its first
+          // bottom paint as lazy renderers hydrate. Keep the selection at its
+          // promised destination unless the user has tried to scroll away.
+          scrollToBottom();
+        } else {
+          // The sentinel left the near-bottom zone, so we are no longer
+          // following the conversation. handleScroll cannot always have
+          // noticed: its event can race this async observer while
+          // sentinelAtBottom is still stale-true.
+          userScrolled = true;
+        }
       }
     },
     { root: container, rootMargin: `0px 0px ${BOTTOM_SENTINEL_MARGIN_PX}px 0px`, threshold: 0 },
@@ -3552,6 +3630,27 @@ function handleScrollKeyDown(e: KeyboardEvent) {
     return;
   }
 
+  if (e.key === "Home" || e.key === "ArrowUp") {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.defaultPrevented) return;
+    const container = messagesContainerRef.value;
+    const target = e.target as HTMLElement | null;
+    const root = chatRootRef.value;
+    if (!container || !target || target === document.body) return;
+    if (!root?.contains(target) || messageListCovered(container)) return;
+    if (
+      target.closest(".terminal-panel") ||
+      target.isContentEditable ||
+      target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT"
+    ) {
+      return;
+    }
+    lastScrollGestureAt = performance.now();
+    markUserScrolledUp();
+    return;
+  }
+
   if (e.key !== "ArrowDown") return;
   const mod = e.metaKey || e.ctrlKey;
   if (!mod || e.altKey || e.shiftKey) return;
@@ -3602,6 +3701,11 @@ onUnmounted(() => {
   container?.removeEventListener("scroll", handleScroll);
   container?.removeEventListener("wheel", handleBottomPinWheel);
   container?.removeEventListener("touchstart", handleBottomPinTouch);
+  container?.removeEventListener("touchend", handleScrollPointerUp);
+  container?.removeEventListener("touchcancel", handleScrollPointerUp);
+  container?.removeEventListener("pointerdown", handleScrollPointerDown);
+  window.removeEventListener("pointerup", handleScrollPointerUp);
+  window.removeEventListener("pointercancel", handleScrollPointerUp);
   if (scrollSaveTimer) clearTimeout(scrollSaveTimer);
   ro?.disconnect();
   bottomObserver?.disconnect();
