@@ -103,7 +103,7 @@
                   >
                   <a
                     v-else-if="part === '{customizeLink}'"
-                    href="https://blog.exe.dev/customizing-shelley"
+                    href="https://github.com/boldsoftware/shelley/"
                     target="_blank"
                     rel="noopener noreferrer"
                     class="chat-welcome-link"
@@ -122,7 +122,7 @@
                     :href="proxyURL"
                     target="_blank"
                     rel="noopener noreferrer"
-                    class="chat-welcome-link chat-welcome-proxy-link"
+                    class="chat-welcome-link"
                     >{{ proxyURL }}</a
                   >
                   <template v-else>{{ part }}</template>
@@ -143,7 +143,7 @@
                 </ul>
                 <p v-if="modelSetupHint.footer">{{ t(modelSetupHint.footer) }}</p>
               </PvMessage>
-              <p v-else class="chat-secondary-text">{{ t("sendMessageToStart") }}</p>
+              <p v-else class="text-sm chat-secondary-text">{{ t("sendMessageToStart") }}</p>
             </div>
           </div>
           <!-- generations -->
@@ -2409,12 +2409,12 @@ async function handleCancel() {
   try {
     cancelling.value = true;
     await api.cancelConversation(props.conversationId);
-    if (queuedText) seedComposer(queuedText);
+    if (!draftText && queuedText) seedComposer(queuedText);
     agentWorking.value = false;
   } catch (err) {
     console.error("Failed to cancel conversation:", err);
     error.value = "Failed to cancel. Please try again.";
-    if (pendingText) seedComposer(pendingText);
+    if (!draftText && pendingText) seedComposer(pendingText);
   } finally {
     cancelling.value = false;
   }

@@ -148,6 +148,21 @@ test.describe('Queue Messages', () => {
     await expect(page.getByTestId('queued-badge')).toHaveCount(0, { timeout: 10000 });
   });
 
+  test('cancelling does not replace text already in the composer', async ({ page, request }) => {
+    await openConversation(page, request);
+    await sendAndWaitForWorking(page, 'delay: 60');
+
+    await queueMessage(page, 'echo: queued message');
+    await expect(page.getByTestId('queued-badge')).toHaveCount(1, { timeout: 10000 });
+
+    const messageInput = page.getByTestId('message-input');
+    await messageInput.fill('keep this draft');
+    await page.getByRole('button', { name: 'Stop' }).tap();
+
+    await expect(messageInput).toHaveValue('keep this draft');
+    await expect(page.getByTestId('queued-badge')).toHaveCount(0, { timeout: 10000 });
+  });
+
   test('cancelling restores a queue request that has not been accepted', async ({ page, request }) => {
     await openConversation(page, request);
     await sendAndWaitForWorking(page, 'delay: 60');
