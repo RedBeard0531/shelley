@@ -101,6 +101,11 @@ func TestTerminalRestoresLegacyRecordAsGlobal(t *testing.T) {
 	if got.ConversationID != "" {
 		t.Errorf("legacy record owner = %q, want empty (global)", got.ConversationID)
 	}
+	client, err := reloaded.Attach(got, 80, 24)
+	if err != nil {
+		t.Fatalf("attach legacy dtach session: %v", err)
+	}
+	client.Close()
 }
 
 // newSessionsAt reopens an existing sessions dir, exercising the scan path.

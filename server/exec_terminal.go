@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
 	"shelley.exe.dev/claudetool"
-	"shelley.exe.dev/dtach"
 )
 
 // ExecMessage is the message format for terminal websocket communication.
@@ -27,9 +27,9 @@ type ExecMessage struct {
 	TermID string `json:"term_id,omitempty"`
 }
 
-// handleExecWS handles websocket connections that proxy to a persistent dtach
-// session. Sessions are created on first attach with cmd= and persisted on
-// disk so they survive page reloads and shelley restarts.
+// handleExecWS handles websocket connections that proxy to a persistent
+// terminal session. New sessions use exe-scroll; legacy dtach sessions remain
+// attachable.
 //
 // Query params:
 //   - term_id: existing session id to re-attach to (preferred)
@@ -128,7 +128,7 @@ func buildTerminalEnv(conversationID, slug, model, userEmail, cwd string, listen
 //
 // conversationID is the owner recorded for newly spawned sessions. Reattaching
 // never changes ownership.
-func (s *Server) attachOrSpawn(termID, cmd, cwd, conversationID string, cols, rows uint16, extraEnv []string) (*TerminalSession, *dtach.Client, error) {
+func (s *Server) attachOrSpawn(termID, cmd, cwd, conversationID string, cols, rows uint16, extraEnv []string) (*TerminalSession, terminalClient, error) {
 	unlock := s.terminals.LockAttach()
 	defer unlock()
 	if termID != "" {
@@ -136,68 +136,61 @@ func (s *Server) attachOrSpawn(termID, cmd, cwd, conversationID string, cols, ro
 		if sess == nil {
 			return nil, nil, fmt.Errorf("unknown terminal id %s", termID)
 		}
-		dc, err := dtach.Attach(sess.Socket)
+		client, err := s.terminals.Attach(sess, cols, rows)
 		if err != nil {
 			// Stale record: the session is gone for good.
 			s.terminals.Forget(termID)
 			return nil, nil, fmt.Errorf("terminal %s no longer running", termID)
 		}
-		return sess, dc, nil
+		return sess, client, nil
 	}
 	return s.terminals.Spawn(cmd, cwd, conversationID, cols, rows, extraEnv)
 }
 
-// bridgeWS shuttles bytes between the browser websocket and the dtach client.
-func (s *Server) bridgeWS(ctx context.Context, conn *websocket.Conn, dc *dtach.Client, termID string) {
+// bridgeWS shuttles bytes between the browser websocket and a terminal session.
+func (s *Server) bridgeWS(ctx context.Context, conn *websocket.Conn, client terminalClient, termID string) {
 	var exited bool
 
-	// dtach -> websocket. When this goroutine returns, close the websocket so
-	// the reader unblocks.
-	dtachDone := make(chan struct{})
+	terminalDone := make(chan struct{})
 	go func() {
-		defer close(dtachDone)
+		defer close(terminalDone)
 		for {
-			t, payload, err := dc.Recv()
+			message, err := client.Recv()
 			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					s.logger.Debug("dtach recv error", "error", err)
+				if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
+					s.logger.Debug("terminal recv error", "error", err)
 				}
 				return
 			}
-			switch t {
-			case dtach.MsgSnapshot, dtach.MsgOutput:
-				if len(payload) == 0 {
+			switch message.kind {
+			case terminalOutput:
+				if len(message.data) == 0 {
 					continue
 				}
 				if err := wsjson.Write(ctx, conn, ExecMessage{
 					Type: "output",
-					Data: base64.StdEncoding.EncodeToString(payload),
+					Data: base64.StdEncoding.EncodeToString(message.data),
 				}); err != nil {
 					return
 				}
-			case dtach.MsgExit:
-				code, _ := dtach.DecodeExit(payload)
+			case terminalExit:
 				exited = true
-				_ = wsjson.Write(ctx, conn, ExecMessage{Type: "exit", Data: fmt.Sprintf("%d", code)})
+				_ = wsjson.Write(ctx, conn, ExecMessage{Type: "exit", Data: fmt.Sprintf("%d", message.exitCode)})
 				return
 			}
 		}
 	}()
 
-	// When the dtach side ends, close the ws to unblock Read below.
 	go func() {
-		<-dtachDone
+		<-terminalDone
 		if exited {
 			s.terminals.Forget(termID)
 			conn.Close(websocket.StatusNormalClosure, "process exited")
 		} else {
-			// Detach: socket dropped but session may still be running. We don't
-			// kill it; the browser can reconnect later by term_id.
 			conn.Close(websocket.StatusGoingAway, "detached")
 		}
 	}()
 
-	// websocket -> dtach
 	for {
 		var msg ExecMessage
 		if err := wsjson.Read(ctx, conn, &msg); err != nil {
@@ -208,12 +201,12 @@ func (s *Server) bridgeWS(ctx context.Context, conn *websocket.Conn, dc *dtach.C
 			if msg.Data == "" {
 				continue
 			}
-			if err := dc.SendInput([]byte(msg.Data)); err != nil {
+			if err := client.SendInput([]byte(msg.Data)); err != nil {
 				return
 			}
 		case "resize":
 			if msg.Cols > 0 && msg.Rows > 0 {
-				_ = dc.SendResize(msg.Cols, msg.Rows)
+				_ = client.SendResize(msg.Cols, msg.Rows)
 			}
 		}
 	}

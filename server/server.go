@@ -507,7 +507,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/read-file", compressionHandler(http.HandlerFunc(s.handleReadFile)))                           // Reads arbitrary text files as JSON
 	mux.Handle("/api/user-agents-md", http.HandlerFunc(s.handleUserAgentsMd))                                      // Small response
 	mux.HandleFunc("/api/exec-ws", s.handleExecWS)                                                                 // Websocket for shell commands
-	mux.HandleFunc("GET /api/terminals", s.handleTerminalsList)                                                    // List persistent dtach sessions
+	mux.HandleFunc("GET /api/terminals", s.handleTerminalsList)                                                    // List persistent terminal sessions
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalDelete)
 	mux.HandleFunc("POST /api/terminals/{id}/kill", s.handleTerminalDelete)
 	mux.HandleFunc("PUT /api/terminals/{id}/scope", s.handleTerminalScope) // Move a terminal between conversation-local and global
