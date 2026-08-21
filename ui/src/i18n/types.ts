@@ -250,6 +250,13 @@ export interface TranslationKeys {
   welcomeTitle: string;
   welcomeSubtitle: string;
   welcomeMessage: string;
+  // welcomeMessageLocal is shown instead of welcomeMessage when Shelley is not
+  // running on an exe.dev host, so it omits exe.dev-specific proxy details.
+  welcomeMessageLocal: string;
+  // Link labels embedded in the welcome messages via {openSourceLink} and
+  // {customizeLink} placeholders.
+  welcomeOpenSource: string;
+  welcomeCustomize: string;
   sendMessageToStart: string;
   noModelsTitle: string;
   noModelsExeNote: string;

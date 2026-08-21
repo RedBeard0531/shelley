@@ -255,7 +255,11 @@ export const upgoer5: TranslationKeys = {
   welcomeTitle: "Your Helper",
   welcomeSubtitle: "",
   welcomeMessage:
-    "This is a helper, running on {hostname}. You can ask it to do stuff. If you build something for people to see, you can use the pass through (see {docsLink}) to visit it at {proxyLink}.",
+    "This is a helper, running on {hostname}. If you build something for people to see, you can use the pass through (see {docsLink}) to visit it at {proxyLink}. This helper is {openSourceLink} and {customizeLink}.",
+  welcomeMessageLocal:
+    "This is a helper, running on {hostname}. This helper is {openSourceLink} and {customizeLink}.",
+  welcomeOpenSource: "free to use and change",
+  welcomeCustomize: "can be made your own",
   sendMessageToStart: "Send a note to start talking.",
   noModelsTitle: "No brains to talk to",
   noModelsExeNote:

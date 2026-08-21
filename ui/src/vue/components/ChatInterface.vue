@@ -94,6 +94,22 @@
                 <template v-for="(part, i) in welcomeParts" :key="i">
                   <strong v-if="part === '{hostname}'">{{ hostname }}</strong>
                   <a
+                    v-else-if="part === '{openSourceLink}'"
+                    href="https://github.com/boldsoftware/shelley/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="chat-welcome-link"
+                    >{{ t("welcomeOpenSource") }}</a
+                  >
+                  <a
+                    v-else-if="part === '{customizeLink}'"
+                    href="https://github.com/boldsoftware/shelley/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="chat-welcome-link"
+                    >{{ t("welcomeCustomize") }}</a
+                  >
+                  <a
                     v-else-if="part === '{docsLink}'"
                     href="https://exe.dev/docs/proxy"
                     target="_blank"
@@ -1202,8 +1218,13 @@ const displayTitle = computed(() => {
 
 const hasCwd = computed(() => !!(props.currentConversation?.cwd || selectedCwd.value));
 const proxyURL = computed(() => `https://${hostname}/`);
+// On exe.dev hosts the welcome message advertises the proxy features; off
+// exe.dev those don't apply, so show a shorter variant without proxy details.
+const isExeDev = window.__SHELLEY_INIT__?.is_exe_dev ?? false;
 const welcomeParts = computed(() =>
-  t("welcomeMessage").split(/(\{hostname\}|\{docsLink\}|\{proxyLink\})/),
+  t(isExeDev ? "welcomeMessage" : "welcomeMessageLocal").split(
+    /(\{hostname\}|\{openSourceLink\}|\{customizeLink\}|\{docsLink\}|\{proxyLink\})/,
+  ),
 );
 
 const coalescedItems = computed(() => {

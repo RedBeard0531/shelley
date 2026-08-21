@@ -254,7 +254,11 @@ export const ja: TranslationKeys = {
   welcomeTitle: "Shelley Agent",
   welcomeSubtitle: "",
   welcomeMessage:
-    "Shelleyは{hostname}で動作するエージェントです。Shelleyに作業を依頼できます。Shelleyでウェブサイトを構築した場合、exe.devのプロキシ機能（{docsLink}を参照）を使用して{proxyLink}からアクセスできます。",
+    "Shelleyは{hostname}で動作するエージェントです。Shelleyでウェブサイトを構築した場合、exe.devのプロキシ機能（{docsLink}を参照）を使用して{proxyLink}からアクセスできます。Shelleyは{openSourceLink}であり、{customizeLink}。",
+  welcomeMessageLocal:
+    "Shelleyは{hostname}で動作するエージェントです。Shelleyは{openSourceLink}であり、{customizeLink}。",
+  welcomeOpenSource: "オープンソース",
+  welcomeCustomize: "カスタマイズできます",
   sendMessageToStart: "メッセージを送信して会話を開始してください。",
   noModelsTitle: "利用可能なAIモデルがありません",
   noModelsExeNote:

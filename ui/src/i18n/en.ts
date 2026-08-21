@@ -256,7 +256,11 @@ export const en: TranslationKeys = {
   welcomeTitle: "Shelley Agent",
   welcomeSubtitle: "",
   welcomeMessage:
-    "Shelley is an agent, running on {hostname}. You can ask Shelley to do stuff. If you build a web site with Shelley, you can use exe.dev's proxy features (see {docsLink}) to visit it over the web at {proxyLink}.",
+    "Shelley is an agent, running on {hostname}. If you build a web site with Shelley, you can use exe.dev's proxy features (see {docsLink}) to visit it over the web at {proxyLink}. Shelley is {openSourceLink} and {customizeLink}.",
+  welcomeMessageLocal:
+    "Shelley is an agent, running on {hostname}. Shelley is {openSourceLink} and {customizeLink}.",
+  welcomeOpenSource: "open-source",
+  welcomeCustomize: "can be customized",
   sendMessageToStart: "Send a message to start the conversation.",
   noModelsTitle: "No AI models available",
   noModelsExeNote:

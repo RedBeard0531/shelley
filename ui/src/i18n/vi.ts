@@ -255,7 +255,11 @@ export const vi: TranslationKeys = {
   welcomeTitle: "Shelley Agent",
   welcomeSubtitle: "",
   welcomeMessage:
-    "Shelley là một agent lập trình chạy trên {hostname}. Bạn có thể yêu cầu Shelley xây dựng dự án. Nếu bạn build website bằng Shelley, bạn có thể dùng HTTP proxy của exe.dev ({docsLink}) để xem tại {proxyLink}.",
+    "Shelley là một agent lập trình chạy trên {hostname}. Nếu bạn build website bằng Shelley, bạn có thể dùng HTTP proxy của exe.dev ({docsLink}) để xem tại {proxyLink}. Shelley là {openSourceLink} và {customizeLink}.",
+  welcomeMessageLocal:
+    "Shelley là một agent lập trình chạy trên {hostname}. Shelley là {openSourceLink} và {customizeLink}.",
+  welcomeOpenSource: "mã nguồn mở",
+  welcomeCustomize: "có thể tùy chỉnh",
   sendMessageToStart: "Gửi tin nhắn để bắt đầu trò chuyện.",
   noModelsTitle: "Không có model AI khả dụng",
   noModelsExeNote:

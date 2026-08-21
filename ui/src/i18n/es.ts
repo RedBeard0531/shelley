@@ -257,7 +257,11 @@ export const es: TranslationKeys = {
   welcomeTitle: "Shelley Agent",
   welcomeSubtitle: "",
   welcomeMessage:
-    "Shelley es un agente que se ejecuta en {hostname}. Puede pedirle a Shelley que haga cosas. Si crea un sitio web con Shelley, puede usar las funciones de proxy de exe.dev (ver {docsLink}) para visitarlo en {proxyLink}.",
+    "Shelley es un agente que se ejecuta en {hostname}. Si crea un sitio web con Shelley, puede usar las funciones de proxy de exe.dev (ver {docsLink}) para visitarlo en {proxyLink}. Shelley es {openSourceLink} y {customizeLink}.",
+  welcomeMessageLocal:
+    "Shelley es un agente que se ejecuta en {hostname}. Shelley es {openSourceLink} y {customizeLink}.",
+  welcomeOpenSource: "de código abierto",
+  welcomeCustomize: "se puede personalizar",
   sendMessageToStart: "Envíe un mensaje para iniciar la conversación.",
   noModelsTitle: "No hay modelos de IA disponibles",
   noModelsExeNote:

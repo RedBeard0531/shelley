@@ -254,7 +254,11 @@ export const zhTW: TranslationKeys = {
   welcomeTitle: "Shelley Agent",
   welcomeSubtitle: "",
   welcomeMessage:
-    "Shelley 是一個運行在 {hostname} 上的代理。你可以讓 Shelley 幫你完成各種任務。若你使用 Shelley 建立了網站，可以透過 exe.dev 的代理功能（參見 {docsLink}）在 {proxyLink} 上存取。",
+    "Shelley 是一個運行在 {hostname} 上的代理。若你使用 Shelley 建立了網站，可以透過 exe.dev 的代理功能（參見 {docsLink}）在 {proxyLink} 上存取。Shelley 是{openSourceLink}的，並且{customizeLink}。",
+  welcomeMessageLocal:
+    "Shelley 是一個運行在 {hostname} 上的代理。Shelley 是{openSourceLink}的，並且{customizeLink}。",
+  welcomeOpenSource: "開源",
+  welcomeCustomize: "可以客製化",
   sendMessageToStart: "傳送訊息以開始對話。",
   noModelsTitle: "沒有可用的 AI 模型",
   noModelsExeNote: "Shelley 從 exe.dev 的 llm 整合取得模型。執行下列任一命令即可修復：",

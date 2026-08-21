@@ -256,7 +256,11 @@ export const ru: TranslationKeys = {
   welcomeTitle: "Shelley Agent",
   welcomeSubtitle: "",
   welcomeMessage:
-    "Shelley — это агент, работающий на {hostname}. Вы можете попросить Shelley выполнить задачи. Если вы создали веб-сайт с помощью Shelley, вы можете использовать прокси-функции exe.dev (см. {docsLink}), чтобы открыть его по адресу {proxyLink}.",
+    "Shelley — это агент, работающий на {hostname}. Если вы создали веб-сайт с помощью Shelley, вы можете использовать прокси-функции exe.dev (см. {docsLink}), чтобы открыть его по адресу {proxyLink}. Shelley — {openSourceLink}, его {customizeLink}.",
+  welcomeMessageLocal:
+    "Shelley — это агент, работающий на {hostname}. Shelley — {openSourceLink}, его {customizeLink}.",
+  welcomeOpenSource: "проект с открытым исходным кодом",
+  welcomeCustomize: "можно настроить",
   sendMessageToStart: "Отправьте сообщение, чтобы начать диалог.",
   noModelsTitle: "Нет доступных моделей ИИ",
   noModelsExeNote:
