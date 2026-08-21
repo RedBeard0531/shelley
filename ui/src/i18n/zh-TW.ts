@@ -9,6 +9,7 @@ export const zhTW: TranslationKeys = {
   // Chat Header & Actions
   newConversation: "新建對話",
   moreOptions: "更多選項",
+  actions: "操作",
   conversations: "對話",
 
   // Overflow Menu

@@ -9,6 +9,7 @@ export interface TranslationKeys {
   // Chat Header & Actions
   newConversation: string;
   moreOptions: string;
+  actions: string;
   conversations: string;
 
   // Overflow Menu

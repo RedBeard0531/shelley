@@ -9,6 +9,7 @@ export const upgoer5: TranslationKeys = {
   // Chat Header & Actions
   newConversation: "New Talk",
   moreOptions: "More things to do",
+  actions: "Things to do",
   conversations: "Talks",
 
   // Overflow Menu

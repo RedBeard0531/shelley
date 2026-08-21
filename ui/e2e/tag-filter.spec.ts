@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { createConversationViaAPIWithDetails } from "./helpers";
 
 async function setTags(
@@ -33,6 +33,14 @@ async function getGitRoot(request: APIRequestContext): Promise<string> {
 // drawer too. Scope assertions to the rows we created by conversation id.
 function row(page: Page, conversationId: string) {
   return page.locator(`.conversation-item[data-conversation-id="${conversationId}"]`);
+}
+
+async function openRowActions(page: Page, conversationRow: Locator) {
+  await conversationRow.hover();
+  await conversationRow.getByRole("button", { name: "Actions" }).click();
+  const menu = page.getByTestId("conversation-actions-menu");
+  await expect(menu).toBeVisible();
+  return menu;
 }
 
 async function openDrawer(page: Page): Promise<void> {
@@ -207,6 +215,106 @@ test.describe("Tag filter", () => {
     await expect(row(page, hit.conversationId)).toBeVisible();
   });
 
+  test("conversation row actions open from one menu button", async ({ page, request }) => {
+    const conversation = await createConversationViaAPIWithDetails(request, "row actions menu", {
+      cwd: "/tmp",
+    });
+    const inactiveConversation = await createConversationViaAPIWithDetails(
+      request,
+      "inactive row actions menu",
+      { cwd: "/tmp" },
+    );
+
+    await page.goto(`/c/${conversation.slug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
+    await openDrawer(page);
+
+    const conversationRow = row(page, conversation.conversationId);
+    await expect(conversationRow.getByRole("button", { name: "Rename" })).toHaveCount(0);
+    await expect(conversationRow.getByRole("button", { name: "Edit tags" })).toHaveCount(0);
+    await expect(conversationRow.getByRole("button", { name: "Archive" })).toHaveCount(0);
+
+    const header = conversationRow.locator(".drawer-conversation-header-row");
+    const trigger = header.getByRole("button", { name: "Actions" });
+    const inactiveTrigger = row(page, inactiveConversation.conversationId)
+      .locator(".drawer-conversation-header-row")
+      .getByRole("button", { name: "Actions" });
+    await expect(trigger).toBeVisible();
+    await expect(trigger.locator("svg")).toBeVisible();
+    const headerOverflowTrigger = page
+      .locator(".chat-overflow-menu-wrapper")
+      .getByRole("button", { name: "More options" });
+    await expect(headerOverflowTrigger).toBeVisible();
+    expect(await trigger.locator("svg path").getAttribute("d")).toBe(
+      await headerOverflowTrigger.locator("svg path").getAttribute("d"),
+    );
+    await expect(inactiveTrigger).toBeVisible();
+    for (const button of [trigger, inactiveTrigger]) {
+      const styles = await button.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          opacity: style.opacity,
+          backgroundColor: style.backgroundColor,
+          borderRadius: Number.parseFloat(style.borderRadius),
+          borderWidth: Number.parseFloat(style.borderWidth),
+          boxShadow: style.boxShadow,
+          width: Number.parseFloat(style.width),
+          height: Number.parseFloat(style.height),
+        };
+      });
+      expect(styles.opacity).toBe("1");
+      expect(styles.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+      expect(styles.borderWidth).toBe(0);
+      expect(styles.boxShadow).toBe("none");
+      expect(styles.width).toBe(28);
+      expect(styles.height).toBe(28);
+      expect(styles.borderRadius).toBe(0);
+    }
+    await inactiveTrigger.scrollIntoViewIfNeeded();
+    const inactiveBox = await inactiveTrigger.boundingBox();
+    expect(inactiveBox).not.toBeNull();
+    await inactiveTrigger.hover({ position: { x: 2, y: 2 } });
+    await expect(page.locator(".p-tooltip-text")).toHaveText("Actions");
+    expect(await inactiveTrigger.boundingBox()).toEqual(inactiveBox);
+    await inactiveTrigger.hover({ position: { x: 26, y: 26 } });
+    expect(await inactiveTrigger.boundingBox()).toEqual(inactiveBox);
+    await trigger.focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(trigger).toBeFocused();
+    const activeFocus = await trigger.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { color: style.outlineColor, width: Number.parseFloat(style.outlineWidth) };
+    });
+    expect(activeFocus.color).toBe("rgb(255, 255, 255)");
+    expect(activeFocus.width).toBeGreaterThanOrEqual(2);
+    await expect(
+      conversationRow.locator(".conversation-meta").getByRole("button", { name: "Actions" }),
+    ).toHaveCount(0);
+
+    const menu = await openRowActions(page, conversationRow);
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect(menu.getByRole("menuitem")).toHaveText(["Archive", "Rename", "Edit tags"]);
+    const menuList = menu.getByRole("menu");
+    await expect(menuList).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(menuList).toHaveAttribute("aria-activedescendant", /.+/);
+
+    const triggerBox = await trigger.boundingBox();
+    const menuBox = await menu.boundingBox();
+    expect(triggerBox).not.toBeNull();
+    expect(menuBox).not.toBeNull();
+    expect(menuBox!.y).toBeGreaterThan(triggerBox!.y + triggerBox!.height / 2);
+
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    await trigger.click();
+    await menu.getByRole("menuitem", { name: "Archive" }).click();
+    await expect(conversationRow).toHaveCount(0);
+  });
+
   test("renaming a search hit refetches its FTS membership", async ({ page, request }) => {
     const conversation = await createConversationViaAPIWithDetails(request, "rename search hit", {
       cwd: "/tmp",
@@ -224,8 +332,8 @@ test.describe("Tag filter", () => {
 
     const result = row(page, conversation.conversationId);
     await expect(result).toBeVisible();
-    await result.hover();
-    await result.getByRole("button", { name: "Rename" }).click();
+    const actionsMenu = await openRowActions(page, result);
+    await actionsMenu.getByRole("menuitem", { name: "Rename" }).click();
     const input = result.locator(".drawer-rename-input");
     await input.fill(newSlug);
     await input.press("Enter");
@@ -327,8 +435,9 @@ test.describe("Tag filter", () => {
     const quoted = 'sp" quote';
     await setTags(request, spaced.conversationId, ["sp tag", quoted]);
     await search.fill("");
-    const quoteChip = row(page, spaced.conversationId)
-      .locator(`[data-testid="conversation-tag-chip"][data-tag='${quoted}']`);
+    const quoteChip = row(page, spaced.conversationId).locator(
+      `[data-testid="conversation-tag-chip"][data-tag='${quoted}']`,
+    );
     await quoteChip.click();
     await expect(searchBox(page)).toHaveValue('tag:"sp\\" quote" ');
     await expect(row(page, spaced.conversationId)).toBeVisible();
@@ -508,8 +617,8 @@ test.describe("Tag filter", () => {
     await openDrawer(page);
 
     const targetRow = row(page, target.conversationId);
-    await targetRow.hover();
-    await targetRow.locator('button[aria-label="Edit tags"]').click();
+    const actionsMenu = await openRowActions(page, targetRow);
+    await actionsMenu.getByRole("menuitem", { name: "Edit tags" }).click();
     const input = targetRow.locator(".conversation-tag-inline-input");
     await expect(input).toBeFocused();
 
@@ -579,8 +688,8 @@ test.describe("Tag filter", () => {
     await openDrawer(page);
 
     const convRow = row(page, conv.conversationId);
-    await convRow.hover();
-    await convRow.locator('button[aria-label="Edit tags"]').click();
+    const actionsMenu = await openRowActions(page, convRow);
+    await actionsMenu.getByRole("menuitem", { name: "Edit tags" }).click();
     await convRow.locator(`button[aria-label="Remove tag ${long}"]`).click();
     await expect(convRow.locator(".conversation-tag-removable")).toHaveCount(0);
   });

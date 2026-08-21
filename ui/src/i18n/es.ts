@@ -9,6 +9,7 @@ export const es: TranslationKeys = {
   // Chat Header & Actions
   newConversation: "Nueva conversación",
   moreOptions: "Más opciones",
+  actions: "Acciones",
   conversations: "Conversaciones",
 
   // Overflow Menu

@@ -10268,6 +10268,8 @@ kbd {
 .drawer-working-indicator {
   width: 8px;
   height: 8px;
+  align-self: flex-start;
+  margin-top: 0.35rem;
 }
 
 .drawer-subagent-count-badge-text {
@@ -10294,6 +10296,62 @@ kbd {
   margin-left: auto;
 }
 
+.drawer-actions-top {
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+
+.drawer-actions-trigger.btn-icon-sm {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+  opacity: 1;
+  transition: none;
+}
+
+.drawer-actions-trigger-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  pointer-events: none;
+}
+
+.drawer-actions-trigger.btn-icon-sm:hover,
+.drawer-actions-trigger.btn-icon-sm[aria-expanded="true"] {
+  background: transparent;
+  color: var(--text-primary);
+  box-shadow: none;
+  opacity: 1;
+}
+
+.drawer-actions-trigger.btn-icon-sm:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.dark .drawer-actions-trigger.btn-icon-sm:focus-visible,
+.conversation-item.active .drawer-actions-trigger.btn-icon-sm:focus-visible {
+  outline-color: white;
+}
+
+.conversation-item.active .drawer-actions-trigger.btn-icon-sm {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  box-shadow: none;
+  opacity: 1;
+}
+
+.conversation-item.active .drawer-actions-trigger.btn-icon-sm:hover,
+.conversation-item.active .drawer-actions-trigger.btn-icon-sm[aria-expanded="true"] {
+  background: transparent;
+  color: white;
+  box-shadow: none;
+}
+
 .drawer-actions-row-offset {
   display: flex;
   gap: 0.25rem;
@@ -10303,6 +10361,38 @@ kbd {
 .drawer-icon-size {
   width: 1rem;
   height: 1rem;
+}
+
+.drawer-actions-menu.p-menu {
+  min-width: 10.5rem;
+  padding: 0.25rem 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.drawer-actions-menu .p-menu-list {
+  gap: 0;
+  padding: 0;
+}
+
+.drawer-actions-menu .p-menu-item-link {
+  padding: 0.625rem 1rem;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.drawer-actions-menu .p-menu-item-icon {
+  margin-right: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.drawer-actions-menu .p-menu-item-content:hover,
+.drawer-actions-menu .p-menu-item.p-focus > .p-menu-item-content {
+  background: var(--bg-hover);
 }
 
 /* Inline delete confirmation rendered in place of the trash icon. */

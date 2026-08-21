@@ -9,6 +9,7 @@ export const ru: TranslationKeys = {
   // Chat Header & Actions
   newConversation: "Новый диалог",
   moreOptions: "Ещё",
+  actions: "Действия",
   conversations: "Диалоги",
 
   // Overflow Menu

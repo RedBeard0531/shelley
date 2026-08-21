@@ -9,6 +9,7 @@ export const ja: TranslationKeys = {
   // Chat Header & Actions
   newConversation: "新しい会話",
   moreOptions: "その他のオプション",
+  actions: "操作",
   conversations: "会話",
 
   // Overflow Menu
