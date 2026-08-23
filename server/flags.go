@@ -41,11 +41,11 @@ var FlagPerformanceHUD = featureflags.Register(featureflags.Flag{
 	Default:     false,
 })
 
-// FlagPatchSimple switches the patch tool from its full nested patches schema
-// to a simplified path-and-edits replacement schema.
+// FlagPatchSimple switches the patch tool to a simplified single-modification
+// schema: one replace (oldText/newText) or one append per call.
 var FlagPatchSimple = featureflags.Register(featureflags.Flag{
 	Name:        "patch-simple",
-	Description: "Use a simplified path and edits array for atomic exact-text replacements. When off, use the full nested patches schema.",
+	Description: "Use a simplified single-modification schema (one exact-text replace or one EOF append per call). When off, use the complex one-operation schema (replace, append_eof, prepend_bof, overwrite).",
 	Default:     false,
 })
 
@@ -54,6 +54,6 @@ var FlagPatchSimple = featureflags.Register(featureflags.Flag{
 // both flags are enabled and has no effect on unsupported providers.
 var FlagPatchOpenAIRaw = featureflags.Register(featureflags.Flag{
 	Name:        "patch-openai-raw",
-	Description: "Use raw grammar-constrained apply_patch for capable direct OpenAI Responses models, overriding the full or simplified nested patch schema.",
+	Description: "Use raw grammar-constrained apply_patch for capable direct OpenAI Responses models, overriding the simplified or complex patch schema.",
 	Default:     false,
 })
