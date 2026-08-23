@@ -613,9 +613,15 @@ func TestNewToolSetPatchStrategy(t *testing.T) {
 				if err := json.Unmarshal(patch.InputSchema, &schema); err != nil {
 					t.Fatal(err)
 				}
-				_, hasEdits := schema.Properties["edits"]
-				if hasEdits != tt.simple {
-					t.Fatalf("edits present = %v, want %v", hasEdits, tt.simple)
+				if _, ok := schema.Properties["patches"]; ok {
+					t.Fatal("patch schema must be flat (one modification per call)")
+				}
+				if tt.simple {
+					if _, ok := schema.Properties["oldText"]; !ok {
+						t.Fatal("simple schema missing top-level oldText")
+					}
+				} else if _, ok := schema.Properties["operation"]; !ok {
+					t.Fatal("complex schema missing top-level operation")
 				}
 			}
 		})
@@ -627,8 +633,8 @@ func TestNewToolSetPatchStrategyUnsupportedService(t *testing.T) {
 		name, property string
 		simple         bool
 	}{
-		{name: "nested", property: "patches"},
-		{name: "simple", property: "edits", simple: true},
+		{name: "complex", property: "operation"},
+		{name: "simple", property: "oldText", simple: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ts := NewToolSet(t.Context(), ToolSetConfig{
@@ -649,6 +655,11 @@ func TestNewToolSetPatchStrategyUnsupportedService(t *testing.T) {
 					}
 					if _, ok := schema.Properties[tt.property]; !ok {
 						t.Fatalf("unsupported service missing %q patch schema", tt.property)
+					}
+					for _, flat := range []string{"patches", "edits"} {
+						if _, ok := schema.Properties[flat]; ok {
+							t.Fatalf("unsupported service schema must be flat, found %q", flat)
+						}
 					}
 					return
 				}

@@ -23,9 +23,13 @@ var FlagCompactSendThresholds = featureflags.Register(featureflags.Flag{
 	Default:     false,
 })
 
-// FlagPatchSimple selects simplified edits for models without native apply_patch.
+// FlagPatchSimple selects simplified edits for models without native apply_patch:
+// a single modification per call (one exact-text replace or one EOF append).
+// When off, use the complex one-operation schema (replace, append_eof,
+// prepend_bof, overwrite). Capable OpenAI Responses models use native
+// apply_patch regardless of this flag.
 var FlagPatchSimple = featureflags.Register(featureflags.Flag{
 	Name:        "patch-simple",
-	Description: "For models without native apply_patch, use simplified path-and-edits replacements instead of the full nested patches schema.",
+	Description: "For models without native apply_patch, use a simplified single-modification schema (one exact-text replace or one EOF append per call). When off, use the complex one-operation schema.",
 	Default:     false,
 })
