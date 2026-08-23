@@ -55,7 +55,6 @@ type ToolSetConfig struct {
 	EnableBrowser bool
 	// ModelID is the model being used for this conversation.
 	ModelID string
-
 	// ReasoningLevel is the parent conversation's user-facing reasoning/thinking
 	// level (one of "off", "minimal", "low", "medium", "high", "xhigh", or ""
 	// for the service default). Subagents inherit this when their "reasoning"
@@ -220,7 +219,7 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		BackgroundAfter:  cfg.BashBackgroundAfter,
 	}
 
-	patchProvider, patchProfile := "", "nested"
+	patchProvider, patchProfile := "", "complex"
 	if cfg.LLMProvider != nil && cfg.ModelID != "" {
 		if svc, err := cfg.LLMProvider.GetService(cfg.ModelID); err == nil {
 			patchProvider = svc.Provider()
