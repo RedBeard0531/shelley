@@ -14,6 +14,19 @@ type Gesture = {
   cancelled: boolean;
 };
 
+export function hasHorizontalScrollContainer(target: Element | null): boolean {
+  for (let element = target; element; element = element.parentElement) {
+    const style = window.getComputedStyle(element);
+    if (
+      (style.overflowX === "auto" || style.overflowX === "scroll") &&
+      element.scrollWidth > element.clientWidth
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function useMobileDrawerSwipe(drawerOpen: Ref<boolean>) {
   let gesture: Gesture | null = null;
 
@@ -23,6 +36,11 @@ export function useMobileDrawerSwipe(drawerOpen: Ref<boolean>) {
     const touch = event.touches[0];
     const target = event.target instanceof Element ? event.target : null;
     const opening = !drawerOpen.value;
+
+    // Code blocks, tables, diffs, and other wide content own horizontal
+    // gestures. Starting a drawer swipe there makes ordinary scrolling
+    // unexpectedly navigate the app.
+    if (hasHorizontalScrollContainer(target)) return;
 
     if (opening) {
       // Leave the true screen edge to the browser/OS back gesture.
