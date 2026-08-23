@@ -180,13 +180,11 @@ func (g *loremGen) patchCall(i, k int) toolCall {
 		use: llm.Content{
 			Type: llm.ContentTypeToolUse, ID: toolUseID(i, k),
 			ToolName: "patch",
-			ToolInput: rawInput(map[string]any{
-				"path": path,
-				"patches": []map[string]any{{
-					"operation": "replace",
-					"oldText":   fmt.Sprintf("// old line %d", i),
-					"newText":   fmt.Sprintf("// new line %d: %s", i, lorem(i, 5)),
-				}},
+			ToolInput: rawInput(map[string]string{
+				"path":      path,
+				"operation": "replace",
+				"oldText":   fmt.Sprintf("// old line %d", i),
+				"newText":   fmt.Sprintf("// new line %d: %s", i, lorem(i, 5)),
 			}),
 		},
 		result:  textResult("<patches_applied>all</patches_applied>\n"),

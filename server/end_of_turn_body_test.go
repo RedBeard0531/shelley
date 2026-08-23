@@ -87,7 +87,7 @@ func TestFinalResponseBody_SummarizesPatchTool(t *testing.T) {
 			t,
 			llm.Content{
 				Type: llm.ContentTypeToolUse, ToolName: "patch",
-				ToolInput: json.RawMessage(`{"path":"server/server.go","patches":[]}`),
+				ToolInput: json.RawMessage(`{"path":"server/server.go","operation":"replace","oldText":"a","newText":"b"}`),
 			},
 		),
 	}
