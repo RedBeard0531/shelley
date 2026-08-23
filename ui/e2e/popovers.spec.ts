@@ -183,6 +183,88 @@ test.describe("Context usage popup", () => {
     await expect(label).toHaveAttribute("aria-expanded", "false");
   });
 
+  test("lists subagents in the breakdown and includes them in the total", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(60000);
+    await page.route("**/api/model-costs", async (route) => {
+      const body = route.request().postDataJSON() as { models: { model: string }[] };
+      const costs = Object.fromEntries(
+        body.models.map(({ model }) => [
+          model,
+          { input: 10, output: 10, cache_read: 10, cache_write: 10 },
+        ]),
+      );
+      await route.fulfill({ json: { costs } });
+    });
+    let subagentRequests = 0;
+    let blockSubagentRequest = false;
+    let releaseSubagentRequest: (() => void) | null = null;
+    await page.route("**/api/conversation/*/subagent-usage", async (route) => {
+      subagentRequests++;
+      if (blockSubagentRequest) {
+        await new Promise<void>((resolve) => {
+          releaseSubagentRequest = resolve;
+        });
+        releaseSubagentRequest = null;
+      }
+      await route.fulfill({
+        json: {
+          llm_calls: 9,
+          estimated_usd: 55.161,
+          reported_usd: 0,
+          unpriced_reported_usd: 0,
+          unpriced_models: [],
+          unpriced_calls: 0,
+        },
+      });
+    });
+
+    const slug = await createConversationViaAPI(request, "echo cost subtotal");
+    await page.clock.install();
+    await page.goto(`/c/${slug}`);
+    await page.locator(".context-usage-label").click();
+
+    const subagentRow = page.locator(".token-cost-model-row").filter({ hasText: "Subagents" });
+    await expect(subagentRow).toBeVisible({ timeout: 30000 });
+    await expect(subagentRow).toContainText("$55.16");
+
+    const total = page.getByTestId("token-cost-total");
+    await expect(total).toBeVisible();
+    await expect(total).toContainText("Total");
+    await expect(total).toHaveCSS("border-top-style", "solid");
+    const subagentCostBox = await subagentRow.locator(".token-cost-legend-cost").boundingBox();
+    const totalCostBox = await total.locator(".token-cost-legend-cost").boundingBox();
+    expect(subagentCostBox).not.toBeNull();
+    expect(totalCostBox).not.toBeNull();
+    expect(
+      Math.abs(
+        subagentCostBox!.x + subagentCostBox!.width - (totalCostBox!.x + totalCostBox!.width),
+      ),
+    ).toBeLessThan(1);
+
+    blockSubagentRequest = true;
+    const requestsAfterFirstOpen = subagentRequests;
+    await page.clock.fastForward(5000);
+    await expect.poll(() => subagentRequests).toBeGreaterThan(requestsAfterFirstOpen);
+    const requestsWithSlowPoll = subagentRequests;
+    await page.clock.fastForward(15000);
+    expect(subagentRequests).toBe(requestsWithSlowPoll);
+    blockSubagentRequest = false;
+    const release = releaseSubagentRequest;
+    expect(release).not.toBeNull();
+    release?.();
+    await expect.poll(() => releaseSubagentRequest).toBeNull();
+
+    const requestsBeforeReopen = subagentRequests;
+    await page.locator(".context-usage-label").click();
+    await expect(total).toBeHidden();
+    await page.locator(".context-usage-label").click();
+    await expect(total).toBeVisible();
+    await expect.poll(() => subagentRequests).toBeGreaterThan(requestsBeforeReopen);
+  });
+
   // The token count is the only way into this popup, and it is styled to read as
   // part of the "~/dir · 115k · Model" line — no box, no chevron. Three things
   // therefore have to say it is a control: a dotted underline (always), a

@@ -831,14 +831,16 @@ export interface SubagentUsageDTO {
   llm_calls: number;
   estimated_usd: number;
   reported_usd: number;
+  unpriced_reported_usd: number;
   unpriced_models: string[];
   unpriced_calls: number;
 }
 
 export const subagentUsageApi = {
-  async get(conversationId: string): Promise<SubagentUsageDTO> {
+  async get(conversationId: string, signal?: AbortSignal): Promise<SubagentUsageDTO> {
     const r = await fetch(`/api/conversation/${conversationId}/subagent-usage`, {
       headers: { "X-Shelley-Request": "1" },
+      signal,
     });
     if (!r.ok) throw new Error(`Failed to load subagent usage: ${r.statusText}`);
     return (await r.json()) as SubagentUsageDTO;

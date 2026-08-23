@@ -9577,6 +9577,15 @@ kbd {
 }
 .chat-context-popup .chat-context-popup-content {
   padding: 6px 10px;
+  max-height: min(42rem, calc(100dvh - 1rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 768px) {
+  .chat-context-popup .chat-context-popup-content {
+    max-height: 70dvh;
+  }
 }
 
 .chat-popup-warning {
@@ -9727,10 +9736,20 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+.token-cost-total-row {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+}
+
 .token-cost-graph-note {
   margin-top: 4px;
   font-size: 0.68rem;
   color: var(--text-secondary);
+}
+
+.token-cost-graph-warning {
+  color: var(--warning-text, #f59e0b);
 }
 
 .chat-distill-container {

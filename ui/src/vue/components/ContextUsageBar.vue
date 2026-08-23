@@ -34,6 +34,7 @@
         :entries="usageEntries || []"
         :other-usage-rows="otherUsageRows || []"
         :conversation-id="conversationId"
+        :active="popupOpen"
       />
       <div v-if="showLongConversationWarning" class="chat-popup-warning">
         This conversation is getting long.
