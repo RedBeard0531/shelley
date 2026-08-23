@@ -2194,6 +2194,8 @@ func withExeNotifyHook(hooks []db.ConversationHook, enabled bool) []db.Conversat
 // about end-of-turn pushes.
 const endOfTurnPushCategory = "SHELLEY_END_OF_TURN_MESSAGE_V2"
 
+const shelleyConversationIDHeader = "Shelley-Conversation-Id"
+
 func (s *Server) sendEndOfTurnHook(ctx context.Context, hook db.ConversationHook, event notifications.Event) {
 	payload, ok := event.Payload.(notifications.AgentDonePayload)
 	if !ok {
@@ -2250,6 +2252,9 @@ func (s *Server) sendEndOfTurnHook(ctx context.Context, hook db.ConversationHook
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if event.ConversationID != "" {
+		req.Header.Set(shelleyConversationIDHeader, event.ConversationID)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
