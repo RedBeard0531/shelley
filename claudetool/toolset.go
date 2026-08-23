@@ -53,8 +53,8 @@ type ToolSetConfig struct {
 	EnableBrowser bool
 	// ModelID is the model being used for this conversation.
 	ModelID string
-	// PatchSimpleEnabled selects the simplified path-and-edits schema. When
-	// false, patch uses the full nested patches schema.
+	// PatchSimpleEnabled selects the simplified single-modification schema.
+	// When false, patch uses the complex single-operation schema.
 	PatchSimpleEnabled func() bool
 	// ReasoningLevel is the parent conversation's user-facing reasoning/thinking
 	// level (one of "off", "minimal", "low", "medium", "high", "xhigh", or ""
@@ -189,7 +189,7 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		Env:              env,
 	}
 
-	patchProvider, patchProfile := "", "nested"
+	patchProvider, patchProfile := "", "complex"
 	if cfg.PatchSimpleEnabled != nil && cfg.PatchSimpleEnabled() {
 		patchProfile = "simple"
 	}
