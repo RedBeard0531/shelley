@@ -150,7 +150,7 @@ func (p *PatchTool) Tool() *llm.Tool {
 	if p.Profile == "codex_apply_patch" {
 		return p.applyPatchTool()
 	}
-	schema := PatchNestedInputSchema
+	schema := PatchComplexInputSchema
 	description := strings.TrimSpace(PatchBaseDescription + PatchUsageNotes)
 	if p.Profile == "simple" {
 		schema = PatchSimpleInputSchema
@@ -226,37 +226,26 @@ changes, break them into multiple smaller patch operations rather than one
 large overwrite. Prefer incremental replace operations over full file overwrites.
 `
 
-	PatchNestedInputSchema = `
+	PatchComplexInputSchema = `
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["path", "patches"],
+  "required": ["path", "operation", "newText"],
   "properties": {
     "path": {"type": "string", "description": "Path to the file to patch"},
-    "patches": {
-      "type": "array",
-      "minItems": 1,
-      "description": "Patch operations to apply in order",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["operation", "newText"],
-        "properties": {
-          "operation": {"type": "string", "enum": ["replace", "append_eof", "prepend_bof", "overwrite"]},
-          "oldText": {"type": "string"},
-          "newText": {"type": "string"}
-        }
-      }
-    }
+    "operation": {"type": "string", "enum": ["replace", "append_eof", "prepend_bof", "overwrite"]},
+    "oldText": {"type": "string", "description": "Text to locate for the operation (must be unique in file, required for replace)"},
+    "newText": {"type": "string", "description": "The new text to use (empty for deletions)"}
   }
 }
 `
 
-	PatchSimpleDescription = `Edit one file with precise text replacements and optional content appended at EOF.
+	PatchSimpleDescription = `Edit one file with a single precise text replacement or a single append at EOF.
 
-Each oldText must match exactly once in the original file. Edits must not overlap
-or depend on text produced by another edit in the same call. Append does not need
-an oldText anchor. The file is written only after every edit validates.`
+A call performs exactly one modification: either replace oldText (which must
+match exactly once in the original file) with newText, or append content at
+the end of the file (which needs no anchor). The file is written only after
+the modification validates.`
 
 	PatchSimpleInputSchema = `
 {
@@ -265,19 +254,8 @@ an oldText anchor. The file is written only after every edit validates.`
   "required": ["path"],
   "properties": {
     "path": {"type": "string", "description": "Path to the file to edit"},
-    "edits": {
-      "type": "array",
-      "description": "Non-overlapping replacements matched against the original file",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["oldText", "newText"],
-        "properties": {
-          "oldText": {"type": "string", "description": "Exact text to replace; must be unique in the original file"},
-          "newText": {"type": "string", "description": "Replacement text"}
-        }
-      }
-    },
+    "oldText": {"type": "string", "description": "Exact text to replace; must be unique in the original file"},
+    "newText": {"type": "string", "description": "Replacement text"},
     "append": {"type": "string", "description": "Content to append at the end of the file"}
   }
 }
@@ -292,15 +270,20 @@ type PatchInput struct {
 	Patches []PatchRequest `json:"patches"`
 }
 
-type PatchSimpleInput struct {
-	Path   string            `json:"path"`
-	Edits  []PatchSimpleEdit `json:"edits"`
-	Append *string           `json:"append"`
+// PatchComplexInput is the flat single-modification input format for the
+// complex profile: one operation per call, no patches array.
+type PatchComplexInput struct {
+	Path      string `json:"path"`
+	Operation string `json:"operation"`
+	OldText   string `json:"oldText"`
+	NewText   string `json:"newText"`
 }
 
-type PatchSimpleEdit struct {
-	OldText string `json:"oldText"`
-	NewText string `json:"newText"`
+type PatchSimpleInput struct {
+	Path    string  `json:"path"`
+	OldText string  `json:"oldText"`
+	NewText string  `json:"newText"`
+	Append  *string `json:"append"`
 }
 
 // PatchDisplayData is the structured data sent to the UI for display.
@@ -780,40 +763,46 @@ func (p *PatchTool) patchParse(m json.RawMessage) (PatchInput, error) {
 	if p.Profile == "simple" {
 		var simple PatchSimpleInput
 		if err := decoder.Decode(&simple); err != nil {
-			return PatchInput{}, fmt.Errorf("invalid patch input: %w; expected path, edits, and append fields", err)
+			return PatchInput{}, fmt.Errorf("invalid patch input: %w; expected path, oldText, newText, and append fields", err)
 		}
-		patches := make([]PatchRequest, len(simple.Edits), len(simple.Edits)+1)
-		for i, edit := range simple.Edits {
-			patches[i] = PatchRequest{Operation: "replace", OldText: edit.OldText, NewText: edit.NewText}
+		var patch PatchRequest
+		switch {
+		case simple.Append != nil:
+			if simple.OldText != "" || simple.NewText != "" {
+				return PatchInput{}, fmt.Errorf("a patch call performs exactly one modification: append cannot be combined with oldText/newText")
+			}
+			patch = PatchRequest{Operation: "append_eof", NewText: *simple.Append}
+		case simple.OldText != "":
+			patch = PatchRequest{Operation: "replace", OldText: simple.OldText, NewText: simple.NewText}
+		default:
+			return PatchInput{}, fmt.Errorf("no modification provided: set oldText and newText to replace, or append to add at the end of the file")
 		}
-		if simple.Append != nil {
-			patches = append(patches, PatchRequest{Operation: "append_eof", NewText: *simple.Append})
-		}
-		return validatePatchInput(PatchInput{Path: simple.Path, Patches: patches})
+		return validatePatchInput(PatchInput{Path: simple.Path, Patches: []PatchRequest{patch}})
 	}
-	var nested PatchInput
-	if err := decoder.Decode(&nested); err != nil {
-		return PatchInput{}, fmt.Errorf("invalid patch input: %w; expected path and patches fields", err)
+	var flat PatchComplexInput
+	if err := decoder.Decode(&flat); err != nil {
+		return PatchInput{}, fmt.Errorf("invalid patch input: %w; expected path, operation, oldText, and newText fields", err)
 	}
-	return validatePatchInput(nested)
+	return validatePatchInput(PatchInput{Path: flat.Path, Patches: []PatchRequest{{Operation: flat.Operation, OldText: flat.OldText, NewText: flat.NewText}}})
 }
 
 func validatePatchInput(input PatchInput) (PatchInput, error) {
 	if strings.TrimSpace(input.Path) == "" {
 		return PatchInput{}, fmt.Errorf("patch path is required")
 	}
-	for i, patch := range input.Patches {
-		switch patch.Operation {
-		case "replace":
-			if patch.OldText == "" {
-				return PatchInput{}, fmt.Errorf("patch %d: oldText is required for replace operation", i)
-			}
-		case "append_eof", "prepend_bof", "overwrite":
-		case "":
-			return PatchInput{}, fmt.Errorf("patch %d: operation is required", i)
-		default:
-			return PatchInput{}, fmt.Errorf("patch %d: unrecognized operation %q", i, patch.Operation)
+	if len(input.Patches) != 1 {
+		return PatchInput{}, fmt.Errorf("patch input must contain exactly one modification, got %d", len(input.Patches))
+	}
+	switch patch := input.Patches[0]; patch.Operation {
+	case "replace":
+		if patch.OldText == "" {
+			return PatchInput{}, fmt.Errorf("oldText is required for replace operation")
 		}
+	case "append_eof", "prepend_bof", "overwrite":
+	case "":
+		return PatchInput{}, fmt.Errorf("operation is required")
+	default:
+		return PatchInput{}, fmt.Errorf("unrecognized operation %q", patch.Operation)
 	}
 	return input, nil
 }
