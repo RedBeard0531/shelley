@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -389,9 +390,9 @@ func (p *PatchTool) logResult(ctx context.Context, result string, err error) {
 func classifyPatchError(err error) string {
 	message := err.Error()
 	switch {
-	case strings.Contains(message, "old text not found"):
+	case strings.Contains(message, "old text not found"), strings.Contains(message, "matched 0 locations"):
 		return "old_text_not_found"
-	case strings.Contains(message, "old text not unique"):
+	case strings.Contains(message, "old text not unique"), strings.Contains(message, "matched ") && strings.Contains(message, " locations at lines "):
 		return "old_text_not_unique"
 	case strings.Contains(message, "does not exist"):
 		return "path_not_found"
@@ -472,7 +473,7 @@ func (p *PatchTool) runApplyPatch(ctx context.Context, text string) llm.ToolOut 
 			for _, request := range file.patches {
 				spec, count := patchkit.Unique(content, request.OldText, request.NewText)
 				if count != 1 {
-					err = fmt.Errorf("apply_patch update for %q matched %d locations", path, count)
+					err = applyPatchMatchError(path, content, request.OldText)
 					break
 				}
 				content = content[:spec.Off] + request.NewText + content[spec.Off+spec.Len:]
@@ -519,6 +520,36 @@ func (p *PatchTool) runApplyPatch(ctx context.Context, text string) llm.ToolOut 
 	return llm.ToolOut{
 		LLMContent: llm.TextContent(fmt.Sprintf("Applied patch to %d file(s).", len(mutations))),
 		Display:    PatchDisplayData{Path: applyPatchDisplayPath(mutations), Diff: diff.String()},
+	}
+}
+
+func applyPatchMatchError(path, content, oldText string) error {
+	lines := exactMatchLines(content, oldText)
+	if len(lines) == 0 {
+		return fmt.Errorf("apply_patch update for %q matched 0 locations\n\nThe context must match exactly, including whitespace. Reread the current file and retry with context copied from it.\n\nNo files were changed", path)
+	}
+
+	lineText := make([]string, len(lines))
+	for i, line := range lines {
+		lineText[i] = strconv.Itoa(line)
+	}
+	return fmt.Errorf("apply_patch update for %q matched %d locations at lines %s\n\nInclude more surrounding unchanged lines so the context identifies one location.\n\nNo files were changed", path, len(lines), strings.Join(lineText, ", "))
+}
+
+func exactMatchLines(content, oldText string) []int {
+	if oldText == "" {
+		return nil
+	}
+
+	var lines []int
+	for offset := 0; ; {
+		match := strings.Index(content[offset:], oldText)
+		if match < 0 {
+			return lines
+		}
+		match += offset
+		lines = append(lines, 1+strings.Count(content[:match], "\n"))
+		offset = match + len(oldText)
 	}
 }
 

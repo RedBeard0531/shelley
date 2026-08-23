@@ -908,6 +908,8 @@ func TestClassifyPatchError(t *testing.T) {
 	}{
 		{"old text not found:\nmissing", "old_text_not_found"},
 		{"old text not unique:\nrepeated", "old_text_not_unique"},
+		{`apply_patch update for "example.go" matched 0 locations`, "old_text_not_found"},
+		{`apply_patch update for "example.go" matched 3 locations at lines 1, 3, 5`, "old_text_not_unique"},
 		{`file "missing" does not exist`, "path_not_found"},
 		{`failed to read file "dir": is a directory`, "path_read_failed"},
 		{"unrecognized operation", "execution_failed"},
@@ -961,6 +963,33 @@ func TestApplyPatchProfileToolAndExecution(t *testing.T) {
 		}
 		if string(got) != want {
 			t.Errorf("%s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestApplyPatchMatchErrorExplainsMissingContext(t *testing.T) {
+	err := applyPatchMatchError("example.go", "current\ncontents\n", "stale\ncontents\n")
+	for _, want := range []string{
+		`apply_patch update for "example.go" matched 0 locations`,
+		"The context must match exactly, including whitespace.",
+		"Reread the current file and retry with context copied from it.",
+		"No files were changed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestApplyPatchMatchErrorIdentifiesAmbiguousLines(t *testing.T) {
+	err := applyPatchMatchError("example.go", "same\nother\nsame\nmore\nsame\n", "same\n")
+	for _, want := range []string{
+		`apply_patch update for "example.go" matched 3 locations at lines 1, 3, 5`,
+		"Include more surrounding unchanged lines so the context identifies one location.",
+		"No files were changed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
 		}
 	}
 }
