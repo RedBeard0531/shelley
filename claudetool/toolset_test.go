@@ -665,9 +665,9 @@ func TestNewToolSetPatchStrategyFlags(t *testing.T) {
 		name, want  string
 		simple, raw bool
 	}{
-		{name: "both off uses full nested", want: "patch"},
-		{name: "simple on uses simplified nested", simple: true, want: "patch"},
-		{name: "raw overrides full nested", raw: true, want: "apply_patch"},
+		{name: "both off uses complex", want: "patch"},
+		{name: "simple on uses simplified single-modification", simple: true, want: "patch"},
+		{name: "raw overrides complex", raw: true, want: "apply_patch"},
 		{name: "raw overrides simple", simple: true, raw: true, want: "apply_patch"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -694,9 +694,15 @@ func TestNewToolSetPatchStrategyFlags(t *testing.T) {
 				if err := json.Unmarshal(patch.InputSchema, &schema); err != nil {
 					t.Fatal(err)
 				}
-				_, hasEdits := schema.Properties["edits"]
-				if hasEdits != tt.simple {
-					t.Fatalf("edits present = %v, want %v", hasEdits, tt.simple)
+				if _, ok := schema.Properties["patches"]; ok {
+					t.Fatal("patch schema must be flat (one modification per call)")
+				}
+				if tt.simple {
+					if _, ok := schema.Properties["oldText"]; !ok {
+						t.Fatal("simple schema missing top-level oldText")
+					}
+				} else if _, ok := schema.Properties["operation"]; !ok {
+					t.Fatal("complex schema missing top-level operation")
 				}
 			}
 		})
@@ -720,8 +726,11 @@ func TestNewToolSetRawFlagDoesNotOverrideUnsupportedService(t *testing.T) {
 			if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
 				t.Fatal(err)
 			}
-			if _, ok := schema.Properties["patches"]; !ok {
-				t.Fatal("raw flag changed unsupported service from nested strategy")
+			if _, ok := schema.Properties["patches"]; ok {
+				t.Fatal("raw flag changed unsupported service from complex strategy")
+			}
+			if _, ok := schema.Properties["operation"]; !ok {
+				t.Fatal("raw flag changed unsupported service from complex strategy")
 			}
 			return
 		}

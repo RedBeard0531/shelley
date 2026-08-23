@@ -799,11 +799,13 @@ func TestPatchToolRejectsInvalidSimpleContractBeforeFilesystemAccess(t *testing.
 		input string
 		want  string
 	}{
-		{name: "missing path", input: `{"edits":[{"oldText":"a","newText":"b"}]}`, want: "patch path is required"},
-		{name: "empty path", input: `{"path":"","edits":[{"oldText":"a","newText":"b"}]}`, want: "patch path is required"},
-		{name: "missing edits and append", input: `{"path":"file.txt"}`, want: "no patches provided"},
-		{name: "missing old text", input: `{"path":"file.txt","edits":[{"newText":"x"}]}`, want: "oldText is required"},
-		{name: "full patches", input: `{"path":"file.txt","patches":[{"operation":"overwrite","newText":"x"}]}`, want: `unknown field "patches"`},
+		{name: "missing path", input: `{"oldText":"a","newText":"b"}`, want: "patch path is required"},
+		{name: "empty path", input: `{"path":"","oldText":"a","newText":"b"}`, want: "patch path is required"},
+		{name: "no modification", input: `{"path":"file.txt"}`, want: "no modification provided"},
+		{name: "newText without oldText", input: `{"path":"file.txt","newText":"x"}`, want: "no modification provided"},
+		{name: "combined append and replace", input: `{"path":"file.txt","oldText":"a","newText":"b","append":"c"}`, want: "one modification"},
+		{name: "old edits array", input: `{"path":"file.txt","edits":[{"oldText":"a","newText":"b"}]}`, want: `unknown field "edits"`},
+		{name: "old patches array", input: `{"path":"file.txt","patches":[{"operation":"overwrite","newText":"x"}]}`, want: `unknown field "patches"`},
 		{name: "flat operation", input: `{"path":"file.txt","operation":"replace","oldText":"a","newText":"b"}`, want: `unknown field "operation"`},
 	}
 	for _, tt := range tests {
@@ -829,18 +831,18 @@ func TestPatchToolExposesAndAcceptsSimpleInput(t *testing.T) {
 	if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"path", "edits", "append"} {
+	for _, name := range []string{"path", "oldText", "newText", "append"} {
 		if _, ok := schema.Properties[name]; !ok {
 			t.Errorf("simple schema missing %q", name)
 		}
 	}
-	for _, name := range []string{"patches", "operation", "oldText", "newText"} {
+	for _, name := range []string{"patches", "operation", "edits"} {
 		if _, ok := schema.Properties[name]; ok {
 			t.Errorf("simple schema exposes %q", name)
 		}
 	}
 
-	result := tool.Run(context.Background(), json.RawMessage(`{"path":"simple.txt","edits":[{"oldText":"alpha","newText":"A"},{"oldText":"gamma","newText":"G"}]}`))
+	result := tool.Run(context.Background(), json.RawMessage(`{"path":"simple.txt","oldText":"beta","newText":"B"}`))
 	if result.Error != nil {
 		t.Fatal(result.Error)
 	}
@@ -848,7 +850,7 @@ func TestPatchToolExposesAndAcceptsSimpleInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(content), "A beta G"; got != want {
+	if got, want := string(content), "alpha B gamma"; got != want {
 		t.Fatalf("content = %q, want %q", got, want)
 	}
 	info, err := os.Stat(filepath.Join(tempDir, "simple.txt"))
@@ -880,7 +882,7 @@ func TestSimplePatchAppendsWithoutUniqueAnchor(t *testing.T) {
 	}
 }
 
-func TestSimplePatchDoesNotAppendWhenEditFails(t *testing.T) {
+func TestSimplePatchRejectsCombinedModifications(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "simple.txt")
 	original := "same\n"
@@ -888,9 +890,9 @@ func TestSimplePatchDoesNotAppendWhenEditFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := (&PatchTool{WorkingDir: NewMutableWorkingDir(tempDir), Profile: "simple"}).Tool()
-	result := tool.Run(context.Background(), json.RawMessage(`{"path":"simple.txt","edits":[{"oldText":"missing","newText":"changed"}],"append":"appended\n"}`))
-	if result.Error == nil {
-		t.Fatal("expected failed edit")
+	result := tool.Run(context.Background(), json.RawMessage(`{"path":"simple.txt","oldText":"same","newText":"changed","append":"appended\n"}`))
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "one modification") {
+		t.Fatalf("error = %v, want combined-modification rejection", result.Error)
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -1150,8 +1152,8 @@ func TestApplyPatchRejectsMalformedInput(t *testing.T) {
 	}
 }
 
-func TestPatchToolExposesAndAcceptsNestedInput(t *testing.T) {
-	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(t.TempDir()), Profile: "nested"}
+func TestPatchToolExposesAndAcceptsComplexInput(t *testing.T) {
+	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(t.TempDir()), Profile: "complex"}
 	tool := patch.Tool()
 	var schema struct {
 		Properties map[string]json.RawMessage `json:"properties"`
@@ -1159,22 +1161,38 @@ func TestPatchToolExposesAndAcceptsNestedInput(t *testing.T) {
 	if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := schema.Properties["patches"]; !ok {
-		t.Fatal("nested schema missing patches")
+	for _, name := range []string{"path", "operation", "oldText", "newText"} {
+		if _, ok := schema.Properties[name]; !ok {
+			t.Errorf("complex schema missing %q", name)
+		}
 	}
-	if _, ok := schema.Properties["operation"]; ok {
-		t.Fatal("nested schema exposes top-level operation")
+	for _, name := range []string{"patches", "edits", "append"} {
+		if _, ok := schema.Properties[name]; ok {
+			t.Errorf("complex schema exposes %q", name)
+		}
 	}
-	result := tool.Run(context.Background(), json.RawMessage(`{"path":"nested.txt","patches":[{"operation":"overwrite","newText":"hello"}]}`))
+
+	result := tool.Run(context.Background(), json.RawMessage(`{"path":"complex.txt","operation":"overwrite","newText":"hello"}`))
 	if result.Error != nil {
 		t.Fatal(result.Error)
 	}
-	content, err := os.ReadFile(filepath.Join(patch.getWorkingDir(), "nested.txt"))
+	content, err := os.ReadFile(filepath.Join(patch.getWorkingDir(), "complex.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(content) != "hello" {
 		t.Fatalf("content = %q", content)
+	}
+
+	for _, input := range []string{
+		`{"path":"complex.txt"}`,
+		`{"path":"complex.txt","patches":[{"operation":"overwrite","newText":"x"}]}`,
+		`{"path":"complex.txt","operation":"replace"}`,
+		`{"path":"complex.txt","operation":"wat"}`,
+	} {
+		if result := tool.Run(context.Background(), json.RawMessage(input)); result.Error == nil {
+			t.Errorf("complex input %q unexpectedly succeeded", input)
+		}
 	}
 }
 
@@ -1186,7 +1204,7 @@ func TestSimplePatchFailureDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := (&PatchTool{WorkingDir: NewMutableWorkingDir(tempDir), Profile: "simple"}).Tool()
-	result := tool.Run(context.Background(), json.RawMessage(`{"path":"simple.txt","edits":[{"oldText":"alpha","newText":"A"},{"oldText":"missing","newText":"M"}]}`))
+	result := tool.Run(context.Background(), json.RawMessage(`{"path":"simple.txt","oldText":"missing","newText":"M"}`))
 	if result.Error == nil {
 		t.Fatal("expected failed edit")
 	}
@@ -1196,18 +1214,5 @@ func TestSimplePatchFailureDoesNotWrite(t *testing.T) {
 	}
 	if string(content) != original {
 		t.Fatalf("partial mutation = %q", content)
-	}
-}
-
-func TestSimplePatchRejectsOverlaps(t *testing.T) {
-	tempDir := t.TempDir()
-	path := filepath.Join(tempDir, "simple.txt")
-	if err := os.WriteFile(path, []byte("abcdef\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	tool := (&PatchTool{WorkingDir: NewMutableWorkingDir(tempDir), Profile: "simple"}).Tool()
-	result := tool.Run(context.Background(), json.RawMessage(`{"path":"simple.txt","edits":[{"oldText":"abcd","newText":"A"},{"oldText":"cdef","newText":"C"}]}`))
-	if result.Error == nil || !strings.Contains(result.Error.Error(), "overlapping edits") {
-		t.Fatalf("error = %v", result.Error)
 	}
 }

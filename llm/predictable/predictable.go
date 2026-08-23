@@ -481,11 +481,8 @@ func (s *Service) makeThinkingResponse(thoughts string, inputTokens uint64) *llm
 // makePatchToolResponse creates a response that calls the patch tool
 func (s *Service) makePatchToolResponse(filePath string, inputTokens uint64) *llm.Response {
 	// Properly marshal the patch data to avoid JSON escaping issues
-	toolInputData := map[string]any{
-		"path": filePath,
-		"patches": []map[string]string{{
-			"operation": "replace", "oldText": "example", "newText": "updated example",
-		}},
+	toolInputData := map[string]string{
+		"path": filePath, "operation": "replace", "oldText": "example", "newText": "updated example",
 	}
 	toolInputBytes, _ := json.Marshal(toolInputData)
 	toolInput := json.RawMessage(toolInputBytes)
@@ -519,11 +516,8 @@ func (s *Service) makePatchToolResponse(filePath string, inputTokens uint64) *ll
 
 // makePatchToolResponseOverwrite creates a response that uses overwrite operation (always succeeds)
 func (s *Service) makePatchToolResponseOverwrite(filePath string, inputTokens uint64) *llm.Response {
-	toolInputData := map[string]any{
-		"path": filePath,
-		"patches": []map[string]string{{
-			"operation": "overwrite", "newText": "This is the new content of the file.\nLine 2\nLine 3\n",
-		}},
+	toolInputData := map[string]string{
+		"path": filePath, "operation": "overwrite", "newText": "This is the new content of the file.\nLine 2\nLine 3\n",
 	}
 	toolInputBytes, _ := json.Marshal(toolInputData)
 	toolInput := json.RawMessage(toolInputBytes)
@@ -566,11 +560,8 @@ func (s *Service) makeBigPatchToolResponse(inputTokens uint64) *llm.Response {
 		fmt.Fprintf(&body, "// line %d of a deliberately tall generated file\nfunc Fn%d() int { return %d }\n\n", i, i, i)
 	}
 	filePath := fmt.Sprintf("/tmp/shelley-big-patch-%d.go", time.Now().UnixNano())
-	toolInputData := map[string]any{
-		"path": filePath,
-		"patches": []map[string]string{{
-			"operation": "overwrite", "newText": body.String(),
-		}},
+	toolInputData := map[string]string{
+		"path": filePath, "operation": "overwrite", "newText": body.String(),
 	}
 	toolInputBytes, err := json.Marshal(toolInputData)
 	if err != nil {
@@ -602,8 +593,9 @@ func (s *Service) makeBigPatchToolResponse(inputTokens uint64) *llm.Response {
 // makeMalformedPatchToolResponse creates a response with malformed JSON that will fail to parse
 // This simulates when Anthropic sends back invalid JSON in the tool input
 func (s *Service) makeMalformedPatchToolResponse(inputTokens uint64) *llm.Response {
-	// This malformed JSON has a string where an object is expected (patch field)
-	// Mimics the error: "cannot unmarshal string into Go struct field PatchInputOneSingular.patch"
+	// This malformed JSON uses the old pre-flatten simplified "patch" field
+	// and a truncated string value, so it fails strict parsing as an unknown
+	// field: {"path":..., "patch":"<parameter name="operation">replace", ...}
 	malformedJSON := `{"path":"/home/agent/example.css","patch":"<parameter name=\"operation\">replace","oldText":".example {\n  color: red;\n}","newText":".example {\n  color: blue;\n}"}`
 	toolInput := json.RawMessage(malformedJSON)
 	return &llm.Response{
@@ -954,11 +946,8 @@ func (s *Service) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response 
 	})
 
 	// patch tool
-	patchInput, _ := json.Marshal(map[string]any{
-		"path": "/tmp/example.txt",
-		"patches": []map[string]string{{
-			"operation": "replace", "oldText": "foo", "newText": "bar",
-		}},
+	patchInput, _ := json.Marshal(map[string]string{
+		"path": "/tmp/example.txt", "operation": "replace", "oldText": "foo", "newText": "bar",
 	})
 	content = append(content, llm.Content{
 		ID:        fmt.Sprintf("tool_patch_%d", (baseNano+2)%1000),
