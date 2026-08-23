@@ -25,6 +25,13 @@ export interface RenderChunk {
   // Trailing chunks render without content-visibility (see LIVE_TAIL_CHUNKS):
   // real layout from birth, so their heights are never estimates.
   live?: boolean;
+  // Position in the conversation-wide chunk sequence (across generation
+  // blocks). Drives tail-first mounting: chunks below the mount floor render
+  // as fixed-height placeholders until the background sweep (or a
+  // near-viewport reveal) reaches them. Positional rather than key-based:
+  // history chunks are stable under appends, and the rare mid-history
+  // restructure (generation flip, view-mode change) resets the floor anyway.
+  globalIndex: number;
 }
 
 export interface GenerationBlock {

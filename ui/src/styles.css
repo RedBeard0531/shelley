@@ -1102,6 +1102,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  /* Booked height of a never-laid-out chunk. Shared by .messages-chunk's
+     contain-intrinsic-size and .messages-chunk-pending's fixed height: the
+     tail-first placeholder must book exactly the estimate for
+     placeholder→content swaps to be height-neutral. */
+  --messages-chunk-estimate: 4000px;
 }
 
 /* Off-screen rendering containment. Applied per *chunk* of ~50 rendered rows
@@ -1125,12 +1130,22 @@ body {
      scroll code must compensate for. Trailing chunks (--live) opt out: they
      hold the streaming tail the user is actually watching, so skipping buys
      nothing there and estimates would poison the follow math. */
-  contain-intrinsic-size: auto 4000px;
+  contain-intrinsic-size: auto var(--messages-chunk-estimate);
 }
 
 .messages-chunk--live {
   content-visibility: visible;
   contain-intrinsic-size: none;
+}
+
+/* Tail-first mounting placeholder (PendingChunk.vue): stands in for one
+   not-yet-mounted .messages-chunk at exactly its pre-layout booked height
+   (the contain-intrinsic-size estimate above), so mounting the real chunk in
+   the background is height-neutral. */
+.messages-chunk-pending {
+  height: var(--messages-chunk-estimate);
+  flex: none;
+  contain: strict;
 }
 
 .messages-bottom-sentinel {

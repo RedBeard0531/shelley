@@ -167,23 +167,15 @@
                 :key="sp.key"
                 :message="sp.message"
               />
-              <div
+              <ChunkHost
                 v-for="chunk in block.chunks"
                 :key="chunk.key"
-                class="messages-chunk"
-                :class="{ 'messages-chunk--live': chunk.live }"
-              >
-                <MessageRenderNode
-                  v-for="node in chunk.nodes"
-                  :key="node.key"
-                  :node="node"
-                  :conversation-id="conversationId"
-                  :on-open-diff-viewer="handleOpenDiffViewer"
-                  :on-comment-text-change="setDiffCommentText"
-                  :on-cancel-queued="cancelQueuedMessages"
-                  :on-fork="forkHandler"
-                />
-              </div>
+                :chunk="chunk"
+                :conversation-id="conversationId"
+                :on-open-diff-viewer="handleOpenDiffViewer"
+                :on-comment-text-change="setDiffCommentText"
+                :on-fork="forkHandler"
+              />
             </div>
           </template>
           <!-- streaming preview -->
@@ -396,7 +388,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, watch } from "vue";
 import Button from "primevue/button";
 import PvMessage from "primevue/message";
 import {
@@ -488,7 +480,8 @@ import TerminalPanel from "./TerminalPanel.vue";
 import VersionChecker from "./VersionChecker.vue";
 import ChatOverflowMenu from "./ChatOverflowMenu.vue";
 import { matchChatInterfaceAction } from "../../utils/menuShortcuts";
-import MessageRenderNode from "./MessageRenderNode.vue";
+import ChunkHost from "./ChunkHost.vue";
+import { chunkMountKey } from "./chunkMount";
 import QueuedGhostMessage from "./QueuedGhostMessage.vue";
 import ChatStatusContent from "./ChatStatusContent.vue";
 import MarkdownContent from "./MarkdownContent.vue";
@@ -558,6 +551,17 @@ const props = withDefaults(
 const { t } = useI18n();
 const { markdownMode } = useMarkdownMode();
 const { conversationViewMode } = useConversationView();
+// A view-mode switch refilters coalescedItems, which renumbers every chunk
+// and can restructure them wholesale; reset the tail-first floor and
+// re-prime for the new model. Synchronous on purpose: renderModel is a
+// pull-based computed, so primeTailFirstMount reads the NEW model here, and
+// the floor is in place before the next DOM flush — toggling back to "all"
+// in a huge conversation must not synchronously mount 20k rows. (Functions
+// hoisted; safe to reference at setup time.)
+watch(conversationViewMode, () => {
+  resetTailFirst();
+  primeTailFirstMount();
+});
 const toolPillsEnabled = useFeatureFlag("tool-pills");
 const {
   hasUpdate,
@@ -912,8 +916,312 @@ let inferredScrollUpDelta = 0;
 // Last upward wheel / touch gesture; a scroll-up near a real gesture must
 // never be undone as a clamp misread.
 let lastScrollGestureAt = -Infinity;
+// Last scroll event on the messages container, whatever its cause. Used by
+// the bottom sentinel's IntersectionObserver to tell "the user scrolled away"
+// from "the list grew above the viewport": growth (a tail-first sweep mount
+// laying out near the viewport, an image decoding) moves the sentinel out of
+// the near-bottom zone WITHOUT any scroll event, and must not disarm follow.
+let lastScrollEventAt = -Infinity;
 let hiddenAt: number | null = null;
 let lastGeneration: { id: string | null; gen: number } | null = null;
+
+// ---- tail-first chunk mounting ----
+//
+// Mounting a 20k-message transcript takes seconds of main-thread time even
+// though content-visibility:auto keeps off-screen chunks unlaid-out — the
+// cost is creating the Vue subtrees and DOM nodes themselves. So on load,
+// only the last INITIAL_TAIL_CHUNKS chunks mount (>= tailFloor); everything
+// above renders as a fixed-height PendingChunk placeholder, and a background
+// sweep mounts the rest TOP-DOWN (sweptTop watermark descends the history
+// oldest-first) during idle time.
+//
+// Top-down matters: the placeholder height matches .messages-chunk's
+// contain-intrinsic-size estimate, and a chunk mounted far above the
+// viewport books at that same estimate until first laid out — so each sweep
+// swap is height-neutral and needs no scroll compensation. Mounting
+// floor-adjacent chunks first would put them inside the browser's
+// content-visibility proximity margin, where they lay out (and deflate)
+// immediately under the reader. With the 10-chunk tail the floor boundary
+// sits tens of thousands of pixels above the scrollport, so even the final
+// sweep steps stay estimate-booked. Deflation only happens when the user
+// scrolls up to content — the pre-existing clamp machinery's job.
+//
+// Placeholders scrolled near the viewport reveal themselves early (see
+// PendingChunk), and TOC/fragment jumps reveal their target's chunk through
+// revealChunkTarget, so nothing the user can reach stays a placeholder.
+// Reveals are tracked by chunk KEY (stable under mid-history renumbering);
+// the floor is positional but self-corrects: floorKey is re-located on every
+// render-model rebuild and the floor/watermark shift with it.
+//
+// Known best-effort windows (the sweep drains a 21k-message history in
+// ~3s Chromium / ~6s Safari, so these are brief): find-in-page and
+// select-all miss unmounted history; printing mid-sweep prints placeholder
+// bands (beforeprint triggers reveals, but the mount is async).
+const INITIAL_TAIL_CHUNKS = 10; // ~500 rows at RENDER_CHUNK_SIZE=50
+const SWEEP_CHUNKS_PER_STEP = 4;
+const tailFloor = ref(0);
+const sweptTop = ref(0);
+const revealedChunks = reactive(new Set<string>());
+let tailSweepToken = 0;
+let tailPrimedFor: string | null = null;
+let tailFloorKey: string | null = null;
+let pendingIdle: (() => void) | null = null;
+
+// Test knob: Playwright can't practically seed 500+ rows, so it shrinks the
+// tail/chunks and/or freezes the sweep via localStorage (same tab-scoped
+// pattern as ff:* overrides). Values are clamped to sane minimums so a
+// malformed override can't hang chunking (chunkSize 0) or hide the tail.
+function tailFirstTestOverrides(): { tailChunks?: number; sweep?: boolean; chunkSize?: number } {
+  try {
+    const raw = localStorage.getItem("shelley.tailFirstTest");
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as { tailChunks?: unknown; sweep?: unknown; chunkSize?: unknown };
+    const posInt = (v: unknown): number | undefined =>
+      typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined;
+    return {
+      tailChunks: posInt(parsed.tailChunks),
+      sweep: typeof parsed.sweep === "boolean" ? parsed.sweep : undefined,
+      chunkSize: posInt(parsed.chunkSize),
+    };
+  } catch {
+    return {};
+  }
+}
+
+// Chunk keys in globalIndex order. O(total chunks) but only evaluated when
+// the floor machinery needs it (priming, reveals, and the floor-relocation
+// watcher below).
+const chunkKeysByIndex = computed<string[]>(() => {
+  const keys: string[] = [];
+  for (const block of renderModel.value) {
+    for (const chunk of block.chunks) keys.push(chunk.key);
+  }
+  return keys;
+});
+
+function cancelPendingIdle(): void {
+  pendingIdle?.();
+  pendingIdle = null;
+}
+
+function resetTailFirst(): void {
+  tailSweepToken++;
+  cancelPendingIdle();
+  tailFloor.value = 0;
+  sweptTop.value = 0;
+  revealedChunks.clear();
+  tailPrimedFor = null;
+  tailFloorKey = null;
+}
+
+/** Install the mount floor for the current render model and start the sweep.
+ * Shared by primeTailFirstMount and the floor-relocation watcher's
+ * lost-anchor fallback. Keeps revealedChunks: keys are stable, so regions
+ * the user already visited stay mounted across a re-establish. */
+function establishTailFloor(): void {
+  const overrides = tailFirstTestOverrides();
+  const tailChunks = overrides.tailChunks ?? INITIAL_TAIL_CHUNKS;
+  const keys = chunkKeysByIndex.value;
+  const floor = Math.max(0, keys.length - tailChunks);
+  if (floor <= 0) return;
+  tailPrimedFor = currentConversationId;
+  tailFloor.value = floor;
+  tailFloorKey = keys[floor];
+  sweptTop.value = 0;
+  if (overrides.sweep !== false) startTailSweep();
+}
+
+/** Set the mount floor for the just-loaded conversation. Idempotent per
+ * conversation — but only once a floor was actually established: the
+ * reveal→incremental-tail→finish path calls this twice, and when the first
+ * call saw a small partial cache (floor 0) the second call must still be
+ * able to install a floor for the full network snapshot. */
+function primeTailFirstMount(): void {
+  if (tailPrimedFor === currentConversationId) return;
+  establishTailFloor();
+}
+
+// The floor and watermark are positional; chunk keys are not. A watcher
+// registered below renderModel's definition (TDZ) re-locates the floor
+// anchor on every render-model rebuild — see relocateTailFloor.
+function relocateTailFloor(): void {
+  if (tailFloor.value <= 0 || tailPrimedFor !== currentConversationId) return;
+  const keys = chunkKeysByIndex.value;
+  const idx = tailFloorKey ? keys.indexOf(tailFloorKey) : -1;
+  if (idx === -1) {
+    tailSweepToken++;
+    cancelPendingIdle();
+    establishTailFloor();
+    if (tailFloor.value <= 0) resetTailFirst();
+    return;
+  }
+  const delta = idx - tailFloor.value;
+  if (delta !== 0) {
+    tailFloor.value = idx;
+    // Shifting the watermark with the floor errs toward mounting extra
+    // chunks near it (benign) rather than unmounting swept history.
+    sweptTop.value = Math.max(0, Math.min(sweptTop.value + delta, idx));
+  }
+}
+
+type IdleDeadlineLike = { timeRemaining(): number };
+/** Schedule cb for idle time; returns a cancel function. The setTimeout
+ * fallback (Safari has no requestIdleCallback) uses a frame-ish delay: with
+ * ~150 steps for a 21k-message history, 50ms/step stretched the sweep to
+ * 12s of find-in-page-missing-history, while 16ms keeps it ~3s and the
+ * nextTick between steps still yields to patches and input. */
+function scheduleIdle(cb: (deadline?: IdleDeadlineLike) => void): () => void {
+  if (typeof requestIdleCallback === "function") {
+    const id = requestIdleCallback(cb, { timeout: 500 });
+    return () => cancelIdleCallback(id);
+  }
+  const id = window.setTimeout(() => cb(), 16);
+  return () => clearTimeout(id);
+}
+
+function startTailSweep(): void {
+  const token = ++tailSweepToken;
+  cancelPendingIdle();
+  const step = (deadline?: IdleDeadlineLike) => {
+    pendingIdle = null;
+    if (token !== tailSweepToken) return;
+    if (tailFloor.value <= 0 || sweptTop.value >= tailFloor.value) return;
+    // Pause while the user is actively scrolling: a mount landing mid-fling
+    // competes with scroll frames, and if the fling is heading into the
+    // swept region the near-viewport reveal path covers it anyway.
+    if (performance.now() - lastScrollGestureAt < 250) {
+      pendingIdle = scheduleIdle(step);
+      return;
+    }
+    // Under deadline pressure (timeout-fired callback, busy frame) mount one
+    // chunk instead of a full batch so the sweep never contributes a long
+    // task to a streaming or scrolling frame.
+    const n = deadline && deadline.timeRemaining() < 8 ? 1 : SWEEP_CHUNKS_PER_STEP;
+    sweptTop.value = Math.min(tailFloor.value, sweptTop.value + n);
+    // Let Vue patch the newly mounted chunks before booking the next step, so
+    // one idle callback never batches multiple steps into a single long task.
+    void nextTick(() => {
+      if (token !== tailSweepToken) return;
+      pendingIdle = scheduleIdle(step);
+    });
+  };
+  pendingIdle = scheduleIdle(step);
+}
+
+function revealChunk(globalIndex: number): void {
+  if (globalIndex < 0) return;
+  const keys = chunkKeysByIndex.value;
+  // Look-behind: the near-viewport observer only fires on scrollport entry
+  // (clipped by the scroll container), so pre-reveal a couple of chunks
+  // above to keep upward scrolling ahead of the mount cost.
+  for (let i = Math.max(0, globalIndex - 2); i <= globalIndex; i++) {
+    const key = keys[i];
+    if (key) revealedChunks.add(key);
+  }
+}
+
+// message_id / tool_use_id → chunk globalIndex, for TOC and #fragment jumps
+// into unmounted history. Built lazily (only on a jump) and cached per
+// render-model identity. During streaming the model identity changes every
+// delta, so consecutive jumps may each pay the O(nodes) walk — acceptable
+// for an explicitly user-initiated action.
+interface ChunkTargetIndex {
+  byMessage: Map<string, number>;
+  byTool: Map<string, number>;
+  // Normalized 8-char fragment prefix → index (the TOC's #m-…/#t-… scheme),
+  // precomputed so fragment resolution (which retries on a timer) is O(1).
+  byMessageFrag: Map<string, number>;
+  byToolFrag: Map<string, number>;
+}
+const chunkTargetIndexCache = new WeakMap<GenerationBlock[], ChunkTargetIndex>();
+
+function fragPrefix(id: string): string {
+  return id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8);
+}
+
+function collectChunkTargets(node: RenderNode, index: number, into: ChunkTargetIndex): void {
+  switch (node.kind) {
+    case "message":
+      if (node.item.message) {
+        into.byMessage.set(node.item.message.message_id, index);
+        into.byMessageFrag.set(fragPrefix(node.item.message.message_id), index);
+      }
+      break;
+    case "tool-pills":
+      for (const item of node.items) {
+        if (item.toolUseId) {
+          into.byTool.set(item.toolUseId, index);
+          into.byToolFrag.set(fragPrefix(item.toolUseId), index);
+        }
+      }
+      break;
+    case "tool-call":
+      if (node.item.toolUseId) {
+        into.byTool.set(node.item.toolUseId, index);
+        into.byToolFrag.set(fragPrefix(node.item.toolUseId), index);
+      }
+      break;
+    case "carried-band":
+      for (const child of node.children) collectChunkTargets(child, index, into);
+      break;
+  }
+}
+
+function chunkTargetIndex(): ChunkTargetIndex {
+  const model = renderModel.value;
+  let idx = chunkTargetIndexCache.get(model);
+  if (!idx) {
+    idx = {
+      byMessage: new Map(),
+      byTool: new Map(),
+      byMessageFrag: new Map(),
+      byToolFrag: new Map(),
+    };
+    for (const block of model) {
+      for (const chunk of block.chunks) {
+        for (const node of chunk.nodes) collectChunkTargets(node, chunk.globalIndex, idx);
+      }
+    }
+    chunkTargetIndexCache.set(model, idx);
+  }
+  return idx;
+}
+
+/** Ensure the chunk containing the target is mounted. Returns true when the
+ * target was found in not-fully-mounted history; callers should re-query the
+ * DOM after the next tick. Fragments use the TOC's normalized 8-char prefix
+ * scheme. */
+function revealChunkTarget(target: {
+  messageId?: string;
+  toolUseId?: string;
+  fragment?: string;
+}): boolean {
+  if (tailFloor.value <= 0 || sweptTop.value >= tailFloor.value) return false;
+  const idx = chunkTargetIndex();
+  let found: number | undefined;
+  if (target.messageId !== undefined) found = idx.byMessage.get(target.messageId);
+  else if (target.toolUseId !== undefined) found = idx.byTool.get(target.toolUseId);
+  else if (target.fragment) {
+    if (target.fragment.startsWith("m-")) found = idx.byMessageFrag.get(target.fragment.slice(2));
+    else if (target.fragment.startsWith("t-")) found = idx.byToolFrag.get(target.fragment.slice(2));
+  }
+  if (found === undefined) return false;
+  // A jump usually precedes reading around the target: reveal one chunk of
+  // look-ahead below it too (revealChunk covers the look-behind above).
+  revealChunk(found);
+  const keys = chunkKeysByIndex.value;
+  const below = keys[found + 1];
+  if (below) revealedChunks.add(below);
+  return true;
+}
+
+provide(chunkMountKey, {
+  floor: tailFloor,
+  sweptTop,
+  revealed: revealedChunks,
+  reveal: revealChunk,
+  revealTarget: revealChunkTarget,
+});
 
 const links = window.__SHELLEY_INIT__?.links || [];
 const hostname = window.__SHELLEY_INIT__?.hostname || "localhost";
@@ -1313,6 +1621,9 @@ const loadingSubtitle = computed(() => {
 
 // ---- Render model (porting renderMessages into structured data) ----
 const renderModel = computed<GenerationBlock[]>(perfWrap("chat.renderModel", buildRenderModel));
+// A mid-history restructure (regenerated turn, compaction) renumbers chunks;
+// re-anchor the tail-first floor to its key. See relocateTailFloor.
+watch(renderModel, relocateTailFloor);
 function buildRenderModel(): GenerationBlock[] {
   const msgs = messages.value;
   if (msgs.length === 0) return [];
@@ -1559,6 +1870,12 @@ function buildRenderModel(): GenerationBlock[] {
     }
   }
 
+  // Conversation-wide chunk numbering for tail-first mounting (chunkMount.ts).
+  let globalIndex = 0;
+  for (const block of blocks) {
+    for (const chunk of block.chunks) chunk.globalIndex = globalIndex++;
+  }
+
   return blocks;
 }
 
@@ -1580,11 +1897,16 @@ const RENDER_CHUNK_SIZE = 50;
 // negligible cost (measured on real Safari 26.4, 17k-message conversation:
 // see the commit message).
 const LIVE_TAIL_CHUNKS = 5;
+// Read once per component: the override is set via addInitScript before the
+// app boots, and re-reading localStorage on every model rebuild is waste.
+const renderChunkSize = tailFirstTestOverrides().chunkSize ?? RENDER_CHUNK_SIZE;
 function chunkRenderNodes(nodes: RenderNode[]): RenderChunk[] {
   const chunks: RenderChunk[] = [];
-  for (let i = 0; i < nodes.length; i += RENDER_CHUNK_SIZE) {
-    const slice = nodes.slice(i, i + RENDER_CHUNK_SIZE);
-    chunks.push({ key: `chunk-${slice[0].key}`, nodes: slice });
+  for (let i = 0; i < nodes.length; i += renderChunkSize) {
+    const slice = nodes.slice(i, i + renderChunkSize);
+    // globalIndex is assigned conversation-wide in buildRenderModel once all
+    // blocks exist.
+    chunks.push({ key: `chunk-${slice[0].key}`, nodes: slice, globalIndex: 0 });
   }
   return chunks;
 }
@@ -1825,6 +2147,7 @@ async function revealCachedConversation(
   if (focusedId !== currentConversationId || loadEpoch !== conversationLoadEpoch) return;
 
   applyConversationRecord(cached);
+  primeTailFirstMount();
   renderingConversation.value = true;
   if (cached.messages.length >= LARGE_LOAD_STATUS_MESSAGES) {
     showLoadingProgressUI.value = true;
@@ -1855,6 +2178,7 @@ async function finishConversationLoad(
   if (focusedId !== currentConversationId || loadEpoch !== conversationLoadEpoch) return;
 
   applyConversationRecord(cached);
+  primeTailFirstMount();
 
   const renderStarted = performance.now();
   if (loading.value) {
@@ -3068,6 +3392,7 @@ watch(
     inferredScrollUpAt = -Infinity;
     inferredScrollUpDelta = 0;
     lastScrollGestureAt = -Infinity;
+    lastScrollEventAt = -Infinity;
     atBottom = true;
     // Per-message memo caches are keyed by message_id, which is globally
     // unique, so stale entries are never *wrong* — they'd just accumulate for
@@ -3077,6 +3402,9 @@ watch(
     usageParseCache.clear();
     otherUsageParseCache.clear();
     usageWanted.value = false;
+    // Tail-first mounting is per conversation: cancel the old sweep and mount
+    // everything until the new load primes a fresh floor.
+    resetTailFirst();
     if (!id) {
       messages.value = [];
       contextWindowSize.value = 0;
@@ -3373,6 +3701,7 @@ function handleScroll() {
   const container = messagesContainerRef.value;
   if (!container) return;
   perfCount("chat.handleScroll");
+  lastScrollEventAt = performance.now();
   let upwardDelta = lastObservedScrollTop - container.scrollTop;
   // Discount any scrollTop drop the ResizeObserver already attributed to a
   // list shrink (a layout clamp, not a gesture).
@@ -3475,6 +3804,15 @@ function setupScrollObservers() {
           // An explicitly selected conversation may grow after its first
           // bottom paint as lazy renderers hydrate. Keep the selection at its
           // promised destination unless the user has tried to scroll away.
+          scrollToBottom();
+        } else if (!userScrolled && performance.now() - lastScrollEventAt > 200) {
+          // The sentinel left the near-bottom zone with NO scroll event: the
+          // viewport didn't move, the list grew under it (a tail-first sweep
+          // mount laying out near the viewport, an image decode). We were
+          // following, so keep following. A real gesture always produces
+          // scroll events, so it can't be misread here; layout clamps DO
+          // fire scroll events, but they land at/near the bottom where the
+          // sentinel stays visible and this branch isn't reached.
           scrollToBottom();
         } else {
           // The sentinel left the near-bottom zone, so we are no longer
@@ -3822,6 +4160,8 @@ onMounted(() => {
 onUnmounted(() => {
   teardownSubscriptions();
   stopBottomPin();
+  tailSweepToken++; // cancel any in-flight background mount sweep
+  cancelPendingIdle();
   const container = messagesContainerRef.value;
   container?.removeEventListener("scroll", handleScroll);
   container?.removeEventListener("wheel", handleBottomPinWheel);

@@ -80,10 +80,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onUnmounted, ref, watch } from "vue";
 import Popover from "primevue/popover";
 import { isCompactionCarried, type Message, type LLMMessage, type LLMContent } from "../../types";
 import { perfCount, perfWrap } from "../../utils/perf";
+import { chunkMountKey } from "./chunkMount";
 
 interface TOCThumbnail {
   src: string;
@@ -430,7 +431,12 @@ function scrollToFragment(
   options: { highlight?: boolean } = {},
 ): boolean {
   const el = findElementByFragment(container, fragment);
-  if (!el) return false;
+  if (!el) {
+    // Tail-first mounting may not have reached the target's chunk yet. Ask
+    // for it; the caller's retry loop re-queries after the mount lands.
+    chunkMount?.revealTarget({ fragment });
+    return false;
+  }
   el.scrollIntoView({
     behavior: el.classList.contains("tool-card-mount-placeholder") ? "auto" : "smooth",
     block: "start",
@@ -566,6 +572,17 @@ watch([() => props.messages.length, () => props.containerRef], () => {
   if (open.value) nextTick(refreshRenderedThumbnails);
 });
 
+const chunkMount = inject(chunkMountKey, null);
+
+/** Mount the target's chunk (tail-first rendering) before a DOM query for
+ * it. Resolves after Vue patched the mount in, so the query will see it. */
+async function ensureTargetMounted(target: {
+  messageId?: string;
+  toolUseId?: string;
+}): Promise<void> {
+  if (chunkMount?.revealTarget(target)) await nextTick();
+}
+
 function handleGoto(entry: TOCEntry) {
   const container = props.containerRef;
   if (!container) return;
@@ -584,33 +601,41 @@ function handleGoto(entry: TOCEntry) {
   if (entry.kind === "gen") {
     const target = props.messages.find((m) => m.generation === entry.generation);
     if (target) {
-      const el = findMessageElement(container, target.message_id);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-        highlight(el);
-      }
+      void ensureTargetMounted({ messageId: target.message_id }).then(() => {
+        const el = findMessageElement(container, target.message_id);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+          highlight(el);
+        }
+      });
     }
     return;
   }
   if (entry.toolUseId) {
-    const el = findToolElement(container, entry.toolUseId);
-    if (!el) return;
-    el.scrollIntoView({
-      behavior: el.classList.contains("tool-card-mount-placeholder") ? "auto" : "smooth",
-      block: "start",
+    const toolUseId = entry.toolUseId;
+    void ensureTargetMounted({ toolUseId }).then(() => {
+      const el = findToolElement(container, toolUseId);
+      if (!el) return;
+      el.scrollIntoView({
+        behavior: el.classList.contains("tool-card-mount-placeholder") ? "auto" : "smooth",
+        block: "start",
+      });
+      highlightTool(container, toolUseId, el);
+      const url = `${window.location.pathname}${window.location.search}#${entry.id}`;
+      history.replaceState(null, "", url);
     });
-    highlightTool(container, entry.toolUseId, el);
-    const url = `${window.location.pathname}${window.location.search}#${entry.id}`;
-    history.replaceState(null, "", url);
     return;
   }
   if (!entry.messageId) return;
-  const el = findMessageElement(container, entry.messageId);
-  if (!el) return;
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
-  highlight(el);
-  const url = `${window.location.pathname}${window.location.search}#${entry.id}`;
-  history.replaceState(null, "", url);
+  const messageId = entry.messageId;
+  void ensureTargetMounted({ messageId }).then(() => {
+    const el = findMessageElement(container, messageId);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    highlight(el);
+    const url = `${window.location.pathname}${window.location.search}#${entry.id}`;
+    history.replaceState(null, "", url);
+  });
 }
 
 // Resolve URL fragment on mount + on messages/hash change.
