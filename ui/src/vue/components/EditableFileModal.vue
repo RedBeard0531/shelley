@@ -146,7 +146,7 @@
                 <MarkdownContent
                   v-if="previewText"
                   :text="previewText"
-                  :defer-code-highlighting="mode === 'split'"
+                  :live="mode === 'split'"
                   file-preview
                 />
                 <p v-else class="file-preview-empty">
