@@ -623,6 +623,7 @@ function handleGoto(entry: TOCEntry) {
       highlightTool(container, toolUseId, el);
       const url = `${window.location.pathname}${window.location.search}#${entry.id}`;
       history.replaceState(null, "", url);
+      resolvedFragmentKey = fragmentKey(entry.id);
     });
     return;
   }
@@ -635,19 +636,37 @@ function handleGoto(entry: TOCEntry) {
     highlight(el);
     const url = `${window.location.pathname}${window.location.search}#${entry.id}`;
     history.replaceState(null, "", url);
+    resolvedFragmentKey = fragmentKey(entry.id);
   });
 }
 
-// Resolve URL fragment on mount + on messages/hash change.
+// The (conversation, fragment) we have already scrolled to. The watcher below
+// re-fires on every messages.length change (streaming appends, new turns);
+// without this guard it yanks the reader back to the fragment target — and
+// emits scroll-away, disarming auto-follow — on each one.
+let resolvedFragmentKey: string | null = null;
+function fragmentKey(fragment: string) {
+  return `${props.conversationSlug ?? ""}|${fragment}`;
+}
+
+// Resolve a URL fragment once, when it first applies (page load with #m-…, or a
+// hashchange). Retries while the target's chunk mounts (tail-first rendering).
 function resolveFragmentWithRetry() {
   const container = props.containerRef;
   if (!container) return;
   const fragment = window.location.hash.slice(1);
-  if (!fragment) return;
+  if (!fragment) {
+    resolvedFragmentKey = null;
+    return;
+  }
+  if (fragmentKey(fragment) === resolvedFragmentKey) return;
   emit("scroll-away");
   let tries = 0;
   const tryScroll = () => {
-    if (scrollToFragment(container, fragment)) return;
+    if (scrollToFragment(container, fragment)) {
+      resolvedFragmentKey = fragmentKey(fragment);
+      return;
+    }
     if (++tries < 10) window.setTimeout(tryScroll, 100);
   };
   tryScroll();
@@ -658,13 +677,8 @@ watch([() => props.messages.length, () => props.containerRef], resolveFragmentWi
 });
 
 function onHashChange() {
-  const container = props.containerRef;
-  if (!container) return;
-  const fragment = window.location.hash.slice(1);
-  if (fragment) {
-    emit("scroll-away");
-    scrollToFragment(container, fragment);
-  }
+  resolvedFragmentKey = null;
+  resolveFragmentWithRetry();
 }
 window.addEventListener("hashchange", onHashChange);
 

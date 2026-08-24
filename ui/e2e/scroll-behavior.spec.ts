@@ -1,5 +1,27 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { createConversationViaAPI, createConversationViaAPIWithDetails } from "./helpers";
+
+// Wait until the messages container's scrollTop stops changing (±3px) for 250ms
+// — settles smooth-scroll animations and streaming follow writes before
+// asserting position. Not a sleep: it polls a stability condition.
+async function waitForScrollStable(page: Page, timeout = 10000) {
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector(".messages-container") as HTMLElement | null;
+      if (!el) return false;
+      const cur = el.scrollTop;
+      const w = window as unknown as { __ssLast?: number; __ssAt?: number };
+      if (w.__ssLast === undefined || Math.abs(cur - w.__ssLast) > 3) {
+        w.__ssLast = cur;
+        w.__ssAt = Date.now();
+        return false;
+      }
+      return Date.now() - (w.__ssAt ?? 0) > 250;
+    },
+    undefined,
+    { timeout },
+  );
+}
 
 test.describe("Scroll behavior", () => {
   test("auto-pinning does not synchronously read back scrollTop", async ({ page, request }) => {
@@ -778,6 +800,74 @@ test.describe("Scroll behavior", () => {
     // the bug, the re-armed pin rewrites scrollTop back to `pinned` on its next
     // frame, so `after` lands back at (or within a few px of) the bottom.
     expect(result.after).toBeLessThanOrEqual(result.pinned - 80);
+  });
+
+  test("a URL fragment does not re-scroll when new messages arrive", async ({ page, request }) => {
+    // Regression: after a "jump to message" sets a #m-…/#t-… fragment, the TOC's
+    // fragment resolver watched messages.length and re-scrolled to the fragment
+    // on every append — yanking the reader back (and emitting scroll-away,
+    // disarming auto-follow) each time a turn streamed. It must resolve once,
+    // then leave the reader alone.
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "12", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+
+    await page.goto(`/c/${conversationId}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    // Jump to an early tool card via its fragment.
+    const placeholder = page.locator(".tool-card-mount-placeholder").first();
+    await expect(placeholder).toBeAttached({ timeout: 30000 });
+    const toolUseId = await placeholder.getAttribute("data-tool-use-id");
+    expect(toolUseId).toBeTruthy();
+    const fragment = `t-${toolUseId!.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8)}`;
+    await page.evaluate((hash) => {
+      window.location.hash = hash;
+    }, fragment);
+    const card = page.locator(
+      `.toc-tool-anchor[data-tool-use-id="${toolUseId}"] + [data-testid="tool-call-completed"]`,
+    );
+    await expect(card).toBeVisible({ timeout: 10000 });
+    await waitForScrollStable(page); // the jump's smooth scroll settles on the target
+
+    // Scroll down a screen. Auto-follow is disarmed (userScrolled from the
+    // jump), so the streaming watcher and follow observer won't move the
+    // viewport — only the fragment re-resolver could yank it back. A screen
+    // (not the far middle) keeps the target's chunk hydrated (sticky mount).
+    const messagesContainer = page.locator(".messages-container");
+    await messagesContainer.evaluate((el) => {
+      el.scrollTop += 600;
+    });
+    await waitForScrollStable(page);
+
+    // New messages arrive (a streamed reply). The fragment must not re-resolve.
+    await page.getByTestId("message-input").fill("Hello");
+    await page.getByTestId("send-button").click();
+    await page.waitForFunction(
+      () =>
+        document.body.textContent?.includes(
+          "Hello! I'm Shelley, your AI assistant. How can I help you today?",
+        ) ?? false,
+      undefined,
+      { timeout: 30000 },
+    );
+    await waitForScrollStable(page);
+
+    // With the bug the re-resolver yanked the viewport back to the fragment
+    // target (it sits at the top of the viewport); with the fix the reader
+    // stays where they scrolled, so the target is above the viewport.
+    const above = await page.evaluate((tid) => {
+      const c = document.querySelector(".messages-container") as HTMLElement | null;
+      const t = document.querySelector(
+        `.toc-tool-anchor[data-tool-use-id="${tid}"] + [data-testid="tool-call-completed"]`,
+      ) as HTMLElement | null;
+      if (!c || !t) return null;
+      return t.getBoundingClientRect().bottom < c.getBoundingClientRect().top;
+    }, toolUseId);
+    expect(above).toBe(true);
   });
 });
 
