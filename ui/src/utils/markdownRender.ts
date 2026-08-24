@@ -3,7 +3,7 @@
 // and the Vue SFC can share an identical implementation. The React file now
 // re-exports renderMarkdownToSafeHTML + classifyImageSrc from here so the
 // existing test (components/MarkdownContent.test.ts) keeps passing.
-import { Marked } from "marked";
+import { Marked, type Token } from "marked";
 import DOMPurify from "dompurify";
 
 // Maximum size (in characters of the data: URI) we are willing to inline.
@@ -160,24 +160,80 @@ export interface MarkdownCacheKey {
   runKey: string;
 }
 
+export interface MarkdownRenderInfo {
+  // True when `text` ends inside an unterminated fenced code block — the live
+  // streaming case where that block is still receiving tokens. Only meaningful
+  // for uncached renders; cached (finalized message) callers ignore it.
+  endsInOpenFence: boolean;
+}
+
+// Walk past container tokens (blockquote, list > item) to the real last leaf
+// token — an unterminated fence inside a trailing blockquote or list item is
+// still "the open fence" (marked strips the "> " / indentation prefixes from
+// the nested token's raw).
+function deepestLastToken(tokens: Token[]): Token | null {
+  const last = tokens.length > 0 ? tokens[tokens.length - 1] : null;
+  if (!last) return null;
+  if (last.type === "list" && last.items.length > 0) {
+    const itemTokens = last.items[last.items.length - 1].tokens;
+    if (itemTokens && itemTokens.length > 0) return deepestLastToken(itemTokens);
+  }
+  const nested = (last as { tokens?: Token[] }).tokens;
+  if (nested && nested.length > 0) return deepestLastToken(nested);
+  return last;
+}
+
+// An unterminated fence consumes the rest of the document, so it is always the
+// deepest last token: a fenced code token whose raw has no closing fence that
+// matches its opener (marked's rule: same exact fence characters, with only
+// trailing ~/` and spaces allowed after them — so ``` markers inside code or
+// shorter / differently-charactered lines can't mislead a fence counter).
+function endsInOpenFence(tokens: Token[]): boolean {
+  const last = deepestLastToken(tokens);
+  // Indented code blocks have no `lang`; fenced ones do ("" when unlabeled).
+  if (!last || last.type !== "code" || last.lang === undefined) return false;
+  const raw = last.raw;
+  const opener = /^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})/.exec(raw);
+  if (!opener) return false;
+  const fence = opener[1];
+  // The closer must be the last non-blank line (a closed fence's raw ends
+  // with the closer line; trailing blank lines don't count).
+  const lines = raw.split("\n");
+  let lastLine = "";
+  for (let i = lines.length - 1; i >= 0 && lastLine === ""; i--) {
+    lastLine = lines[i].trimEnd();
+  }
+  if (lastLine === "") return true;
+  return !new RegExp(`^ {0,3}${fence}[~\`]* *$`).test(lastLine);
+}
+
 // renderMarkdownToSafeHTML parses markdown and returns sanitized HTML.
 //
 // `messageId` drives the local-image URL rewrite only (see buildMarked above)
 // and plays no part in caching. `cacheKey`, when supplied, memoizes the result
 // for the lifetime of `cacheKey.owner`; callers whose text can change without
 // a new owner — the streaming preview, the distillation preview, export —
-// omit it and always re-render.
+// omit it and always re-render. `out`, when supplied, receives parse-state
+// information (see MarkdownRenderInfo) for live text.
 export function renderMarkdownToSafeHTML(
   text: string,
   messageId?: string,
   cacheKey?: MarkdownCacheKey,
+  out?: MarkdownRenderInfo,
 ): string {
   let runs = cacheKey ? cache.get(cacheKey.owner) : undefined;
   const cached = cacheKey ? runs?.get(cacheKey.runKey) : undefined;
   if (cached !== undefined) return cached;
 
-  const raw = buildMarked(messageId).parse(text, { async: false }) as string;
+  const marked = buildMarked(messageId);
+  const tokens = marked.lexer(text);
+  // parse() runs walkTokens — where the local-image rewrite hook lives —
+  // between lexing and parsing; replicate that when splitting the two phases.
+  if (marked.defaults.walkTokens) marked.walkTokens(tokens, marked.defaults.walkTokens);
+  const raw = marked.parser(tokens);
   const html = DOMPurify.sanitize(raw, SANITIZE_OPTS);
+
+  if (out) out.endsInOpenFence = endsInOpenFence(tokens);
 
   if (cacheKey) {
     if (!runs) {
