@@ -192,8 +192,10 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 		}
 	}
 
-	// Add co-author trailer to git commits unless user has disabled it
-	if !isNoTrailerSet() {
+	// Add co-author trailer to git commits only when the user opts in via
+	// git config shelley.no-trailer=true. (Fork default: off. Upstream's
+	// default is on, with this config suppressing the trailer.)
+	if isNoTrailerSet() {
 		req.Command = bashkit.AddCoauthorTrailer(req.Command, "Co-authored-by: Shelley <shelley@exe.dev>")
 	}
 
