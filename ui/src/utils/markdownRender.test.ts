@@ -176,5 +176,49 @@ assert(!withoutId.includes("<img"), "local image dropped with no messageId to au
   assert(calls === 2, "calls without a cacheKey are never cached (each one re-parses)");
 }
 
+// ---- endsInOpenFence: the parser tells us when live text ends inside an
+// unterminated fence (the streaming case), without a fence-count heuristic. ----
+
+{
+  const info = { endsInOpenFence: false };
+  const endsOpen = (text: string): boolean => {
+    info.endsInOpenFence = false;
+    renderMarkdownToSafeHTML(text, undefined, undefined, info);
+    return info.endsInOpenFence;
+  };
+
+  assert(endsOpen("```go\nfmt.Println(1)\n```\n") === false, "closed fence is not open");
+  assert(endsOpen("```go\nfmt.Println(1)") === true, "unterminated fence is open");
+  assert(endsOpen("~~~py\nx = 1") === true, "unterminated tilde fence is open");
+  assert(endsOpen("~~~py\nx = 1\n~~~\n") === false, "closed tilde fence is not open");
+  assert(
+    endsOpen("`````go\nfoo\n```\nbar") === true,
+    "a short ``` line inside a 5-backtick fence does not close it",
+  );
+  assert(
+    endsOpen("`````go\nfoo\n`````\n") === false,
+    "a same-length backtick line closes a 5-backtick fence",
+  );
+  assert(
+    endsOpen("```go\nfoo\n~~~~\n") === true,
+    "a tilde line does not close a backtick fence",
+  );
+  assert(
+    endsOpen("```go\nfmt.Println(1)\n```\nmore prose") === false,
+    "text after a closed fence is not open",
+  );
+  assert(endsOpen("plain prose, no fences") === false, "no fences is not open");
+  assert(endsOpen("    indented code\n    more") === false, "indented code is not open");
+  assert(
+    endsOpen("```\nunlabeled unterminated") === true,
+    "unlabeled unterminated fence is still an open fenced block",
+  );
+  assert(
+    endsOpen("> quote\n>\n> ```js\n> x\n> ```\n") === false,
+    "closed fence inside a blockquote is not open",
+  );
+  assert(endsOpen("> ```js\n> x") === true, "unterminated fence inside a blockquote is open");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

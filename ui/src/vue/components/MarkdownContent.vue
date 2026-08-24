@@ -18,11 +18,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onBeforeUpdate, ref, watch } from "vue";
 import { highlightCode, normalizeCodeLanguage } from "../../services/markdownHighlight";
 import { applyHighlightTokens } from "../../utils/codeHighlight";
 import { COMMENT_ICON } from "../../utils/icons";
-import { renderMarkdownToSafeHTML } from "../../utils/markdownRender";
+import {
+  renderMarkdownToSafeHTML,
+  type MarkdownRenderInfo,
+} from "../../utils/markdownRender";
 import { perfWrap } from "../../utils/perf";
 import { handleImageCommentClick, openImageComment } from "../composables/imageComment";
 import { whenNearViewport } from "../composables/nearViewport";
@@ -47,6 +50,12 @@ const props = defineProps<{
   // message with several text blocks split by tool calls). Required
   // whenever cacheOwner is set.
   runKey?: string;
+  // Live-streaming text (the chat streaming preview): the trailing fenced
+  // block's fence may still be open, so its highlighting must wait for the
+  // fence to close rather than tokenize half-written code on every token.
+  // Omitted for static renders — a genuinely unterminated fence in final
+  // text still highlights normally.
+  live?: boolean;
 }>();
 
 const containerRef = ref<HTMLDivElement | null>(null);
@@ -58,35 +67,32 @@ const containerRef = ref<HTMLDivElement | null>(null);
 // then tokenize.
 let cancelDeferred: (() => void)[] = [];
 // Streaming markdown re-renders (and v-html replaces the whole subtree) on
-// every token, so every in-view block re-registers per pass. Registration
-// itself stays immediate — a delayed registration could miss the window while
-// the just-loaded bottom pin holds the view in place — but the worker
-// tokenize is debounced: a growing block tokenizes once, when its text has
-// stopped changing for this long (~one inter-token gap after the stream moves
-// past it, or at the end of the turn), instead of once per token.
-const HIGHLIGHT_QUIESCE_MS = 300;
-let highlightTimer: number | null = null;
-const pendingHighlight: { root: HTMLElement; code: HTMLElement; language: string }[] = [];
-
-function scheduleHighlight(root: HTMLElement, code: HTMLElement, language: string): void {
-  // Drop stale registrations for blocks a new v-html pass already replaced
-  // (disconnected), so this stays bounded by the mounted in-view blocks.
-  for (let i = pendingHighlight.length - 1; i >= 0; i--) {
-    if (!pendingHighlight[i].code.isConnected) pendingHighlight.splice(i, 1);
+// every token. Completed (closed-fence) blocks keep their highlighted DOM
+// across those replacements: right before each update, capture every
+// fully-highlighted block's (language, source -> innerHTML); after the new
+// pass, restore exact matches directly instead of re-tokenizing — so a block
+// colors in once, when its fence closes, and is not re-tokenized or flickered
+// on later tokens. The still-open trailing block is left plain until its
+// fence closes (see highlightFencedCode).
+const codeSnapshot = new Map<string, string>();
+onBeforeUpdate(() => {
+  codeSnapshot.clear();
+  const root = containerRef.value;
+  if (!root) return;
+  for (const code of root.querySelectorAll<HTMLElement>("pre > code")) {
+    const language = code.dataset.shelleyCodeHighlight;
+    if (!language || language === "deferred" || language === "pending") continue;
+    codeSnapshot.set(`${language}\0${code.textContent}`, code.innerHTML);
   }
-  pendingHighlight.push({ root, code, language });
-  if (highlightTimer !== null) clearTimeout(highlightTimer);
-  highlightTimer = window.setTimeout(() => {
-    highlightTimer = null;
-    for (const item of pendingHighlight.splice(0)) highlightBlock(item.root, item.code, item.language);
-  }, HIGHLIGHT_QUIESCE_MS);
-}
+});
 
 onBeforeUnmount(() => {
-  if (highlightTimer !== null) clearTimeout(highlightTimer);
   for (const cancel of cancelDeferred) cancel();
   cancelDeferred = [];
 });
+
+// Parse-state of the current render, read by the post-flush watch below.
+const renderInfo: MarkdownRenderInfo = { endsInOpenFence: false };
 
 const html = computed(
   perfWrap("markdown.render", () =>
@@ -96,6 +102,7 @@ const html = computed(
       props.cacheOwner && props.runKey !== undefined
         ? { owner: props.cacheOwner, runKey: props.runKey }
         : undefined,
+      renderInfo,
     ),
   ),
 );
@@ -151,18 +158,38 @@ function languageFor(code: HTMLElement): string | undefined {
 }
 
 function highlightFencedCode(root: HTMLElement): void {
-  for (const code of root.querySelectorAll<HTMLElement>("pre > code")) {
+  // Live streaming: when the text ends inside an unterminated fence, that
+  // trailing block is still receiving tokens — tokenizing it now would be
+  // thrown away next token. Leave it plain until the fence closes (and a
+  // later pass tokenizes it); all preceding blocks are already complete.
+  const openFenceActive = !!props.live && renderInfo.endsInOpenFence;
+  const codes = root.querySelectorAll<HTMLElement>("pre > code");
+  const lastCode = codes.length > 0 ? codes[codes.length - 1] : null;
+  for (const code of codes) {
     const state = code.dataset.shelleyCodeHighlight;
     if (state && state !== "deferred") continue;
     const language = languageFor(code);
     if (!language) continue;
+
+    // Unchanged block (a fence that closed in a previous pass): restore the
+    // highlighted DOM captured before this v-html replacement — no
+    // re-tokenize, no flicker. Snapshot misses both brand-new blocks and the
+    // still-growing trailing block, which fall through below.
+    const snapshotHtml = codeSnapshot.get(`${language}\0${code.textContent}`);
+    if (snapshotHtml !== undefined) {
+      code.innerHTML = snapshotHtml;
+      code.dataset.shelleyCodeHighlight = language;
+      continue;
+    }
+
+    if (openFenceActive && code === lastCode) continue;
 
     // "deferred" blocks re-register on every pass (the watch cancels all
     // previous registrations first) because v-html replacement may have
     // produced brand-new elements.
     code.dataset.shelleyCodeHighlight = "deferred";
     cancelDeferred.push(
-      whenNearViewport(code, () => scheduleHighlight(root, code, language), {
+      whenNearViewport(code, () => highlightBlock(root, code, language), {
         printReveal: false,
       }),
     );

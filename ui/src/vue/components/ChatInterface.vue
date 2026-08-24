@@ -195,7 +195,7 @@
                   {{ streamingText }}<span class="streaming-cursor">▊</span>
                 </div>
                 <div v-else class="streaming-markdown">
-                  <MarkdownContent :text="streamingText" />
+                  <MarkdownContent :text="streamingText" live />
                   <span class="streaming-cursor">▊</span>
                 </div>
               </template>
