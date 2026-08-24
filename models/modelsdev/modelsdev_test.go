@@ -257,6 +257,7 @@ func TestLookupCost(t *testing.T) {
 		{"fireworks full path", "", "accounts/fireworks/models/kimi-k2p6", true, 0.95, 4},
 		{"fireworks inkling", "", "accounts/fireworks/models/inkling", true, 1, 4.05},
 		{"fireworks qwen3p8-max", "", "accounts/fireworks/models/qwen3p8-max", true, 2, 6},
+		{"fireworks deepseek-v4-flash-0731", "", "accounts/fireworks/models/deepseek-v4-flash-0731", true, 0.22, 0.66},
 		{"unknown model", "", "predictable-v1", false, 0, 0},
 	}
 	for _, tc := range cases {
