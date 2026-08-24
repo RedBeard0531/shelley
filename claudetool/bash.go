@@ -96,7 +96,9 @@ func (b *BashTool) getWorkingDir() string {
 	return b.WorkingDir.Get()
 }
 
-// isNoTrailerSet checks if user has disabled co-author trailer via git config.
+// isNoTrailerSet reports whether git config shelley.no-trailer is set to
+// "true". Upstream uses it to suppress the Co-authored-by trailer; this fork
+// inverts the call sites, adding the trailer only when it is set.
 func isNoTrailerSet() bool {
 	out, err := exec.Command("git", "config", "--get", "shelley.no-trailer").Output()
 	if err != nil {
@@ -191,8 +193,10 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 		}
 	}
 
-	// Add co-author trailer to git commits unless user has disabled it
-	if !isNoTrailerSet() {
+	// Add co-author trailer to git commits only when the user opts in via
+	// git config shelley.no-trailer=true. (Fork default: off. Upstream's
+	// default is on, with this config suppressing the trailer.)
+	if isNoTrailerSet() {
 		req.Command = bashkit.AddCoauthorTrailer(req.Command, "Co-authored-by: Shelley <shelley@exe.dev>")
 	}
 
