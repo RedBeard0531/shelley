@@ -18,7 +18,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onBeforeUpdate, ref, watch } from "vue";
 import { highlightCode, normalizeCodeLanguage } from "../../services/markdownHighlight";
 import {
   addCodeBlockHeaders,
@@ -28,7 +28,10 @@ import {
 import { applyHighlightTokens } from "../../utils/codeHighlight";
 import { COMMENT_ICON } from "../../utils/icons";
 import { localhostLinkOptionsFromInit } from "../../utils/linkify";
-import { renderMarkdownToSafeHTML } from "../../utils/markdownRender";
+import {
+  renderMarkdownToSafeHTML,
+  type MarkdownRenderInfo,
+} from "../../utils/markdownRender";
 import { perfWrap } from "../../utils/perf";
 import { handleImageCommentClick, openImageComment } from "../composables/imageComment";
 import { whenNearViewport } from "../composables/nearViewport";
@@ -55,10 +58,12 @@ const props = defineProps<{
   runKey?: string;
   // Rewrite VM-local links for user-clickable assistant content only.
   rewriteLocalhostLinks?: boolean;
-  // Streaming replaces the v-html subtree on every delta. Highlighting those
-  // short-lived revisions makes fenced blocks alternate between plain text and
-  // tokens, so callers can defer tokenization until their text is stable.
-  deferCodeHighlighting?: boolean;
+  // Live-streaming text (the chat streaming preview): the trailing fenced
+  // block's fence may still be open, so its highlighting must wait for the
+  // fence to close rather than tokenize half-written code on every token.
+  // Omitted for static renders — a genuinely unterminated fence in final
+  // text still highlights normally.
+  live?: boolean;
 }>();
 
 const containerRef = ref<HTMLDivElement | null>(null);
@@ -70,11 +75,35 @@ const containerRef = ref<HTMLDivElement | null>(null);
 // then tokenize.
 let cancelDeferred: (() => void)[] = [];
 const copyFeedbackTimers = new Map<HTMLButtonElement, ReturnType<typeof setTimeout>>();
+
+// Streaming markdown re-renders (and v-html replaces the whole subtree) on
+// every token. Completed (closed-fence) blocks keep their highlighted DOM
+// across those replacements: right before each update, capture every
+// fully-highlighted block's (language, source -> innerHTML); after the new
+// pass, restore exact matches directly instead of re-tokenizing — so a block
+// colors in once, when its fence closes, and is not re-tokenized or flickered
+// on later tokens. The still-open trailing block is left plain until its
+// fence closes (see highlightFencedCode).
+const codeSnapshot = new Map<string, string>();
+onBeforeUpdate(() => {
+  codeSnapshot.clear();
+  const root = containerRef.value;
+  if (!root) return;
+  for (const code of root.querySelectorAll<HTMLElement>("pre > code")) {
+    const language = code.dataset.shelleyCodeHighlight;
+    if (!language || language === "deferred" || language === "pending") continue;
+    codeSnapshot.set(`${language}\0${code.textContent}`, code.innerHTML);
+  }
+});
+
 onBeforeUnmount(() => {
   for (const cancel of cancelDeferred) cancel();
   cancelDeferred = [];
   clearCopyFeedback();
 });
+
+// Parse-state of the current render, read by the post-flush watch below.
+const renderInfo: MarkdownRenderInfo = { endsInOpenFence: false };
 
 const html = computed(
   perfWrap("markdown.render", () =>
@@ -90,6 +119,7 @@ const html = computed(
           }
         : undefined,
       props.rewriteLocalhostLinks ? localhostLinkOptionsFromInit() : undefined,
+      renderInfo,
     ),
   ),
 );
@@ -147,19 +177,40 @@ function languageFor(code: HTMLElement): string | undefined {
 }
 
 function highlightFencedCode(root: HTMLElement): void {
-  if (props.deferCodeHighlighting) return;
-  for (const code of root.querySelectorAll<HTMLElement>("pre > code")) {
+  // Live streaming: when the text ends inside an unterminated fence, that
+  // trailing block is still receiving tokens — tokenizing it now would be
+  // thrown away next token. Leave it plain until the fence closes (and a
+  // later pass tokenizes it); all preceding blocks are already complete.
+  const openFenceActive = !!props.live && renderInfo.endsInOpenFence;
+  const codes = root.querySelectorAll<HTMLElement>("pre > code");
+  const lastCode = codes.length > 0 ? codes[codes.length - 1] : null;
+  for (const code of codes) {
     const state = code.dataset.shelleyCodeHighlight;
     if (state && state !== "deferred") continue;
     const language = languageFor(code);
     if (!language) continue;
+
+    // Unchanged block (a fence that closed in a previous pass): restore the
+    // highlighted DOM captured before this v-html replacement — no
+    // re-tokenize, no flicker. Snapshot misses both brand-new blocks and the
+    // still-growing trailing block, which fall through below.
+    const snapshotHtml = codeSnapshot.get(`${language}\0${code.textContent}`);
+    if (snapshotHtml !== undefined) {
+      code.innerHTML = snapshotHtml;
+      code.dataset.shelleyCodeHighlight = language;
+      continue;
+    }
+
+    if (openFenceActive && code === lastCode) continue;
 
     // "deferred" blocks re-register on every pass (the watch cancels all
     // previous registrations first) because v-html replacement may have
     // produced brand-new elements.
     code.dataset.shelleyCodeHighlight = "deferred";
     cancelDeferred.push(
-      whenNearViewport(code, () => highlightBlock(root, code, language), { printReveal: false }),
+      whenNearViewport(code, () => highlightBlock(root, code, language), {
+        printReveal: false,
+      }),
     );
   }
 }
