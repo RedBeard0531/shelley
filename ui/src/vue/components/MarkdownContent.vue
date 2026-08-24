@@ -57,7 +57,33 @@ const containerRef = ref<HTMLDivElement | null>(null);
 // within a viewport of view (same shared observer that gates tool cards),
 // then tokenize.
 let cancelDeferred: (() => void)[] = [];
+// Streaming markdown re-renders (and v-html replaces the whole subtree) on
+// every token, so every in-view block re-registers per pass. Registration
+// itself stays immediate — a delayed registration could miss the window while
+// the just-loaded bottom pin holds the view in place — but the worker
+// tokenize is debounced: a growing block tokenizes once, when its text has
+// stopped changing for this long (~one inter-token gap after the stream moves
+// past it, or at the end of the turn), instead of once per token.
+const HIGHLIGHT_QUIESCE_MS = 300;
+let highlightTimer: number | null = null;
+const pendingHighlight: { root: HTMLElement; code: HTMLElement; language: string }[] = [];
+
+function scheduleHighlight(root: HTMLElement, code: HTMLElement, language: string): void {
+  // Drop stale registrations for blocks a new v-html pass already replaced
+  // (disconnected), so this stays bounded by the mounted in-view blocks.
+  for (let i = pendingHighlight.length - 1; i >= 0; i--) {
+    if (!pendingHighlight[i].code.isConnected) pendingHighlight.splice(i, 1);
+  }
+  pendingHighlight.push({ root, code, language });
+  if (highlightTimer !== null) clearTimeout(highlightTimer);
+  highlightTimer = window.setTimeout(() => {
+    highlightTimer = null;
+    for (const item of pendingHighlight.splice(0)) highlightBlock(item.root, item.code, item.language);
+  }, HIGHLIGHT_QUIESCE_MS);
+}
+
 onBeforeUnmount(() => {
+  if (highlightTimer !== null) clearTimeout(highlightTimer);
   for (const cancel of cancelDeferred) cancel();
   cancelDeferred = [];
 });
@@ -136,7 +162,9 @@ function highlightFencedCode(root: HTMLElement): void {
     // produced brand-new elements.
     code.dataset.shelleyCodeHighlight = "deferred";
     cancelDeferred.push(
-      whenNearViewport(code, () => highlightBlock(root, code, language), { printReveal: false }),
+      whenNearViewport(code, () => scheduleHighlight(root, code, language), {
+        printReveal: false,
+      }),
     );
   }
 }
