@@ -714,6 +714,71 @@ test.describe("Scroll behavior", () => {
       .toBeLessThan(50);
     await expect(scrollButton).toBeVisible({ timeout: 5000 });
   });
+
+  test("a touch scroll-up disarms auto-follow even when the bottom pin is re-armed mid-gesture", async ({
+    page,
+    request,
+  }) => {
+    // Regression: while a turn streams (thinking or text) the streaming
+    // watcher re-arms the bottom pin on every token. On mobile a touch
+    // scroll-up arrives as many small scroll events, each under the pin's
+    // 128px jump-release threshold, and the pin rewrites scrollTop to the
+    // bottom every frame — so a reader could not scroll up at all while
+    // content streamed in. The touch/pointer path must release the pin and
+    // disarm on the first upward event, the way a wheel already does.
+    //
+    // A live stream is hard to stage deterministically in an e2e test, so
+    // reproduce the decisive condition directly: a pointerdown starts the
+    // gesture (scrollPointerActive true, in-flight pin stopped), then a
+    // Cmd/Ctrl+ArrowDown re-arms the bottom pin exactly as a streaming token
+    // would (handleScrollKeyDown -> scrollToBottom, ungated by
+    // scrollPointerActive), then an upward scroll smaller than the 128px jump
+    // threshold (but past the 100px near-bottom margin) arrives with the pin
+    // active and the pointer still down. The view must stay scrolled up
+    // instead of being yanked back to the bottom by the pin's next frame.
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+
+    await page.goto(`/c/${conversationId}`);
+    const messagesContainer = page.locator(".messages-container");
+    await expect(page.locator('[data-testid="message-input"]')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+
+    const result = await messagesContainer.evaluate(async (el) => {
+      // Real touch lifecycle: touchstart arms touchScrolling, then the browser
+      // fires pointercancel mid-scroll (the OS seizes the gesture for panning),
+      // which clears scrollPointerActive but NOT touchScrolling. A fix that
+      // gates only on scrollPointerActive is defeated here — exactly the
+      // mobile-only failure a synthetic test without pointercancel hides.
+      el.dispatchEvent(new TouchEvent("touchstart", { bubbles: true }));
+      el.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 1, bubbles: true }));
+      // A streaming token re-arms the bottom pin mid-gesture. Cmd/Ctrl+ArrowDown
+      // routes to handleScrollKeyDown -> scrollToBottom, mirroring the watcher.
+      el.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", ctrlKey: true, bubbles: true }),
+      );
+      // scrollToBottom's first rAF step runs synchronously and pins scrollTop to
+      // the bottom — capture that as the reference the pin fights to return to.
+      const pinned = el.scrollTop;
+      // Scroll up 110px: under the pin's 128px jump-release threshold (so only
+      // the active-gesture path can release it) but past the 100px near-bottom
+      // margin. Dispatch the scroll event synchronously so handleScroll runs
+      // before the pin's next animation frame can reset it.
+      el.scrollTop = Math.max(0, el.scrollTop - 110);
+      el.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      el.dispatchEvent(new TouchEvent("touchend", { bubbles: true }));
+      return { pinned, after: el.scrollTop };
+    });
+
+    // Auto-follow must be disarmed: the reader scrolled up and stays up. With
+    // the bug, the re-armed pin rewrites scrollTop back to `pinned` on its next
+    // frame, so `after` lands back at (or within a few px of) the bottom.
+    expect(result.after).toBeLessThanOrEqual(result.pinned - 80);
+  });
 });
 
 // Desktop keeps the conversation drawer visible, which makes this a direct
