@@ -4,7 +4,7 @@
 import { createHighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import { SHIKI_LANGUAGE_LOADERS } from "./generated-shiki-language-loaders";
-import { applyShellScopeColors } from "./shellTokenColors";
+import { shellTokenFragments } from "./shellTokenColors";
 import githubDark from "@shikijs/themes/github-dark";
 import githubLight from "@shikijs/themes/github-light";
 
@@ -71,14 +71,14 @@ self.addEventListener("message", async ({ data }: MessageEvent<HighlightRequest>
       includeExplanation: data.language === "shellscript" ? "scopeName" : undefined,
     });
     const lines: HighlightToken[][] = tokens.map((line) =>
-      line.map((token) => {
-        if (data.language === "shellscript") applyShellScopeColors(token);
-        return {
-          content: token.content,
-          light: token.variants.light.color ?? "",
-          dark: token.variants.dark.color ?? "",
-          fontStyle: token.variants.light.fontStyle ?? 0,
-        };
+      line.flatMap((token) => {
+        const fragments = data.language === "shellscript" ? shellTokenFragments(token) : [token];
+        return fragments.map((fragment) => ({
+          content: fragment.content,
+          light: fragment.variants.light.color ?? "",
+          dark: fragment.variants.dark.color ?? "",
+          fontStyle: fragment.variants.light.fontStyle ?? 0,
+        }));
       }),
     );
     self.postMessage({ id: data.id, kind: "highlighted", lines } satisfies HighlightResponse);

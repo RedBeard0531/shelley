@@ -8,7 +8,7 @@ import bash from "@shikijs/langs/bash";
 import javascript from "@shikijs/langs/javascript";
 import githubDark from "@shikijs/themes/github-dark";
 import githubLight from "@shikijs/themes/github-light";
-import { applyShellScopeColors } from "./shellTokenColors";
+import { applyShellScopeColors, shellTokenFragments } from "./shellTokenColors";
 
 let passed = 0;
 let failed = 0;
@@ -36,18 +36,29 @@ function shellColors(code: string): Array<{ content: string; light?: string; dar
   const out: Array<{ content: string; light?: string; dark?: string }> = [];
   for (const line of lines) {
     for (const token of line) {
-      applyShellScopeColors(token);
-      out.push({ content: token.content, light: token.variants.light?.color, dark: token.variants.dark?.color });
+      for (const fragment of shellTokenFragments(token)) {
+        out.push({
+          content: fragment.content,
+          light: fragment.variants.light?.color,
+          dark: fragment.variants.dark?.color,
+        });
+      }
     }
   }
   return out;
 }
 
-function hasLight(tokens: Array<{ content: string; light?: string; dark?: string }>, color: string): boolean {
+function hasLight(
+  tokens: Array<{ content: string; light?: string; dark?: string }>,
+  color: string,
+): boolean {
   return tokens.some((t) => t.light === color);
 }
 
-function hasDark(tokens: Array<{ content: string; light?: string; dark?: string }>, color: string): boolean {
+function hasDark(
+  tokens: Array<{ content: string; light?: string; dark?: string }>,
+  color: string,
+): boolean {
   return tokens.some((t) => t.dark === color);
 }
 
@@ -59,7 +70,10 @@ function colorOf(
   return tokens.find((t) => t.content.trim() === content.trim());
 }
 
-function lightOf(tokens: Array<{ content: string; light?: string; dark?: string }>, content: string): string | undefined {
+function lightOf(
+  tokens: Array<{ content: string; light?: string; dark?: string }>,
+  content: string,
+): string | undefined {
   return colorOf(tokens, content)?.light;
 }
 
@@ -73,7 +87,10 @@ assert(
 // builtins join commands rather than staying theme-blue
 assert(lightOf(basic, "grep") === "#6F42C1", "grep (support.function.builtin) is purple");
 assert(lightOf(basic, "-la") === "#005CC5", "options keep the theme blue (-la)");
-assert(basic.some((t) => t.light === "#22863A" && t.dark === "#85E89D"), "quoted strings are green in both themes");
+assert(
+  basic.some((t) => t.light === "#22863A" && t.dark === "#85E89D"),
+  "quoted strings are green in both themes",
+);
 assert(lightOf(basic, "cd") !== "#22863A", "command name is not a string");
 
 // ---- Variables: orange, and they WIN inside double-quoted strings ----
@@ -122,17 +139,41 @@ assert(
     lightOf(joins, ";") === "#9A6700",
   "&&, ||, and ; are amber",
 );
+assert(colorOf(joins, "||")?.dark === "#E3B341", "|| is amber in dark too");
+assert(lightOf(joins, "&&") !== "#D73A49", "&& is no longer operator-red");
+assert(lightOf(joins, "&") === "#6A737D", "background & is muted gray");
+
+const substitution = shellColors('echo $(date); echo "$(date)"');
 assert(
-  colorOf(joins, "||")?.dark === "#E3B341",
-  "|| is amber in dark too",
+  lightOf(substitution, "$(") === "#B31D28" && lightOf(substitution, ")") === "#B31D28",
+  "command-substitution delimiters are muted pink",
 );
 assert(
-  lightOf(joins, "&&") !== "#D73A49",
-  "&& is no longer operator-red",
+  lightOf(substitution, ";") === "#9A6700",
+  "a semicolon after command substitution remains amber",
 );
 assert(
-  lightOf(joins, "&") === "#6A737D",
-  "background & is muted gray",
+  colorOf(substitution, "$(")?.dark === "#FDAEB7" && colorOf(substitution, ")")?.dark === "#FDAEB7",
+  "command-substitution delimiters are pink in dark mode",
+);
+
+const nestedInString = shellColors('echo "outer $(printf inner | sed x >out) tail"');
+assert(
+  lightOf(nestedInString, "inner") === "#032F62",
+  "unquoted arguments inside a quoted command substitution keep normal blue",
+);
+assert(
+  lightOf(nestedInString, "|") === "#D73A49" && lightOf(nestedInString, ">") === "#D73A49",
+  "operators inside a quoted command substitution keep normal red",
+);
+assert(
+  lightOf(nestedInString, 'tail"') === "#22863A",
+  "text outside a command substitution stays green",
+);
+const explicitlyQuotedNested = shellColors('echo "outer $(printf "inner") tail"');
+assert(
+  lightOf(explicitlyQuotedNested, '"inner"') === "#22863A",
+  "explicitly quoted arguments inside a command substitution stay green",
 );
 
 const pipeVsOr = shellColors("a | b || c");
@@ -142,19 +183,13 @@ assert(
 );
 
 const caseTerm = shellColors("case x in a) echo a ;; esac");
-assert(
-  lightOf(caseTerm, ";;") === "#6A737D",
-  "case terminator ;; is muted gray",
-);
+assert(lightOf(caseTerm, ";;") === "#6A737D", "case terminator ;; is muted gray");
 
 const fallthrough = shellColors("case x in a) echo a ;;& b) echo b ;; esac");
 assert(lightOf(fallthrough, ";;") === "#6A737D", "case fallthrough ;; is muted gray");
 
 const fnDef = shellColors("foo() { local v=1; }");
-assert(
-  lightOf(fnDef, "foo") === "#6F42C1",
-  "function definition name is purple",
-);
+assert(lightOf(fnDef, "foo") === "#6F42C1", "function definition name is purple");
 assert(
   lightOf(fnDef, "local") === "#6F42C1",
   "storage modifier (local) joins command purple instead of keyword red",
