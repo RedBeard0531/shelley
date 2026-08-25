@@ -153,6 +153,7 @@ const DefaultIdleTimeout = 3 * time.Minute
 
 // Transport wraps an http.RoundTripper to add Shelley-specific headers,
 // enforce an idle/stall timeout on the response body, and record exchanges.
+// When FlightRecorder is set, exchanges are also captured byte-exactly to disk.
 type Transport struct {
 	Base http.RoundTripper
 	// IdleTimeout, when > 0, aborts a request if no response bytes are
@@ -162,6 +163,9 @@ type Transport struct {
 	IdleTimeout time.Duration
 	// Log, when non-nil, records each request and response.
 	Log *Ring
+	// FlightRecorder, when set, persists byte-exact request/response pairs
+	// (see flight.go). Attach one via EnableFlightRecorder.
+	FlightRecorder *FlightRecorder
 }
 
 // RoundTrip implements http.RoundTripper.
@@ -230,10 +234,24 @@ func (t *Transport) send(req *http.Request, trace *llm.RequestTrace) (*http.Resp
 		base = http.DefaultTransport
 	}
 
+	// Flight data recorder: snapshot the request body byte-exactly (and swap
+	// in a replayable body) before it goes on the wire.
+	var flight *flightSession
+	if t.FlightRecorder != nil && req.Body != nil {
+		flight = t.FlightRecorder.begin(req)
+	}
+
 	if t.IdleTimeout <= 0 {
 		resp, err := base.RoundTrip(req)
 		if resp != nil {
 			captureUpstreamRequestID(trace, resp.Header)
+		}
+		if flight != nil {
+			if resp != nil {
+				flight.attachResponse(resp)
+			} else {
+				flight.fail(err)
+			}
 		}
 		return resp, err
 	}
@@ -256,7 +274,11 @@ func (t *Transport) send(req *http.Request, trace *llm.RequestTrace) (*http.Resp
 	if err != nil {
 		watch.stop()
 		cancel()
-		return nil, watch.translate(err)
+		err = watch.translate(err)
+		if flight != nil {
+			flight.fail(err)
+		}
+		return nil, err
 	}
 
 	// Wrap the body so each read resets the idle timer, and so the final
@@ -265,6 +287,11 @@ func (t *Transport) send(req *http.Request, trace *llm.RequestTrace) (*http.Resp
 		ReadCloser: resp.Body,
 		watch:      watch,
 		cancel:     cancel,
+	}
+	if flight != nil {
+		// Wrap outermost so the recorder sees exactly what the caller reads
+		// (including the stall-abort read error), not just the idle wrapper.
+		flight.attachResponse(resp)
 	}
 	return resp, nil
 }
