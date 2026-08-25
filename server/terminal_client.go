@@ -155,3 +155,32 @@ func (c *exeScrollPTYClient) Close() error {
 	})
 	return err
 }
+
+// drainTerminalOutput collects whatever a freshly spawned child printed to the
+// PTY master, for at most max. Used only on spawn failure, so the child's own
+// stderr can be reported instead of a bare timeout.
+func drainTerminalOutput(client terminalClient, max time.Duration) string {
+	done := make(chan string, 1)
+	go func() {
+		var out []byte
+		for {
+			message, err := client.Recv()
+			if err != nil {
+				break
+			}
+			if message.kind == terminalOutput {
+				out = append(out, message.data...)
+				if len(out) > 64*1024 {
+					break
+				}
+			}
+		}
+		done <- string(out)
+	}()
+	select {
+	case output := <-done:
+		return output
+	case <-time.After(max):
+		return ""
+	}
+}
