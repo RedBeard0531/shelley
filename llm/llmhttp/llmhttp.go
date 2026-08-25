@@ -135,7 +135,8 @@ func (e *idleTimeoutError) RequestErrorInfo() llm.RequestErrorInfo {
 const DefaultIdleTimeout = 3 * time.Minute
 
 // Transport wraps an http.RoundTripper to add Shelley-specific headers and
-// enforce an idle/stall timeout on the response body.
+// enforce an idle/stall timeout on the response body. When FlightRecorder is
+// set, every request/response pair is captured byte-exactly to disk.
 type Transport struct {
 	Base http.RoundTripper
 	// IdleTimeout, when > 0, aborts a request if no response bytes are
@@ -143,6 +144,9 @@ type Transport struct {
 	// it measures the gap between chunks (and time-to-first-byte), not total
 	// duration. Zero disables the mechanism.
 	IdleTimeout time.Duration
+	// FlightRecorder, when set, persists byte-exact request/response pairs
+	// (see flight.go). Attach one via EnableFlightRecorder.
+	FlightRecorder *FlightRecorder
 }
 
 // RoundTrip implements http.RoundTripper.
@@ -187,10 +191,24 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		base = http.DefaultTransport
 	}
 
+	// Flight data recorder: snapshot the request body byte-exactly (and swap
+	// in a replayable body) before it goes on the wire.
+	var flight *flightSession
+	if t.FlightRecorder != nil && req.Body != nil {
+		flight = t.FlightRecorder.begin(req)
+	}
+
 	if t.IdleTimeout <= 0 {
 		resp, err := base.RoundTrip(req)
 		if resp != nil {
 			captureUpstreamRequestID(trace, resp.Header)
+		}
+		if flight != nil {
+			if resp != nil {
+				flight.attachResponse(resp)
+			} else {
+				flight.fail(err)
+			}
 		}
 		return resp, err
 	}
@@ -213,7 +231,11 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		watch.stop()
 		cancel()
-		return nil, watch.translate(err)
+		err = watch.translate(err)
+		if flight != nil {
+			flight.fail(err)
+		}
+		return nil, err
 	}
 
 	// Wrap the body so each read resets the idle timer, and so the final
@@ -222,6 +244,11 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		ReadCloser: resp.Body,
 		watch:      watch,
 		cancel:     cancel,
+	}
+	if flight != nil {
+		// Wrap outermost so the recorder sees exactly what the caller reads
+		// (including the stall-abort read error), not just the idle wrapper.
+		flight.attachResponse(resp)
 	}
 	return resp, nil
 }
