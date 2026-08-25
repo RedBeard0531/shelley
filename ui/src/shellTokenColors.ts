@@ -7,10 +7,11 @@
 // The palette reuses theme colors where possible: command purple is the
 // theme's entity name color, muted gray is the theme's comment color, and
 // variable orange is the theme's generic variable color (shellscript pins
-// variables to foreground, which is why they need the override). Only two
+// variables to foreground, which is why they need the override). Only three
 // hues diverge deliberately: quoted strings/heredocs go green (the stock
-// theme lumps them with unquoted args) and &&/;/|| joiners go amber (a
-// custom accent).
+// theme lumps them with unquoted args), &&/;/|| joiners go amber (a custom
+// accent), and command-substitution delimiters use the theme's muted
+// invalid/error pink rather than disappearing into punctuation gray.
 import type { ThemedTokenWithVariants } from "@shikijs/core";
 
 export type ShellToken = ThemedTokenWithVariants;
@@ -28,6 +29,8 @@ const SHELL_SEPARATOR_LIGHT = "#9A6700";
 const SHELL_SEPARATOR_DARK = "#E3B341";
 const SHELL_PUNCTUATION_LIGHT = "#6A737D";
 const SHELL_PUNCTUATION_DARK = "#8B949E";
+const SHELL_SUBSHELL_LIGHT = "#B31D28";
+const SHELL_SUBSHELL_DARK = "#FDAEB7";
 
 function shellTokenScopes(token: ShellToken): string[] {
   const scopes: string[] = [];
@@ -52,20 +55,14 @@ function setShellTokenColor(token: ShellToken, light: string, dark: string): voi
   (token.variants.dark ||= {}).color = dark;
 }
 
-/**
- * Rescope the GitHub light/dark theme to the palette the shell tool cards
- * want, while the grammar still decides *what* each token is. Order matters:
- * variables win inside double-quoted strings, escapes keep their built-in
- * color, and only then do strings fall through to green.
- */
-export function applyShellScopeColors(token: ShellToken): void {
-  const scopes = shellTokenScopes(token);
-  // Guard against misuse outside the bash grammar: `variable`, `string`,
-  // `keyword.operator` etc. are generic scopes other grammars use too, and
-  // this palette is only meaningful for shell tokens. (The worker additionally
-  // gates the call on the canonical "shellscript" language.)
+function innermostShellScopes(scopes: string[]): string[] {
+  const subshell = scopes.lastIndexOf("meta.scope.subshell");
+  return subshell === -1 ? scopes : scopes.slice(subshell);
+}
+
+function applyShellScopeColorsToScopes(token: ShellToken, scopes: string[], text: string): void {
   if (!scopes.includes("source.shell")) return;
-  const text = token.content.trim();
+  scopes = innermostShellScopes(scopes);
 
   if (hasScope(scopes, "variable")) {
     setShellTokenColor(token, SHELL_VARIABLE_LIGHT, SHELL_VARIABLE_DARK);
@@ -83,6 +80,16 @@ export function applyShellScopeColors(token: ShellToken): void {
     scopes.some(isShellStorageModifier)
   ) {
     setShellTokenColor(token, SHELL_COMMAND_LIGHT, SHELL_COMMAND_DARK);
+    return;
+  }
+
+  // Command-substitution delimiters are punctuation. This must be handled
+  // independently for tokens such as `);`, whose grammar explanation has a
+  // subshell scope for `)` and a semicolon scope for `;`. The scope list has
+  // already been trimmed at the innermost subshell, so an outer string cannot
+  // override the delimiter or the syntax inside it.
+  if (hasScope(scopes, "punctuation.definition.subshell")) {
+    setShellTokenColor(token, SHELL_SUBSHELL_LIGHT, SHELL_SUBSHELL_DARK);
     return;
   }
 
@@ -129,4 +136,79 @@ export function applyShellScopeColors(token: ShellToken): void {
   ) {
     setShellTokenColor(token, SHELL_STRING_LIGHT, SHELL_STRING_DARK);
   }
+}
+
+/**
+ * Rescope the GitHub light/dark theme to the palette the shell tool cards
+ * want, while the grammar still decides *what* each token is. Order matters:
+ * variables win inside double-quoted strings, escapes keep their built-in
+ * color, and only then do strings fall through to green.
+ */
+export function applyShellScopeColors(token: ShellToken): void {
+  applyShellScopeColorsToScopes(token, shellTokenScopes(token), token.content.trim());
+}
+
+type ShellExplanation = NonNullable<ShellToken["explanation"]>[number];
+
+function sameScopeNames(left: ShellExplanation, right: ShellExplanation): boolean {
+  return (
+    left.scopes.length === right.scopes.length &&
+    left.scopes.every((scope, index) => scope.scopeName === right.scopes[index]?.scopeName)
+  );
+}
+
+/**
+ * Split a Shiki token at scope transitions before applying the shell palette.
+ * Shiki can merge adjacent characters into one token while its explanation
+ * still records their individual scopes; using those explanation segments
+ * keeps `)` gray and `;` amber in a combined `);` token.
+ */
+export function shellTokenFragments(token: ShellToken): ShellToken[] {
+  const explanations: ShellExplanation[] = [];
+  for (const explanation of token.explanation ?? []) {
+    const previous = explanations[explanations.length - 1];
+    if (previous && sameScopeNames(previous, explanation)) {
+      previous.content += explanation.content;
+    } else {
+      explanations.push({ ...explanation });
+    }
+  }
+
+  if (explanations.length <= 1) {
+    applyShellScopeColors(token);
+    return [token];
+  }
+
+  const fragments: ShellToken[] = [];
+  for (const explanation of explanations) {
+    const fragment: ShellToken = {
+      ...token,
+      content: explanation.content,
+      variants: {
+        light: { ...token.variants.light },
+        dark: { ...token.variants.dark },
+      },
+      explanation: [explanation],
+    };
+    applyShellScopeColorsToScopes(
+      fragment,
+      explanation.scopes.map((scope) => scope.scopeName),
+      explanation.content.trim(),
+    );
+
+    const previous = fragments[fragments.length - 1];
+    if (
+      previous &&
+      previous.variants.light?.color === fragment.variants.light?.color &&
+      previous.variants.light?.fontStyle === fragment.variants.light?.fontStyle &&
+      previous.variants.dark?.color === fragment.variants.dark?.color &&
+      previous.variants.dark?.fontStyle === fragment.variants.dark?.fontStyle
+    ) {
+      previous.content += fragment.content;
+      previous.explanation = [...(previous.explanation ?? []), explanation];
+    } else {
+      fragments.push(fragment);
+    }
+  }
+  return fragments;
 }
