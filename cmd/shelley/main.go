@@ -457,6 +457,13 @@ func buildLLMConfig(global GlobalConfig, logger *slog.Logger, database *db.DB) (
 	defaultModel, sources := buildLLMModelSources(context.Background(), global, config, logger)
 
 	httpc := llmhttp.NewClient(nil)
+	flightsDir, err := llmhttp.DefaultFlightsDir()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := llmhttp.EnableFlightRecorder(httpc, flightsDir); err != nil {
+		return nil, fmt.Errorf("enable flight recorder: %w", err)
+	}
 	return &server.LLMConfig{
 		Models:       modelsources.Build(models.All(), sources, httpc, logger),
 		DefaultModel: defaultModel,
