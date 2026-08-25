@@ -87,6 +87,7 @@ func (s *Server) handleExecWS(w http.ResponseWriter, r *http.Request) {
 	extraEnv := buildTerminalEnv(conversationID, slug, model, userEmail, cwd, s.listenPort)
 	sess, dc, err := s.attachOrSpawn(termID, cmd, cwd, conversationID, cols, rows, extraEnv)
 	if err != nil {
+		s.logger.Error("terminal attach/spawn failed", "error", err, "term_id", termID, "cmd", cmd, "conversation_id", conversationID)
 		wsjson.Write(ctx, conn, ExecMessage{Type: "error", Data: err.Error()})
 		conn.Close(websocket.StatusInternalError, "attach failed")
 		return
