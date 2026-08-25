@@ -109,6 +109,7 @@ func (s *Server) handleExecWS(w http.ResponseWriter, r *http.Request) {
 		dc, err = startDirectPTY(cmd, cwd, cols, rows, extraEnv)
 	}
 	if err != nil {
+		s.logger.Error("terminal attach/spawn failed", "error", err, "term_id", termID, "cmd", cmd, "conversation_id", conversationID)
 		wsjson.Write(ctx, conn, ExecMessage{Type: "error", Data: err.Error()})
 		conn.Close(websocket.StatusInternalError, "attach failed")
 		return
