@@ -265,17 +265,26 @@ func (t *TerminalSessions) spawnExeScroll(id, command, cwd, conversationID strin
 	if err != nil {
 		return nil, nil, err
 	}
-	pid, err := t.waitForPID(pidFile, 3*time.Second)
+	// A freshly spawned exe-scroll server writes its pid file within
+	// milliseconds, but first spawns on a heavily loaded machine can be
+	// starved for seconds. Give it a generous window; if the child actually
+	// failed, drainTerminalOutput surfaces its stderr quickly.
+	pid, err := t.waitForPID(pidFile, 15*time.Second)
 	if err != nil {
 		cleanupErr := t.terminateSpawnedExeScroll(socket, pid)
+		// The child's stderr lands on the PTY master. Read it back so a
+		// failed exe-scroll startup (bad args, exec failure, ...) reports its
+		// real error instead of an opaque timeout.
+		childOutput := drainTerminalOutput(client, 250*time.Millisecond)
 		client.Close()
 		if cleanupErr == nil {
 			t.removeFiles(id)
 		}
-		return nil, nil, errors.Join(
-			fmt.Errorf("terminals: start exe-scroll session: %w", err),
-			cleanupErr,
-		)
+		err = fmt.Errorf("terminals: start exe-scroll session: %w", err)
+		if childOutput != "" {
+			err = fmt.Errorf("%w (child output: %q)", err, childOutput)
+		}
+		return nil, nil, errors.Join(err, cleanupErr)
 	}
 	sess := &TerminalSession{
 		ID:             id,
