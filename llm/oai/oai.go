@@ -55,7 +55,6 @@ type Model struct {
 	URL                string
 	APIKeyEnv          string // environment variable name for the API key
 	IsReasoningModel   bool   // whether this model is a reasoning model (e.g. O3, O4-mini)
-	UseSimplifiedPatch bool   // deprecated; retained in generated model literals until removed
 	SupportsApplyPatch bool   // whether this model is trained for Codex apply_patch custom tools
 	SupportsImages     bool   // whether this model accepts image inputs
 }
@@ -64,91 +63,83 @@ var (
 	DefaultModel = GPT54
 
 	GPT41 = Model{
-		UserName:           "gpt4.1",
-		ModelName:          "gpt-4.1-2025-04-14",
-		TextVerbosity:      "",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "gpt4.1",
+		ModelName:        "gpt-4.1-2025-04-14",
+		TextVerbosity:    "",
+		URL:              OpenAIURL,
+		APIKeyEnv:        OpenAIAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   true,
 	}
 
 	GPT4o = Model{
-		UserName:           "gpt4o",
-		ModelName:          "gpt-4o-2024-08-06",
-		TextVerbosity:      "",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "gpt4o",
+		ModelName:        "gpt-4o-2024-08-06",
+		TextVerbosity:    "",
+		URL:              OpenAIURL,
+		APIKeyEnv:        OpenAIAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   true,
 	}
 
 	GPT4oMini = Model{
-		UserName:           "gpt4o-mini",
-		ModelName:          "gpt-4o-mini-2024-07-18",
-		TextVerbosity:      "",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "gpt4o-mini",
+		ModelName:        "gpt-4o-mini-2024-07-18",
+		TextVerbosity:    "",
+		URL:              OpenAIURL,
+		APIKeyEnv:        OpenAIAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   true,
 	}
 
 	GPT41Mini = Model{
-		UserName:           "gpt4.1-mini",
-		ModelName:          "gpt-4.1-mini-2025-04-14",
-		TextVerbosity:      "",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "gpt4.1-mini",
+		ModelName:        "gpt-4.1-mini-2025-04-14",
+		TextVerbosity:    "",
+		URL:              OpenAIURL,
+		APIKeyEnv:        OpenAIAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   true,
 	}
 
 	GPT41Nano = Model{
-		UserName:           "gpt4.1-nano",
-		ModelName:          "gpt-4.1-nano-2025-04-14",
-		TextVerbosity:      "",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "gpt4.1-nano",
+		ModelName:        "gpt-4.1-nano-2025-04-14",
+		TextVerbosity:    "",
+		URL:              OpenAIURL,
+		APIKeyEnv:        OpenAIAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   true,
 	}
 
 	O3 = Model{
-		UserName:           "o3",
-		ModelName:          "o3-2025-04-16",
-		TextVerbosity:      "",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "o3",
+		ModelName:        "o3-2025-04-16",
+		TextVerbosity:    "",
+		URL:              OpenAIURL,
+		APIKeyEnv:        OpenAIAPIKeyEnv,
+		IsReasoningModel: true,
+		SupportsImages:   true,
 	}
 
 	O4Mini = Model{
-		UserName:           "o4-mini",
-		ModelName:          "o4-mini-2025-04-16",
-		TextVerbosity:      "",
-		URL:                OpenAIURL,
-		APIKeyEnv:          OpenAIAPIKeyEnv,
-		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "o4-mini",
+		ModelName:        "o4-mini-2025-04-16",
+		TextVerbosity:    "",
+		URL:              OpenAIURL,
+		APIKeyEnv:        OpenAIAPIKeyEnv,
+		IsReasoningModel: true,
+		SupportsImages:   true,
 	}
 
 	Gemini25Flash = Model{
-		UserName:           "gemini-flash-2.5",
-		ModelName:          "gemini-2.5-flash-preview-04-17",
-		TextVerbosity:      "",
-		URL:                GeminiURL,
-		APIKeyEnv:          GeminiAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "gemini-flash-2.5",
+		ModelName:        "gemini-2.5-flash-preview-04-17",
+		TextVerbosity:    "",
+		URL:              GeminiURL,
+		APIKeyEnv:        GeminiAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   true,
 	}
 
 	Gemini25Pro = Model{
@@ -163,219 +154,199 @@ var (
 		// Whatever that means. Are we caching? I have no idea.
 		// How do you always manage to be the annoying one, Google?
 		// I'm not complicating things just for you.
-		APIKeyEnv:          GeminiAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		APIKeyEnv:        GeminiAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   true,
 	}
 
 	TogetherDeepseekV3 = Model{
-		UserName:           "together-deepseek-v3",
-		ModelName:          "deepseek-ai/DeepSeek-V3",
-		TextVerbosity:      "",
-		URL:                TogetherURL,
-		APIKeyEnv:          TogetherAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "together-deepseek-v3",
+		ModelName:        "deepseek-ai/DeepSeek-V3",
+		TextVerbosity:    "",
+		URL:              TogetherURL,
+		APIKeyEnv:        TogetherAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	TogetherDeepseekR1 = Model{
-		UserName:           "together-deepseek-r1",
-		ModelName:          "deepseek-ai/DeepSeek-R1",
-		TextVerbosity:      "",
-		URL:                TogetherURL,
-		APIKeyEnv:          TogetherAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "together-deepseek-r1",
+		ModelName:        "deepseek-ai/DeepSeek-R1",
+		TextVerbosity:    "",
+		URL:              TogetherURL,
+		APIKeyEnv:        TogetherAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	TogetherLlama4Maverick = Model{
-		UserName:           "together-llama4-maverick",
-		ModelName:          "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
-		TextVerbosity:      "",
-		URL:                TogetherURL,
-		APIKeyEnv:          TogetherAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "together-llama4-maverick",
+		ModelName:        "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+		TextVerbosity:    "",
+		URL:              TogetherURL,
+		APIKeyEnv:        TogetherAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   true,
 	}
 
 	TogetherLlama3_3_70B = Model{
-		UserName:           "together-llama3-70b",
-		ModelName:          "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-		TextVerbosity:      "",
-		URL:                TogetherURL,
-		APIKeyEnv:          TogetherAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "together-llama3-70b",
+		ModelName:        "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+		TextVerbosity:    "",
+		URL:              TogetherURL,
+		APIKeyEnv:        TogetherAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	TogetherMistralSmall = Model{
-		UserName:           "together-mistral-small",
-		ModelName:          "mistralai/Mistral-Small-24B-Instruct-2501",
-		TextVerbosity:      "",
-		URL:                TogetherURL,
-		APIKeyEnv:          TogetherAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "together-mistral-small",
+		ModelName:        "mistralai/Mistral-Small-24B-Instruct-2501",
+		TextVerbosity:    "",
+		URL:              TogetherURL,
+		APIKeyEnv:        TogetherAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	TogetherQwen3 = Model{
-		UserName:           "together-qwen3",
-		ModelName:          "Qwen/Qwen3-235B-A22B-fp8-tput",
-		TextVerbosity:      "",
-		URL:                TogetherURL,
-		APIKeyEnv:          TogetherAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "together-qwen3",
+		ModelName:        "Qwen/Qwen3-235B-A22B-fp8-tput",
+		TextVerbosity:    "",
+		URL:              TogetherURL,
+		APIKeyEnv:        TogetherAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	TogetherGemma2 = Model{
-		UserName:           "together-gemma2",
-		ModelName:          "google/gemma-2-27b-it",
-		TextVerbosity:      "",
-		URL:                TogetherURL,
-		APIKeyEnv:          TogetherAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "together-gemma2",
+		ModelName:        "google/gemma-2-27b-it",
+		TextVerbosity:    "",
+		URL:              TogetherURL,
+		APIKeyEnv:        TogetherAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	LlamaCPP = Model{
-		UserName:           "llama.cpp",
-		ModelName:          "llama.cpp local model",
-		TextVerbosity:      "",
-		URL:                LlamaCPPURL,
-		APIKeyEnv:          "NONE",
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "llama.cpp",
+		ModelName:        "llama.cpp local model",
+		TextVerbosity:    "",
+		URL:              LlamaCPPURL,
+		APIKeyEnv:        "NONE",
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	DeepseekV4ProFireworks = Model{
-		UserName:           "deepseek-v4-pro-fireworks",
-		ModelName:          "accounts/fireworks/models/deepseek-v4-pro",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "deepseek-v4-pro-fireworks",
+		ModelName:        "accounts/fireworks/models/deepseek-v4-pro",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	DeepseekV4FlashFireworks = Model{
-		UserName:           "deepseek-v4-flash-0731-fireworks",
-		ModelName:          "accounts/fireworks/models/deepseek-v4-flash-0731",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "deepseek-v4-flash-0731-fireworks",
+		ModelName:        "accounts/fireworks/models/deepseek-v4-flash-0731",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	MoonshotKimiK2 = Model{
-		UserName:           "moonshot-kimi-k2",
-		ModelName:          "moonshot-v1-auto",
-		TextVerbosity:      "",
-		URL:                MoonshotURL,
-		APIKeyEnv:          MoonshotAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "moonshot-kimi-k2",
+		ModelName:        "moonshot-v1-auto",
+		TextVerbosity:    "",
+		URL:              MoonshotURL,
+		APIKeyEnv:        MoonshotAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	MistralMedium = Model{
-		UserName:           "mistral-medium-3",
-		ModelName:          "mistral-medium-latest",
-		TextVerbosity:      "",
-		URL:                MistralURL,
-		APIKeyEnv:          MistralAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "mistral-medium-3",
+		ModelName:        "mistral-medium-latest",
+		TextVerbosity:    "",
+		URL:              MistralURL,
+		APIKeyEnv:        MistralAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	DevstralSmall = Model{
-		UserName:           "devstral-small",
-		ModelName:          "devstral-small-latest",
-		TextVerbosity:      "",
-		URL:                MistralURL,
-		APIKeyEnv:          MistralAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "devstral-small",
+		ModelName:        "devstral-small-latest",
+		TextVerbosity:    "",
+		URL:              MistralURL,
+		APIKeyEnv:        MistralAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	GLM52Fireworks = Model{
-		UserName:           "glm-5.2-fireworks",
-		ModelName:          "accounts/fireworks/models/glm-5p2",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "glm-5.2-fireworks",
+		ModelName:        "accounts/fireworks/models/glm-5p2",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	KimiK26Fireworks = Model{
-		UserName:           "kimi-k2.6-fireworks",
-		ModelName:          "accounts/fireworks/models/kimi-k2p6",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "kimi-k2.6-fireworks",
+		ModelName:        "accounts/fireworks/models/kimi-k2p6",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: true,
+		SupportsImages:   true,
 	}
 
 	KimiK27CodeFireworks = Model{
-		UserName:           "kimi-k2.7-code-fireworks",
-		ModelName:          "accounts/fireworks/models/kimi-k2p7-code",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "kimi-k2.7-code-fireworks",
+		ModelName:        "accounts/fireworks/models/kimi-k2p7-code",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: true,
+		SupportsImages:   true,
 	}
 
 	KimiK3Fireworks = Model{
-		UserName:           "kimi-k3-fireworks",
-		ModelName:          "accounts/fireworks/models/kimi-k3",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "kimi-k3-fireworks",
+		ModelName:        "accounts/fireworks/models/kimi-k3",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: true,
+		SupportsImages:   true,
 	}
 
 	Grok45 = Model{
-		UserName:           "grok-4.5",
-		ModelName:          "grok-4.5",
-		TextVerbosity:      "",
-		URL:                XAIURL,
-		APIKeyEnv:          "", // gateway-only; no direct XAI_API_KEY env support
-		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
-		SupportsImages:     true,
+		UserName:         "grok-4.5",
+		ModelName:        "grok-4.5",
+		TextVerbosity:    "",
+		URL:              XAIURL,
+		APIKeyEnv:        "", // gateway-only; no direct XAI_API_KEY env support
+		IsReasoningModel: true,
+		SupportsImages:   true,
 	}
 
 	GPTOSS120B = Model{
-		UserName:           "gpt-oss-120b",
-		ModelName:          "accounts/fireworks/models/gpt-oss-120b",
-		TextVerbosity:      "",
-		URL:                FireworksURL,
-		APIKeyEnv:          FireworksAPIKeyEnv,
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "gpt-oss-120b",
+		ModelName:        "accounts/fireworks/models/gpt-oss-120b",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 
 	GPT5 = Model{
@@ -385,7 +356,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -397,7 +367,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -409,7 +378,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -421,7 +389,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -433,7 +400,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -445,7 +411,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   true,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -457,7 +422,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -469,7 +433,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -481,7 +444,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -493,7 +455,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -505,7 +466,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -517,7 +477,6 @@ var (
 		URL:                OpenAIURL,
 		APIKeyEnv:          OpenAIAPIKeyEnv,
 		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
 		SupportsApplyPatch: true,
 		SupportsImages:     true,
 	}
@@ -525,24 +484,22 @@ var (
 	// Skaband-specific model names.
 	// Provider details (URL and APIKeyEnv) are handled by skaband
 	Qwen = Model{
-		UserName:           "qwen",
-		ModelName:          "qwen", // skaband will map this to the actual provider model
-		TextVerbosity:      "",
-		URL:                "",
-		APIKeyEnv:          "",
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: true,
-		SupportsImages:     false,
+		UserName:         "qwen",
+		ModelName:        "qwen", // skaband will map this to the actual provider model
+		TextVerbosity:    "",
+		URL:              "",
+		APIKeyEnv:        "",
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 	GLM = Model{
-		UserName:           "glm",
-		ModelName:          "glm", // skaband will map this to the actual provider model
-		TextVerbosity:      "",
-		URL:                "",
-		APIKeyEnv:          "",
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "glm",
+		ModelName:        "glm", // skaband will map this to the actual provider model
+		TextVerbosity:    "",
+		URL:              "",
+		APIKeyEnv:        "",
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 )
 
@@ -649,14 +606,13 @@ func ModelByUserName(name string) Model {
 
 func zeroModel() Model {
 	return Model{
-		UserName:           "",
-		ModelName:          "",
-		TextVerbosity:      "",
-		URL:                "",
-		APIKeyEnv:          "",
-		IsReasoningModel:   false,
-		UseSimplifiedPatch: false,
-		SupportsImages:     false,
+		UserName:         "",
+		ModelName:        "",
+		TextVerbosity:    "",
+		URL:              "",
+		APIKeyEnv:        "",
+		IsReasoningModel: false,
+		SupportsImages:   false,
 	}
 }
 

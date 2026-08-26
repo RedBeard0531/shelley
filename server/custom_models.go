@@ -500,14 +500,13 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 			ModelURL:        req.Endpoint,
 			ReasoningEffort: reasoningEffort,
 			Model: oai.Model{
-				UserName:           "",
-				ModelName:          req.ModelName,
-				TextVerbosity:      "",
-				URL:                req.Endpoint,
-				APIKeyEnv:          "",
-				IsReasoningModel:   false,
-				UseSimplifiedPatch: false,
-				SupportsImages:     true,
+				UserName:         "",
+				ModelName:        req.ModelName,
+				TextVerbosity:    "",
+				URL:              req.Endpoint,
+				APIKeyEnv:        "",
+				IsReasoningModel: false,
+				SupportsImages:   true,
 			},
 		}
 	case "gemini":
@@ -521,14 +520,13 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 		service = &oai.ResponsesService{
 			APIKey: req.APIKey,
 			Model: oai.Model{
-				UserName:           "",
-				ModelName:          req.ModelName,
-				TextVerbosity:      "",
-				URL:                req.Endpoint,
-				APIKeyEnv:          "",
-				IsReasoningModel:   false,
-				UseSimplifiedPatch: false,
-				SupportsImages:     true,
+				UserName:         "",
+				ModelName:        req.ModelName,
+				TextVerbosity:    "",
+				URL:              req.Endpoint,
+				APIKeyEnv:        "",
+				IsReasoningModel: false,
+				SupportsImages:   true,
 			},
 			// Match createServiceFromModel so Test reflects real runtime behavior:
 			// medium is the default when no explicit override is given.
