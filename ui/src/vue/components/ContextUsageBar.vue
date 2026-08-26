@@ -31,11 +31,25 @@
         percentage.toFixed(1)
       }}%) tokens used
       <TokenCostGraph
+        v-if="usageGraph === 'cost'"
         :entries="usageEntries || []"
         :other-usage-rows="otherUsageRows || []"
         :conversation-id="conversationId"
         :active="popupOpen"
-      />
+      >
+        <template #mode-controls>
+          <UsageGraphSwitch v-model="usageGraph" />
+        </template>
+      </TokenCostGraph>
+      <ContextCompositionGraph
+        v-else
+        :messages="messages || []"
+        :max-context-tokens="maxContextTokens"
+      >
+        <template #mode-controls>
+          <UsageGraphSwitch v-model="usageGraph" />
+        </template>
+      </ContextCompositionGraph>
       <div v-if="showLongConversationWarning" class="chat-popup-warning">
         This conversation is getting long.
         <br />
@@ -85,10 +99,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from "vue";
 import Popover from "primevue/popover";
+import type { Message } from "../../types";
 import { contextUsageLevel, contextUsageLevelLabel } from "../../utils/contextUsage";
 import { formatTokenCount } from "../../utils/tokenCostGraph";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
+import ContextCompositionGraph from "./ContextCompositionGraph.vue";
 import TokenCostGraph from "./TokenCostGraph.vue";
+import UsageGraphSwitch from "./UsageGraphSwitch.vue";
 
 const props = defineProps<{
   contextWindowSize: number;
@@ -96,6 +113,7 @@ const props = defineProps<{
   conversationId?: string | null;
   usageEntries?: UsageEntry[];
   otherUsageRows?: OtherUsageRow[];
+  messages?: Message[];
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration?: () => Promise<void> | void;
   /** Called just before the popup opens. The parent computes usageEntries /
@@ -107,6 +125,7 @@ const props = defineProps<{
 }>();
 
 const distilling = ref(false);
+const usageGraph = ref<"cost" | "context">("cost");
 // Mirrors the Popover's visibility for aria-expanded. PrimeVue owns the state;
 // we only observe its show/hide events (the popover also closes on outside
 // click and Escape, which never route through our click handler).
