@@ -362,7 +362,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, provide, ref, watch } from "vue";
 import type { Conversation, ConversationWithState } from "../../types";
 import { api } from "../../services/api";
 import { useI18n } from "../composables/i18n";
@@ -1214,7 +1214,6 @@ onUnmounted(() => {
   document.removeEventListener("mousedown", onPendingDeleteOutside);
   document.removeEventListener("mousedown", onTagEditorOutside);
 });
-onMounted(() => {});
 
 // Share all row-relevant state + handlers with ConversationDrawerRow via inject.
 provide(DrawerCtxKey, {

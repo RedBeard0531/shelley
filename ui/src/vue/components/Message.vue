@@ -199,15 +199,7 @@
                 :cache-owner="message"
                 :run-key="`${entity.key}-${index}`"
               />
-              <MessageContentBlock
-                v-else
-                :content="item.content!"
-                :render-md="shouldRenderMarkdown(markdownMode, isUser, isDistilledUser)"
-                :message-id="message.message_id"
-                :tool-use-map="toolUseMap"
-                :server-tool-result-map="serverToolResultMap"
-                :on-comment-text-change="onCommentTextChange"
-              />
+              <MessageContentBlock v-else :content="item.content!" />
             </div>
           </template>
         </div>
@@ -452,29 +444,6 @@ const hasForkAction = computed(
     (props.message.type === "user" || props.message.type === "agent"),
 );
 const isCommentable = computed(() => !isUser.value && !isError.value && !isTool.value);
-
-// ---- Tool maps (link tool_result back to tool_use) ----
-const toolMaps = computed(() => {
-  const toolUseMap: Record<string, { name: string; input: unknown }> = {};
-  const serverToolResultMap: Record<string, LLMContent[]> = {};
-  const m = llmMessage.value;
-  if (m && m.Content) {
-    m.Content.forEach((content) => {
-      if (content.Type === 5 && content.ID && content.ToolName) {
-        toolUseMap[content.ID] = { name: content.ToolName, input: content.ToolInput };
-      }
-      if (content.Type === 7 && content.ID && content.ToolName) {
-        toolUseMap[content.ID] = { name: content.ToolName, input: content.ToolInput };
-      }
-      if (content.Type === 8 && content.ToolUseID && content.ToolResult) {
-        serverToolResultMap[content.ToolUseID] = content.ToolResult;
-      }
-    });
-  }
-  return { toolUseMap, serverToolResultMap };
-});
-const toolUseMap = computed(() => toolMaps.value.toolUseMap);
-const serverToolResultMap = computed(() => toolMaps.value.serverToolResultMap);
 
 // ---- Error message details ----
 const errorText = computed(() => {

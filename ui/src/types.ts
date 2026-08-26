@@ -238,19 +238,6 @@ export interface GitCommitMessage {
   isHead: boolean;
 }
 
-// Comment for diff viewer
-export interface DiffComment {
-  id: string;
-  line: number;
-  side: "left" | "right";
-  text: string;
-  selectedText?: string;
-  startLine?: number;
-  endLine?: number;
-  filePath: string;
-  diffId: string;
-}
-
 // Conversation list patch stream payload.
 export interface ConversationListPatchOp {
   op: "add" | "remove" | "replace" | "move";
