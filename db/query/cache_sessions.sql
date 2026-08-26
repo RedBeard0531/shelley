@@ -17,7 +17,3 @@ WHERE token_hash = ?;
 
 -- name: DeleteCacheSession :exec
 DELETE FROM cache_sessions WHERE token_hash = ?;
-
--- name: DeleteExpiredCacheSessions :exec
-DELETE FROM cache_sessions
-WHERE last_seen_at < datetime('now', ?);

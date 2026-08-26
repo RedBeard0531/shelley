@@ -286,9 +286,6 @@ WHERE conversation_id = ?;
 -- name: CountConversations :one
 SELECT COUNT(*) FROM conversations WHERE archived = FALSE AND parent_conversation_id IS NULL;
 
--- name: CountArchivedConversations :one
-SELECT COUNT(*) FROM conversations WHERE archived = TRUE;
-
 -- name: ArchiveConversation :one
 UPDATE conversations
 SET archived = TRUE

@@ -41,17 +41,6 @@ func (q *Queries) ArchiveConversation(ctx context.Context, conversationID string
 	return i, err
 }
 
-const countArchivedConversations = `-- name: CountArchivedConversations :one
-SELECT COUNT(*) FROM conversations WHERE archived = TRUE
-`
-
-func (q *Queries) CountArchivedConversations(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countArchivedConversations)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countConversations = `-- name: CountConversations :one
 SELECT COUNT(*) FROM conversations WHERE archived = FALSE AND parent_conversation_id IS NULL
 `

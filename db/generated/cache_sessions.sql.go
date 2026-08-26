@@ -18,16 +18,6 @@ func (q *Queries) DeleteCacheSession(ctx context.Context, tokenHash string) erro
 	return err
 }
 
-const deleteExpiredCacheSessions = `-- name: DeleteExpiredCacheSessions :exec
-DELETE FROM cache_sessions
-WHERE last_seen_at < datetime('now', ?)
-`
-
-func (q *Queries) DeleteExpiredCacheSessions(ctx context.Context, datetime interface{}) error {
-	_, err := q.db.ExecContext(ctx, deleteExpiredCacheSessions, datetime)
-	return err
-}
-
 const getCacheSession = `-- name: GetCacheSession :one
 SELECT token_hash, user_id, created_at, last_seen_at
 FROM cache_sessions

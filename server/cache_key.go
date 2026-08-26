@@ -42,9 +42,9 @@ var errNoCacheSession = db.ErrNoCacheSession
 // cookie intact, the next /api/cache-key re-records the same token under
 // the same hash, derives the same key, and "resumes" the cache. The only
 // way to force a key rotation is to also invalidate the cookie at the
-// browser. DeleteExpiredCacheSessions exists in the generated SQL but is
-// intentionally not wired up — GC'ing rows would silently *not* rotate
-// active cookies and would defeat the design.
+// browser. Do not garbage-collect cache-session rows by age: deleting a row
+// without invalidating the browser cookie resumes the same key rather than
+// rotating it.
 
 const (
 	cacheCookieName = "shelley_cache_session"
