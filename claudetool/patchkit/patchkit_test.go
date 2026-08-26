@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"sketch.dev/claudetool/editbuf"
+	"shelley.exe.dev/claudetool/editbuf"
 )
 
 func TestUnique(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"sketch.dev/claudetool/editbuf"
+	"shelley.exe.dev/claudetool/editbuf"
 )
 
 // A Spec specifies a single patch.

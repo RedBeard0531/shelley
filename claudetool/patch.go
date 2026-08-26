@@ -18,9 +18,9 @@ import (
 	"sync/atomic"
 
 	"github.com/pkg/diff"
+	"shelley.exe.dev/claudetool/editbuf"
+	"shelley.exe.dev/claudetool/patchkit"
 	"shelley.exe.dev/llm"
-	"sketch.dev/claudetool/editbuf"
-	"sketch.dev/claudetool/patchkit"
 )
 
 // PatchCallback defines the signature for patch tool callbacks.

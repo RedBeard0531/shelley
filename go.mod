@@ -9,11 +9,10 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
 	github.com/fynelabs/selfupdate v0.2.1
+	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.19.0
-	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pkg/diff v0.0.0-20241224192749-4e6772a4315c
-	github.com/richardlehane/crock32 v1.0.1
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/samber/slog-http v1.12.1
 	github.com/sashabaranov/go-openai v1.41.2
@@ -21,8 +20,10 @@ require (
 	golang.org/x/crypto v0.54.0
 	golang.org/x/image v0.44.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
+	modernc.org/sqlite v1.53.0
 	mvdan.cc/sh/v3 v3.13.1
-	sketch.dev v0.0.33
 	tailscale.com v1.100.0
 )
 
@@ -32,6 +33,7 @@ require (
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/bitfield/gotestdox v0.2.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/cubicdaiya/gonp v1.0.4 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dnephin/pflag v1.0.7 // indirect
@@ -40,6 +42,9 @@ require (
 	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
+	github.com/gobwas/httphead v0.1.0 // indirect
+	github.com/gobwas/pool v0.2.1 // indirect
+	github.com/gobwas/ws v1.4.0 // indirect
 	github.com/google/cel-go v0.26.1 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -85,17 +90,6 @@ require (
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-)
-
-require (
-	github.com/chromedp/sysutil v1.1.0 // indirect
-	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68
-	github.com/gobwas/httphead v0.1.0 // indirect
-	github.com/gobwas/pool v0.2.1 // indirect
-	github.com/gobwas/ws v1.4.0 // indirect
-	golang.org/x/sys v0.47.0
-	golang.org/x/term v0.45.0
-	modernc.org/sqlite v1.53.0
 )
 
 replace github.com/boldsoftware/shelley/lazycue => ./lazycue
