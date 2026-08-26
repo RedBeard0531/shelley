@@ -533,29 +533,6 @@ func (m *MockLLMProviderPredictableFallback) GetModelInfo(modelID string) *model
 	return nil
 }
 
-// mockFallbackProvider is an LLM provider that supports per-model services and info.
-type mockFallbackProvider struct {
-	services  map[string]llm.Service
-	models    []string
-	modelInfo map[string]*models.ModelInfo
-}
-
-func (m *mockFallbackProvider) GetService(modelID string) (llm.Service, error) {
-	svc, ok := m.services[modelID]
-	if !ok {
-		return nil, fmt.Errorf("model not available: %s", modelID)
-	}
-	return svc, nil
-}
-
-func (m *mockFallbackProvider) GetAvailableModels() []string {
-	return m.models
-}
-
-func (m *mockFallbackProvider) GetModelInfo(modelID string) *models.ModelInfo {
-	return m.modelInfo[modelID]
-}
-
 // TestGenerateSlug_ReasoningModel verifies that slug generation works when the
 // LLM returns a leading Thinking content block followed by the text answer,
 // as reasoning models like gpt-oss-20b do. Previously the code only inspected

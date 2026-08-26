@@ -86,15 +86,6 @@ func TestMessageOtherUsageRoundTrip(t *testing.T) {
 	}
 }
 
-func mustOtherUsageJSON(t *testing.T, entries []llm.PurposedUsage) string {
-	t.Helper()
-	data, err := json.Marshal(entries)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
-}
-
 func TestCreateSlugMessage(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()

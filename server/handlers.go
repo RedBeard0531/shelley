@@ -2573,16 +2573,6 @@ func (s *Server) handleModelCommand(ctx context.Context, w http.ResponseWriter, 
 // "default" is deliberately not a level: it selects the default MODEL instead.
 var reasoningLevelNames = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
-func isReasoningLevelName(s string) bool {
-	s = strings.ToLower(strings.TrimSpace(s))
-	for _, name := range reasoningLevelNames {
-		if s == name {
-			return true
-		}
-	}
-	return false
-}
-
 // resolveReasoningArg matches a /model argument to a reasoning level, leniently.
 // It accepts an exact level name or any unambiguous case-insensitive prefix
 // ("med" → medium, "hi" → high). It returns the canonical level and true on a

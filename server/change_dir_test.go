@@ -15,7 +15,6 @@ import (
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
-	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/loop"
 )
 
@@ -151,11 +150,6 @@ func waitForMessageContaining(t *testing.T, database *db.DB, conversationID, tex
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("did not find message containing %q within %v", text, timeout)
-}
-
-// getConversationMessages retrieves all messages for a conversation.
-func getConversationMessages(database *db.DB, conversationID string) ([]generated.Message, error) {
-	return database.ListMessages(context.Background(), conversationID)
 }
 
 // truncate truncates a string to maxLen characters.
