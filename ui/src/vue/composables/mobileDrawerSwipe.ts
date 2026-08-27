@@ -26,17 +26,32 @@ export function isPopupTarget(target: Element | null): boolean {
   return !!target?.closest(POPUP_SELECTOR);
 }
 
+function isHorizontalScrollContainer(element: Element): boolean {
+  const style = window.getComputedStyle(element);
+  return (
+    (style.overflowX === "auto" || style.overflowX === "scroll") &&
+    element.scrollWidth > element.clientWidth
+  );
+}
+
 export function hasHorizontalScrollContainer(target: Element | null): boolean {
   for (let element = target; element; element = element.parentElement) {
-    const style = window.getComputedStyle(element);
-    if (
-      (style.overflowX === "auto" || style.overflowX === "scroll") &&
-      element.scrollWidth > element.clientWidth
-    ) {
-      return true;
-    }
+    if (isHorizontalScrollContainer(element)) return true;
   }
   return false;
+}
+
+// The composed path pierces shadow roots, which document-level listeners
+// otherwise never see: touch events retarget event.target to the shadow
+// host, so a parentElement walk can't reach a scroll container rendered
+// inside one (e.g. the @pierre/diffs tool-card diff, whose [data-code]
+// scroll container lives in a shadow root). The path starts at the target,
+// includes every shadow-tree node it crossed, then continues through the
+// same light-DOM ancestors the walk above covers.
+export function eventPathHasHorizontalScrollContainer(path: readonly EventTarget[]): boolean {
+  return path.some(
+    (node): node is Element => node instanceof Element && isHorizontalScrollContainer(node),
+  );
 }
 
 export function useMobileDrawerSwipe(drawerOpen: Ref<boolean>) {
@@ -55,8 +70,10 @@ export function useMobileDrawerSwipe(drawerOpen: Ref<boolean>) {
 
     // Code blocks, tables, diffs, and other wide content own horizontal
     // gestures. Starting a drawer swipe there makes ordinary scrolling
-    // unexpectedly navigate the app.
-    if (hasHorizontalScrollContainer(target)) return;
+    // unexpectedly navigate the app. composedPath() — not the retargeted
+    // event.target — is what reaches scroll containers inside shadow DOM,
+    // like the @pierre/diffs tool-card diff's [data-code] element.
+    if (eventPathHasHorizontalScrollContainer(event.composedPath())) return;
 
     if (opening) {
       // Leave the true screen edge to the browser/OS back gesture.
