@@ -17,6 +17,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/loop"
 	"shelley.exe.dev/models"
 )
@@ -40,12 +41,12 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Fatal("timed out waiting for condition")
 }
 
-// newTestServer creates a Server with a PredictableService for testing.
-func newTestServer(t *testing.T) (*Server, *db.DB, *loop.PredictableService) {
+// newTestServer creates a Server with a predictable.Service for testing.
+func newTestServer(t *testing.T) (*Server, *db.DB, *predictable.Service) {
 	t.Helper()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	svr := NewServer(database, &testLLMManager{service: ps},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
@@ -437,7 +438,7 @@ func TestRetryAfterLLMFailure(t *testing.T) {
 	t.Parallel()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	switchable := &switchableTestLLM{inner: ps, err: fmt.Errorf("connection error: EOF")}
 
 	svr := NewServer(database, &testLLMManager{service: switchable},
@@ -571,7 +572,7 @@ func (s *switchableTestLLM) SupportsImages() bool { return s.inner.SupportsImage
 
 // fixedMultiToolService always responds with a fixed multi-tool-use batch.
 type fixedMultiToolService struct {
-	*loop.PredictableService
+	*predictable.Service
 	content []llm.Content
 }
 
@@ -637,7 +638,7 @@ func TestCancelMultiToolHTTPPersistsCompleteOrderedBatch(t *testing.T) {
 			},
 		},
 	}
-	service := &fixedMultiToolService{PredictableService: loop.NewPredictableService(), content: uses}
+	service := &fixedMultiToolService{Service: predictable.NewService(), content: uses}
 	processCtx, processCancel := context.WithCancel(context.Background())
 	loopInstance := loop.NewLoop(loop.Config{
 		LLM:     service,
@@ -764,7 +765,7 @@ func TestCancelSlowLoopWaitsForOrderedFinalization(t *testing.T) {
 	releaseRecord := make(chan struct{})
 	recordStarted := make(chan struct{})
 	var stallOnce sync.Once
-	service := &fixedMultiToolService{PredictableService: loop.NewPredictableService(), content: uses}
+	service := &fixedMultiToolService{Service: predictable.NewService(), content: uses}
 	processCtx, processCancel := context.WithCancel(context.Background())
 	loopInstance := loop.NewLoop(loop.Config{
 		LLM:     service,
@@ -1054,7 +1055,7 @@ func TestResetLoopWaitsForExitBeforeReplacement(t *testing.T) {
 		},
 	}
 	uses := []llm.Content{{ID: "reset-tool", Type: llm.ContentTypeToolUse, ToolName: tool.Name, ToolInput: json.RawMessage(`{}`)}}
-	service := &fixedMultiToolService{PredictableService: loop.NewPredictableService(), content: uses}
+	service := &fixedMultiToolService{Service: predictable.NewService(), content: uses}
 
 	recordStarted := make(chan struct{})
 	releaseRecord := make(chan struct{})
@@ -1109,7 +1110,7 @@ func TestResetLoopWaitsForExitBeforeReplacement(t *testing.T) {
 	}
 	<-resetDone
 
-	if err := manager.ensureLoop(loop.NewPredictableService(), "predictable"); err != nil {
+	if err := manager.ensureLoop(predictable.NewService(), "predictable"); err != nil {
 		t.Fatalf("ensure replacement loop: %v", err)
 	}
 	manager.mu.Lock()

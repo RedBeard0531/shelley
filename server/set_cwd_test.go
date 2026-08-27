@@ -17,7 +17,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // postSetCwd asks the server to move a conversation to dir.
@@ -157,7 +157,7 @@ func newRecordingTestServer(t *testing.T) (*Server, *db.DB, *recordingService) {
 	t.Helper()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	rec := &recordingService{Service: loop.NewPredictableService()}
+	rec := &recordingService{Service: predictable.NewService()}
 	server := NewServer(database, &testLLMManager{service: rec},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),

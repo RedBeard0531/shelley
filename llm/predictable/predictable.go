@@ -1,4 +1,4 @@
-package loop
+package predictable
 
 import (
 	"context"
@@ -59,7 +59,7 @@ func requestMentions(req *llm.Request, needle string) bool {
 	return false
 }
 
-// PredictableService is an LLM service that returns predictable responses for testing.
+// Service is an LLM service that returns predictable responses for testing.
 //
 // To add new test patterns, update the Do() method directly by adding cases to the switch
 // statement or new prefix checks. Do not extend or wrap this service - modify it in place.
@@ -72,7 +72,7 @@ func requestMentions(req *llm.Request, needle string) bool {
 //   - "delay: <seconds>" - delays response by specified seconds
 //   - "fail <error>" - emits a retry warning and returns a failure
 //   - See Do() method for complete list of supported patterns
-type PredictableService struct {
+type Service struct {
 	// TokenContextWindow size
 	tokenContextWindow int
 	mu                 sync.Mutex
@@ -81,9 +81,9 @@ type PredictableService struct {
 	responseDelay  time.Duration
 }
 
-// NewPredictableService creates a new predictable LLM service
-func NewPredictableService() *PredictableService {
-	svc := &PredictableService{
+// NewService creates a new predictable LLM service
+func NewService() *Service {
+	svc := &Service{
 		tokenContextWindow: 200000,
 	}
 
@@ -96,29 +96,29 @@ func NewPredictableService() *PredictableService {
 	return svc
 }
 
-func (s *PredictableService) Provider() string { return "builtin" }
+func (s *Service) Provider() string { return "builtin" }
 
 // SupportsImages reports that the predictable service accepts image inputs
 // (it returns image dimensions in its synthetic responses).
-func (s *PredictableService) SupportsImages() bool { return true }
+func (s *Service) SupportsImages() bool { return true }
 
 // TokenContextWindow returns the maximum token context window size
-func (s *PredictableService) TokenContextWindow() int {
+func (s *Service) TokenContextWindow() int {
 	return s.tokenContextWindow
 }
 
 // MaxImageDimension returns the maximum allowed image dimension.
-func (s *PredictableService) MaxImageDimension() int {
+func (s *Service) MaxImageDimension() int {
 	return 2000
 }
 
 // MaxImageBytes returns the maximum allowed encoded image size in bytes.
-func (s *PredictableService) MaxImageBytes() int {
+func (s *Service) MaxImageBytes() int {
 	return 5 * 1024 * 1024
 }
 
 // Do processes a request and returns a predictable response based on the input text
-func (s *PredictableService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
 	// Store request for testing inspection
 	s.mu.Lock()
 	delay := s.responseDelay
@@ -346,7 +346,7 @@ func (s *PredictableService) Do(ctx context.Context, req *llm.Request) (*llm.Res
 }
 
 // makeMaxTokensResponse creates a response that simulates hitting max_tokens limit
-func (s *PredictableService) makeMaxTokensResponse(text string, inputTokens uint64) *llm.Response {
+func (s *Service) makeMaxTokensResponse(text string, inputTokens uint64) *llm.Response {
 	outputTokens := uint64(len(text) / 4)
 	if outputTokens == 0 {
 		outputTokens = 1
@@ -372,7 +372,7 @@ func (s *PredictableService) makeMaxTokensResponse(text string, inputTokens uint
 // continue (stop_reason=refusal). Mirrors what real providers do: they may emit
 // only a thinking block (or nothing) and set stop_reason=refusal, leaving no
 // visible content for the user.
-func (s *PredictableService) makeRefusalResponse(inputTokens uint64) *llm.Response {
+func (s *Service) makeRefusalResponse(inputTokens uint64) *llm.Response {
 	return &llm.Response{
 		ID:    fmt.Sprintf("pred-%d", time.Now().UnixNano()),
 		Type:  "message",
@@ -397,7 +397,7 @@ func (s *PredictableService) makeRefusalResponse(inputTokens uint64) *llm.Respon
 }
 
 // makeResponse creates a simple text response
-func (s *PredictableService) makeResponse(text string, inputTokens uint64) *llm.Response {
+func (s *Service) makeResponse(text string, inputTokens uint64) *llm.Response {
 	outputTokens := uint64(len(text) / 4) // ~4 chars per token
 	if outputTokens == 0 {
 		outputTokens = 1
@@ -420,7 +420,7 @@ func (s *PredictableService) makeResponse(text string, inputTokens uint64) *llm.
 }
 
 // makeBashToolResponse creates a response that calls the bash tool
-func (s *PredictableService) makeBashToolResponse(command string, inputTokens uint64) *llm.Response {
+func (s *Service) makeBashToolResponse(command string, inputTokens uint64) *llm.Response {
 	// Properly marshal the command to avoid JSON escaping issues
 	toolInputData := map[string]string{"command": command}
 	toolInputBytes, _ := json.Marshal(toolInputData)
@@ -454,7 +454,7 @@ func (s *PredictableService) makeBashToolResponse(command string, inputTokens ui
 }
 
 // makeThinkingResponse creates a response with extended thinking content
-func (s *PredictableService) makeThinkingResponse(thoughts string, inputTokens uint64) *llm.Response {
+func (s *Service) makeThinkingResponse(thoughts string, inputTokens uint64) *llm.Response {
 	responseText := "I've considered my approach."
 	outputTokens := uint64(len(responseText)/4 + len(thoughts)/4)
 	if outputTokens == 0 {
@@ -479,7 +479,7 @@ func (s *PredictableService) makeThinkingResponse(thoughts string, inputTokens u
 }
 
 // makePatchToolResponse creates a response that calls the patch tool
-func (s *PredictableService) makePatchToolResponse(filePath string, inputTokens uint64) *llm.Response {
+func (s *Service) makePatchToolResponse(filePath string, inputTokens uint64) *llm.Response {
 	// Properly marshal the patch data to avoid JSON escaping issues
 	toolInputData := map[string]any{
 		"path": filePath,
@@ -518,7 +518,7 @@ func (s *PredictableService) makePatchToolResponse(filePath string, inputTokens 
 }
 
 // makePatchToolResponseOverwrite creates a response that uses overwrite operation (always succeeds)
-func (s *PredictableService) makePatchToolResponseOverwrite(filePath string, inputTokens uint64) *llm.Response {
+func (s *Service) makePatchToolResponseOverwrite(filePath string, inputTokens uint64) *llm.Response {
 	toolInputData := map[string]any{
 		"path": filePath,
 		"patches": []map[string]string{{
@@ -559,7 +559,7 @@ func (s *PredictableService) makePatchToolResponseOverwrite(filePath string, inp
 // code, so the resulting unified diff renders as an @pierre/diffs view many
 // viewports tall. The path is unique per call so repeated turns each produce a
 // full-file diff rather than a no-op.
-func (s *PredictableService) makeBigPatchToolResponse(inputTokens uint64) *llm.Response {
+func (s *Service) makeBigPatchToolResponse(inputTokens uint64) *llm.Response {
 	var body strings.Builder
 	body.WriteString("package big\n\n")
 	for i := range 200 {
@@ -601,7 +601,7 @@ func (s *PredictableService) makeBigPatchToolResponse(inputTokens uint64) *llm.R
 
 // makeMalformedPatchToolResponse creates a response with malformed JSON that will fail to parse
 // This simulates when Anthropic sends back invalid JSON in the tool input
-func (s *PredictableService) makeMalformedPatchToolResponse(inputTokens uint64) *llm.Response {
+func (s *Service) makeMalformedPatchToolResponse(inputTokens uint64) *llm.Response {
 	// This malformed JSON has a string where an object is expected (patch field)
 	// Mimics the error: "cannot unmarshal string into Go struct field PatchInputOneSingular.patch"
 	malformedJSON := `{"path":"/home/agent/example.css","patch":"<parameter name=\"operation\">replace","oldText":".example {\n  color: red;\n}","newText":".example {\n  color: blue;\n}"}`
@@ -630,7 +630,7 @@ func (s *PredictableService) makeMalformedPatchToolResponse(inputTokens uint64) 
 }
 
 // GetRecentRequests returns the recent requests made to this service
-func (s *PredictableService) GetRecentRequests() []*llm.Request {
+func (s *Service) GetRecentRequests() []*llm.Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -644,7 +644,7 @@ func (s *PredictableService) GetRecentRequests() []*llm.Request {
 }
 
 // GetLastRequest returns the most recent request, or nil if none
-func (s *PredictableService) GetLastRequest() *llm.Request {
+func (s *Service) GetLastRequest() *llm.Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -656,14 +656,14 @@ func (s *PredictableService) GetLastRequest() *llm.Request {
 
 // SetResponseDelay makes every Do() call block for d before responding,
 // so tests can keep a conversation "working" for a deterministic window.
-func (s *PredictableService) SetResponseDelay(d time.Duration) {
+func (s *Service) SetResponseDelay(d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.responseDelay = d
 }
 
 // ClearRequests clears the request history
-func (s *PredictableService) ClearRequests() {
+func (s *Service) ClearRequests() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -672,7 +672,7 @@ func (s *PredictableService) ClearRequests() {
 
 // countRequestTokens estimates token count based on character count.
 // Uses a simple ~4 chars per token approximation.
-func (s *PredictableService) countRequestTokens(req *llm.Request) uint64 {
+func (s *Service) countRequestTokens(req *llm.Request) uint64 {
 	var totalChars int
 
 	// Count system prompt characters
@@ -711,7 +711,7 @@ func (s *PredictableService) countRequestTokens(req *llm.Request) uint64 {
 }
 
 // makeScreenshotToolResponse creates a response that calls the screenshot tool
-func (s *PredictableService) makeScreenshotToolResponse(selector string, inputTokens uint64) *llm.Response {
+func (s *Service) makeScreenshotToolResponse(selector string, inputTokens uint64) *llm.Response {
 	// The browser tool dispatches on "action"; without it the call fails with
 	// `unknown action: ""`.
 	toolInputData := map[string]any{"action": "screenshot"}
@@ -749,7 +749,7 @@ func (s *PredictableService) makeScreenshotToolResponse(selector string, inputTo
 }
 
 // makeReadImageToolResponse creates a response that calls the read_image tool
-func (s *PredictableService) makeReadImageToolResponse(path string, inputTokens uint64) *llm.Response {
+func (s *Service) makeReadImageToolResponse(path string, inputTokens uint64) *llm.Response {
 	toolInputBytes, _ := json.Marshal(map[string]string{"path": path})
 	responseText := fmt.Sprintf("Reading %s...", path)
 	outputTokens := uint64(len(responseText)/4 + len(toolInputBytes)/4)
@@ -780,7 +780,7 @@ func (s *PredictableService) makeReadImageToolResponse(path string, inputTokens 
 }
 
 // makeChangeDirToolResponse creates a response that calls the change_dir tool
-func (s *PredictableService) makeChangeDirToolResponse(path string, inputTokens uint64) *llm.Response {
+func (s *Service) makeChangeDirToolResponse(path string, inputTokens uint64) *llm.Response {
 	toolInputData := map[string]string{"path": path}
 	toolInputBytes, _ := json.Marshal(toolInputData)
 	toolInput := json.RawMessage(toolInputBytes)
@@ -812,7 +812,7 @@ func (s *PredictableService) makeChangeDirToolResponse(path string, inputTokens 
 	}
 }
 
-func (s *PredictableService) makeSubagentToolResponse(slug, prompt string, inputTokens uint64) *llm.Response {
+func (s *Service) makeSubagentToolResponse(slug, prompt string, inputTokens uint64) *llm.Response {
 	toolInputData := map[string]any{
 		"slug":   slug,
 		"prompt": prompt,
@@ -865,7 +865,7 @@ func webCite(citedText, url, title string) json.RawMessage {
 // where cited quotes carry a Citations array. The UI should coalesce the
 // adjacent text blocks into flowing paragraphs and surface inline citation
 // markers + a Sources list.
-func (s *PredictableService) makeWebSearchCitationsResponse(inputTokens uint64) *llm.Response {
+func (s *Service) makeWebSearchCitationsResponse(inputTokens uint64) *llm.Response {
 	baseNano := time.Now().UnixNano()
 	searchID := fmt.Sprintf("srvtoolu_%d", baseNano%100000)
 
@@ -932,7 +932,7 @@ func (s *PredictableService) makeWebSearchCitationsResponse(inputTokens uint64) 
 }
 
 // makeToolSmorgasbordResponse creates a response that uses all available tool types
-func (s *PredictableService) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response {
+func (s *Service) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response {
 	baseNano := time.Now().UnixNano()
 	content := []llm.Content{
 		{Type: llm.ContentTypeText, Text: "Here's a sample of all the tools:"},

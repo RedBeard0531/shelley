@@ -15,7 +15,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/slug"
 )
 
@@ -29,10 +29,10 @@ import (
 // refusal races into the throwaway slug request while the real agent turn gets
 // the OK response — then no refusal is ever recorded and the test wedges. Slug
 // requests carry a distinctive prompt preamble (slug.PromptPreamble), so we
-// detect and delegate them to the inner PredictableService without touching the
+// detect and delegate them to the inner predictable.Service without touching the
 // refusal counter.
 type refuseThenOKService struct {
-	inner *loop.PredictableService
+	inner *predictable.Service
 	mu    sync.Mutex
 	calls int
 }
@@ -98,7 +98,7 @@ func TestContinueAfterRefusalSwitchesModelAndResumes(t *testing.T) {
 	t.Parallel()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	svc := &refuseThenOKService{inner: loop.NewPredictableService()}
+	svc := &refuseThenOKService{inner: predictable.NewService()}
 	svr := NewServer(database, &twoModelLLMManager{service: svc},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),

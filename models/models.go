@@ -16,7 +16,7 @@ import (
 	"shelley.exe.dev/llm/gem"
 	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/llm/oai"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models/modelsdev"
 )
 
@@ -386,7 +386,7 @@ func All() []Model {
 			Description:    "Deterministic test model (no API key)",
 			APIType:        APITypeBuiltIn,
 			DefaultBaseURL: "-",
-			Build:          func(url, apiKey string, httpc *http.Client) llm.Service { return loop.NewPredictableService() },
+			Build:          func(url, apiKey string, httpc *http.Client) llm.Service { return predictable.NewService() },
 		},
 	}
 }

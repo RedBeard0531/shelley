@@ -22,7 +22,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/modelsources"
 	"shelley.exe.dev/server"
@@ -60,7 +60,7 @@ func TestServerEndToEnd(t *testing.T) {
 
 	// Create LLM service manager with predictable service
 	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
-	predictableService := loop.NewPredictableService()
+	predictableService := predictable.NewService()
 	// For testing, we'll override the manager's service selection
 	_ = predictableService // will need to mock this properly
 
@@ -326,9 +326,9 @@ func TestServerEndToEnd(t *testing.T) {
 	})
 }
 
-func TestPredictableServiceWithTools(t *testing.T) {
+func TestPredictableFixtureWithTools(t *testing.T) {
 	// Test that the predictable service correctly handles tool calls
-	service := loop.NewPredictableService()
+	service := predictable.NewService()
 
 	// First call should return greeting
 	resp1, err := service.Do(context.Background(), &llm.Request{
@@ -510,7 +510,7 @@ func TestSanitizeSlug(t *testing.T) {
 	}
 }
 
-func TestSlugGenerationWithPredictableService(t *testing.T) {
+func TestSlugGenerationWithPredictableFixture(t *testing.T) {
 	// Create server with predictable service only
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
@@ -732,7 +732,7 @@ func TestSystemPromptSentToLLM(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	// Create a predictable service we can inspect
-	predictableService := loop.NewPredictableService()
+	predictableService := predictable.NewService()
 
 	// Create a custom LLM manager that returns our inspectable predictable service
 	customLLMManager := &inspectableLLMManager{
@@ -904,7 +904,7 @@ func TestSystemPromptSentToLLM(t *testing.T) {
 
 // inspectableLLMManager is a test helper that always returns the same predictable service
 type inspectableLLMManager struct {
-	predictableService *loop.PredictableService
+	predictableService *predictable.Service
 	logger             *slog.Logger
 }
 
@@ -1084,7 +1084,7 @@ func TestGitStateChangeCreatesGitInfoMessage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	// Create LLM manager that returns predictable service
-	predictableService := loop.NewPredictableService()
+	predictableService := predictable.NewService()
 	customLLMManager := &inspectableLLMManager{
 		predictableService: predictableService,
 		logger:             logger,

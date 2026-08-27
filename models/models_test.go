@@ -13,7 +13,7 @@ import (
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/llmhttp"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // predictableBuilt returns a Built entry for the predictable test model.
@@ -23,7 +23,7 @@ func predictableBuilt() Built {
 		ID:       "predictable",
 		Provider: ProviderBuiltIn,
 		Source:   "test",
-		Service:  loop.NewPredictableService(),
+		Service:  predictable.NewService(),
 	}
 }
 

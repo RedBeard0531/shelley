@@ -40,7 +40,7 @@ func TestInjectMessagesMidTurn(t *testing.T) {
 		},
 	}
 
-	service := &recordingService{Service: &customPredictableService{
+	service := &recordingService{Service: &customService{
 		responseFunc: func(req *llm.Request) (*llm.Response, error) {
 			// Any request that already carries a tool result ends the turn;
 			// the first request calls the tool.

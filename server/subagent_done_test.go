@@ -10,7 +10,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // subagentDoneFixture sets up a parent conversation with an active manager and
@@ -22,7 +22,7 @@ type subagentDoneFixture struct {
 	t        *testing.T
 	server   *Server
 	database *db.DB
-	llmSvc   *loop.PredictableService
+	llmSvc   *predictable.Service
 
 	parentID    string
 	parentMgr   *ConversationManager

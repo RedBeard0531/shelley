@@ -15,7 +15,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models"
 )
 
@@ -110,7 +110,7 @@ func TestCompactionRecordsUsage(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		database, cleanup := setupTestDB(t)
 		t.Cleanup(cleanup)
-		ps := loop.NewPredictableService()
+		ps := predictable.NewService()
 		logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 		mgr := NewLLMServiceManager(&LLMConfig{
 			Models: []models.Built{{ID: "predictable", Provider: models.ProviderBuiltIn, Source: "test", Service: ps}},

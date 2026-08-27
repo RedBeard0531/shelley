@@ -16,7 +16,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models"
 )
 
@@ -68,7 +68,7 @@ func TestModelCommandStatusListsPerModelLevels(t *testing.T) {
 }
 
 // twoModelLLMManager exposes two ready models ("model-a" and "model-b"), both
-// backed by the same PredictableService, so /model switching can be exercised
+// backed by the same predictable.Service, so /model switching can be exercised
 // end-to-end without real providers.
 type twoModelLLMManager struct {
 	service llm.Service
@@ -130,7 +130,7 @@ func newTwoModelTestServer(t *testing.T) (*Server, *db.DB) {
 	t.Helper()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	svr := NewServer(database, &twoModelLLMManager{service: ps},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
@@ -390,7 +390,7 @@ func getConvReasoning(t *testing.T, database *db.DB, conversationID string) stri
 func TestModelCommandReasoningOnly(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ps := srv.llmManager.(*twoModelLLMManager).service.(*loop.PredictableService)
+	ps := srv.llmManager.(*twoModelLLMManager).service.(*predictable.Service)
 	ctx := context.Background()
 
 	modelA := "model-a"
@@ -561,7 +561,7 @@ func TestModelCommandAmbiguous(t *testing.T) {
 	t.Parallel()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	srv := NewServer(database, &levelNamedModelLLMManager{service: ps},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
@@ -1007,7 +1007,7 @@ func (s defaultReasoningService) DefaultReasoningLevel() string { return s.level
 func TestChatMessageHookMaterializesDefaultReasoningLevel(t *testing.T) {
 	srv, database := newTwoModelTestServer(t)
 	srv.llmManager = &twoModelLLMManager{service: defaultReasoningService{
-		Service: loop.NewPredictableService(),
+		Service: predictable.NewService(),
 		level:   "medium",
 	}}
 	ctx := context.Background()

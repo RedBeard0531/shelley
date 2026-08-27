@@ -1,4 +1,4 @@
-package loop
+package predictable
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 func TestPredictableWebSearchCitations(t *testing.T) {
 	for _, trigger := range []string{"web search", "citations"} {
 		t.Run(trigger, func(t *testing.T) {
-			svc := NewPredictableService()
+			svc := NewService()
 			req := &llm.Request{
 				Messages: []llm.Message{{
 					Role:    llm.MessageRoleUser,

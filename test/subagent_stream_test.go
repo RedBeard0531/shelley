@@ -17,7 +17,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/server"
 	"shelley.exe.dev/server/notifications"
@@ -45,7 +45,7 @@ type ConversationListUpdate struct {
 }
 
 type fakeLLMManager struct {
-	service *loop.PredictableService
+	service *predictable.Service
 }
 
 func (m *fakeLLMManager) GetService(modelID string) (llm.Service, error) {
@@ -95,7 +95,7 @@ func (r *recordingChannel) eventsForConversation(conversationID string) []notifi
 	return out
 }
 
-func setupTestServerForSubagent(t *testing.T) (*server.Server, *db.DB, *httptest.Server, *loop.PredictableService) {
+func setupTestServerForSubagent(t *testing.T) (*server.Server, *db.DB, *httptest.Server, *predictable.Service) {
 	t.Helper()
 
 	// Create temporary database
@@ -116,7 +116,7 @@ func setupTestServerForSubagent(t *testing.T) (*server.Server, *db.DB, *httptest
 	}))
 
 	// Use predictable model
-	predictableService := loop.NewPredictableService()
+	predictableService := predictable.NewService()
 	llmManager := &fakeLLMManager{service: predictableService}
 
 	toolSetConfig := claudetool.ToolSetConfig{

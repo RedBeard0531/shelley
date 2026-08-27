@@ -12,7 +12,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // TestHarness provides a DSL-like interface for testing conversations.
@@ -20,7 +20,7 @@ type TestHarness struct {
 	t              *testing.T
 	db             *db.DB
 	server         *Server
-	llm            *loop.PredictableService
+	llm            *predictable.Service
 	convID         string
 	timeout        time.Duration
 	responsesCount int // Number of agent responses seen so far

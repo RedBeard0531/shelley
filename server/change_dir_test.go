@@ -15,7 +15,7 @@ import (
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // TestChangeDirAffectsBash tests that change_dir updates the working directory
@@ -38,7 +38,7 @@ func TestChangeDirAffectsBash(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	predictableService := loop.NewPredictableService()
+	predictableService := predictable.NewService()
 	llmManager := &testLLMManager{service: predictableService}
 	logger := slog.Default()
 
@@ -174,7 +174,7 @@ func TestChangeDirBroadcastsCwdUpdate(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	predictableService := loop.NewPredictableService()
+	predictableService := predictable.NewService()
 	llmManager := &testLLMManager{service: predictableService}
 	logger := slog.Default()
 
@@ -298,7 +298,7 @@ func TestChangeDirBroadcastsConversationListPatch(t *testing.T) {
 
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
-	predictableService := loop.NewPredictableService()
+	predictableService := predictable.NewService()
 	llmManager := &testLLMManager{service: predictableService}
 	server := NewServer(database, llmManager, claudetool.ToolSetConfig{WorkingDir: tmpDir}, slog.Default(), true, "predictable", "")
 

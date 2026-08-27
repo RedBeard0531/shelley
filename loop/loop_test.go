@@ -19,6 +19,7 @@ import (
 	"shelley.exe.dev/gitstate"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/llmhttp"
+	"shelley.exe.dev/llm/predictable"
 )
 
 func TestNewLoop(t *testing.T) {
@@ -31,7 +32,7 @@ func TestNewLoop(t *testing.T) {
 	}
 
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		History:       history,
 		Tools:         tools,
 		RecordMessage: recordFunc,
@@ -51,7 +52,7 @@ func TestNewLoop(t *testing.T) {
 
 func TestQueueUserMessage(t *testing.T) {
 	loop := NewLoop(Config{
-		LLM:     NewPredictableService(),
+		LLM:     predictable.NewService(),
 		History: []llm.Message{},
 		Tools:   []*llm.Tool{},
 	})
@@ -72,8 +73,8 @@ func TestQueueUserMessage(t *testing.T) {
 	}
 }
 
-func TestPredictableService(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixture(t *testing.T) {
+	service := predictable.NewService()
 
 	// Test simple hello response
 	ctx := context.Background()
@@ -105,8 +106,8 @@ func TestPredictableService(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceEcho(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureEcho(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -136,8 +137,8 @@ func TestPredictableServiceEcho(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceBashTool(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureBashTool(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -187,8 +188,8 @@ func TestPredictableServiceBashTool(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceDefaultResponse(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureDefaultResponse(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -207,8 +208,8 @@ func TestPredictableServiceDefaultResponse(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceDelay(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureDelay(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -234,7 +235,7 @@ func TestPredictableServiceDelay(t *testing.T) {
 	}
 }
 
-func TestLoopWithPredictableService(t *testing.T) {
+func TestLoopWithPredictableFixture(t *testing.T) {
 	var recordedMessages []llm.Message
 	var recordedUsages []llm.Usage
 
@@ -244,7 +245,7 @@ func TestLoopWithPredictableService(t *testing.T) {
 		return nil
 	}
 
-	service := NewPredictableService()
+	service := predictable.NewService()
 	loop := NewLoop(Config{
 		LLM:           service,
 		History:       []llm.Message{},
@@ -297,7 +298,7 @@ func TestLoopWithTools(t *testing.T) {
 		},
 	}
 
-	service := NewPredictableService()
+	service := predictable.NewService()
 	loop := NewLoop(Config{
 		LLM:     service,
 		History: []llm.Message{},
@@ -339,7 +340,7 @@ func TestGetHistory(t *testing.T) {
 	}
 
 	loop := NewLoop(Config{
-		LLM:     NewPredictableService(),
+		LLM:     predictable.NewService(),
 		History: initialHistory,
 		Tools:   []*llm.Tool{},
 	})
@@ -361,7 +362,7 @@ func TestGetHistory(t *testing.T) {
 
 func TestLoopWithKeywordTool(t *testing.T) {
 	// Test that keyword tool doesn't crash with nil pointer dereference
-	service := NewPredictableService()
+	service := predictable.NewService()
 
 	var messages []llm.Message
 	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
@@ -423,7 +424,7 @@ func TestLoopWithKeywordTool(t *testing.T) {
 
 func TestLoopWithActualKeywordTool(t *testing.T) {
 	// Test that actual keyword tool works with Loop
-	service := NewPredictableService()
+	service := predictable.NewService()
 
 	var messages []llm.Message
 	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
@@ -581,7 +582,7 @@ func TestInsertMissingToolResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			loop := NewLoop(Config{
-				LLM:     NewPredictableService(),
+				LLM:     predictable.NewService(),
 				History: []llm.Message{},
 			})
 
@@ -624,7 +625,7 @@ func TestInsertMissingToolResultsWithEdgeCases(t *testing.T) {
 	// because it only checks the last two messages.
 	t.Run("tool_use hidden by subsequent assistant message", func(t *testing.T) {
 		loop := NewLoop(Config{
-			LLM:     NewPredictableService(),
+			LLM:     predictable.NewService(),
 			History: []llm.Message{},
 		})
 
@@ -684,7 +685,7 @@ func TestInsertMissingToolResultsWithEdgeCases(t *testing.T) {
 	// Test for tool_use in earlier message (not the second-to-last)
 	t.Run("tool_use in earlier message without result", func(t *testing.T) {
 		loop := NewLoop(Config{
-			LLM:     NewPredictableService(),
+			LLM:     predictable.NewService(),
 			History: []llm.Message{},
 		})
 
@@ -738,7 +739,7 @@ func TestInsertMissingToolResultsWithEdgeCases(t *testing.T) {
 
 	t.Run("empty message list", func(t *testing.T) {
 		loop := NewLoop(Config{
-			LLM:     NewPredictableService(),
+			LLM:     predictable.NewService(),
 			History: []llm.Message{},
 		})
 
@@ -752,7 +753,7 @@ func TestInsertMissingToolResultsWithEdgeCases(t *testing.T) {
 
 	t.Run("single message", func(t *testing.T) {
 		loop := NewLoop(Config{
-			LLM:     NewPredictableService(),
+			LLM:     predictable.NewService(),
 			History: []llm.Message{},
 		})
 
@@ -771,7 +772,7 @@ func TestInsertMissingToolResultsWithEdgeCases(t *testing.T) {
 
 	t.Run("wrong role order - user then assistant", func(t *testing.T) {
 		loop := NewLoop(Config{
-			LLM:     NewPredictableService(),
+			LLM:     predictable.NewService(),
 			History: []llm.Message{},
 		})
 
@@ -799,7 +800,7 @@ func TestInsertMissingToolResults_EmptyAssistantContent(t *testing.T) {
 
 	t.Run("empty assistant content in middle of conversation", func(t *testing.T) {
 		loop := NewLoop(Config{
-			LLM:     NewPredictableService(),
+			LLM:     predictable.NewService(),
 			History: []llm.Message{},
 		})
 
@@ -850,7 +851,7 @@ func TestInsertMissingToolResults_EmptyAssistantContent(t *testing.T) {
 
 	t.Run("empty assistant content at end of conversation - no modification needed", func(t *testing.T) {
 		loop := NewLoop(Config{
-			LLM:     NewPredictableService(),
+			LLM:     predictable.NewService(),
 			History: []llm.Message{},
 		})
 
@@ -880,7 +881,7 @@ func TestInsertMissingToolResults_EmptyAssistantContent(t *testing.T) {
 
 	t.Run("non-empty assistant content - no modification needed", func(t *testing.T) {
 		loop := NewLoop(Config{
-			LLM:     NewPredictableService(),
+			LLM:     predictable.NewService(),
 			History: []llm.Message{},
 		})
 
@@ -935,7 +936,7 @@ func TestGitStateTracking(t *testing.T) {
 	var gitStateChanges []*gitstate.GitState
 
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		History:       []llm.Message{},
 		WorkingDir:    tmpDir,
 		GetWorkingDir: func() string { return tmpDir },
@@ -1038,7 +1039,7 @@ func TestGitStateTrackingWorktree(t *testing.T) {
 	var gitStateChanges []*gitstate.GitState
 
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		History:       []llm.Message{},
 		WorkingDir:    worktreeDir,
 		GetWorkingDir: func() string { return worktreeDir },
@@ -1110,24 +1111,24 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func TestPredictableServiceTokenContextWindow(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureTokenContextWindow(t *testing.T) {
+	service := predictable.NewService()
 	window := service.TokenContextWindow()
 	if window != 200000 {
 		t.Errorf("expected TokenContextWindow to return 200000, got %d", window)
 	}
 }
 
-func TestPredictableServiceMaxImageDimension(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureMaxImageDimension(t *testing.T) {
+	service := predictable.NewService()
 	dimension := service.MaxImageDimension()
 	if dimension != 2000 {
 		t.Errorf("expected MaxImageDimension to return 2000, got %d", dimension)
 	}
 }
 
-func TestPredictableServiceThinking(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureThinking(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -1165,8 +1166,8 @@ func TestPredictableServiceThinking(t *testing.T) {
 	}
 }
 
-func TestPredictableServicePatchTool(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixturePatchTool(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -1208,8 +1209,8 @@ func TestPredictableServicePatchTool(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceMalformedPatchTool(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureMalformedPatchTool(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -1247,8 +1248,8 @@ func TestPredictableServiceMalformedPatchTool(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceError(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureError(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -1271,8 +1272,8 @@ func TestPredictableServiceError(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceRequestTracking(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureRequestTracking(t *testing.T) {
+	service := predictable.NewService()
 
 	// Initially no requests
 	requests := service.GetRecentRequests()
@@ -1356,8 +1357,8 @@ func TestPredictableServiceRequestTracking(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceScreenshotTool(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureScreenshotTool(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -1399,8 +1400,8 @@ func TestPredictableServiceScreenshotTool(t *testing.T) {
 	}
 }
 
-func TestPredictableServiceToolSmorgasbord(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureToolSmorgasbord(t *testing.T) {
+	service := predictable.NewService()
 
 	ctx := context.Background()
 	req := &llm.Request{
@@ -1750,7 +1751,7 @@ func TestCheckGitStateChange(t *testing.T) {
 
 	// Test with nil OnGitStateChange - should not panic
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		History:       []llm.Message{},
 		WorkingDir:    tmpDir,
 		GetWorkingDir: func() string { return tmpDir },
@@ -1766,7 +1767,7 @@ func TestCheckGitStateChange(t *testing.T) {
 	// Test with actual callback
 	var gitStateChanges []*gitstate.GitState
 	loop = NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		History:       []llm.Message{},
 		WorkingDir:    tmpDir,
 		GetWorkingDir: func() string { return tmpDir },
@@ -1868,7 +1869,7 @@ func TestExecuteToolCallsRunsConcurrently(t *testing.T) {
 
 	var recordedMessages []llm.Message
 	loop := NewLoop(Config{
-		LLM:   NewPredictableService(),
+		LLM:   predictable.NewService(),
 		Tools: []*llm.Tool{testTool},
 		RecordMessage: func(_ context.Context, message llm.Message, _ llm.Usage, _ []llm.PurposedUsage) error {
 			recordedMessages = append(recordedMessages, message)
@@ -1937,7 +1938,7 @@ func TestExecuteToolCallsWithMissingTool(t *testing.T) {
 	}
 
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		History:       []llm.Message{},
 		Tools:         []*llm.Tool{}, // No tools registered
 		RecordMessage: recordFunc,
@@ -2020,7 +2021,7 @@ func TestExecuteToolCallsWithErrorTool(t *testing.T) {
 	}
 
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		History:       []llm.Message{},
 		Tools:         []*llm.Tool{errorTool},
 		RecordMessage: recordFunc,
@@ -2095,7 +2096,7 @@ func TestMaxTokensTruncation(t *testing.T) {
 		return nil
 	}
 
-	service := NewPredictableService()
+	service := predictable.NewService()
 	loop := NewLoop(Config{
 		LLM:           service,
 		History:       []llm.Message{},
@@ -2190,7 +2191,7 @@ func TestRefusal(t *testing.T) {
 		return nil
 	}
 
-	service := NewPredictableService()
+	service := predictable.NewService()
 	loop := NewLoop(Config{
 		LLM:           service,
 		History:       []llm.Message{},
@@ -2296,16 +2297,16 @@ func TestRefusal(t *testing.T) {
 
 // requestCapturingService records every request it receives (a deep-ish copy of
 // the Messages slice header is enough since the loop rebuilds it each turn) then
-// delegates to a PredictableService so keyword triggers like "refusal" and
+// delegates to a predictable.Service so keyword triggers like "refusal" and
 // "hello" still drive realistic responses.
 type requestCapturingService struct {
-	*PredictableService // embedded: promotes Provider/TokenContextWindow/MaxImage*/etc.
-	mu                  *sync.Mutex
-	out                 *[]*llm.Request
+	*predictable.Service // embedded: promotes Provider/TokenContextWindow/MaxImage*/etc.
+	mu                   *sync.Mutex
+	out                  *[]*llm.Request
 }
 
 func NewRequestCapturingService(mu *sync.Mutex, out *[]*llm.Request) *requestCapturingService {
-	return &requestCapturingService{PredictableService: NewPredictableService(), mu: mu, out: out}
+	return &requestCapturingService{Service: predictable.NewService(), mu: mu, out: out}
 }
 
 func (s *requestCapturingService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
@@ -2314,7 +2315,7 @@ func (s *requestCapturingService) Do(ctx context.Context, req *llm.Request) (*ll
 	captured.Messages = append([]llm.Message(nil), req.Messages...)
 	*s.out = append(*s.out, &captured)
 	s.mu.Unlock()
-	return s.PredictableService.Do(ctx, req)
+	return s.Service.Do(ctx, req)
 }
 
 // TestRefusalThenRephraseNotInContext is the reviewer's regression test: after
@@ -2382,7 +2383,7 @@ func TestRefusalThenRephraseNotInContext(t *testing.T) {
 
 //func TestInsertMissingToolResultsEdgeCases(t *testing.T) {
 //	loop := NewLoop(Config{
-//		LLM:     NewPredictableService(),
+//		LLM:     predictable.NewService(),
 //		History: []llm.Message{},
 //	})
 //
@@ -2474,8 +2475,8 @@ func TestRefusalThenRephraseNotInContext(t *testing.T) {
 //	}
 //}
 
-func TestPredictableServiceFailEmitsRetryWarning(t *testing.T) {
-	service := NewPredictableService()
+func TestPredictableFixtureFailEmitsRetryWarning(t *testing.T) {
+	service := predictable.NewService()
 	var warnings []llm.RetryEvent
 
 	ctx := context.Background()
@@ -2854,7 +2855,7 @@ func TestToolOtherUsageAttachedToToolResult(t *testing.T) {
 	}
 	var records []recorded
 	loop := NewLoop(Config{
-		LLM:   NewPredictableService(),
+		LLM:   predictable.NewService(),
 		Tools: []*llm.Tool{testTool},
 		RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 			mu.Lock()
@@ -3019,7 +3020,7 @@ func TestExecuteToolCallsCancellationPreservesOutput(t *testing.T) {
 	}
 
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		Tools:         []*llm.Tool{testTool},
 		RecordMessage: recordFunc,
 	})
@@ -3103,7 +3104,7 @@ func TestExecuteToolCallsCancelActiveSuccessWins(t *testing.T) {
 	}
 
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		Tools:         []*llm.Tool{testTool},
 		RecordMessage: recordFunc,
 	})
@@ -3159,7 +3160,7 @@ func TestExecuteToolCallsAbandonsContextIgnoringTool(t *testing.T) {
 	}
 
 	loop := NewLoop(Config{
-		LLM:           NewPredictableService(),
+		LLM:           predictable.NewService(),
 		Tools:         []*llm.Tool{testTool},
 		RecordMessage: recordFunc,
 	})

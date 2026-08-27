@@ -219,7 +219,7 @@ func TestNewPageDraftOpensWithoutSpinner(t *testing.T) {
 // --- Conversation tests (ported from ui/e2e/conversation.spec.ts) ---
 //
 // These drive the predictable LLM service through the real UI. The predictable
-// service (loop/predictable.go) maps specific inputs to deterministic outputs:
+// service (llm/predictable/predictable.go) maps specific inputs to deterministic outputs:
 //   - "Hello"            -> "Hello! I'm Shelley, your AI assistant. How can I help you today?"
 //   - "hello"            -> "Well, hi there!"
 //   - "echo: <text>"     -> echoes <text> back

@@ -16,7 +16,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/exeenv"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // withReflectionStatus swaps in a fake reflection client that replies with the
@@ -150,7 +150,7 @@ func TestIndexInitDataCarriesModelSetupHint(t *testing.T) {
 	withReflectionStatus(t, http.StatusForbidden, "integration not found or not attached to this VM")
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	srv := NewServer(database, &emptyLLMManager{testLLMManager{service: ps}},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelWarn})),
@@ -373,7 +373,7 @@ func TestCreateDraftWithNoModels(t *testing.T) {
 	withReflectionStatus(t, http.StatusForbidden, "nope")
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	srv := NewServer(database, &emptyLLMManager{testLLMManager{service: ps}},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelWarn})),

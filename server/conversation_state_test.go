@@ -15,7 +15,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // responseRecorderWithClose wraps httptest.ResponseRecorder to support
@@ -128,7 +128,7 @@ func TestConversationStateAfterServerRestart(t *testing.T) {
 	}
 
 	// Create a NEW server (simulating server restart - no active managers)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	server := NewServer(database, &testLLMManager{service: ps},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
@@ -238,7 +238,7 @@ func TestModelRestorationAfterServerRestart(t *testing.T) {
 	}
 
 	// Create a NEW server (simulating server restart - no active managers)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	server := NewServer(database, &testLLMManager{service: ps},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),

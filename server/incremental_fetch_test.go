@@ -14,7 +14,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // seedConversation creates a conversation with N alternating user/agent
@@ -50,7 +50,7 @@ func seedConversation(t *testing.T, database *db.DB, n int) string {
 
 func newTestStreamServer(t *testing.T, database *db.DB) (*http.ServeMux, *Server) {
 	t.Helper()
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	srv := NewServer(database, &testLLMManager{service: ps},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),

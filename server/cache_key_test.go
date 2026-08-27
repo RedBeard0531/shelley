@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"shelley.exe.dev/claudetool"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // newCacheKeyTestServer makes a Server wired with the requireHeader so that
@@ -20,7 +20,7 @@ func newCacheKeyTestServer(t *testing.T, requireHeader string) *Server {
 	t.Helper()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	svr := NewServer(database, &testLLMManager{service: ps},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),

@@ -6,7 +6,7 @@ handling LLM interactions, tool execution, and message recording.
 ## Features
 
 - **LLM Integration**: Works with any LLM service implementing the `llm.Service` interface
-- **Predictable Testing**: Includes a `PredictableService` for deterministic testing
+- **Predictable Testing**: Works with the `predictable.Service` fixture for deterministic testing
 - **Tool Execution**: Automatically executes tools called by the LLM
 - **Message Recording**: Records all conversation messages via a configurable function
 - **Usage Tracking**: Tracks token usage and costs across all LLM calls
@@ -49,12 +49,12 @@ if err := agentLoop.ProcessOneTurn(ctx); err != nil {
 }
 ```
 
-## Testing with PredictableService
+## Testing with predictable.Service
 
-The `PredictableService` records requests and returns deterministic responses that are convenient for tests:
+The `predictable.Service` records requests and returns deterministic responses that are convenient for tests:
 
 ```go
-service := loop.NewPredictableService()
+service := predictable.NewService()
 
 testLoop := loop.NewLoop(loop.Config{
     LLM:           service,

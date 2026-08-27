@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models"
 )
 
@@ -24,7 +24,7 @@ func TestHandleModelsIncludesReasoningLevels(t *testing.T) {
 	mgr, err := models.NewManager(&models.Config{Models: []models.Built{{
 		ID:       "reasoning-model",
 		Provider: models.ProviderBuiltIn,
-		Service:  &modelListReasoningService{Service: loop.NewPredictableService()},
+		Service:  &modelListReasoningService{Service: predictable.NewService()},
 	}}})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
@@ -58,7 +58,7 @@ func TestHandleModelRefreshReturnsRefreshedModels(t *testing.T) {
 				ID:       "old-built",
 				Provider: models.ProviderBuiltIn,
 				Source:   "old source",
-				Service:  loop.NewPredictableService(),
+				Service:  predictable.NewService(),
 			},
 		},
 		Logger: slog.Default(),
@@ -75,13 +75,13 @@ func TestHandleModelRefreshReturnsRefreshedModels(t *testing.T) {
 					ID:       "new-built",
 					Provider: models.ProviderBuiltIn,
 					Source:   "new source",
-					Service:  loop.NewPredictableService(),
+					Service:  predictable.NewService(),
 				},
 				{
 					ID:       models.Default().ID,
 					Provider: models.ProviderAnthropic,
 					Source:   "new source",
-					Service:  loop.NewPredictableService(),
+					Service:  predictable.NewService(),
 				},
 			}, nil
 		},
@@ -112,8 +112,8 @@ func TestHandleModelRefreshReturnsRefreshedModels(t *testing.T) {
 func TestHandleModelsAssignsTiers(t *testing.T) {
 	mgr, err := models.NewManager(&models.Config{
 		Models: []models.Built{
-			{ID: "claude-opus-4.8", Provider: models.ProviderAnthropic, Service: loop.NewPredictableService()},
-			{ID: "claude-opus-4.7", Provider: models.ProviderAnthropic, Service: loop.NewPredictableService()},
+			{ID: "claude-opus-4.8", Provider: models.ProviderAnthropic, Service: predictable.NewService()},
+			{ID: "claude-opus-4.7", Provider: models.ProviderAnthropic, Service: predictable.NewService()},
 		},
 		Logger: slog.Default(),
 	})

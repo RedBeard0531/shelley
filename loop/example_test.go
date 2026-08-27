@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/loop"
 )
 
@@ -47,7 +48,7 @@ func ExampleLoop() {
 	}
 
 	// Set up a predictable service for this example
-	service := loop.NewPredictableService()
+	service := predictable.NewService()
 	myLoop := loop.NewLoop(loop.Config{
 		LLM:           service,
 		History:       initialHistory,

@@ -14,7 +14,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 // gatingTestLLM errors until released, then blocks each Do on a gate channel so
@@ -56,7 +56,7 @@ func TestRetryDoubleClickDeduped(t *testing.T) {
 	t.Parallel()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	gate := make(chan struct{})
 	gllm := &gatingTestLLM{inner: ps, err: fmt.Errorf("connection error: EOF"), gate: gate}
 

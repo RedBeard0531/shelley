@@ -12,14 +12,14 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/exeenv"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 )
 
 func newExeNotifyTestServer(t *testing.T) *Server {
 	t.Helper()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	// predictableOnly is false here: these tests exercise the exe.dev notify
 	// integration logic itself, which is intentionally disabled in
 	// predictable-only mode (see exeNotifyEnabled). A predictable LLM service is
@@ -75,7 +75,7 @@ func TestExeNotifyDisabledInPredictableMode(t *testing.T) {
 	withReflection(t, `{"integrations":[{"name":"notify","type":"notify"}]}`)
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	s := NewServer(database, &testLLMManager{service: ps},
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/predictable"
 )
 
 func TestLoopWithClaudeTools(t *testing.T) {
@@ -21,7 +22,7 @@ func TestLoopWithClaudeTools(t *testing.T) {
 		// TODO: Add actual tools when needed
 	}
 
-	service := NewPredictableService()
+	service := predictable.NewService()
 
 	// Create loop with the configured service
 	loop := NewLoop(Config{
@@ -84,7 +85,7 @@ func TestLoopWithClaudeTools(t *testing.T) {
 }
 
 func TestLoopContextCancellation(t *testing.T) {
-	service := NewPredictableService()
+	service := predictable.NewService()
 	loop := NewLoop(Config{
 		LLM:     service,
 		History: []llm.Message{},
@@ -111,7 +112,7 @@ func TestLoopSystemMessages(t *testing.T) {
 	}
 
 	loop := NewLoop(Config{
-		LLM:     NewPredictableService(),
+		LLM:     predictable.NewService(),
 		History: []llm.Message{},
 		Tools:   []*llm.Tool{},
 		System:  system,

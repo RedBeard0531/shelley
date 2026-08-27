@@ -15,7 +15,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/loop"
+	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models"
 )
 
@@ -37,7 +37,7 @@ func newUsageCollectingServer(t *testing.T) (*Server, *db.DB) {
 			Provider: models.ProviderBuiltIn,
 			Source:   "test",
 			Tags:     "slug",
-			Service:  loop.NewPredictableService(),
+			Service:  predictable.NewService(),
 		}},
 		Logger: logger,
 	})
@@ -164,7 +164,7 @@ func TestRetryWorksWithTrailingSlugMarker(t *testing.T) {
 	t.Parallel()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
-	ps := loop.NewPredictableService()
+	ps := predictable.NewService()
 	switchable := &switchableTestLLM{inner: ps, err: fmt.Errorf("connection error: EOF")}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	svr := NewServer(database, &testLLMManager{service: switchable},

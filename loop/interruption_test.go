@@ -44,7 +44,7 @@ func TestInterruptionDuringToolExecution(t *testing.T) {
 	}
 
 	// Create a service that detects the interruption
-	service := &customPredictableService{
+	service := &customService{
 		responseFunc: func(req *llm.Request) (*llm.Response, error) {
 			// Check if we've seen the interruption
 			toolResults := 0
@@ -181,7 +181,7 @@ func TestInterruptionDuringMultiToolChain(t *testing.T) {
 
 	// Service that makes multiple tool calls but stops when it sees "STOP"
 	interruptionSeenAtToolResult.Store(-1)
-	service := &customPredictableService{
+	service := &customService{
 		responseFunc: func(req *llm.Request) (*llm.Response, error) {
 			// Check if we've seen the STOP message
 			toolResults := 0
@@ -294,8 +294,8 @@ func TestInterruptionDuringMultiToolChain(t *testing.T) {
 	}
 }
 
-// customPredictableService allows custom response logic for testing
-type customPredictableService struct {
+// customService allows custom response logic for testing
+type customService struct {
 	responses    []customResponse
 	responseFunc func(req *llm.Request) (*llm.Response, error)
 	callIndex    int
@@ -307,7 +307,7 @@ type customResponse struct {
 	err      error
 }
 
-func (s *customPredictableService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+func (s *customService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -331,21 +331,21 @@ func (s *customPredictableService) Do(ctx context.Context, req *llm.Request) (*l
 	return resp.response, resp.err
 }
 
-func (s *customPredictableService) GetDefaultModel() string {
+func (s *customService) GetDefaultModel() string {
 	return "custom-test"
 }
 
-func (s *customPredictableService) Provider() string { return "" }
+func (s *customService) Provider() string { return "" }
 
-func (s *customPredictableService) TokenContextWindow() int {
+func (s *customService) TokenContextWindow() int {
 	return 100000
 }
 
-func (s *customPredictableService) MaxImageDimension() int {
+func (s *customService) MaxImageDimension() int {
 	return 8000
 }
 
-func (s *customPredictableService) MaxImageBytes() int {
+func (s *customService) MaxImageBytes() int {
 	return 0
 }
 
@@ -374,7 +374,7 @@ func TestNoInterruptionNormalFlow(t *testing.T) {
 	}
 
 	// Service that makes 3 tool calls then finishes
-	service := &customPredictableService{
+	service := &customService{
 		responseFunc: func(req *llm.Request) (*llm.Response, error) {
 			toolResults := 0
 			for _, msg := range req.Messages {
@@ -445,4 +445,4 @@ func TestNoInterruptionNormalFlow(t *testing.T) {
 	}
 }
 
-func (s *customPredictableService) SupportsImages() bool { return true }
+func (s *customService) SupportsImages() bool { return true }
