@@ -344,6 +344,7 @@ import {
   type ComposerSubmissionIntent,
 } from "./composerDispatch";
 import { isImeComposing } from "../../utils/imeComposing";
+import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,
@@ -1189,10 +1190,7 @@ watch(
   () => [props.autoFocus, props.disabled] as const,
   ([af, dis]) => {
     if (af && !dis && textareaRef.value) {
-      setTimeout(() => {
-        if (document.activeElement?.closest('[aria-modal="true"]')) return;
-        textareaRef.value?.focus();
-      }, 0);
+      focusMessageInputIfUnfocused();
     }
   },
   { immediate: true },
