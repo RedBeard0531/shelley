@@ -2804,7 +2804,7 @@ func TestUserFacingLLMError(t *testing.T) {
 	}
 
 	// Trace ids are appended when present.
-	ctx, trace := llmhttp.WithRequestTrace(context.Background())
+	ctx, trace := llm.WithRequestTrace(context.Background())
 	_ = ctx
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-Id", "req_abc")
@@ -2822,7 +2822,7 @@ func TestUserFacingLLMError(t *testing.T) {
 	if !strings.Contains(withIDs, "req_abc") {
 		t.Errorf("error message missing upstream request id: %q", withIDs)
 	}
-	if !strings.Contains(withIDs, trace.ShelleyRequestID()) {
+	if !strings.Contains(withIDs, trace.Value("shelley_request_id")) {
 		t.Errorf("error message missing shelley request id: %q", withIDs)
 	}
 }
@@ -2838,7 +2838,7 @@ func TestToolOtherUsageAttachedToToolResult(t *testing.T) {
 		InputSchema: llm.MustSchema(`{"type": "object", "properties": {"command": {"type": "string"}}}`),
 		Run: func(ctx context.Context, input json.RawMessage) llm.ToolOut {
 			// Simulate what models.loggingService does for a purposed call.
-			collect := llmhttp.UsageCollectorFromContext(ctx)
+			collect := llm.UsageCollectorFromContext(ctx)
 			if collect == nil {
 				t.Error("no usage collector in tool ctx")
 			} else {

@@ -440,7 +440,7 @@ func (r *SubagentRunner) generateProgressSummary(ctx context.Context, conversati
 	// lands on the parent's tool-result message. WithConversationID re-tags the
 	// request with the subagent's ID for gateway logging and cache affinity
 	// (the incoming ctx carries the parent's ID).
-	ctx = llmhttp.WithConversationID(llmhttp.WithPurpose(ctx, "subagent_progress"), conversationID)
+	ctx = llmhttp.WithConversationID(llm.WithPurpose(ctx, "subagent_progress"), conversationID)
 
 	// Get the conversation messages
 	var messages []generated.Message

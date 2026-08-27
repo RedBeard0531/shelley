@@ -25,9 +25,6 @@ const (
 	conversationIDKey contextKey = iota
 	modelIDKey
 	providerKey
-	requestTraceKey
-	purposeKey
-	usageCollectorKey
 )
 
 // shelleyRequestIDHeader is the header Shelley sets on every LLM request with a
@@ -46,77 +43,6 @@ var upstreamRequestIDHeaders = []string{
 	"X-Amzn-Requestid",
 }
 
-// RequestTrace collects correlation ids for a single LLM request so callers
-// can surface them (e.g. in a user-facing error). ShelleyRequestID is always
-// set by the Transport; UpstreamRequestID is set only if the provider returned
-// one. It is safe for concurrent use.
-type RequestTrace struct {
-	mu               sync.Mutex
-	shelleyRequestID string
-	upstreamID       string
-}
-
-// ShelleyRequestID returns the Shelley-generated request id, if assigned.
-func (t *RequestTrace) ShelleyRequestID() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.shelleyRequestID
-}
-
-// UpstreamRequestID returns the provider's request id, if one was seen.
-func (t *RequestTrace) UpstreamRequestID() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.upstreamID
-}
-
-// String renders the available ids compactly for inclusion in error messages
-// and logs. Returns "" when nothing has been captured.
-func (t *RequestTrace) String() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	switch {
-	case t.shelleyRequestID != "" && t.upstreamID != "":
-		return fmt.Sprintf("shelley_request_id=%s upstream_request_id=%s", t.shelleyRequestID, t.upstreamID)
-	case t.shelleyRequestID != "":
-		return "shelley_request_id=" + t.shelleyRequestID
-	case t.upstreamID != "":
-		return "upstream_request_id=" + t.upstreamID
-	default:
-		return ""
-	}
-}
-
-func (t *RequestTrace) setShelleyRequestID(id string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.shelleyRequestID = id
-}
-
-func (t *RequestTrace) setUpstreamID(id string) {
-	if id == "" {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.upstreamID = id
-}
-
-// WithRequestTrace attaches a fresh RequestTrace to ctx and returns both. The
-// Transport populates it as the request proceeds.
-func WithRequestTrace(ctx context.Context) (context.Context, *RequestTrace) {
-	t := &RequestTrace{}
-	return context.WithValue(ctx, requestTraceKey, t), t
-}
-
-// RequestTraceFromContext returns the RequestTrace attached to ctx, if any.
-func RequestTraceFromContext(ctx context.Context) *RequestTrace {
-	if v := ctx.Value(requestTraceKey); v != nil {
-		return v.(*RequestTrace)
-	}
-	return nil
-}
-
 // newRequestID returns a short random hex id for correlating a request.
 func newRequestID() string {
 	var b [8]byte
@@ -130,13 +56,13 @@ func newRequestID() string {
 
 // captureUpstreamRequestID records the provider's request id from response
 // headers into trace, if present. No-op when trace is nil.
-func captureUpstreamRequestID(trace *RequestTrace, h http.Header) {
+func captureUpstreamRequestID(trace *llm.RequestTrace, h http.Header) {
 	if trace == nil || h == nil {
 		return
 	}
 	for _, name := range upstreamRequestIDHeaders {
-		if v := h.Get(name); v != "" {
-			trace.setUpstreamID(v)
+		if value := h.Get(name); value != "" {
+			trace.Set("upstream_request_id", value)
 			return
 		}
 	}
@@ -153,61 +79,6 @@ func ConversationIDFromContext(ctx context.Context) string {
 		return v.(string)
 	}
 	return ""
-}
-
-// WithPurpose returns a context tagged with the purpose of an indirect LLM
-// call (e.g. "compaction", "keyword_search"), so its usage can be recorded.
-func WithPurpose(ctx context.Context, purpose string) context.Context {
-	return context.WithValue(ctx, purposeKey, purpose)
-}
-
-// PurposeFromContext returns the purpose from the context, if any.
-func PurposeFromContext(ctx context.Context) string {
-	if v := ctx.Value(purposeKey); v != nil {
-		return v.(string)
-	}
-	return ""
-}
-
-// UsageCollector receives the usage of one indirect LLM call (one tagged with
-// llmhttp.WithPurpose). Implementations must be safe for concurrent use.
-type UsageCollector func(purpose string, usage llm.Usage)
-
-// WithUsageCollector returns a context that collects the usage of indirect
-// LLM calls (those tagged with WithPurpose) made under it.
-func WithUsageCollector(ctx context.Context, c UsageCollector) context.Context {
-	return context.WithValue(ctx, usageCollectorKey, c)
-}
-
-// UsageCollectorFromContext returns the usage collector from the context, if any.
-func UsageCollectorFromContext(ctx context.Context) UsageCollector {
-	if v := ctx.Value(usageCollectorKey); v != nil {
-		return v.(UsageCollector)
-	}
-	return nil
-}
-
-// UsageAccumulator is a mutex-guarded UsageCollector that accumulates
-// collected entries for attachment to a message record.
-type UsageAccumulator struct {
-	mu      sync.Mutex
-	entries []llm.PurposedUsage
-}
-
-// Collect implements UsageCollector.
-func (a *UsageAccumulator) Collect(purpose string, usage llm.Usage) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.entries = append(a.entries, llm.PurposedUsage{Purpose: purpose, Usage: usage})
-}
-
-// Take returns the accumulated entries and resets the accumulator.
-func (a *UsageAccumulator) Take() []llm.PurposedUsage {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	entries := a.entries
-	a.entries = nil
-	return entries
 }
 
 // WithModelID returns a context with the model ID attached.
@@ -283,9 +154,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		requestID = newRequestID()
 		req.Header.Set(shelleyRequestIDHeader, requestID)
 	}
-	trace := RequestTraceFromContext(req.Context())
+	trace := llm.RequestTraceFromContext(req.Context())
 	if trace != nil {
-		trace.setShelleyRequestID(requestID)
+		trace.Set("shelley_request_id", requestID)
 	}
 
 	// Add conversation ID header if present

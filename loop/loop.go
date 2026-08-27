@@ -409,11 +409,11 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		// any upstream provider request id) for this turn so we can surface them
 		// in a user-facing error — including on the idle/stall-timeout path, where
 		// there is no successful response to read an id from.
-		var requestTrace *llmhttp.RequestTrace
+		var requestTrace *llm.RequestTrace
 		sendWithRetry := func(req *llm.Request) (*llm.Response, error) {
 			llmCtx, cancel := context.WithTimeout(ctx, maxTurnDuration)
 			defer cancel()
-			llmCtx, requestTrace = llmhttp.WithRequestTrace(llmCtx)
+			llmCtx, requestTrace = llm.WithRequestTrace(llmCtx)
 			const maxRetries = 2
 			var resp *llm.Response
 			var err error
@@ -920,8 +920,8 @@ func (l *Loop) executeToolCall(ctx context.Context, c llm.Content) llm.Content {
 // executeToolCalls runs sibling tools concurrently and appends the results to l.history
 // in request order. It does NOT call processLLMRequest — the caller loops instead.
 func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) error {
-	var otherUsage llmhttp.UsageAccumulator
-	ctx = llmhttp.WithUsageCollector(ctx, otherUsage.Collect)
+	var otherUsage llm.UsageAccumulator
+	ctx = llm.WithUsageCollector(ctx, otherUsage.Collect)
 
 	var toolUses []llm.Content
 	for _, c := range content {
@@ -1168,7 +1168,7 @@ func (l *Loop) insertMissingToolResults(req *llm.Request) {
 // Other errors fall through to their raw text. When trace carries any
 // correlation ids (Shelley's own request id and/or an upstream provider id),
 // they are appended so users can quote them to support.
-func userFacingLLMError(err error, trace *llmhttp.RequestTrace) string {
+func userFacingLLMError(err error, trace *llm.RequestTrace) string {
 	var msg string
 	if errors.Is(err, llmhttp.ErrIdleTimeout) {
 		msg = fmt.Sprintf(

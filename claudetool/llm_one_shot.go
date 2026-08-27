@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/imageutil"
-	"shelley.exe.dev/llm/llmhttp"
 )
 
 // LLMOneShotTool sends a one-shot prompt to an LLM and returns the result.
@@ -282,7 +281,7 @@ func (t *LLMOneShotTool) run(ctx context.Context, req llmOneShotInput) llm.ToolO
 	}
 
 	// Send the request
-	resp, err := svc.Do(llmhttp.WithPurpose(ctx, "llm_one_shot"), llmReq)
+	resp, err := svc.Do(llm.WithPurpose(ctx, "llm_one_shot"), llmReq)
 	if err != nil {
 		return llm.ErrorfToolOut("LLM request failed: %w", err)
 	}

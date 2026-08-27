@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/llm/llmhttp"
 )
 
 // KeywordTool provides keyword search functionality
@@ -185,7 +184,7 @@ func (k *KeywordTool) keywordRun(ctx context.Context, input keywordInput) llm.To
 	if err != nil {
 		return llm.ErrorfToolOut("failed to send relevance filtering message: %w", err)
 	}
-	resp, err := svc.Do(llmhttp.WithPurpose(ctx, "keyword_search"), req)
+	resp, err := svc.Do(llm.WithPurpose(ctx, "keyword_search"), req)
 	if err != nil {
 		return llm.ErrorfToolOut("failed to send relevance filtering message: %w", err)
 	}

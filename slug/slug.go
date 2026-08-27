@@ -39,9 +39,9 @@ func GenerateSlug(ctx context.Context, llmProvider LLMServiceProvider, database 
 	// Tag the ctx so the slug LLM call's usage is collected; it is recorded on
 	// an appended slug marker message below. (WithConversationID also stamps the
 	// gateway request logs; the caller's ctx does not carry it.)
-	var otherUsage llmhttp.UsageAccumulator
-	ctx = llmhttp.WithUsageCollector(ctx, otherUsage.Collect)
-	ctx = llmhttp.WithConversationID(llmhttp.WithPurpose(ctx, "slug"), conversationID)
+	var otherUsage llm.UsageAccumulator
+	ctx = llm.WithUsageCollector(ctx, otherUsage.Collect)
+	ctx = llmhttp.WithConversationID(llm.WithPurpose(ctx, "slug"), conversationID)
 
 	baseSlug, err := generateSlugText(ctx, llmProvider, userMessage, conversationModelID)
 	if err != nil {

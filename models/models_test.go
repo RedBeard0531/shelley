@@ -12,7 +12,6 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/llm/predictable"
 )
 
@@ -204,7 +203,7 @@ func TestLoggingServiceUsageCollector(t *testing.T) {
 		modelID: "test-model",
 	}
 	req := &llm.Request{Messages: []llm.Message{llm.UserStringMessage("hi")}}
-	ctxWithCollector := llmhttp.WithUsageCollector(context.Background(), func(purpose string, usage llm.Usage) {
+	ctxWithCollector := llm.WithUsageCollector(context.Background(), func(purpose string, usage llm.Usage) {
 		got = append(got, collected{purpose, usage})
 	})
 
@@ -217,7 +216,7 @@ func TestLoggingServiceUsageCollector(t *testing.T) {
 	}
 
 	// Purpose tag: collected, model falls back to modelID (mock leaves Model empty).
-	ctx := llmhttp.WithPurpose(ctxWithCollector, "keyword_search")
+	ctx := llm.WithPurpose(ctxWithCollector, "keyword_search")
 	if _, err := svc.Do(ctx, req); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +242,7 @@ func TestLoggingServiceUsageCollector(t *testing.T) {
 
 	// Purpose tag but no collector in ctx: no panic, nothing collected.
 	svc.service = &mockLLMService{}
-	if _, err := svc.Do(llmhttp.WithPurpose(context.Background(), "keyword_search"), req); err != nil {
+	if _, err := svc.Do(llm.WithPurpose(context.Background(), "keyword_search"), req); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 {

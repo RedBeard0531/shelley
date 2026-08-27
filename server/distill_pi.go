@@ -523,9 +523,9 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 	// gateway request logs carry the conversation ID; the HTTP request ctx
 	// this derives from carries neither). The collected entries are attached
 	// to the summary message below.
-	var otherUsage llmhttp.UsageAccumulator
-	ctx = llmhttp.WithUsageCollector(ctx, otherUsage.Collect)
-	ctx = llmhttp.WithConversationID(llmhttp.WithPurpose(ctx, "compaction"), conversationID)
+	var otherUsage llm.UsageAccumulator
+	ctx = llm.WithUsageCollector(ctx, otherUsage.Collect)
+	ctx = llmhttp.WithConversationID(llm.WithPurpose(ctx, "compaction"), conversationID)
 
 	svc, err := s.llmManager.GetService(modelID)
 	if err != nil {

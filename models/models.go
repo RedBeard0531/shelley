@@ -497,8 +497,8 @@ func (l *loggingService) Do(ctx context.Context, request *llm.Request) (*llm.Res
 		}
 	}
 	l.logger.Info("LLM request completed", logAttrs...)
-	if purpose := llmhttp.PurposeFromContext(ctx); purpose != "" && !response.Usage.IsZero() {
-		if collect := llmhttp.UsageCollectorFromContext(ctx); collect != nil {
+	if purpose := llm.PurposeFromContext(ctx); purpose != "" && !response.Usage.IsZero() {
+		if collect := llm.UsageCollectorFromContext(ctx); collect != nil {
 			usage := response.UsageWithMeta()
 			if usage.Model == "" {
 				usage.Model = l.modelID
