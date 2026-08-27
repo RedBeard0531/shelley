@@ -5,6 +5,14 @@ const SWIPE_DISTANCE = 48;
 const DIRECTION_LOCK_DISTANCE = 10;
 const HORIZONTAL_BIAS = 1.25;
 
+// Full-screen popups (diff viewer, git graph, image comments, command
+// palette, PrimeVue modals) sit inside the app shell's light DOM, so a
+// drawer swipe that starts on one opens/closes the drawer underneath —
+// invisible until the popup closes. While a popup is open it owns all
+// touch gestures. Overlays in the app follow a "<name>-overlay" class
+// convention; dialogs additionally/alternatively set aria-modal.
+const POPUP_SELECTOR = '[aria-modal="true"], [class$="-overlay"]';
+
 type Gesture = {
   startX: number;
   startY: number;
@@ -13,6 +21,10 @@ type Gesture = {
   opening: boolean;
   cancelled: boolean;
 };
+
+export function isPopupTarget(target: Element | null): boolean {
+  return !!target?.closest(POPUP_SELECTOR);
+}
 
 export function hasHorizontalScrollContainer(target: Element | null): boolean {
   for (let element = target; element; element = element.parentElement) {
@@ -36,6 +48,10 @@ export function useMobileDrawerSwipe(drawerOpen: Ref<boolean>) {
     const touch = event.touches[0];
     const target = event.target instanceof Element ? event.target : null;
     const opening = !drawerOpen.value;
+
+    // Popups own all gestures (see isPopupTarget) so a swipe on them can't
+    // open or close the drawer underneath.
+    if (isPopupTarget(target)) return;
 
     // Code blocks, tables, diffs, and other wide content own horizontal
     // gestures. Starting a drawer swipe there makes ordinary scrolling
