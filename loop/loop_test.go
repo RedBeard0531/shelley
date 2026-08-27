@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +16,6 @@ import (
 
 	"shelley.exe.dev/gitstate"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/llm/predictable"
 )
 
@@ -1519,6 +1516,25 @@ func (e *errorLLMService) MaxImageBytes() int {
 	return 5 * 1024 * 1024
 }
 
+type testRequestError struct {
+	message string
+	info    llm.RequestErrorInfo
+}
+
+func (e *testRequestError) Error() string { return e.message }
+
+func (e *testRequestError) RequestErrorInfo() llm.RequestErrorInfo { return e.info }
+
+func newIdleStallError(duration time.Duration) error {
+	return &testRequestError{
+		message: fmt.Sprintf("llm stream idle timeout: no data received within idle window after %s: context canceled", duration),
+		info: llm.RequestErrorInfo{
+			Retryable:         true,
+			IdleStallDuration: duration,
+		},
+	}
+}
+
 // retryableLLMService fails with a retryable error a specified number of times, then succeeds
 type retryableLLMService struct {
 	failuresRemaining int
@@ -1683,7 +1699,9 @@ func TestIsRetryableError(t *testing.T) {
 		{"connection reset", fmt.Errorf("connection reset by peer"), true},
 		{"connection refused", fmt.Errorf("connection refused"), true},
 		{"timeout", fmt.Errorf("i/o timeout"), true},
-		{"idle stall timeout", fmt.Errorf("stream: %w", llmhttp.ErrIdleTimeout), true},
+		{"idle stall timeout", fmt.Errorf("stream: %w", newIdleStallError(3*time.Minute)), true},
+		{"structured retryable", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true}}, true},
+		{"structured non-retryable overrides EOF text", &testRequestError{message: "EOF", info: llm.RequestErrorInfo{}}, false},
 		{"rate limit not in tight set", fmt.Errorf("rate limit exceeded"), false},
 		{"503 not in tight set", fmt.Errorf("upstream returned 503"), false},
 		{"generic error", fmt.Errorf("something went wrong"), false},
@@ -1714,7 +1732,9 @@ func TestIsRetryableLLMError(t *testing.T) {
 		{"gateway proxy error retryable", fmt.Errorf("gateway proxy error: dial tcp ..."), true},
 		{"upstream connect error retryable", fmt.Errorf("upstream connect error or disconnect/reset before headers"), true},
 		{"deadline exceeded retryable", fmt.Errorf("context deadline exceeded"), true},
-		{"idle stall timeout retryable", fmt.Errorf("stream: %w", llmhttp.ErrIdleTimeout), true},
+		{"idle stall timeout retryable", fmt.Errorf("stream: %w", newIdleStallError(3*time.Minute)), true},
+		{"structured retryable", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true}}, true},
+		{"structured non-retryable overrides rate-limit text", &testRequestError{message: "rate limit exceeded", info: llm.RequestErrorInfo{}}, false},
 		{"deployment scaling retryable", fmt.Errorf("DEPLOYMENT_SCALING_UP scale-up in progress"), true},
 		{"credits exhausted not retryable", fmt.Errorf("LLM credits exhausted; credits refresh over time"), false},
 		{"invalid api key not retryable", fmt.Errorf("invalid api key"), false},
@@ -2783,18 +2803,25 @@ func (s *switchableLLM) SupportsImages() bool       { return true }
 func (p *pauseLLMService) SupportsImages() bool     { return true }
 
 func TestUserFacingLLMError(t *testing.T) {
-	idleErr := fmt.Errorf("stream: %w after 3m0s: context canceled", llmhttp.ErrIdleTimeout)
+	idleTimeout := 3 * time.Minute
+	idleErr := fmt.Errorf("stream: %w", newIdleStallError(idleTimeout))
 
 	// Idle/stall timeout is explained, not surfaced as a raw deadline error.
 	msg := userFacingLLMError(idleErr, nil)
-	if !strings.Contains(msg, "idle/stall timeout") {
-		t.Errorf("idle error message missing explanation: %q", msg)
+	want := "LLM request timed out: the model stopped sending data for 3m0s " +
+		"(idle/stall timeout), so the request was aborted. This usually " +
+		"means the provider or upstream connection stalled mid-response, " +
+		"not that your turn was too long — a slow but steadily streaming " +
+		"response is allowed to finish. Press Retry to try again.\n\n" +
+		"Details: stream: llm stream idle timeout: no data received within idle window after 3m0s: context canceled"
+	if msg != want {
+		t.Errorf("idle error message = %q, want %q", msg, want)
 	}
 	if strings.Contains(msg, "context deadline exceeded") {
 		t.Errorf("idle error message should not surface opaque deadline text: %q", msg)
 	}
-	if !strings.Contains(msg, llmhttp.DefaultIdleTimeout.String()) {
-		t.Errorf("idle error message missing timeout duration %s: %q", llmhttp.DefaultIdleTimeout, msg)
+	if !strings.Contains(msg, idleTimeout.String()) {
+		t.Errorf("idle error message missing timeout duration %s: %q", idleTimeout, msg)
 	}
 
 	// A non-idle error falls through to its raw text.
@@ -2803,26 +2830,15 @@ func TestUserFacingLLMError(t *testing.T) {
 		t.Errorf("generic error message = %q, want it to contain the cause", generic)
 	}
 
-	// Trace ids are appended when present.
-	ctx, trace := llm.WithRequestTrace(context.Background())
-	_ = ctx
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Request-Id", "req_abc")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL, nil)
-	resp, err := llmhttp.NewClient(nil).Do(req)
-	if err != nil {
-		t.Fatalf("seed request: %v", err)
-	}
-	resp.Body.Close()
-
+	// Trace diagnostics are appended when present.
+	_, trace := llm.WithRequestTrace(context.Background())
+	trace.Set("shelley_request_id", "local_123")
+	trace.Set("upstream_request_id", "req_abc")
 	withIDs := userFacingLLMError(idleErr, trace)
 	if !strings.Contains(withIDs, "req_abc") {
 		t.Errorf("error message missing upstream request id: %q", withIDs)
 	}
-	if !strings.Contains(withIDs, trace.Value("shelley_request_id")) {
+	if !strings.Contains(withIDs, "local_123") {
 		t.Errorf("error message missing shelley request id: %q", withIDs)
 	}
 }

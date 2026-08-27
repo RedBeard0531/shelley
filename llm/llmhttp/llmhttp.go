@@ -107,12 +107,25 @@ func ProviderFromContext(ctx context.Context) string {
 	return ""
 }
 
-// ErrIdleTimeout is returned (wrapped) when a response stream makes no
-// progress — no bytes received — for longer than the configured idle timeout.
-// Callers can test for it with errors.Is. It is deliberately distinct from
-// context.DeadlineExceeded so that a stalled stream is not confused with an
-// overall request deadline or a user-initiated cancel.
-var ErrIdleTimeout = errors.New("llm stream idle timeout: no data received within idle window")
+const idleTimeoutMessage = "llm stream idle timeout: no data received within idle window"
+
+type idleTimeoutError struct {
+	timeout time.Duration
+	cause   error
+}
+
+var _ llm.RequestError = (*idleTimeoutError)(nil)
+
+func (e *idleTimeoutError) Error() string {
+	return fmt.Sprintf("%s after %s: %v", idleTimeoutMessage, e.timeout, e.cause)
+}
+
+func (e *idleTimeoutError) RequestErrorInfo() llm.RequestErrorInfo {
+	return llm.RequestErrorInfo{
+		Retryable:         true,
+		IdleStallDuration: e.timeout,
+	}
+}
 
 // DefaultIdleTimeout is the idle/stall timeout applied to LLM requests when a
 // client is built without an explicit value. It bounds how long we wait
@@ -204,7 +217,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Wrap the body so each read resets the idle timer, and so the final
-	// read error is translated to ErrIdleTimeout when the watchdog fired.
+	// read error exposes idle-stall metadata when the watchdog fired.
 	resp.Body = &idleReadCloser{
 		ReadCloser: resp.Body,
 		watch:      watch,
@@ -269,17 +282,17 @@ func (w *idleWatchdog) hasFired() bool {
 	return w.fired
 }
 
-// translate converts an error into ErrIdleTimeout when the watchdog fired,
-// preserving the underlying cause for debugging.
+// translate converts an error into a retryable idle-stall error when the
+// watchdog fired, preserving the underlying cause text for debugging.
 func (w *idleWatchdog) translate(err error) error {
 	if err == nil || !w.hasFired() {
 		return err
 	}
-	return fmt.Errorf("%w after %s: %v", ErrIdleTimeout, w.timeout, err)
+	return &idleTimeoutError{timeout: w.timeout, cause: err}
 }
 
 // idleReadCloser resets the idle watchdog on every read and translates a read
-// error caused by the watchdog into ErrIdleTimeout.
+// error caused by the watchdog into provider-neutral idle-stall metadata.
 type idleReadCloser struct {
 	io.ReadCloser
 	watch  *idleWatchdog
@@ -295,7 +308,7 @@ func (r *idleReadCloser) Read(p []byte) (int, error) {
 	if err != nil {
 		// A natural end of stream is not a stall. Stop the watchdog so a
 		// delayed Close (or a read past EOF) can't retroactively translate
-		// this into a spurious ErrIdleTimeout.
+		// this into a spurious idle-stall error.
 		if errors.Is(err, io.EOF) {
 			r.watch.stop()
 			return n, err

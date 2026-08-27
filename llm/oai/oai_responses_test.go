@@ -3,7 +3,6 @@ package oai
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1426,7 +1425,7 @@ func TestResponsesServiceRequestLevelThinking(t *testing.T) {
 
 // TestResponsesServiceStallTimeout verifies that when the upstream stream
 // stalls mid-response (headers + a delta sent, then silence), the idle-timeout
-// client aborts the request with an ErrIdleTimeout-wrapped error rather than
+// client aborts the request with retryable idle-stall metadata rather than
 // hanging or capping on a fixed total deadline.
 func TestResponsesServiceStallTimeout(t *testing.T) {
 	release := make(chan struct{})
@@ -1465,8 +1464,12 @@ func TestResponsesServiceStallTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected stall error, got nil")
 	}
-	if !errors.Is(err, llmhttp.ErrIdleTimeout) {
-		t.Fatalf("error = %v, want errors.Is(err, llmhttp.ErrIdleTimeout)", err)
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.IdleStallDuration != 150*time.Millisecond || !info.Retryable {
+		t.Fatalf("error metadata = %+v, %v; want retryable 150ms idle stall (error: %v)", info, ok, err)
+	}
+	if wantURL := "url=" + server.URL + "/responses"; !strings.Contains(err.Error(), wantURL) {
+		t.Fatalf("error = %v, want request URL diagnostic %q", err, wantURL)
 	}
 }
 

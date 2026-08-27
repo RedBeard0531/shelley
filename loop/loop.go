@@ -13,18 +13,17 @@ import (
 
 	"shelley.exe.dev/gitstate"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/llm/llmhttp"
 )
 
 var errMessagePersistence = errors.New("message persistence failed")
 
 // maxTurnDuration is an absolute backstop on a single LLM request (including
 // its inner transport retries). The primary bound on a stuck stream is the
-// transport idle/stall timeout (llmhttp.DefaultIdleTimeout); this ceiling only
-// exists to stop a provider that keeps the connection warm with
-// heartbeats/keepalives (which reset the idle timer) from hanging a turn
-// indefinitely. It is deliberately far larger than the idle window so that
-// genuinely long, steadily-streaming turns are unaffected.
+// transport idle/stall timeout. This ceiling only exists to stop a provider
+// that keeps the connection warm with heartbeats/keepalives (which reset the
+// idle timer) from hanging a turn indefinitely. It is deliberately far larger
+// than the idle window so that genuinely long, steadily-streaming turns are
+// unaffected.
 const maxTurnDuration = 15 * time.Minute
 
 // MessageRecordFunc is called to record new messages to persistent storage.
@@ -395,11 +394,11 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		// that escape the provider without adding noise.
 		//
 		// Timeouts are layered:
-		//   - The primary bound is the transport-level idle/stall timeout (see
-		//     llmhttp.Transport.IdleTimeout), which aborts only when no bytes
-		//     arrive for the idle window. This lets a slow-but-progressing turn
-		//     (a long high-reasoning response, or a slow ChatGPT-subscription
-		//     proxy hop) run to completion instead of dying at a fixed cap.
+		//   - The primary bound is the provider transport's idle/stall timeout,
+		//     which aborts only when no bytes arrive for the idle window. This lets
+		//     a slow-but-progressing turn (a long high-reasoning response, or a
+		//     slow ChatGPT-subscription proxy hop) run to completion instead of
+		//     dying at a fixed cap.
 		//   - maxTurnDuration is a generous absolute backstop so a provider that
 		//     keeps the socket warm with heartbeats/keepalives while otherwise
 		//     wedged (which would keep resetting the idle timer) can't hang the
@@ -1170,7 +1169,7 @@ func (l *Loop) insertMissingToolResults(req *llm.Request) {
 // they are appended so users can quote them to support.
 func userFacingLLMError(err error, trace *llm.RequestTrace) string {
 	var msg string
-	if errors.Is(err, llmhttp.ErrIdleTimeout) {
+	if info, ok := llm.RequestErrorInfoFromError(err); ok && info.IdleStallDuration > 0 {
 		msg = fmt.Sprintf(
 			"LLM request timed out: the model stopped sending data for %s "+
 				"(idle/stall timeout), so the request was aborted. This usually "+
@@ -1178,7 +1177,7 @@ func userFacingLLMError(err error, trace *llm.RequestTrace) string {
 				"not that your turn was too long — a slow but steadily streaming "+
 				"response is allowed to finish. Press Retry to try again.\n\n"+
 				"Details: %v",
-			llmhttp.DefaultIdleTimeout, err,
+			info.IdleStallDuration, err,
 		)
 	} else {
 		msg = fmt.Sprintf("LLM request failed: %v", err)
@@ -1204,10 +1203,10 @@ func isRetryableError(err error) bool {
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		return true
 	}
-	// A stalled stream (no bytes within the idle window) is a transport-level
-	// hiccup: a fresh attempt often succeeds immediately.
-	if errors.Is(err, llmhttp.ErrIdleTimeout) {
-		return true
+	// Structured request metadata is authoritative when a transport or
+	// provider supplies it.
+	if info, ok := llm.RequestErrorInfoFromError(err); ok {
+		return info.Retryable
 	}
 	lower := strings.ToLower(err.Error())
 	for _, p := range []string{
@@ -1246,10 +1245,10 @@ func IsRetryableLLMError(err error) bool {
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		return true
 	}
-	// Idle/stall timeout: the stream went silent mid-flight. Re-sending the
-	// same conversation state is safe and usually succeeds.
-	if errors.Is(err, llmhttp.ErrIdleTimeout) {
-		return true
+	// Structured request metadata is authoritative when a transport or
+	// provider supplies it.
+	if info, ok := llm.RequestErrorInfoFromError(err); ok {
+		return info.Retryable
 	}
 	lower := strings.ToLower(err.Error())
 

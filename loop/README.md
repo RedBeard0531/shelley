@@ -13,6 +13,13 @@ handling LLM interactions, tool execution, and message recording.
 - **Context Cancellation**: Gracefully handles context cancellation
 - **Thread Safety**: All methods are safe for concurrent use
 
+## Transport Boundary
+
+The loop depends only on provider-neutral `llm` contracts. Providers and
+transports may populate `llm.RequestTrace`, collect indirect usage through the
+`llm` context helpers, and expose retry/idle-stall details with
+`llm.RequestError`; the loop does not import a concrete transport package.
+
 ## Basic Usage
 
 ```go

@@ -2,7 +2,6 @@ package llmhttp
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +11,18 @@ import (
 
 	"shelley.exe.dev/llm"
 )
+
+func requireIdleStall(t *testing.T, err error) llm.RequestErrorInfo {
+	t.Helper()
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.IdleStallDuration <= 0 {
+		t.Fatalf("error = %v, want idle-stall request metadata", err)
+	}
+	if !info.Retryable {
+		t.Fatalf("idle-stall error metadata = %+v, want retryable", info)
+	}
+	return info
+}
 
 func TestContextFunctions(t *testing.T) {
 	ctx := context.Background()
@@ -159,8 +170,9 @@ func TestIdleTimeoutFiresOnStall(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected idle-timeout error reading body, got nil")
 	}
-	if !errors.Is(err, ErrIdleTimeout) {
-		t.Fatalf("error = %v, want errors.Is(err, ErrIdleTimeout)", err)
+	info := requireIdleStall(t, err)
+	if info.IdleStallDuration != 100*time.Millisecond {
+		t.Errorf("idle stall duration = %s, want 100ms", info.IdleStallDuration)
 	}
 	if !strings.Contains(err.Error(), "100ms") {
 		t.Errorf("error %q does not mention the idle timeout duration", err.Error())
@@ -222,15 +234,18 @@ func TestIdleTimeoutFiresBeforeFirstByte(t *testing.T) {
 	resp, err := client.Do(req)
 	if err != nil {
 		// Some stacks deliver the stall as a RoundTrip error instead of a body
-		// read error; either is acceptable as long as it's an idle timeout.
-		if !errors.Is(err, ErrIdleTimeout) {
-			t.Fatalf("Do error = %v, want ErrIdleTimeout", err)
+		// read error; either is acceptable as long as it has idle-stall metadata.
+		info := requireIdleStall(t, err)
+		if info.IdleStallDuration != 100*time.Millisecond {
+			t.Errorf("idle stall duration = %s, want 100ms", info.IdleStallDuration)
 		}
 		return
 	}
 	defer resp.Body.Close()
-	if _, err := io.ReadAll(resp.Body); !errors.Is(err, ErrIdleTimeout) {
-		t.Fatalf("ReadAll error = %v, want ErrIdleTimeout", err)
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		requireIdleStall(t, err)
+	} else {
+		t.Fatal("ReadAll error = nil, want idle-stall request metadata")
 	}
 }
 
@@ -317,9 +332,7 @@ func TestRequestTraceHasShelleyIDOnStall(t *testing.T) {
 		_, err = io.ReadAll(resp.Body)
 		resp.Body.Close()
 	}
-	if !errors.Is(err, ErrIdleTimeout) {
-		t.Fatalf("error = %v, want ErrIdleTimeout", err)
-	}
+	requireIdleStall(t, err)
 	if trace.Value("shelley_request_id") == "" {
 		t.Fatalf("trace missing Shelley request id after stall")
 	}
