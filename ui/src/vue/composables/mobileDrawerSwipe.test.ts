@@ -62,6 +62,7 @@ const popupDom = new JSDOM(`
     <div class="main-content">
       <div class="diff-viewer-overlay"><div id="in-overlay"></div></div>
       <div class="command-palette-overlay"><div id="in-palette"></div></div>
+      <div class="command-palette-overlay v-enter-active"><div id="in-transition-overlay"></div></div>
       <div aria-modal="true"><div id="in-dialog"></div></div>
       <div id="plain-content"></div>
     </div>
@@ -70,6 +71,9 @@ const popupDom = new JSDOM(`
 
 const overlayTarget = popupDom.window.document.querySelector("#in-overlay") as HTMLElement;
 const paletteTarget = popupDom.window.document.querySelector("#in-palette") as HTMLElement;
+const transitionTarget = popupDom.window.document.querySelector(
+  "#in-transition-overlay",
+) as HTMLElement;
 const dialogTarget = popupDom.window.document.querySelector("#in-dialog") as HTMLElement;
 const plainTarget = popupDom.window.document.querySelector("#plain-content") as HTMLElement;
 const drawerTarget = popupDom.window.document.querySelector("#drawer") as HTMLElement;
@@ -77,6 +81,10 @@ const drawerTarget = popupDom.window.document.querySelector("#drawer") as HTMLEl
 run("treats -overlay popups as drawer-swipe-free zones", () => {
   assert(isPopupTarget(overlayTarget), "swipe inside an overlay should not drive the drawer");
   assert(isPopupTarget(paletteTarget), "command palette overlay should also own swipes");
+  assert(
+    isPopupTarget(transitionTarget),
+    "an overlay with extra classes (e.g. a transition suffix) should still be matched",
+  );
 });
 
 run("treats aria-modal dialogs as drawer-swipe-free zones", () => {
@@ -104,11 +112,12 @@ run("composedPath reaches a scroll container inside a shadow root", () => {
 
   // A document-level listener sees the composed path, not just the host.
   let path: EventTarget[] = [];
-  document.addEventListener("drawer-swipe-test", (e) => (path = e.composedPath()));
+  const onTest = (e: Event) => (path = e.composedPath());
+  document.addEventListener("drawer-swipe-test", onTest);
   inner.dispatchEvent(
     new document.defaultView!.Event("drawer-swipe-test", { bubbles: true, composed: true }),
   );
-  document.removeEventListener("drawer-swipe-test", () => {});
+  document.removeEventListener("drawer-swipe-test", onTest);
   assert(path.includes(code), "the composed path should include shadow-tree nodes");
   assert(path.includes(host), "the composed path should include the shadow host");
   // (jsdom pierces composedPath but cannot apply computed styles inside shadow
@@ -120,11 +129,12 @@ run("path scan finds a wide scroll container on the composed path", () => {
   wide.style.overflowX = "auto";
   Object.defineProperty(wide, "scrollWidth", { value: 640, configurable: true });
   let path: EventTarget[] = [];
-  document.addEventListener("drawer-swipe-test-wide", (e) => (path = e.composedPath()));
+  const onTest = (e: Event) => (path = e.composedPath());
+  document.addEventListener("drawer-swipe-test-wide", onTest);
   target.dispatchEvent(
     new document.defaultView!.Event("drawer-swipe-test-wide", { bubbles: true, composed: true }),
   );
-  document.removeEventListener("drawer-swipe-test-wide", () => {});
+  document.removeEventListener("drawer-swipe-test-wide", onTest);
   assert(
     eventPathHasHorizontalScrollContainer(path),
     "a wide scroll container on the composed path should own the swipe",
@@ -135,11 +145,12 @@ run("path scan ignores fitting scroll containers", () => {
   wide.style.overflowX = "auto";
   Object.defineProperty(wide, "scrollWidth", { value: 320, configurable: true });
   let path: EventTarget[] = [];
-  document.addEventListener("drawer-swipe-test-fit", (e) => (path = e.composedPath()));
+  const onTest = (e: Event) => (path = e.composedPath());
+  document.addEventListener("drawer-swipe-test-fit", onTest);
   target.dispatchEvent(
     new document.defaultView!.Event("drawer-swipe-test-fit", { bubbles: true, composed: true }),
   );
-  document.removeEventListener("drawer-swipe-test-fit", () => {});
+  document.removeEventListener("drawer-swipe-test-fit", onTest);
   assert(
     !eventPathHasHorizontalScrollContainer(path),
     "a fitting scroll container should not block drawer swipes",

@@ -5,13 +5,15 @@ const SWIPE_DISTANCE = 48;
 const DIRECTION_LOCK_DISTANCE = 10;
 const HORIZONTAL_BIAS = 1.25;
 
-// Full-screen popups (diff viewer, git graph, image comments, command
-// palette, PrimeVue modals) sit inside the app shell's light DOM, so a
-// drawer swipe that starts on one opens/closes the drawer underneath —
-// invisible until the popup closes. While a popup is open it owns all
-// touch gestures. Overlays in the app follow a "<name>-overlay" class
-// convention; dialogs additionally/alternatively set aria-modal.
-const POPUP_SELECTOR = '[aria-modal="true"], [class$="-overlay"]';
+// Full-screen popups that live inside the app shell — the diff viewer, git
+// graph, and command palette — pass the .main-content/.app-container guards,
+// so a drawer swipe starting on one opens/closes the drawer underneath,
+// invisible until the popup closes. While a popup is open it owns all touch
+// gestures. Overlays in the app follow a "<name>-overlay" class convention
+// (the two attribute forms cover the class token even when the element
+// gains more classes, e.g. a transition's v-enter-active suffix); dialogs
+// additionally/alternatively set aria-modal.
+const POPUP_SELECTOR = '[aria-modal="true"], [class$="-overlay"], [class*="-overlay "]';
 
 type Gesture = {
   startX: number;
