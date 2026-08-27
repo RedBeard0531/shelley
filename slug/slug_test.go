@@ -127,16 +127,8 @@ type MockLLMProvider struct {
 	Service *MockLLMService
 }
 
-func (m *MockLLMProvider) GetService(modelID string) (llm.Service, error) {
+func (m *MockLLMProvider) GetWorkhorseService(string) (llm.Service, error) {
 	return m.Service, nil
-}
-
-func (m *MockLLMProvider) GetAvailableModels() []string {
-	return []string{"mock"}
-}
-
-func (m *MockLLMProvider) GetModelInfo(modelID string) *models.ModelInfo {
-	return nil
 }
 
 // TestGenerateSlug_DatabaseIntegration tests slug generation with actual database conflicts
@@ -296,31 +288,15 @@ func (m *MockLLMServiceWithError) MaxImageBytes() int {
 // MockLLMProviderWithError provides a mock LLM provider that returns errors for all models
 type MockLLMProviderWithError struct{}
 
-func (m *MockLLMProviderWithError) GetService(modelID string) (llm.Service, error) {
-	return nil, fmt.Errorf("model not available")
-}
-
-func (m *MockLLMProviderWithError) GetAvailableModels() []string {
-	return []string{}
-}
-
-func (m *MockLLMProviderWithError) GetModelInfo(modelID string) *models.ModelInfo {
-	return nil
+func (m *MockLLMProviderWithError) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return nil, fmt.Errorf("no workhorse model available (conversation model %q)", modelID)
 }
 
 // MockLLMProviderWithServiceError provides a mock LLM provider that returns a service with error
 type MockLLMProviderWithServiceError struct{}
 
-func (m *MockLLMProviderWithServiceError) GetService(modelID string) (llm.Service, error) {
+func (m *MockLLMProviderWithServiceError) GetWorkhorseService(string) (llm.Service, error) {
 	return &MockLLMServiceWithError{}, nil
-}
-
-func (m *MockLLMProviderWithServiceError) GetAvailableModels() []string {
-	return []string{"mock"}
-}
-
-func (m *MockLLMProviderWithServiceError) GetModelInfo(modelID string) *models.ModelInfo {
-	return nil
 }
 
 // TestGenerateSlug_LLMError tests error handling when LLM service fails
@@ -369,16 +345,8 @@ func TestGenerateSlug_EmptyResponse(t *testing.T) {
 // MockLLMProviderWithEmptyResponse provides a mock LLM provider that returns empty response
 type MockLLMProviderWithEmptyResponse struct{}
 
-func (m *MockLLMProviderWithEmptyResponse) GetService(modelID string) (llm.Service, error) {
+func (m *MockLLMProviderWithEmptyResponse) GetWorkhorseService(string) (llm.Service, error) {
 	return &MockLLMServiceEmptyResponse{}, nil
-}
-
-func (m *MockLLMProviderWithEmptyResponse) GetAvailableModels() []string {
-	return []string{"mock"}
-}
-
-func (m *MockLLMProviderWithEmptyResponse) GetModelInfo(modelID string) *models.ModelInfo {
-	return nil
 }
 
 // MockLLMServiceEmptyResponse provides a mock LLM service that returns empty response
@@ -494,45 +462,6 @@ func TestGenerateSlug_PredictableModel(t *testing.T) {
 	}
 }
 
-// TestGenerateSlug_ConversationModelFallback tests fallback to conversation model when no slug-tagged models exist
-func TestGenerateSlug_ConversationModelFallback(t *testing.T) {
-	// Mock LLM provider that doesn't have predictable model but has a conversation model
-	mockLLM := &MockLLMProviderPredictableFallback{
-		fallbackService: &MockLLMService{
-			ResponseText: "fallback-slug",
-		},
-	}
-
-	// Test that fallback to conversation model works when no slug-tagged models exist
-	slug, err := generateSlugText(context.Background(), mockLLM, "Test message", "my-custom-model")
-	if err != nil {
-		t.Fatalf("Failed to generate slug with conversation model fallback: %v", err)
-	}
-	if slug != "fallback-slug" {
-		t.Errorf("Expected 'fallback-slug', got %q", slug)
-	}
-}
-
-// MockLLMProviderPredictableFallback provides a mock LLM provider that simulates predictable model not available
-type MockLLMProviderPredictableFallback struct {
-	fallbackService *MockLLMService
-}
-
-func (m *MockLLMProviderPredictableFallback) GetService(modelID string) (llm.Service, error) {
-	if modelID == "predictable" {
-		return nil, fmt.Errorf("predictable model not available")
-	}
-	return m.fallbackService, nil
-}
-
-func (m *MockLLMProviderPredictableFallback) GetAvailableModels() []string {
-	return []string{"my-custom-model"}
-}
-
-func (m *MockLLMProviderPredictableFallback) GetModelInfo(modelID string) *models.ModelInfo {
-	return nil
-}
-
 // TestGenerateSlug_ReasoningModel verifies that slug generation works when the
 // LLM returns a leading Thinking content block followed by the text answer,
 // as reasoning models like gpt-oss-20b do. Previously the code only inspected
@@ -580,107 +509,38 @@ func (m *MockLLMService) SupportsImages() bool              { return true }
 func (m *MockLLMServiceWithError) SupportsImages() bool     { return true }
 func (m *MockLLMServiceEmptyResponse) SupportsImages() bool { return true }
 
-// recordingProvider is a mock provider with a fixed model list and per-model
-// providers. It records which model IDs GetService was asked for.
+// recordingProvider records the workhorse service requested by slug generation.
 type recordingProvider struct {
-	modelIDs   []string
-	providers  map[string]models.Provider // optional per-model provider
-	requested  []string
-	services   map[string]llm.Service // optional per-model service override
-	fallbackTo llm.Service
+	MockLLMService
+	modelID string
+	request *llm.Request
 }
 
-func (p *recordingProvider) GetService(modelID string) (llm.Service, error) {
-	p.requested = append(p.requested, modelID)
-	if svc, ok := p.services[modelID]; ok {
-		return svc, nil
-	}
-	return p.fallbackTo, nil
+func (p *recordingProvider) GetWorkhorseService(modelID string) (llm.Service, error) {
+	p.modelID = modelID
+	return p, nil
 }
 
-func (p *recordingProvider) GetAvailableModels() []string { return p.modelIDs }
-
-func (p *recordingProvider) GetModelInfo(modelID string) *models.ModelInfo {
-	provider, ok := p.providers[modelID]
-	if !ok {
-		return nil
-	}
-	return &models.ModelInfo{DisplayName: modelID, Provider: provider}
+func (p *recordingProvider) Do(_ context.Context, req *llm.Request) (*llm.Response, error) {
+	p.request = req
+	return &llm.Response{Content: llm.TextContent("my-slug")}, nil
 }
 
-// TestGenerateSlugText_WorkhorsePreferred verifies that slug generation picks
-// a cheap same-provider sibling of the conversation model before the
-// conversation model itself.
-func TestGenerateSlugText_WorkhorsePreferred(t *testing.T) {
-	provider := &recordingProvider{
-		modelIDs: []string{"claude-opus-5", "claude-fable-5", "claude-haiku-4-5"},
-		providers: map[string]models.Provider{
-			"claude-opus-5":    models.ProviderAnthropic,
-			"claude-fable-5":   models.ProviderAnthropic,
-			"claude-haiku-4-5": models.ProviderAnthropic,
-		},
-		fallbackTo: &MockLLMService{ResponseText: "my-slug"},
-	}
-
-	slug, err := generateSlugText(context.Background(), provider, "some message", "claude-fable-5")
-	if err != nil {
-		t.Fatalf("generateSlugText failed: %v", err)
-	}
-	if slug != "my-slug" {
-		t.Errorf("expected slug %q, got %q", "my-slug", slug)
-	}
-	if len(provider.requested) == 0 || provider.requested[0] != "claude-haiku-4-5" {
-		t.Errorf("expected workhorse claude-haiku-4-5 first, got %v", provider.requested)
-	}
-}
-
-// TestGenerateSlugText_ConversationFallback verifies that a failed workhorse
-// gets one retry with the conversation model.
-func TestGenerateSlugText_ConversationFallback(t *testing.T) {
-	provider := &recordingProvider{
-		modelIDs: []string{"claude-fable-5", "claude-haiku-4-5"},
-		providers: map[string]models.Provider{
-			"claude-fable-5":   models.ProviderAnthropic,
-			"claude-haiku-4-5": models.ProviderAnthropic,
-		},
-		services: map[string]llm.Service{
-			"claude-haiku-4-5": &MockLLMServiceWithError{},
-		},
-		fallbackTo: &MockLLMService{ResponseText: "fable-slug"},
-	}
+func TestGenerateSlugTextUsesWorkhorseService(t *testing.T) {
+	provider := &recordingProvider{}
 
 	slug, err := generateSlugText(context.Background(), provider, "some message", "claude-fable-5")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slug != "fable-slug" {
-		t.Fatalf("slug = %q, want fable-slug", slug)
+	if slug != "my-slug" {
+		t.Errorf("slug = %q, want my-slug", slug)
 	}
-	want := []string{"claude-haiku-4-5", "claude-fable-5"}
-	if len(provider.requested) != 2 || provider.requested[0] != want[0] || provider.requested[1] != want[1] {
-		t.Errorf("expected requests %v, got %v", want, provider.requested)
+	if provider.modelID != "claude-fable-5" {
+		t.Errorf("conversation model = %q, want claude-fable-5", provider.modelID)
 	}
-}
-
-// TestGenerateSlugText_UnknownProviderUsesConversationModel verifies that a
-// conversation model with no provider info (e.g. a custom model) generates
-// slugs with itself.
-func TestGenerateSlugText_UnknownProviderUsesConversationModel(t *testing.T) {
-	provider := &recordingProvider{
-		modelIDs:   []string{"my-custom-model", "claude-haiku-4-5"},
-		fallbackTo: &MockLLMService{ResponseText: "custom-slug"},
-	}
-
-	slug, err := generateSlugText(context.Background(), provider, "some message", "my-custom-model")
-	if err != nil {
-		t.Fatalf("generateSlugText failed: %v", err)
-	}
-	if slug != "custom-slug" {
-		t.Errorf("expected slug %q, got %q", "custom-slug", slug)
-	}
-	want := []string{"my-custom-model"}
-	if len(provider.requested) != 1 || provider.requested[0] != want[0] {
-		t.Errorf("expected requests %v, got %v", want, provider.requested)
+	if provider.request == nil {
+		t.Fatal("workhorse request was not provided")
 	}
 }
 

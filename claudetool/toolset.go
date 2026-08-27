@@ -9,6 +9,13 @@ import (
 	"shelley.exe.dev/llm"
 )
 
+// LLMServiceProvider is what tools need from the model layer.
+type LLMServiceProvider interface {
+	GetService(modelID string) (llm.Service, error)
+	GetAvailableModels() []string
+	GetWorkhorseService(conversationModelID string) (llm.Service, error)
+}
+
 // WorkingDir is a thread-safe mutable working directory.
 type MutableWorkingDir struct {
 	mu  sync.RWMutex

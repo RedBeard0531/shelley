@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/models"
 )
 
 func TestNewToolSet(t *testing.T) {
@@ -458,8 +457,8 @@ func (m *mockLLMProviderWithProviders) GetAvailableModels() []string {
 	return nil
 }
 
-func (m *mockLLMProviderWithProviders) GetModelInfo(modelID string) *models.ModelInfo {
-	return &models.ModelInfo{DisplayName: modelID}
+func (m *mockLLMProviderWithProviders) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return m.GetService(modelID)
 }
 
 // plainOpenAIProvider returns a mockServiceWithProvider (no web search
@@ -470,9 +469,8 @@ func (p *plainOpenAIProvider) GetService(modelID string) (llm.Service, error) {
 	return &mockServiceWithProvider{provider: "openai"}, nil
 }
 func (p *plainOpenAIProvider) GetAvailableModels() []string { return nil }
-
-func (p *plainOpenAIProvider) GetModelInfo(modelID string) *models.ModelInfo {
-	return &models.ModelInfo{DisplayName: modelID}
+func (p *plainOpenAIProvider) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return p.GetService(modelID)
 }
 
 // plainAnthropicProvider returns a mockServiceWithProvider (no web search
@@ -486,9 +484,8 @@ func (p *plainAnthropicProvider) GetService(modelID string) (llm.Service, error)
 	return &mockServiceWithProvider{provider: "anthropic"}, nil
 }
 func (p *plainAnthropicProvider) GetAvailableModels() []string { return nil }
-
-func (p *plainAnthropicProvider) GetModelInfo(modelID string) *models.ModelInfo {
-	return &models.ModelInfo{DisplayName: modelID}
+func (p *plainAnthropicProvider) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return p.GetService(modelID)
 }
 
 func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
@@ -658,7 +655,9 @@ type rawPatchProvider struct{}
 
 func (*rawPatchProvider) GetService(string) (llm.Service, error) { return &rawPatchService{}, nil }
 func (*rawPatchProvider) GetAvailableModels() []string           { return []string{"test"} }
-func (*rawPatchProvider) GetModelInfo(string) *models.ModelInfo  { return nil }
+func (p *rawPatchProvider) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return p.GetService(modelID)
+}
 
 func TestNewToolSetPatchStrategyFlags(t *testing.T) {
 	boolFn := func(value bool) func() bool { return func() bool { return value } }

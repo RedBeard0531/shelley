@@ -919,6 +919,10 @@ func (m *inspectableLLMManager) GetAvailableModels() []string {
 	return []string{"predictable"}
 }
 
+func (m *inspectableLLMManager) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return m.GetService(modelID)
+}
+
 func (m *inspectableLLMManager) HasModel(modelID string) bool {
 	return modelID == "predictable"
 }

@@ -8,13 +8,6 @@ import (
 	"shelley.exe.dev/llm"
 )
 
-// WorkhorseProvider is the subset of Manager needed to run workhorse calls.
-type WorkhorseProvider interface {
-	GetAvailableModels() []string
-	GetModelInfo(modelID string) *ModelInfo
-	GetService(modelID string) (llm.Service, error)
-}
-
 type workhorseFamily struct {
 	contains string
 	excludes []string
@@ -32,36 +25,73 @@ var workhorseFamilies = map[Provider]workhorseFamily{
 	ProviderFireworks: {contains: "deepseek-v4-flash"},
 }
 
-// WorkhorseDo sends req to a cheap model from the conversation's provider. If
-// that call fails, or no workhorse is configured, it uses the conversation
-// model once.
-func WorkhorseDo(ctx context.Context, p WorkhorseProvider, conversationModelID string, req *llm.Request) (*llm.Response, error) {
-	modelID := workhorseModel(p, conversationModelID)
-	if modelID == "" {
-		return nil, fmt.Errorf("no workhorse model available (conversation model %q)", conversationModelID)
-	}
-	do := func(modelID string) (*llm.Response, error) {
-		svc, err := p.GetService(modelID)
-		if err != nil {
-			return nil, err
-		}
-		request := *req
-		request.ThinkingLevel = llm.ThinkingLevelOff
-		request.ReasoningEffort = ""
-		return svc.Do(ctx, &request)
-	}
-	resp, err := do(modelID)
-	if err == nil || modelID == conversationModelID {
+type workhorseService struct {
+	primary         llm.Service
+	manager         *Manager
+	fallbackModelID string
+}
+
+func (s *workhorseService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	resp, err := s.do(ctx, s.primary, req)
+	if err == nil || s.fallbackModelID == "" {
 		return resp, err
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return do(conversationModelID)
+	fallback, err := s.manager.GetService(s.fallbackModelID)
+	if err != nil {
+		return nil, err
+	}
+	return s.do(ctx, fallback, req)
 }
 
-func workhorseModel(c WorkhorseProvider, conversationModelID string) string {
-	info := c.GetModelInfo(conversationModelID)
+func (s *workhorseService) do(ctx context.Context, service llm.Service, req *llm.Request) (*llm.Response, error) {
+	request := *req
+	request.ThinkingLevel = llm.ThinkingLevelOff
+	request.ReasoningEffort = ""
+	return service.Do(ctx, &request)
+}
+
+func (s *workhorseService) Provider() string        { return s.primary.Provider() }
+func (s *workhorseService) TokenContextWindow() int { return s.primary.TokenContextWindow() }
+func (s *workhorseService) MaxImageDimension() int  { return s.primary.MaxImageDimension() }
+func (s *workhorseService) MaxImageBytes() int      { return s.primary.MaxImageBytes() }
+func (s *workhorseService) SupportsImages() bool    { return s.primary.SupportsImages() }
+
+func (m *Manager) getWorkhorseService(conversationModelID string) (llm.Service, error) {
+	modelID := m.workhorseModel(conversationModelID)
+	if modelID == "" {
+		return nil, fmt.Errorf("no workhorse model available (conversation model %q)", conversationModelID)
+	}
+	return m.newWorkhorseService(modelID, conversationModelID)
+}
+
+func (m *Manager) newWorkhorseService(modelID, conversationModelID string) (llm.Service, error) {
+	primary, err := m.GetService(modelID)
+	if err != nil {
+		if modelID == conversationModelID {
+			return nil, err
+		}
+		primary, err = m.GetService(conversationModelID)
+		if err != nil {
+			return nil, err
+		}
+		modelID = conversationModelID
+	}
+	fallbackModelID := ""
+	if modelID != conversationModelID {
+		fallbackModelID = conversationModelID
+	}
+	return &workhorseService{
+		primary:         primary,
+		manager:         m,
+		fallbackModelID: fallbackModelID,
+	}, nil
+}
+
+func (m *Manager) workhorseModel(conversationModelID string) string {
+	info := m.GetModelInfo(conversationModelID)
 	if info == nil {
 		return conversationModelID
 	}
@@ -71,8 +101,8 @@ func workhorseModel(c WorkhorseProvider, conversationModelID string) string {
 	}
 	bestID := ""
 	bestDate := ""
-	for _, modelID := range c.GetAvailableModels() {
-		candidate := c.GetModelInfo(modelID)
+	for _, modelID := range m.GetAvailableModels() {
+		candidate := m.GetModelInfo(modelID)
 		if candidate == nil || candidate.Provider != info.Provider || !matchesWorkhorseFamily(modelID, family) {
 			continue
 		}

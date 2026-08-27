@@ -30,7 +30,10 @@ type tieredModelProvider struct {
 
 func (p *tieredModelProvider) GetService(string) (llm.Service, error) { return nil, nil }
 func (p *tieredModelProvider) GetAvailableModels() []string           { return p.ids }
-func (p *tieredModelProvider) HasModel(string) bool                   { return true }
+func (p *tieredModelProvider) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return p.GetService(modelID)
+}
+func (p *tieredModelProvider) HasModel(string) bool { return true }
 func (p *tieredModelProvider) GetModelInfo(id string) *models.ModelInfo {
 	return p.infos[id]
 }

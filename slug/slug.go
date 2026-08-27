@@ -12,11 +12,12 @@ import (
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/llmhttp"
-	"shelley.exe.dev/models"
 )
 
-// LLMServiceProvider provides LLM services and workhorse model selection.
-type LLMServiceProvider = models.WorkhorseProvider
+// LLMServiceProvider provides the LLM service used to generate slugs.
+type LLMServiceProvider interface {
+	GetWorkhorseService(conversationModelID string) (llm.Service, error)
+}
 
 // GenerateSlug generates a slug for a conversation and updates the database.
 // If the conversation already has a slug, it is returned unchanged (no LLM call).
@@ -104,7 +105,11 @@ func generateSlugText(ctx context.Context, llmProvider LLMServiceProvider, userM
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	response, err := models.WorkhorseDo(ctxWithTimeout, llmProvider, conversationModelID, request)
+	service, err := llmProvider.GetWorkhorseService(conversationModelID)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate slug: %w", err)
+	}
+	response, err := service.Do(ctxWithTimeout, request)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate slug: %w", err)
 	}

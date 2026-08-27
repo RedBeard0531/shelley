@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/models"
 )
 
 func TestKeywordInputSearchTermsFlexible(t *testing.T) {
@@ -67,8 +66,8 @@ func (m *mockLLMProvider) GetAvailableModels() []string {
 	return []string{"test-model"}
 }
 
-func (m *mockLLMProvider) GetModelInfo(modelID string) *models.ModelInfo {
-	return &models.ModelInfo{DisplayName: modelID}
+func (m *mockLLMProvider) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return m.GetService(modelID)
 }
 
 func TestNewKeywordTool(t *testing.T) {

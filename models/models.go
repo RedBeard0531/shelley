@@ -431,6 +431,12 @@ type Manager struct {
 	httpc      *http.Client
 }
 
+// GetWorkhorseService returns a service that uses a cheap model from the
+// conversation model's provider, falling back to the conversation model once.
+func (m *Manager) GetWorkhorseService(conversationModelID string) (llm.Service, error) {
+	return m.getWorkhorseService(conversationModelID)
+}
+
 type serviceEntry struct {
 	service     llm.Service
 	provider    Provider

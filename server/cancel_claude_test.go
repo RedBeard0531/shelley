@@ -541,6 +541,10 @@ func (m *claudeLLMManager) GetAvailableModels() []string {
 	return []string{"claude", "claude-haiku-4.5"}
 }
 
+func (m *claudeLLMManager) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return m.GetService(modelID)
+}
+
 func (m *claudeLLMManager) HasModel(modelID string) bool {
 	return modelID == "claude" || modelID == "claude-haiku-4.5"
 }

@@ -83,6 +83,10 @@ func (m *twoModelLLMManager) GetService(modelID string) (llm.Service, error) {
 
 func (m *twoModelLLMManager) GetAvailableModels() []string { return []string{"model-a", "model-b"} }
 
+func (m *twoModelLLMManager) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return m.GetService(modelID)
+}
+
 func (m *twoModelLLMManager) HasModel(modelID string) bool {
 	return modelID == "model-a" || modelID == "model-b"
 }
@@ -114,6 +118,10 @@ func (m *levelNamedModelLLMManager) GetService(modelID string) (llm.Service, err
 
 func (m *levelNamedModelLLMManager) GetAvailableModels() []string {
 	return []string{"model-a", "high"}
+}
+
+func (m *levelNamedModelLLMManager) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return m.GetService(modelID)
 }
 
 func (m *levelNamedModelLLMManager) HasModel(modelID string) bool {

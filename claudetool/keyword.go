@@ -12,11 +12,7 @@ import (
 
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/llmhttp"
-	"shelley.exe.dev/models"
 )
-
-// LLMServiceProvider provides LLM services and workhorse model selection.
-type LLMServiceProvider = models.WorkhorseProvider
 
 // KeywordTool provides keyword search functionality
 type KeywordTool struct {
@@ -185,7 +181,11 @@ func (k *KeywordTool) keywordRun(ctx context.Context, input keywordInput) llm.To
 		System:   system,
 	}
 
-	resp, err := models.WorkhorseDo(llmhttp.WithPurpose(ctx, "keyword_search"), k.llmProvider, k.modelID, req)
+	svc, err := k.llmProvider.GetWorkhorseService(k.modelID)
+	if err != nil {
+		return llm.ErrorfToolOut("failed to send relevance filtering message: %w", err)
+	}
+	resp, err := svc.Do(llmhttp.WithPurpose(ctx, "keyword_search"), req)
 	if err != nil {
 		return llm.ErrorfToolOut("failed to send relevance filtering message: %w", err)
 	}

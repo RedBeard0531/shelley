@@ -18,7 +18,6 @@ import (
 	"shelley.exe.dev/claudetool/bashkit"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/llmhttp"
-	"shelley.exe.dev/models"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -602,7 +601,11 @@ Command: %s
 		}},
 	}
 
-	resp, err := models.WorkhorseDo(llmhttp.WithPurpose(ctx, "tool_install"), b.LLMProvider, b.ModelID, req)
+	svc, err := b.LLMProvider.GetWorkhorseService(b.ModelID)
+	if err != nil {
+		return fmt.Errorf("failed to validate tool with LLM: %w", err)
+	}
+	resp, err := svc.Do(llmhttp.WithPurpose(ctx, "tool_install"), req)
 	if err != nil {
 		return fmt.Errorf("failed to validate tool with LLM: %w", err)
 	}

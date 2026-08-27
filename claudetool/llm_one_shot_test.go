@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/models"
 )
 
 // oneShotMockService returns a canned response.
@@ -54,8 +53,8 @@ func (p *oneShotMockProvider) GetService(modelID string) (llm.Service, error) {
 	return svc, nil
 }
 
-func (p *oneShotMockProvider) GetModelInfo(modelID string) *models.ModelInfo {
-	return &models.ModelInfo{DisplayName: modelID}
+func (p *oneShotMockProvider) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return p.GetService(modelID)
 }
 
 func (p *oneShotMockProvider) GetAvailableModels() []string {
