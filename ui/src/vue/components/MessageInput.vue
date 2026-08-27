@@ -338,6 +338,7 @@ import { useI18n } from "../composables/i18n";
 import { pickPlaceholderHint } from "../../utils/placeholderHints";
 import { SLASH_COMMANDS } from "../../utils/slashCommands";
 import { isImeComposing } from "../../utils/imeComposing";
+import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,
@@ -1151,7 +1152,7 @@ watch(
   () => [props.autoFocus, props.disabled] as const,
   ([af, dis]) => {
     if (af && !dis && textareaRef.value) {
-      setTimeout(() => textareaRef.value?.focus(), 0);
+      focusMessageInputIfUnfocused();
     }
   },
   { immediate: true },
