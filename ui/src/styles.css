@@ -2710,8 +2710,6 @@ body {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 0.5rem;
-  max-width: 800px;
-  margin: 0 auto;
 }
 
 .message-input-container.slash-menu-open .message-input-form {
