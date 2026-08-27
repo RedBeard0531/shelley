@@ -11,48 +11,45 @@ import (
 	"shelley.exe.dev/featureflags"
 )
 
-func TestFeatureFlagBool(t *testing.T) {
-	flag := featureflags.Register(featureflags.Flag{
-		Name:        "test-feature-flag-bool",
-		Description: "test flag",
-		Default:     false,
-	})
+var testFeatureFlagBool = featureflags.Register(featureflags.Flag{
+	Name:        "test-feature-flag-bool",
+	Description: "test flag",
+	Default:     false,
+})
 
+var _ = featureflags.Register(featureflags.Flag{
+	Name:        "test-handlers-flag",
+	Description: "test flag",
+	Default:     false,
+})
+
+func TestFeatureFlagBool(t *testing.T) {
 	srv, database, _ := newTestServer(t)
 	ctx := context.Background()
 
 	// No override: the registered default applies.
-	if got := srv.featureFlagBool(ctx, flag); got != false {
+	if got := srv.featureFlagBool(ctx, testFeatureFlagBool); got != false {
 		t.Fatalf("featureFlagBool default = %v, want false", got)
 	}
 
 	// Override to true.
-	if err := database.SetFeatureFlagOverride(ctx, flag.Name, `true`); err != nil {
+	if err := database.SetFeatureFlagOverride(ctx, testFeatureFlagBool.Name, `true`); err != nil {
 		t.Fatal(err)
 	}
-	if got := srv.featureFlagBool(ctx, flag); got != true {
+	if got := srv.featureFlagBool(ctx, testFeatureFlagBool); got != true {
 		t.Fatalf("featureFlagBool with true override = %v, want true", got)
 	}
 
 	// A non-boolean override falls back to the default.
-	if err := database.SetFeatureFlagOverride(ctx, flag.Name, `"nope"`); err != nil {
+	if err := database.SetFeatureFlagOverride(ctx, testFeatureFlagBool.Name, `"nope"`); err != nil {
 		t.Fatal(err)
 	}
-	if got := srv.featureFlagBool(ctx, flag); got != false {
+	if got := srv.featureFlagBool(ctx, testFeatureFlagBool); got != false {
 		t.Fatalf("featureFlagBool with bad override = %v, want false", got)
 	}
 }
 
 func TestFeatureFlagsHandlers(t *testing.T) {
-	// Register a unique flag for this test. Registry is process-global so a
-	// distinctive name avoids collisions with future real flags.
-	flag := featureflags.Register(featureflags.Flag{
-		Name:        "test-handlers-flag",
-		Description: "test flag",
-		Default:     false,
-	})
-	_ = flag
-
 	srv, database, _ := newTestServer(t)
 	ctx := context.Background()
 
