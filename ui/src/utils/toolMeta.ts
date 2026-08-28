@@ -84,6 +84,8 @@ export function toolEmoji(name: string | undefined | null, input?: unknown): str
       return "✨";
     case "web_search":
       return "🔎";
+    case "web_fetch":
+      return "📄";
     default:
       return "⚙️";
   }
@@ -107,6 +109,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   read_image: "Read image",
   keyword_search: "Keyword search",
   web_search: "Web search",
+  web_fetch: "Web fetch",
   subagent: "Subagent",
   llm_one_shot: "LLM request",
   output_iframe: "HTML preview",
@@ -403,6 +406,11 @@ function inputSummary(name: string | undefined | null, input: unknown): string {
     case "keyword_search":
     case "web_search":
       return pick("query");
+    case "web_fetch": {
+      const urls = o.urls;
+      if (Array.isArray(urls) && urls.length > 0 && typeof urls[0] === "string") return urls[0];
+      return "";
+    }
     case "subagent":
       return pick("slug", "prompt");
     case "llm_one_shot": {

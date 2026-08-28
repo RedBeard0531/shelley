@@ -137,7 +137,8 @@ import ChangeDirTool from "./tools/ChangeDirTool.vue";
 import SubagentTool from "./tools/SubagentTool.vue";
 import LLMOneShotTool from "./tools/LLMOneShotTool.vue";
 import OutputIframeTool from "./tools/OutputIframeTool.vue";
-import WebSearchTool from "./tools/WebSearchTool.vue";
+import WebSearchCard from "./tools/WebSearchCard.vue";
+import WebFetchCard from "./tools/WebFetchCard.vue";
 import { toolCardPlaceholderKind } from "./toolCardMount";
 
 const props = defineProps<{
@@ -195,7 +196,8 @@ const TOOL_COMPONENTS: Record<string, any> = {
   browser_network: BrowserNetworkTool,
   browser_accessibility: BrowserAccessibilityTool,
   browser_profile: BrowserProfileTool,
-  web_search: WebSearchTool,
+  web_search: WebSearchCard,
+  web_fetch: WebFetchCard,
   browser_take_screenshot: ScreenshotTool,
   browser_navigate: BrowserNavigateTool,
   browser_eval: BrowserEvalTool,

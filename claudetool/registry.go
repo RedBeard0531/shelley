@@ -21,6 +21,8 @@ var ToolRegistry = []ToolInfo{
 	{Name: "keyword_search", Summary: "Search the codebase by keyword.", DefaultOn: true},
 	{Name: "change_dir", Summary: "Change the working directory.", DefaultOn: true},
 	{Name: "output_iframe", Summary: "Show HTML/visualizations to the user.", DefaultOn: true},
+	{Name: "web_search", Summary: "Search the web.", DefaultOn: true},
+	{Name: "web_fetch", Summary: "Read web pages as markdown.", DefaultOn: true},
 	{Name: "subagent", Summary: "Spawn a subagent conversation.", DefaultOn: true},
 	{Name: "llm_one_shot", Summary: "One-shot prompt to another LLM.", DefaultOn: true},
 	{Name: "browser", Summary: "Browser automation (navigate, eval, screenshot, emulate, network, accessibility, profile).", DefaultOn: true},

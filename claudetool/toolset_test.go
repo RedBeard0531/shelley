@@ -509,9 +509,14 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 		}
 		return false
 	}
+	// Fork divergence: this build may also contribute a CLIENT-side tool named
+	// "web_search" for services without native server-side search (see
+	// NewToolSet). The no-web_search subtests below guard issue #242 — a
+	// *server-side* web_search must never be sent to services that 400 on it —
+	// so scope this helper to server-side tools only.
 	hasWebSearchTool := func(ts *ToolSet) bool {
 		for _, tool := range ts.Tools() {
-			if tool.Name == "web_search" {
+			if tool.Name == "web_search" && tool.ServerSide {
 				return true
 			}
 		}

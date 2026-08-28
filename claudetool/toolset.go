@@ -226,6 +226,24 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		outputIframeTool.Tool(),
 	}
 
+	// Client-side web tools backed by a hosted web search/read MCP endpoint.
+	// web_fetch has no provider-native equivalent, so it is always available.
+	// web_search is only added when the model service has no native server-side
+	// web search (native search is higher quality and keeps first-party
+	// citation rendering on capable models).
+	nativeWebSearch := false
+	if cfg.LLMProvider != nil && cfg.ModelID != "" {
+		if svc, err := cfg.LLMProvider.GetService(cfg.ModelID); err == nil {
+			if c, ok := svc.(ServerSideWebSearchCapable); ok && c.SupportsServerSideWebSearch() {
+				nativeWebSearch = true
+			}
+		}
+	}
+	if !nativeWebSearch {
+		tools = append(tools, (&WebSearchTool{}).Tool())
+	}
+	tools = append(tools, (&WebFetchTool{}).Tool())
+
 	// Build the available models list (shared by subagent and llm_one_shot tools).
 	// Resolved fresh on each ToolSet construction so new conversations see
 	// custom models added since server start.

@@ -137,6 +137,8 @@ import ChangeDirTool from "./tools/ChangeDirTool.vue";
 import SubagentTool from "./tools/SubagentTool.vue";
 import LLMOneShotTool from "./tools/LLMOneShotTool.vue";
 import OutputIframeTool from "./tools/OutputIframeTool.vue";
+import WebSearchCard from "./tools/WebSearchCard.vue";
+import WebFetchCard from "./tools/WebFetchCard.vue";
 import BrowserEmulateTool from "./tools/BrowserEmulateTool.vue";
 import BrowserNetworkTool from "./tools/BrowserNetworkTool.vue";
 import BrowserAccessibilityTool from "./tools/BrowserAccessibilityTool.vue";
@@ -205,6 +207,10 @@ function componentForTool(toolName: string) {
       return LLMOneShotTool;
     case "output_iframe":
       return OutputIframeTool;
+    case "web_search":
+      return WebSearchCard;
+    case "web_fetch":
+      return WebFetchCard;
     case "browser_emulate":
       return BrowserEmulateTool;
     case "browser_network":
