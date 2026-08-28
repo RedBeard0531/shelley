@@ -233,7 +233,7 @@
                 :run-key="`${entity.key}-${index}`"
                 :rewrite-localhost-links="message.type === 'agent' || !!sender"
               />
-              <MessageContentBlock v-else :content="item.content!" />
+              <MessageContentBlock v-else :content="item.content!" :message-id="message.message_id" />
             </div>
           </template>
         </div>
