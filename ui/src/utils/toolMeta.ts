@@ -81,7 +81,10 @@ export function toolEmoji(name: string | undefined | null, input?: unknown): str
     case "output_iframe":
       return "✨";
     case "web_search":
+    case "WebSearch":
       return "🔎";
+    case "WebFetch":
+      return "📄";
     default:
       return "⚙️";
   }
