@@ -22,6 +22,8 @@ var ToolRegistry = []ToolInfo{
 	{Name: "keyword_search", Summary: "Search the codebase by keyword.", DefaultOn: true, SourcePath: "claudetool/keyword.go"},
 	{Name: "change_dir", Summary: "Change the working directory.", DefaultOn: true, SourcePath: "claudetool/changedir.go"},
 	{Name: "output_iframe", Summary: "Show HTML/visualizations to the user.", DefaultOn: true, SourcePath: "claudetool/output_iframe.go"},
+	{Name: "WebSearch", Summary: "Search the web.", DefaultOn: true, SourcePath: "claudetool/websearch.go"},
+	{Name: "WebFetch", Summary: "Read web pages as markdown.", DefaultOn: true, SourcePath: "claudetool/websearch.go"},
 	{Name: "subagent", Summary: "Spawn a subagent conversation.", DefaultOn: true, SourcePath: "claudetool/subagent.go"},
 	{Name: "llm_one_shot", Summary: "One-shot prompt to another LLM.", DefaultOn: true, SourcePath: "claudetool/llm_one_shot.go"},
 	{Name: "browser", Summary: "Browser automation (navigate, eval, screenshot, emulate, network, accessibility, profile).", DefaultOn: true, SourcePath: "claudetool/browse/browse.go"},
