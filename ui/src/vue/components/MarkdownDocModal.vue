@@ -54,6 +54,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
 import type { MarkdownDoc } from "../composables/markdownDoc";
+import { popBackButtonDismiss, pushBackButtonDismiss } from "../composables/backButtonDismiss";
 import { popModalEscape, pushModalEscape } from "../composables/modalEscapeStack";
 import MarkdownContent from "./MarkdownContent.vue";
 
@@ -66,7 +67,12 @@ const error = ref<string | null>(null);
 
 const close = () => emit("close");
 pushModalEscape(close);
-onBeforeUnmount(() => popModalEscape(close));
+// Back closes the document, like the other full-height viewers.
+pushBackButtonDismiss(close);
+onBeforeUnmount(() => {
+  popModalEscape(close);
+  popBackButtonDismiss(close);
+});
 
 void (async () => {
   try {

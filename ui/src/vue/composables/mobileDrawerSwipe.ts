@@ -5,11 +5,17 @@ const OPEN_SWIPE_DISTANCE = 72;
 const CLOSE_SWIPE_DISTANCE = 48;
 const DIRECTION_LOCK_DISTANCE = 10;
 const HORIZONTAL_BIAS = 1.5;
+// Fullscreen overlays that are not PrimeVue Dialogs (so they carry no
+// aria-modal) and therefore need naming explicitly.
+export const MODAL_OVERLAY_CLASSES = [
+  "diff-viewer-overlay",
+  "image-comment-overlay",
+  "command-palette-overlay",
+];
+
 const MODAL_OVERLAY_SELECTOR = [
   '[aria-modal="true"]',
-  ".diff-viewer-overlay",
-  ".image-comment-overlay",
-  ".command-palette-overlay",
+  ...MODAL_OVERLAY_CLASSES.map((cls) => `.${cls}`),
 ].join(",");
 
 type Gesture = {
