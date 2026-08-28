@@ -633,6 +633,10 @@ import {
   useReviewRecording,
   type ReviewConversationStart,
 } from "./useReviewRecording";
+import {
+  popBackButtonDismiss,
+  pushBackButtonDismiss,
+} from "../composables/backButtonDismiss";
 import { COMMIT_MESSAGES_DIR, treeRealPathOrder, type DiffFileTreeEntry } from "./diffFileTree";
 import { buildTourContents } from "./commitTourContents";
 import { defaultDiffSelection, workingChangesStatus } from "./diffViewerModel";
@@ -659,6 +663,9 @@ const emit = defineEmits<{
   (e: "comment-text-change", text: string): void;
   (e: "cwd-change", cwd: string): void;
 }>();
+
+// Stable close callback for the shared back-button stack.
+const emitClose = () => emit("close");
 
 type ViewMode = "comment" | "edit";
 
@@ -1729,8 +1736,10 @@ function handleKeyDown(e: KeyboardEvent) {
 watch(
   () => props.isOpen,
   (open) => {
+    popBackButtonDismiss(emitClose);
     if (open) {
       window.addEventListener("keydown", handleKeyDown, true);
+      pushBackButtonDismiss(emitClose);
     } else {
       window.removeEventListener("keydown", handleKeyDown, true);
     }
@@ -1985,6 +1994,7 @@ onUnmounted(() => {
   tourContentsResizeObserver?.disconnect();
   window.removeEventListener("resize", handleResize);
   window.removeEventListener("keydown", handleKeyDown, true);
+  popBackButtonDismiss(emitClose);
   themeObserver?.disconnect();
   diffUpdateDisposable?.dispose();
   if (saveTimeout) clearTimeout(saveTimeout);

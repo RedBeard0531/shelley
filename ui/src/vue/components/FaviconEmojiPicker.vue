@@ -36,6 +36,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import "emoji-picker-element";
 import { popModalEscape, pushModalEscape } from "../composables/modalEscapeStack";
+import { popBackButtonDismiss, pushBackButtonDismiss } from "../composables/backButtonDismiss";
 import { faviconEmojiApi, type FaviconEmoji } from "../../services/api";
 import { setFaviconHref } from "../../services/favicon";
 import { useI18n } from "../composables/i18n";
@@ -90,8 +91,11 @@ watch(
     // Escape goes through the shared modal stack, so it closes the picker
     // wherever focus is, as it does for every other modal.
     popModalEscape(close);
+    // The browser/back gesture closes it too, like every other overlay.
+    popBackButtonDismiss(close);
     if (!open) return;
     pushModalEscape(close);
+    pushBackButtonDismiss(close);
     const seq = ++session;
     current.value = null;
     error.value = null;
