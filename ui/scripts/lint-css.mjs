@@ -55,7 +55,6 @@ const legacyFontSizes = new Set([
   "12px",
   "13px",
   "16px",
-  "inherit",
 ]);
 const expectedLegacyFontSizeDeclarations = 160;
 const expectedDuplicateRuleGroups = 176;
