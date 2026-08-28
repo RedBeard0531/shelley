@@ -202,6 +202,10 @@ import { tildifyPath } from "../../utils/tildify";
 import { isMac } from "../../utils/menuShortcuts";
 import { useVimEnabled, useMonacoVim } from "../composables/monacoVim";
 import { lineCommentLabel, useMonacoComments } from "../composables/monacoComments";
+import {
+  popBackButtonDismiss,
+  pushBackButtonDismiss,
+} from "../composables/backButtonDismiss";
 import VimToggle from "./VimToggle.vue";
 import CommentDialog from "./CommentDialog.vue";
 import MarkdownContent from "./MarkdownContent.vue";
@@ -230,6 +234,9 @@ const emit = defineEmits<{
   (e: "saved", content: string): void;
   (e: "comment", text: string): void;
 }>();
+
+// Stable close callback for the shared back-button stack.
+const emitClose = () => emit("close");
 
 const content = ref<string | null>(null);
 const loadStatus = ref<LoadStatus>("loading");
@@ -690,6 +697,16 @@ function handleKeyDown(e: KeyboardEvent) {
   emit("close");
 }
 
+// --- Browser back closes the editor (shared stacking with the other overlays) ---
+watch(
+  () => props.isOpen,
+  (open) => {
+    popBackButtonDismiss(emitClose);
+    if (open) pushBackButtonDismiss(emitClose);
+  },
+  { immediate: true },
+);
+
 // --- React to open/close: attach/detach Escape + reset on close ---
 watch(
   () => props.isOpen,
@@ -730,6 +747,7 @@ onUnmounted(() => {
   unmounted = true;
   window.removeEventListener("resize", onResize);
   window.removeEventListener("keydown", handleKeyDown, true);
+  popBackButtonDismiss(emitClose);
   themeObserver?.disconnect();
   if (statusTimeout) clearTimeout(statusTimeout);
   // A host can open a different file without first closing this editor.

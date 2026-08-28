@@ -67,6 +67,10 @@
 import { computed, h, nextTick, onUnmounted, ref, watch, type VNode } from "vue";
 import type { GitDiffInfo } from "../../types";
 import { workingChangesStatus } from "./diffViewerModel";
+import {
+  popBackButtonDismiss,
+  pushBackButtonDismiss,
+} from "../composables/backButtonDismiss";
 import RangeToggle from "./RangeToggle.vue";
 
 const props = defineProps<{
@@ -81,6 +85,9 @@ const emit = defineEmits<{
 }>();
 
 const open = ref(false);
+// Stable close callback for the shared back-button stack: back closes just the
+// picker, exactly like Escape, rather than tearing down the diff viewer behind.
+const closePicker = () => (open.value = false);
 const triggerRef = ref<HTMLButtonElement | null>(null);
 const popoverRef = ref<HTMLDivElement | null>(null);
 
@@ -340,10 +347,12 @@ function detach() {
 const wasOpen = ref(false);
 watch(open, (isOpen) => {
   detach();
+  popBackButtonDismiss(closePicker);
   if (isOpen) {
     emit("open");
     document.addEventListener("mousedown", onDocDown);
     document.addEventListener("keydown", onKey, true);
+    pushBackButtonDismiss(closePicker);
     nextTick(() => {
       requestAnimationFrame(() => {
         const root = popoverRef.value;
@@ -361,5 +370,8 @@ watch(open, (isOpen) => {
   wasOpen.value = isOpen;
 });
 
-onUnmounted(detach);
+onUnmounted(() => {
+  detach();
+  popBackButtonDismiss(closePicker);
+});
 </script>
