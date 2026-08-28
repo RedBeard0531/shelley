@@ -199,7 +199,7 @@
                 :cache-owner="message"
                 :run-key="`${entity.key}-${index}`"
               />
-              <MessageContentBlock v-else :content="item.content!" />
+              <MessageContentBlock v-else :content="item.content!" :message-id="message.message_id" />
             </div>
           </template>
         </div>
