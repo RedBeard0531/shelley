@@ -117,6 +117,10 @@ import { useI18n } from "../composables/i18n";
 import { tildifyPath } from "../../utils/tildify";
 import { isImeComposing } from "../../utils/imeComposing";
 import { menuShortcutLabel } from "../../utils/menuShortcuts";
+import {
+  popBackButtonDismiss,
+  pushBackButtonDismiss,
+} from "../composables/backButtonDismiss";
 
 interface CommandItem {
   id: string;
@@ -159,6 +163,9 @@ const emit = defineEmits<{
   (e: "next-user-message"): void;
   (e: "previous-user-message"): void;
 }>();
+
+// Stable close callback for the shared back-button stack.
+const emitClose = () => emit("close");
 
 const { markdownMode, setMarkdownMode } = useMarkdownMode();
 const { t, locale, setLocale } = useI18n();
@@ -786,6 +793,17 @@ const displayItems = computed<CommandItem[]>(() => {
 watch(displayItems, () => {
   selectedIndex.value = 0;
 });
+
+// Back closes the palette instead of leaving the page (immediate, so mounting
+// while already open registers too, as EditableFileModal's v-if does).
+watch(
+  () => props.isOpen,
+  (open) => {
+    popBackButtonDismiss(emitClose);
+    if (open) pushBackButtonDismiss(emitClose);
+  },
+  { immediate: true },
+);
 
 // Focus input when opened.
 watch(

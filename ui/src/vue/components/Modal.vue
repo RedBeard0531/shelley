@@ -60,6 +60,10 @@ import { nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import Dialog from "primevue/dialog";
 import Button from "primevue/button";
 import { popModalEscape, pushModalEscape } from "../composables/modalEscapeStack";
+import {
+  popBackButtonDismiss,
+  pushBackButtonDismiss,
+} from "../composables/backButtonDismiss";
 
 const props = defineProps<{
   isOpen: boolean;
@@ -77,11 +81,18 @@ watch(
   () => props.isOpen,
   (open) => {
     popModalEscape(requestClose);
-    if (open) pushModalEscape(requestClose);
+    popBackButtonDismiss(requestClose);
+    if (open) {
+      pushModalEscape(requestClose);
+      pushBackButtonDismiss(requestClose);
+    }
   },
   { immediate: true },
 );
-onBeforeUnmount(() => popModalEscape(requestClose));
+onBeforeUnmount(() => {
+  popModalEscape(requestClose);
+  popBackButtonDismiss(requestClose);
+});
 
 const panelRef = ref<HTMLDivElement | null>(null);
 

@@ -313,6 +313,10 @@ import DiffstatList from "./gitGraph/DiffstatList.vue";
 import OctocatIcon from "./gitGraph/OctocatIcon.vue";
 import LoadMoreRow from "./gitGraph/LoadMoreRow.vue";
 import {
+  popBackButtonDismiss,
+  pushBackButtonDismiss,
+} from "../composables/backButtonDismiss";
+import {
   computeLayout,
   normalizeCommits,
   laneColor,
@@ -351,6 +355,9 @@ const emit = defineEmits<{
   (e: "close"): void;
   (e: "open-diff", commit: string, cwd: string, file?: string): void;
 }>();
+
+// Stable close callback for the shared back-button stack.
+const emitClose = () => emit("close");
 
 // Internal override so the user can switch directories without re-opening.
 const cwdOverride = ref<string | null>(null);
@@ -465,6 +472,17 @@ watch(
       cancelled = true;
       stop();
     });
+  },
+  { immediate: true },
+);
+
+// Let the browser back button close this overlay (shared stacking so nested
+// overlays/modals close one at a time).
+watch(
+  () => props.isOpen,
+  (open) => {
+    popBackButtonDismiss(emitClose);
+    if (open) pushBackButtonDismiss(emitClose);
   },
   { immediate: true },
 );
@@ -607,6 +625,7 @@ watch(
 onUnmounted(() => {
   window.removeEventListener("keydown", onEscKey);
   window.removeEventListener("keydown", onNavKey);
+  popBackButtonDismiss(emitClose);
 });
 
 const selectedCommit = computed(() => commits.value.find((c) => c.hash === selected.value) || null);

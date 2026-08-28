@@ -135,6 +135,10 @@ import {
 import { tildifyPath } from "../../utils/tildify";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import { popModalEscape, pushModalEscape } from "../composables/modalEscapeStack";
+import {
+  popBackButtonDismiss,
+  pushBackButtonDismiss,
+} from "../composables/backButtonDismiss";
 import type { ImageCommentTarget } from "../composables/imageComment";
 import CommentDialog from "./CommentDialog.vue";
 
@@ -143,6 +147,9 @@ const emit = defineEmits<{
   (e: "submit", text: string): void;
   (e: "close"): void;
 }>();
+
+// Stable close callback for the shared back-button stack.
+const emitClose = () => emit("close");
 
 const overlayRef = ref<HTMLDivElement | null>(null);
 const frameRef = ref<HTMLDivElement | null>(null);
@@ -366,6 +373,9 @@ function onKeyDown(e: KeyboardEvent) {
 
 onMounted(() => {
   pushModalEscape(requestClose);
+  // Back leaves the view outright, like the diff/git overlays; Escape still
+  // peels the drag or comment dialog first.
+  pushBackButtonDismiss(emitClose);
   // Move focus into the view so keyboard users are not left typing into the
   // conversation behind it; restored on close. v-focustrap keeps it here.
   returnFocusTo = document.activeElement as HTMLElement | null;
@@ -380,6 +390,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   popModalEscape(requestClose);
+  popBackButtonDismiss(emitClose);
   endDrag();
   // Put focus back where it came from, unless that element is gone (a markdown
   // re-render or conversation switch), in which case fall back to the composer
