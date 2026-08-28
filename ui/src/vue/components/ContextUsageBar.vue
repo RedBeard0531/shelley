@@ -30,26 +30,37 @@
       {{ formatTokenCount(contextWindowSize) }} / {{ formatTokenCount(maxContextTokens) }} ({{
         percentage.toFixed(1)
       }}%) tokens used
-      <TokenCostGraph
-        v-if="usageGraph === 'cost'"
-        :entries="usageEntries || []"
-        :other-usage-rows="otherUsageRows || []"
-        :conversation-id="conversationId"
-        :active="popupOpen"
-      >
-        <template #mode-controls>
-          <UsageGraphSwitch v-model="usageGraph" />
-        </template>
-      </TokenCostGraph>
-      <ContextCompositionGraph
-        v-else
-        :messages="messages || []"
-        :max-context-tokens="maxContextTokens"
-      >
-        <template #mode-controls>
-          <UsageGraphSwitch v-model="usageGraph" />
-        </template>
-      </ContextCompositionGraph>
+      <div v-if="popupOpen" class="usage-graph-panel">
+        <div
+          :class="{ 'usage-graph-panel-item-inactive': usageGraph !== 'cost' }"
+          class="usage-graph-panel-item"
+          :aria-hidden="usageGraph !== 'cost'"
+          :inert="usageGraph !== 'cost'"
+        >
+          <TokenCostGraph
+            :entries="usageEntries || []"
+            :other-usage-rows="otherUsageRows || []"
+            :conversation-id="conversationId"
+            :active="usageGraph === 'cost'"
+          >
+            <template #mode-controls>
+              <UsageGraphSwitch v-model="usageGraph" />
+            </template>
+          </TokenCostGraph>
+        </div>
+        <div
+          :class="{ 'usage-graph-panel-item-inactive': usageGraph !== 'context' }"
+          class="usage-graph-panel-item"
+          :aria-hidden="usageGraph !== 'context'"
+          :inert="usageGraph !== 'context'"
+        >
+          <ContextCompositionGraph :messages="messages || []" :max-context-tokens="maxContextTokens">
+            <template #mode-controls>
+              <UsageGraphSwitch v-model="usageGraph" />
+            </template>
+          </ContextCompositionGraph>
+        </div>
+      </div>
       <div v-if="showLongConversationWarning" class="chat-popup-warning">
         This conversation is getting long.
         <br />

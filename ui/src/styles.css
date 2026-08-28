@@ -9615,6 +9615,20 @@ kbd {
   border-color: var(--text-secondary);
 }
 
+.usage-graph-panel {
+  display: grid;
+}
+
+.usage-graph-panel-item {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.usage-graph-panel-item-inactive {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .token-cost-graph {
   margin-top: 0;
   width: 280px;
@@ -9627,124 +9641,51 @@ kbd {
 }
 
 .context-composition-graph-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 6px;
   color: var(--text-secondary);
   font-size: 0.68rem;
   font-variant-numeric: tabular-nums;
 }
 
-.context-composition-graph-svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  margin-top: 4px;
-  background: var(--bg-tertiary);
-  border-radius: 4px;
-}
-
-.context-composition-zone-quiet {
-  fill: #10b981;
-  opacity: 0.08;
-}
-.context-composition-zone-elide {
-  fill: #f59e0b;
-  opacity: 0.1;
-}
-.context-composition-zone-compact {
-  fill: #ef4444;
-  opacity: 0.1;
-}
-.context-composition-threshold {
-  stroke: #f59e0b;
-  stroke-width: 1;
-  stroke-dasharray: 3 3;
-  opacity: 0.7;
-}
-.context-composition-threshold-compact {
-  stroke: #ef4444;
-}
-.context-composition-area-text {
-  fill: #24a579;
-  opacity: 0.82;
-}
-.context-composition-area-toolCalls {
-  fill: #8375e9;
-  opacity: 0.82;
-}
-.context-composition-area-toolOutput {
-  fill: #2997dd;
-  opacity: 0.86;
-}
-.context-composition-area-images {
-  fill: #e879a7;
-  opacity: 0.88;
-}
-.context-composition-axis {
-  stroke: var(--border-color);
-  stroke-width: 1;
-}
-.context-composition-compaction-line {
-  stroke: var(--text-primary);
-  stroke-width: 1;
-  stroke-dasharray: 4 3;
-  opacity: 0.5;
-  pointer-events: none;
-}
-.context-composition-compaction-label {
-  font-size: 9px;
-  fill: var(--text-secondary);
-}
-.context-composition-hover-line {
-  stroke: var(--text-secondary);
-  stroke-width: 1;
-  stroke-dasharray: 2 2;
-  pointer-events: none;
-}
-.context-composition-label {
-  font-size: 9px;
-  fill: var(--text-secondary);
-}
-
-.context-composition-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px 8px;
-  margin-top: 4px;
-  color: var(--text-secondary);
+.context-composition-graph-header > span:first-child {
+  align-self: center;
   font-size: 0.65rem;
+  line-height: 1.4;
 }
 
-.context-composition-legend span {
-  display: flex;
-  align-items: center;
-  gap: 3px;
+.context-composition-legend-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.context-composition-legend i {
-  width: 7px;
-  height: 7px;
+
+.context-composition-legend-tokens {
+  min-width: 42px;
+  text-align: right;
+}
+
+.context-composition-legend-item {
+  min-width: 0;
+}
+
+.context-composition-legend-row {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-composition-legend-row:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: 2px;
   border-radius: 2px;
-}
-.context-composition-chip-text {
-  background: #24a579;
-}
-.context-composition-chip-toolCalls {
-  background: #8375e9;
-}
-.context-composition-chip-toolOutput {
-  background: #2997dd;
-}
-.context-composition-chip-images {
-  background: #e879a7;
-}
-
-.context-composition-readout {
-  min-height: 1.35em;
-  margin-top: 4px;
-  color: var(--text-secondary);
-  font-size: 0.68rem;
-  line-height: 1.35;
 }
 
 .context-composition-compaction-note {
@@ -9780,7 +9721,8 @@ kbd {
   border-color: var(--text-secondary);
 }
 
-.token-cost-graph-svg {
+.token-cost-graph-svg,
+.context-composition-graph-svg {
   display: block;
   width: 100%;
   height: auto;
