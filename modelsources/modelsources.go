@@ -159,6 +159,15 @@ func modelReleaseDate(endpoint, modelName string) string {
 	return date
 }
 
+func integrationSourceLabel(host string, provider models.Provider) string {
+	switch provider {
+	case "", models.ProviderOpenAI, models.ProviderAnthropic, models.ProviderFireworks, models.ProviderGemini, models.ProviderXAI, models.ProviderBuiltIn:
+		return host
+	default:
+		return host + " (" + string(provider) + ")"
+	}
+}
+
 // Build walks the catalog × sources and produces ready-to-use
 // models.Built values. Order: each Source in turn (preserving catalog
 // order within), first to claim an ID wins.
@@ -190,7 +199,7 @@ func Build(catalog []models.Model, sources []Source, httpc *http.Client, logger 
 					ID:          id,
 					DisplayName: id,
 					Provider:    models.Provider(m.Provider),
-					Source:      src.label,
+					Source:      integrationSourceLabel(src.label, models.Provider(m.Provider)),
 					ReleaseDate: modelReleaseDate(src.integration.URL, m.apiModelName()),
 					Service:     svc,
 					APIType:     apiType,

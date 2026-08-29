@@ -327,6 +327,24 @@ func TestLLMIntegrationAPIMismatchUsesDynamicService(t *testing.T) {
 	}
 }
 
+func TestLLMIntegrationCustomProviderSourceNamesProvider(t *testing.T) {
+	integ := &LLMIntegrationConfig{
+		Name: "llm", Host: "llm.int.exe.xyz", URL: "https://llm.int.exe.xyz",
+		Models: []IntegrationModel{
+			{ID: "openai/gpt-5.5", Provider: "openai", NativeID: "gpt-5.5", APIs: []string{"openai_responses"}},
+			{ID: "hyper/qwen3.7-flash", Provider: "hyper", NativeID: "qwen3.7-flash", APIs: []string{"openai_responses"}},
+		},
+	}
+
+	got := Build(models.All(), []Source{LLMIntegration(integ, "")}, &http.Client{}, nil)
+	if built := findBuilt(got, "gpt-5.5"); built == nil || built.Source != "llm.int.exe.xyz" {
+		t.Fatalf("built-in provider = %+v, want integration host source", built)
+	}
+	if built := findBuilt(got, "qwen3.7-flash"); built == nil || built.Source != "llm.int.exe.xyz (hyper)" {
+		t.Fatalf("custom provider = %+v, want provider-qualified source", built)
+	}
+}
+
 func TestLLMIntegrationProviderMismatchUsesDynamicService(t *testing.T) {
 	integ := &LLMIntegrationConfig{
 		Name: "llm", Host: "llm.int.exe.xyz", URL: "https://llm.int.exe.xyz",
