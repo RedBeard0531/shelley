@@ -215,7 +215,21 @@ function modelUsage(
   const colors = new Set(s.segments.map((seg) => seg.color));
   assert(colors.size === s.segments.length, "all segment colors distinct");
   const rowColors = new Set(s.perModel.flatMap((m) => m.rows.map((r) => r.color)));
-  assert(rowColors.size === s.segments.length, "legend row colors match segments");
+  assert(rowColors.size <= s.segments.length, "legend row colors are a subset of segment colors");
+  assert(
+    rowColors.size === s.perModel.reduce((sum, m) => sum + m.rows.length, 0),
+    "legend row colors distinct",
+  );
+  // Rows stay indexed by TOKEN_BANDS position; the table hides zero
+  // cache-write bands itself via its hideZeroCacheWrite prop.
+  assert(
+    s.perModel.every(
+      (m) =>
+        m.rows.length === TOKEN_BANDS.length &&
+        m.rows.every((r, i) => r.band.key === TOKEN_BANDS[i].key),
+    ),
+    "rows indexed by TOKEN_BANDS position",
+  );
   const mystery = s.perModel.find((m) => m.model === "mystery")!;
   assert(!mystery.priced, "mystery unpriced");
   assert(
