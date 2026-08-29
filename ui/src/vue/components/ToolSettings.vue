@@ -4,14 +4,17 @@
 <template>
   <div class="advanced-settings-header">
     <h3 class="profiles-section-title">Tools</h3>
-    <button
-      type="button"
-      class="advanced-settings-reset"
-      :disabled="Object.keys(overrides).length === 0"
-      @click="overrides = {}"
-    >
-      Reset to defaults
-    </button>
+    <div class="advanced-settings-actions">
+      <button type="button" class="advanced-settings-reset" @click="allOff">All off</button>
+      <button
+        type="button"
+        class="advanced-settings-reset"
+        :disabled="Object.keys(overrides).length === 0"
+        @click="overrides = {}"
+      >
+        Reset to defaults
+      </button>
+    </div>
   </div>
   <div class="auto-compaction-row" data-testid="auto-compaction">
     <span class="auto-compaction-name">{{ t("autoCompaction") }}</span>
@@ -107,6 +110,12 @@ function setOverride(name: string, value: "default" | "on" | "off") {
   const next = { ...overrides.value };
   if (value === "default") delete next[name];
   else next[name] = value;
+  overrides.value = next;
+}
+
+function allOff() {
+  const next: Overrides = {};
+  for (const tool of props.tools) next[tool.name] = "off";
   overrides.value = next;
 }
 
