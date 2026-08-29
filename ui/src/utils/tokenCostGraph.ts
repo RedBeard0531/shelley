@@ -182,6 +182,9 @@ export function buildTokenCostStack(
 
   const n = entries.length;
   const maxY = n > 0 && segments.length > 0 ? layers[segments.length - 1][n - 1] : 0;
+  // Drop bands the model never used (e.g. an unpriced cache-write band) so
+  // the legend doesn't show all-zero rows.
+  for (const mu of perModel) mu.rows = mu.rows.filter((row) => row.tokens > 0);
   return { n, segments, layers, maxY, weighted, perModel, reportedCostUsd };
 }
 

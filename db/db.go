@@ -1955,6 +1955,20 @@ func (db *DB) GetSubagentUsage(ctx context.Context, parentID string) ([]generate
 	return rows, err
 }
 
+// GetSubtreeUsage aggregates LLM usage across a conversation and all its
+// descendants (recursively), grouped by model — the conversation itself
+// included (unlike GetSubagentUsage).
+func (db *DB) GetSubtreeUsage(ctx context.Context, conversationID string) ([]generated.GetSubtreeUsageRow, error) {
+	var rows []generated.GetSubtreeUsageRow
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		q := generated.New(rx.Conn())
+		var err error
+		rows, err = q.GetSubtreeUsage(ctx, conversationID)
+		return err
+	})
+	return rows, err
+}
+
 // GetSubagentOtherUsage aggregates indirect LLM usage (other_usage_data
 // entries) across all descendant conversations of parentID (recursively),
 // grouped by model.
@@ -2087,6 +2101,21 @@ func (db *DB) GetConversationBySlugAndParent(ctx context.Context, slug, parentID
 		return nil, nil // Not found, return nil without error
 	}
 	return &conversation, err
+}
+
+// GetSubtreeOtherUsage aggregates indirect LLM usage (other_usage_data
+// entries) across a conversation and all its descendants (recursively),
+// grouped by model — the conversation itself included (unlike
+// GetSubagentOtherUsage).
+func (db *DB) GetSubtreeOtherUsage(ctx context.Context, conversationID string) ([]generated.GetSubtreeOtherUsageRow, error) {
+	var rows []generated.GetSubtreeOtherUsageRow
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		q := generated.New(rx.Conn())
+		var err error
+		rows, err = q.GetSubtreeOtherUsage(ctx, conversationID)
+		return err
+	})
+	return rows, err
 }
 
 // SubagentDBAdapter adapts *DB to the claudetool.SubagentDB interface.

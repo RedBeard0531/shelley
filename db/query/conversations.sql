@@ -350,6 +350,30 @@ SELECT * FROM conversations
 WHERE parent_conversation_id = ?
 ORDER BY created_at ASC;
 
+-- name: GetSubtreeUsage :many
+-- Aggregate LLM usage across a conversation and all its descendants
+-- (recursively), grouped by model. Unlike GetSubagentUsage, the conversation
+-- itself is included.
+WITH RECURSIVE descendants(conversation_id) AS (
+  SELECT c.conversation_id FROM conversations c WHERE c.conversation_id = ?
+  UNION ALL
+  SELECT c.conversation_id FROM conversations c
+  JOIN descendants d ON c.parent_conversation_id = d.conversation_id
+)
+SELECT
+  m.model_name,
+  m.llm_api_url,
+  COUNT(*) AS llm_calls,
+  CAST(COALESCE(SUM(m.usage_data ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cost_usd'), 0) AS REAL) AS cost_usd
+FROM messages m
+JOIN descendants d ON m.conversation_id = d.conversation_id
+WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
+GROUP BY m.model_name, m.llm_api_url;
+
 -- name: GetSubagentUsage :many
 -- Aggregate LLM usage across all descendant conversations (subagents,
 -- recursively), grouped by model. Powers the "plus $X for subagents" line
@@ -407,6 +431,31 @@ WHERE m.conversation_id = d.conversation_id
   AND m.other_usage_data IS NOT NULL
 -- Group by the JSON expressions, not the aliases: bare model_name/llm_api_url
 -- would resolve to the messages table's own columns (NULL here).
+GROUP BY je.value ->> 'model', je.value ->> 'url';
+
+-- name: GetSubtreeOtherUsage :many
+-- Aggregate indirect LLM usage (messages.other_usage_data entries) across a
+-- conversation and all its descendants (recursively), grouped by model.
+-- Unlike GetSubagentOtherUsage, the conversation itself is included.
+WITH RECURSIVE descendants(conversation_id) AS (
+  SELECT c.conversation_id FROM conversations c WHERE c.conversation_id = ?
+  UNION ALL
+  SELECT c.conversation_id FROM conversations c
+  JOIN descendants d ON c.parent_conversation_id = d.conversation_id
+)
+SELECT
+  CAST(COALESCE(je.value ->> 'model', '') AS TEXT) AS model_name,
+  CAST(COALESCE(je.value ->> 'url', '') AS TEXT) AS llm_api_url,
+  COUNT(*) AS llm_calls,
+  CAST(COALESCE(SUM(je.value ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cost_usd'), 0) AS REAL) AS cost_usd
+FROM messages m
+JOIN descendants d ON m.conversation_id = d.conversation_id,
+  json_each(m.other_usage_data) je
+WHERE m.other_usage_data IS NOT NULL
 GROUP BY je.value ->> 'model', je.value ->> 'url';
 
 -- name: GetConversationBySlugAndParent :one
