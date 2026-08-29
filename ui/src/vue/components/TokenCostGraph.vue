@@ -58,6 +58,15 @@
           :y2="H - PADB"
           class="token-cost-gen-line"
         />
+        <line
+          v-for="m in cacheMissMarkers"
+          :key="`miss-${m.kind}-${m.index}`"
+          :x1="xAt(m.index)"
+          :y1="PADT"
+          :x2="xAt(m.index)"
+          :y2="H - PADB"
+          :class="m.kind === 'model' ? 'token-cost-model-line' : 'token-cost-miss-line'"
+        />
         <line :x1="PADL" :y1="PADT" :x2="PADL" :y2="H - PADB" class="token-cost-axis" />
         <line :x1="PADL" :y1="H - PADB" :x2="W - PADR" :y2="H - PADB" class="token-cost-axis" />
         <line
@@ -98,7 +107,7 @@
         </template>
       </div>
       <div class="token-cost-legend">
-        <template v-for="mu in stack.perModel" :key="mu.model">
+        <template v-for="mu in displayPerModel" :key="mu.model">
           <div class="token-cost-model-row">
             <span class="token-cost-model-name">{{ mu.model }}</span>
             <span v-if="mu.priced" class="token-cost-legend-cost">{{
@@ -160,6 +169,19 @@
             }}</span>
             <span v-else class="token-cost-legend-unit">no pricing</span>
           </div>
+          <a
+            v-for="sub in subagentUsage.subagents"
+            :key="sub.conversation_id"
+            :href="`/c/${sub.slug}`"
+            class="token-cost-legend-row token-cost-subagent-row"
+            :title="`Open subagent ${sub.slug}`"
+          >
+            <span class="token-cost-legend-label">{{ sub.slug }}</span>
+            <span class="token-cost-legend-tokens">{{ sub.llm_calls }} {{ sub.llm_calls === 1 ? "call" : "calls" }}</span>
+            <span v-if="sub.estimated_usd > 0" class="token-cost-legend-cost">{{ formatUsd(sub.estimated_usd) }}</span>
+            <span v-else-if="sub.unpriced_calls === 0" class="token-cost-legend-cost">{{ formatUsd(0) }}</span>
+            <span v-else class="token-cost-legend-unit">no pricing</span>
+          </a>
         </template>
         <div
           v-if="!subagentLoading && showCostSummary"
@@ -639,7 +661,91 @@ const hoverEntry = computed<UsageEntry | null>(() => {
   return props.entries[i];
 });
 
+// Legend breakdown mirrors the graph: cumulative values up to the hovered
+// call while hovering, conversation totals otherwise. Per-row prefix sums
+// are computed once per (stack, entries) change so each hover update is
+// O(rows), not O(calls) per model.
+const prefixPerModel = computed(() => {
+  const s = stack.value;
+  if (!s) return [];
+  return s.perModel.map((mu) => ({
+    model: mu.model,
+    reportedPrefix: (() => {
+      const prefix: number[] = new Array(s.n).fill(0);
+      let acc = 0;
+      for (let j = 0; j < s.n; j++) {
+        const e = props.entries[j];
+        acc += (e?.model || "unknown model") === mu.model ? e?.cost_usd || 0 : 0;
+        prefix[j] = acc;
+      }
+      return prefix;
+    })(),
+    rows: mu.rows.map((row) => {
+      const tokensPrefix: number[] = new Array(s.n).fill(0);
+      const costPrefix: number[] = new Array(s.n).fill(0);
+      let tokens = 0;
+      let cost = 0;
+      for (let j = 0; j < s.n; j++) {
+        // Only the row's own model's entries contribute; model-less entries
+        // are bucketed as "unknown model" (matching buildTokenCostStack).
+        const e = props.entries[j];
+        if ((e?.model || "unknown model") !== mu.model) {
+          tokensPrefix[j] = tokens;
+          costPrefix[j] = cost;
+          continue;
+        }
+        const t = e?.[row.band.key] || 0;
+        tokens += t;
+        cost += (t / 1e6) * row.unitUsdPerMtok;
+        tokensPrefix[j] = tokens;
+        costPrefix[j] = cost;
+      }
+      return { row, tokensPrefix, costPrefix };
+    }),
+  }));
+});
+
+const displayPerModel = computed<ModelUsage[]>(() => {
+  const s = stack.value;
+  const i = hoverIndex.value;
+  if (!s || i === null || i >= s.n) return s?.perModel ?? [];
+  return s.perModel.map((mu, mi) => {
+    const prefixes = prefixPerModel.value[mi];
+    const rows = prefixes.rows.map(({ row, tokensPrefix, costPrefix }) => ({
+      ...row,
+      tokens: tokensPrefix[i],
+      cost: costPrefix[i],
+    }));
+    return {
+      ...mu,
+      rows,
+      totalCost: rows.reduce((sum, row) => sum + row.cost, 0),
+      reportedUsd: prefixes.reportedPrefix[i],
+    };
+  });
+});
+
+// Mid-generation cache-miss markers: red when the model changed (the user's
+// action rebuilds the context), light grey for any other mid-generation cache
+// miss — a turn whose cache read is < 20% of the prior turn's total input.
 const genStarts = computed(() => generationStarts(props.entries));
+const cacheMissMarkers = computed<{ index: number; kind: "model" | "miss" }[]>(() => {
+  const s = stack.value;
+  if (!s) return [];
+  const out: { kind: "model" | "miss"; index: number }[] = [];
+  for (let i = 1; i < s.n; i++) {
+    const prev = props.entries[i - 1];
+    const cur = props.entries[i];
+    if (prev.generation !== undefined && cur.generation !== undefined && prev.generation !== cur.generation) continue;
+    if (cur.model && prev.model && cur.model !== prev.model) out.push({ kind: "model", index: i });
+    else if (
+      (cur.cache_read_input_tokens || 0) < 0.2 * ((prev.input_tokens || 0) + (prev.cache_creation_input_tokens || 0) + (prev.cache_read_input_tokens || 0))
+    ) {
+      out.push({ kind: "miss", index: i });
+    }
+  }
+  return out;
+});
 
 // Generation number shown in the hover readout, only when the conversation
 // actually spans multiple generations.
