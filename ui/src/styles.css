@@ -9845,6 +9845,25 @@ kbd {
   pointer-events: none;
 }
 
+/* Mid-generation cache miss caused by a model switch (user action). */
+.token-cost-model-line {
+  stroke: var(--error-text);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* Other mid-generation cache miss: cache read < 20% of the prior turn's
+   total input. */
+.token-cost-miss-line {
+  stroke: var(--text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
 .token-cost-label {
   font-size: 9px;
   fill: var(--text-secondary);

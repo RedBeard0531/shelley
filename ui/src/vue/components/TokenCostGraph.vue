@@ -58,6 +58,15 @@
           :y2="H - PADB"
           class="token-cost-gen-line"
         />
+        <line
+          v-for="m in cacheMissMarkers"
+          :key="`miss-${m.kind}-${m.index}`"
+          :x1="xAt(m.index)"
+          :y1="PADT"
+          :x2="xAt(m.index)"
+          :y2="H - PADB"
+          :class="m.kind === 'model' ? 'token-cost-model-line' : 'token-cost-miss-line'"
+        />
         <line :x1="PADL" :y1="PADT" :x2="PADL" :y2="H - PADB" class="token-cost-axis" />
         <line :x1="PADL" :y1="H - PADB" :x2="W - PADR" :y2="H - PADB" class="token-cost-axis" />
         <line
@@ -694,7 +703,27 @@ const displayPerModel = computed<ModelUsage[]>(() => {
   });
 });
 
+// Mid-generation cache-miss markers: red when the model changed (the user's
+// action rebuilds the context), light grey for any other mid-generation cache
+// miss — a turn whose cache read is < 20% of the prior turn's total input.
 const genStarts = computed(() => generationStarts(props.entries));
+const cacheMissMarkers = computed<{ index: number; kind: "model" | "miss" }[]>(() => {
+  const s = stack.value;
+  if (!s) return [];
+  const out: { kind: "model" | "miss"; index: number }[] = [];
+  for (let i = 1; i < s.n; i++) {
+    const prev = props.entries[i - 1];
+    const cur = props.entries[i];
+    if (prev.generation !== undefined && cur.generation !== undefined && prev.generation !== cur.generation) continue;
+    if (cur.model && prev.model && cur.model !== prev.model) out.push({ kind: "model", index: i });
+    else if (
+      (cur.cache_read_input_tokens || 0) < 0.2 * ((prev.input_tokens || 0) + (prev.cache_creation_input_tokens || 0) + (prev.cache_read_input_tokens || 0))
+    ) {
+      out.push({ kind: "miss", index: i });
+    }
+  }
+  return out;
+});
 
 // Generation number shown in the hover readout, only when the conversation
 // actually spans multiple generations.
