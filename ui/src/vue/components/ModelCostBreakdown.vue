@@ -3,7 +3,7 @@
   <tbody class="token-cost-model-breakdown">
     <tr class="token-cost-model-row">
       <th scope="row">
-        <span class="token-cost-model-name">{{ model.model }}</span>
+        <span class="token-cost-model-name" :title="model.model">{{ label ?? model.model }}</span>
       </th>
       <td v-for="scope in scopes" :key="scope" :data-scope="scope">
         <template v-if="model[scope]">
@@ -54,18 +54,20 @@ import TokenCostCell from "./TokenCostCell.vue";
 const props = defineProps<{
   model: ModelCostComparison;
   showSubagents: boolean;
-  hideZeroCacheWrite: boolean;
+  /** Display name for the model; falls back to the raw recorded name. */
+  label?: string;
 }>();
 const scopes = computed(() =>
   props.showSubagents ? (["main", "subagents"] as const) : (["main"] as const),
 );
+// Omit zero-token cache-write rows (e.g. a model that never writes cache);
+// hiding applies only when every scope's usage for the band is zero.
 const rowIndexes = computed(() =>
   bands
     .map((_, index) => index)
     .filter(
       (index) =>
         !(
-          props.hideZeroCacheWrite &&
           bands[index].costKey === "cache_write" &&
           scopes.value.every((scope) => (props.model[scope]?.rows[index].tokens ?? 0) === 0)
         ),
