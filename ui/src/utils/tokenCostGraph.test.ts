@@ -94,7 +94,16 @@ function entry(partial: Partial<UsageEntry>): UsageEntry {
   const colors = new Set(s.segments.map((seg) => seg.color));
   assert(colors.size === s.segments.length, "all segment colors distinct");
   const rowColors = new Set(s.perModel.flatMap((m) => m.rows.map((r) => r.color)));
-  assert(rowColors.size === s.segments.length, "legend row colors match segments");
+  assert(rowColors.size <= s.segments.length, "legend row colors are a subset of segment colors");
+  assert(
+    rowColors.size === s.perModel.reduce((sum, m) => sum + m.rows.length, 0),
+    "legend row colors distinct",
+  );
+  // Zero-token bands (unused by the model) are dropped from the legend.
+  assert(
+    s.perModel.every((m) => m.rows.every((r) => r.tokens > 0)),
+    "legend omits zero-token bands",
+  );
   const mystery = s.perModel.find((m) => m.model === "mystery")!;
   assert(!mystery.priced, "mystery unpriced");
   assert(
