@@ -169,6 +169,17 @@
             }}</span>
             <span v-else class="token-cost-legend-unit">no pricing</span>
           </div>
+          <a
+            v-for="sub in subagentUsage.subagents"
+            :key="sub.conversation_id"
+            :href="`/c/${sub.slug}`"
+            class="token-cost-legend-row token-cost-subagent-row"
+            :title="`Open subagent ${sub.slug}`"
+          >
+            <span class="token-cost-legend-label">{{ sub.slug }}</span>
+            <span class="token-cost-legend-tokens">{{ sub.llm_calls }} {{ sub.llm_calls === 1 ? "call" : "calls" }}</span>
+            <span class="token-cost-legend-cost">{{ formatUsd(sub.estimated_usd) }}</span>
+          </a>
         </template>
         <div
           v-if="!subagentLoading && showCostSummary"

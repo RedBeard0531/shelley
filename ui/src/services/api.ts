@@ -921,6 +921,15 @@ export interface SubagentUsageDTO {
   unpriced_reported_usd: number;
   unpriced_models: string[];
   unpriced_calls: number;
+  /** Direct subagents, each folded with its own descendants. */
+  subagents: {
+    conversation_id: string;
+    slug: string;
+    llm_calls: number;
+    estimated_usd: number;
+    reported_usd: number;
+    unpriced_calls: number;
+  }[];
 }
 
 export const subagentUsageApi = {
