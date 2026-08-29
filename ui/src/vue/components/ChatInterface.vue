@@ -1540,6 +1540,16 @@ function resetToolOverrides() {
     /* ignore */
   }
 }
+function allToolsOff() {
+  const next: Record<string, "off"> = {};
+  for (const tool of availableTools.value) next[tool.name] = "off";
+  toolOverrides.value = next;
+  try {
+    localStorage.setItem(TOOL_OVERRIDES_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+}
 const toolOverrideCount = computed(() => Object.keys(toolOverrides.value).length);
 
 // ---- auto compaction nudge threshold (persisted) ----
@@ -4027,6 +4037,7 @@ const statusContentProps = computed(() => {
     onResetToolOverrides: resetToolOverrides,
     compactNudgeTokens: compactNudgeTokens.value,
     onSetCompactNudgeTokens: setCompactNudgeTokens,
+    onAllToolsOff: allToolsOff,
     onOpenDirectoryPicker: () => (showDirectoryPicker.value = true),
     onUsageNeeded: () => (usageWanted.value = true),
   };

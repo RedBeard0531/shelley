@@ -57,8 +57,16 @@ const legacyFontSizes = new Set([
   "16px",
 ]);
 const expectedLegacyFontSizeDeclarations = 159;
+<<<<<<< HEAD
 const expectedDuplicateRuleGroups = 184;
 const expectedExcessDuplicateRules = 513;
+||||||| parent of fdae18e9 (tools: add 'All off' button next to Reset to defaults in the tool popover)
+const expectedDuplicateRuleGroups = 185;
+const expectedExcessDuplicateRules = 514;
+=======
+const expectedDuplicateRuleGroups = 186;
+const expectedExcessDuplicateRules = 515;
+>>>>>>> fdae18e9 (tools: add 'All off' button next to Reset to defaults in the tool popover)
 const legacyFontShorthands = new Set([
   "13px/1.55 ui-monospace,\n    SFMono-Regular,\n    Menlo,\n    Consolas,\n    monospace",
 ]);

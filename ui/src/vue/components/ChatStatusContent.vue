@@ -182,15 +182,26 @@
           </div>
           <div class="advanced-settings-header">
             <span>Tools</span>
-            <button
-              type="button"
-              class="advanced-settings-reset"
-              :disabled="toolOverrideCount === 0"
-              v-tooltip.top="'Clear all overrides'"
-              @click="onResetToolOverrides"
-            >
-              Reset to defaults
-            </button>
+            <div class="advanced-settings-actions">
+              <button
+                type="button"
+                class="advanced-settings-reset"
+                :disabled="toolOverrideList.length === 0"
+                v-tooltip.top="'Set every tool to off'"
+                @click="onAllToolsOff"
+              >
+                All off
+              </button>
+              <button
+                type="button"
+                class="advanced-settings-reset"
+                :disabled="toolOverrideCount === 0"
+                v-tooltip.top="'Clear all overrides'"
+                @click="onResetToolOverrides"
+              >
+                Reset to defaults
+              </button>
+            </div>
           </div>
           <div class="tool-override-list">
             <template v-for="tool in listedTools" :key="tool.name">
@@ -303,6 +314,7 @@ const props = defineProps<{
   onResetToolOverrides: () => void;
   compactNudgeTokens: number;
   onSetCompactNudgeTokens: (tokens: number) => void;
+  onAllToolsOff: () => void;
   onOpenDirectoryPicker: () => void;
   /** Told before the context usage popup opens, so ChatInterface can start
    *  computing the cost graph's usage entries (see usageWanted there). */
