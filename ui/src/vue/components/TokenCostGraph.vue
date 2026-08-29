@@ -98,7 +98,7 @@
         </template>
       </div>
       <div class="token-cost-legend">
-        <template v-for="mu in stack.perModel" :key="mu.model">
+        <template v-for="mu in displayPerModel" :key="mu.model">
           <div class="token-cost-model-row">
             <span class="token-cost-model-name">{{ mu.model }}</span>
             <span v-if="mu.priced" class="token-cost-legend-cost">{{
@@ -637,6 +637,61 @@ const hoverEntry = computed<UsageEntry | null>(() => {
   const i = hoverIndex.value;
   if (!s || i === null || i >= s.n) return null;
   return props.entries[i];
+});
+
+// Legend breakdown mirrors the graph: cumulative values up to the hovered
+// call while hovering, conversation totals otherwise. Per-row prefix sums
+// are computed once per (stack, entries) change so each hover update is
+// O(rows), not O(calls) per model.
+const prefixPerModel = computed(() => {
+  const s = stack.value;
+  if (!s) return [];
+  return s.perModel.map((mu) => ({
+    model: mu.model,
+    reportedPrefix: (() => {
+      const prefix: number[] = new Array(s.n).fill(0);
+      let acc = 0;
+      for (let j = 0; j < s.n; j++) {
+        acc += props.entries[j]?.model === mu.model ? props.entries[j]?.cost_usd || 0 : 0;
+        prefix[j] = acc;
+      }
+      return prefix;
+    })(),
+    rows: mu.rows.map((row) => {
+      const tokensPrefix: number[] = new Array(s.n).fill(0);
+      const costPrefix: number[] = new Array(s.n).fill(0);
+      let tokens = 0;
+      let cost = 0;
+      for (let j = 0; j < s.n; j++) {
+        const t = props.entries[j]?.[row.band.key] || 0;
+        tokens += t;
+        cost += (t / 1e6) * row.unitUsdPerMtok;
+        tokensPrefix[j] = tokens;
+        costPrefix[j] = cost;
+      }
+      return { row, tokensPrefix, costPrefix };
+    }),
+  }));
+});
+
+const displayPerModel = computed<ModelUsage[]>(() => {
+  const s = stack.value;
+  const i = hoverIndex.value;
+  if (!s || i === null || i >= s.n) return s?.perModel ?? [];
+  return s.perModel.map((mu, mi) => {
+    const prefixes = prefixPerModel.value[mi];
+    const rows = prefixes.rows.map(({ row, tokensPrefix, costPrefix }) => ({
+      ...row,
+      tokens: tokensPrefix[i],
+      cost: costPrefix[i],
+    }));
+    return {
+      ...mu,
+      rows,
+      totalCost: rows.reduce((sum, row) => sum + row.cost, 0),
+      reportedUsd: prefixes.reportedPrefix[i],
+    };
+  });
 });
 
 const genStarts = computed(() => generationStarts(props.entries));

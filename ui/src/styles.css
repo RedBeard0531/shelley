@@ -9743,46 +9743,38 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
-.context-composition-graph-header > span:first-child {
-  align-self: center;
   font-size: 0.65rem;
   line-height: 1.4;
 }
 
-.context-composition-legend-label {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-composition-legend-tokens {
-  min-width: 42px;
-  text-align: right;
-}
-
-.context-composition-legend-item {
-  min-width: 0;
-}
-
-.context-composition-legend-row {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  line-height: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.context-composition-legend-row:focus-visible {
-  outline: 2px solid var(--blue-text);
-  outline-offset: 2px;
   border-radius: 2px;
+  flex-shrink: 0;
+}
+.context-composition-legend-tokens {
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.context-composition-unit {
+  font-style: italic;
+}
+
+.context-composition-legend-pct {
+  min-width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.context-composition-legend-total {
+  min-width: 52px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary, inherit);
+}
+.context-composition-total-row {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  font-weight: 600;
 }
 
 .context-composition-compaction-note {
