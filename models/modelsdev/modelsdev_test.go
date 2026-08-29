@@ -232,6 +232,15 @@ func TestLookupReasoningCapabilities(t *testing.T) {
 				llm.ThinkingLevelOff, llm.ThinkingLevelLow, llm.ThinkingLevelHigh, llm.ThinkingLevelMax,
 			}},
 		},
+		{
+			name:     "fireworks glm-5p3-flash deployment effort levels",
+			endpoint: "https://llm.int.exe.xyz/v1",
+			model:    "accounts/fireworks/deployments/glm-5p3-flash-vllm",
+			found:    true,
+			want: ReasoningCapabilities{Supported: true, Levels: []llm.ThinkingLevel{
+				llm.ThinkingLevelOff, llm.ThinkingLevelLow, llm.ThinkingLevelHigh, llm.ThinkingLevelMax,
+			}},
+		},
 		{name: "unknown", endpoint: "https://made-up.example", model: "unknown"},
 	}
 	for _, tt := range tests {
@@ -282,6 +291,7 @@ func TestLookupCost(t *testing.T) {
 		{"fireworks qwen3p8-max", "", "accounts/fireworks/models/qwen3p8-max", true, 2, 6},
 		{"fireworks glm-5p3", "", "accounts/fireworks/models/glm-5p3", true, 1.4, 4.4},
 		{"fireworks glm-5p3-flash", "", "accounts/fireworks/models/glm-5p3-flash", true, 0.15, 0.5},
+		{"fireworks glm-5p3-flash deployment", "", "accounts/fireworks/deployments/glm-5p3-flash-vllm", true, 0.15, 0.5},
 		{"fireworks deepseek-v4-flash-0731", "", "accounts/fireworks/models/deepseek-v4-flash-0731", true, 0.22, 0.66},
 		{"unknown model", "", "predictable-v1", false, 0, 0},
 	}
@@ -306,6 +316,7 @@ func TestLookupCostCachedReads(t *testing.T) {
 	}{
 		{"fireworks glm-5p3 cached reads", "accounts/fireworks/models/glm-5p3", 0.26},
 		{"fireworks glm-5p3-flash cached reads", "accounts/fireworks/models/glm-5p3-flash", 0.029},
+		{"fireworks glm-5p3-flash deployment cached reads", "accounts/fireworks/deployments/glm-5p3-flash-vllm", 0.029},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

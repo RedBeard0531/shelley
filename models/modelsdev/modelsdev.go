@@ -248,15 +248,43 @@ func LookupCost(endpoint, modelName string) (Cost, bool) {
 	return m.Cost, found
 }
 
+// lookupNames returns the model-name spellings worth trying for a lookup,
+// most specific first: the name as recorded, the same name with a trailing
+// provider snapshot date stripped, and — for Fireworks deployment ids — the
+// serverless model id the deployment serves. The exe.dev gateway reports
+// responses from its vLLM Fireworks deployments under
+// "accounts/fireworks/deployments/<model>-vllm" (e.g.
+// "accounts/fireworks/deployments/glm-5p3-flash-vllm"), but models.dev prices
+// the equivalent "accounts/fireworks/models/<model>" id, so recorded usage
+// needs the rewrite to resolve a price.
+func lookupNames(modelName string) []string {
+	var names []string
+	add := func(s string) {
+		for _, have := range names {
+			if have == s {
+				return
+			}
+		}
+		names = append(names, s)
+	}
+	add(modelName)
+	if stripped := dateSuffixRe.ReplaceAllString(modelName, ""); stripped != modelName {
+		add(stripped)
+	}
+	const deploymentsPrefix = "accounts/fireworks/deployments/"
+	const modelsPrefix = "accounts/fireworks/models/"
+	if rest, ok := strings.CutPrefix(modelName, deploymentsPrefix); ok {
+		add(modelsPrefix + strings.TrimSuffix(rest, "-vllm"))
+	}
+	return names
+}
+
 // lookupBroad resolves models that may be reached through gateway hosts absent
 // from models.dev: endpoint host first, then first-party catalogs by bare name,
-// then OpenRouter. Each path also tries a trailing date suffix stripped.
+// then OpenRouter. Each path tries every spelling from lookupNames.
 func lookupBroad(endpoint, modelName string, usable func(modelEntry) bool) (modelEntry, bool) {
 	data := load()
-	names := []string{modelName}
-	if stripped := dateSuffixRe.ReplaceAllString(modelName, ""); stripped != modelName {
-		names = append(names, stripped)
-	}
+	names := lookupNames(modelName)
 	tryProvider := func(p providerEntry, name string) (modelEntry, bool) {
 		m, found := lookupInProvider(p, name)
 		return m, found && usable(m)
