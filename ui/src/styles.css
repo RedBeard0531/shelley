@@ -4602,6 +4602,12 @@ svg {
   border-bottom: 1px solid var(--border);
 }
 
+.advanced-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
 .advanced-settings-reset {
   background: transparent;
   border: 1px solid var(--border);

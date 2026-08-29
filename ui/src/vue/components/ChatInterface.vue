@@ -1297,6 +1297,16 @@ function resetToolOverrides() {
     /* ignore */
   }
 }
+function allToolsOff() {
+  const next: Record<string, "off"> = {};
+  for (const tool of availableTools.value) next[tool.name] = "off";
+  toolOverrides.value = next;
+  try {
+    localStorage.setItem(TOOL_OVERRIDES_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+}
 const toolOverrideCount = computed(() => Object.keys(toolOverrides.value).length);
 
 const toolOverrideList = computed(() => availableTools.value);
@@ -3332,6 +3342,7 @@ const statusContentProps = computed(() => {
     onThinkingChange: setThinkingLevel,
     onSetToolOverride: setToolOverride,
     onResetToolOverrides: resetToolOverrides,
+    onAllToolsOff: allToolsOff,
     onOpenDirectoryPicker: () => (showDirectoryPicker.value = true),
     onUsageNeeded: () => (usageWanted.value = true),
   };
