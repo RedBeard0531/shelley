@@ -120,7 +120,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 			{ID: "openai/gpt-5.5", Provider: "openai", NativeID: "gpt-5.5", APIs: []string{"openai_responses"}},
 			{ID: "fireworks/glm-5p2", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p2", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/kimi-k2p6", Provider: "fireworks", NativeID: "accounts/fireworks/models/kimi-k2p6", APIs: []string{"openai_chat"}},
-			{ID: "fireworks/deepseek-v4-pro", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-pro", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/deepseek-v4-pro-0813", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-pro-0813", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4-flash-0731", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-flash-0731", APIs: []string{"openai_chat"}},
 		},
 	}

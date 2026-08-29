@@ -118,7 +118,7 @@ func TestLookupReasoningSupport(t *testing.T) {
 	}{
 		{"https://api.openai.com/v1", "gpt-5.4", true, true},
 		{"https://api.openai.com/v1", "gpt-4o", false, true},
-		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/gpt-oss-20b", true, true},
+		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/gpt-oss-120b", true, true},
 		{"https://generativelanguage.googleapis.com", "gemini-3-flash-preview", true, true},
 		{"https://made-up.example.com", "x", false, false},
 	}

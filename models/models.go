@@ -293,7 +293,7 @@ func All() []Model {
 		},
 		{
 			ID: "deepseek-v4-pro-fireworks", Provider: ProviderFireworks,
-			Description: "DeepSeek V4 Pro on Fireworks", APIModelName: oai.DeepseekV4ProFireworks.ModelName,
+			Description: "DeepSeek V4 Pro 0813 on Fireworks", APIModelName: oai.DeepseekV4ProFireworks.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
 			Build: oaiChatSvc(oai.DeepseekV4ProFireworks, "fireworks"),
 		},

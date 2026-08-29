@@ -1370,7 +1370,7 @@ func TestTokenContextWindowAdditionalCases(t *testing.T) {
 			expected: 256000,
 		},
 		{
-			name:     "DeepSeek V4 Pro Fireworks model",
+			name:     "DeepSeek V4 Pro 0813 Fireworks model",
 			model:    DeepseekV4ProFireworks,
 			expected: 1048576,
 		},
@@ -2164,7 +2164,7 @@ func TestServiceReasoningEffort(t *testing.T) {
 		{name: "GLM low rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelLow, wantEffort: "high"},
 		{name: "GLM xhigh tie rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
 		{name: "Kimi xhigh tie rounds to high", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
-		{name: "DeepSeek V4 Pro keeps max", model: DeepseekV4ProFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
+		{name: "DeepSeek V4 Pro 0813 keeps max", model: DeepseekV4ProFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "DeepSeek V4 Flash keeps max", model: DeepseekV4FlashFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "GLM 5.2 keeps max", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "Kimi K3 keeps max", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
