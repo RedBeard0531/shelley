@@ -23,6 +23,8 @@ func TestLookupImageSupport(t *testing.T) {
 
 		// Hosts that carry an explicit "api" field in models.dev.
 		{"fireworks text-only", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p2", true, false},
+		{"fireworks glm-5p3 text", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p3", true, false},
+		{"fireworks glm-5p3-flash vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p3-flash", true, true},
 		{"fireworks vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/kimi-k3", true, true},
 		{"fireworks inkling vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/inkling", true, true},
 		{"fireworks museglimmer vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/muse-glimmer-30b", true, true},
@@ -125,6 +127,8 @@ func TestLookupReasoningSupport(t *testing.T) {
 		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/gpt-oss-120b", true, true},
 		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/gpt-oss-20b", true, true},
 		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p2", true, true},
+		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p3", true, true},
+		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p3-flash", true, true},
 		{"https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/deepseek-v4-pro-0813", true, true},
 		{"https://generativelanguage.googleapis.com", "gemini-3-flash-preview", true, true},
 		{"https://made-up.example.com", "x", false, false},
@@ -210,6 +214,24 @@ func TestLookupReasoningCapabilities(t *testing.T) {
 			found: true,
 			want:  ReasoningCapabilities{Supported: true},
 		},
+		{
+			name:     "fireworks glm-5p3 effort levels",
+			endpoint: "https://api.fireworks.ai/inference/v1",
+			model:    "accounts/fireworks/models/glm-5p3",
+			found:    true,
+			want: ReasoningCapabilities{Supported: true, Levels: []llm.ThinkingLevel{
+				llm.ThinkingLevelOff, llm.ThinkingLevelLow, llm.ThinkingLevelHigh, llm.ThinkingLevelMax,
+			}},
+		},
+		{
+			name:     "fireworks glm-5p3-flash effort levels",
+			endpoint: "https://api.fireworks.ai/inference/v1",
+			model:    "accounts/fireworks/models/glm-5p3-flash",
+			found:    true,
+			want: ReasoningCapabilities{Supported: true, Levels: []llm.ThinkingLevel{
+				llm.ThinkingLevelOff, llm.ThinkingLevelLow, llm.ThinkingLevelHigh, llm.ThinkingLevelMax,
+			}},
+		},
 		{name: "unknown", endpoint: "https://made-up.example", model: "unknown"},
 	}
 	for _, tt := range tests {
@@ -258,6 +280,8 @@ func TestLookupCost(t *testing.T) {
 		{"fireworks full path", "", "accounts/fireworks/models/kimi-k2p6", true, 0.95, 4},
 		{"fireworks inkling", "", "accounts/fireworks/models/inkling", true, 1, 4.05},
 		{"fireworks qwen3p8-max", "", "accounts/fireworks/models/qwen3p8-max", true, 2, 6},
+		{"fireworks glm-5p3", "", "accounts/fireworks/models/glm-5p3", true, 1.4, 4.4},
+		{"fireworks glm-5p3-flash", "", "accounts/fireworks/models/glm-5p3-flash", true, 0.15, 0.5},
 		{"fireworks deepseek-v4-flash-0731", "", "accounts/fireworks/models/deepseek-v4-flash-0731", true, 0.22, 0.66},
 		{"unknown model", "", "predictable-v1", false, 0, 0},
 	}
@@ -269,6 +293,28 @@ func TestLookupCost(t *testing.T) {
 			}
 			if c.Input != tc.wantIn || c.Output != tc.wantOut {
 				t.Errorf("LookupCost(%q, %q) = %+v, want input=%v output=%v", tc.endpoint, tc.model, c, tc.wantIn, tc.wantOut)
+			}
+		})
+	}
+}
+
+func TestLookupCostCachedReads(t *testing.T) {
+	cases := []struct {
+		name  string
+		model string
+		want  float64
+	}{
+		{"fireworks glm-5p3 cached reads", "accounts/fireworks/models/glm-5p3", 0.26},
+		{"fireworks glm-5p3-flash cached reads", "accounts/fireworks/models/glm-5p3-flash", 0.029},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, found := LookupCost("https://api.fireworks.ai/inference/v1", tc.model)
+			if !found {
+				t.Fatalf("LookupCost(%q) not found", tc.model)
+			}
+			if c.CacheRead != tc.want {
+				t.Errorf("LookupCost(%q).CacheRead = %v, want %v", tc.model, c.CacheRead, tc.want)
 			}
 		})
 	}

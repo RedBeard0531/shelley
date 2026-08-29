@@ -302,6 +302,26 @@ var (
 		SupportsImages:   false, // models.dev: text-only
 	}
 
+	GLM53Fireworks = Model{
+		UserName:         "glm-5.3-fireworks",
+		ModelName:        "accounts/fireworks/models/glm-5p3",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: true,  // models.dev: reasoning
+		SupportsImages:   false, // models.dev: text-only
+	}
+
+	GLM53FlashFireworks = Model{
+		UserName:         "glm-5.3-flash-fireworks",
+		ModelName:        "accounts/fireworks/models/glm-5p3-flash",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: true, // models.dev: reasoning
+		SupportsImages:   true, // models.dev: text, image
+	}
+
 	KimiK26Fireworks = Model{
 		UserName:         "kimi-k2.6-fireworks",
 		ModelName:        "accounts/fireworks/models/kimi-k2p6",
@@ -631,6 +651,8 @@ var ModelsRegistry = []Model{
 	MistralMedium,
 	DevstralSmall,
 	GLM52Fireworks,
+	GLM53Fireworks,
+	GLM53FlashFireworks,
 	KimiK26Fireworks,
 	KimiK27CodeFireworks,
 	KimiK3Fireworks,
@@ -1443,6 +1465,8 @@ func (s *Service) TokenContextWindow() int {
 		return 1048576
 	case "accounts/fireworks/models/glm-5p2":
 		return 1048575
+	case "accounts/fireworks/models/glm-5p3", "accounts/fireworks/models/glm-5p3-flash":
+		return 1000000
 	case "accounts/fireworks/models/qwen3p8-max", "accounts/fireworks/models/nemotron-3-ultra-nvfp4", "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b":
 		return 262144
 	case "accounts/fireworks/models/muse-glimmer-30b":

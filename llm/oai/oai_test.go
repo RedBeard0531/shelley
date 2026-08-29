@@ -1410,6 +1410,16 @@ func TestTokenContextWindowAdditionalCases(t *testing.T) {
 			expected: 1048575,
 		},
 		{
+			name:     "GLM 5.3 Fireworks model",
+			model:    GLM53Fireworks,
+			expected: 1000000,
+		},
+		{
+			name:     "GLM 5.3 Flash Fireworks model",
+			model:    GLM53FlashFireworks,
+			expected: 1000000,
+		},
+		{
 			name:     "Inkling Fireworks model",
 			model:    InklingFireworks,
 			expected: 1048576,
