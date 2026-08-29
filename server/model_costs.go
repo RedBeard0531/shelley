@@ -116,7 +116,7 @@ func (s *Server) handleSubagentUsage(w http.ResponseWriter, r *http.Request, con
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		childOther, err := s.db.GetSubagentOtherUsage(r.Context(), child.ConversationID)
+		childOther, err := s.db.GetSubtreeOtherUsage(r.Context(), child.ConversationID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

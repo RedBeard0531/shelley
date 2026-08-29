@@ -2043,6 +2043,21 @@ func (db *DB) GetConversationBySlugAndParent(ctx context.Context, slug, parentID
 	return &conversation, err
 }
 
+// GetSubtreeOtherUsage aggregates indirect LLM usage (other_usage_data
+// entries) across a conversation and all its descendants (recursively),
+// grouped by model — the conversation itself included (unlike
+// GetSubagentOtherUsage).
+func (db *DB) GetSubtreeOtherUsage(ctx context.Context, conversationID string) ([]generated.GetSubtreeOtherUsageRow, error) {
+	var rows []generated.GetSubtreeOtherUsageRow
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		q := generated.New(rx.Conn())
+		var err error
+		rows, err = q.GetSubtreeOtherUsage(ctx, conversationID)
+		return err
+	})
+	return rows, err
+}
+
 // SubagentDBAdapter adapts *DB to the claudetool.SubagentDB interface.
 type SubagentDBAdapter struct {
 	DB *DB

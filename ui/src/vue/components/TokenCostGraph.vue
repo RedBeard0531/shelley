@@ -178,7 +178,9 @@
           >
             <span class="token-cost-legend-label">{{ sub.slug }}</span>
             <span class="token-cost-legend-tokens">{{ sub.llm_calls }} {{ sub.llm_calls === 1 ? "call" : "calls" }}</span>
-            <span class="token-cost-legend-cost">{{ formatUsd(sub.estimated_usd) }}</span>
+            <span v-if="sub.estimated_usd > 0" class="token-cost-legend-cost">{{ formatUsd(sub.estimated_usd) }}</span>
+            <span v-else-if="sub.unpriced_calls === 0" class="token-cost-legend-cost">{{ formatUsd(0) }}</span>
+            <span v-else class="token-cost-legend-unit">no pricing</span>
           </a>
         </template>
         <div
@@ -672,7 +674,8 @@ const prefixPerModel = computed(() => {
       const prefix: number[] = new Array(s.n).fill(0);
       let acc = 0;
       for (let j = 0; j < s.n; j++) {
-        acc += props.entries[j]?.model === mu.model ? props.entries[j]?.cost_usd || 0 : 0;
+        const e = props.entries[j];
+        acc += (e?.model || "unknown model") === mu.model ? e?.cost_usd || 0 : 0;
         prefix[j] = acc;
       }
       return prefix;
@@ -683,7 +686,15 @@ const prefixPerModel = computed(() => {
       let tokens = 0;
       let cost = 0;
       for (let j = 0; j < s.n; j++) {
-        const t = props.entries[j]?.[row.band.key] || 0;
+        // Only the row's own model's entries contribute; model-less entries
+        // are bucketed as "unknown model" (matching buildTokenCostStack).
+        const e = props.entries[j];
+        if ((e?.model || "unknown model") !== mu.model) {
+          tokensPrefix[j] = tokens;
+          costPrefix[j] = cost;
+          continue;
+        }
+        const t = e?.[row.band.key] || 0;
         tokens += t;
         cost += (t / 1e6) * row.unitUsdPerMtok;
         tokensPrefix[j] = tokens;
