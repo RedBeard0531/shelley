@@ -1164,6 +1164,13 @@ func (s *Server) buildCreateMessageParams(conversationID string, message llm.Mes
 		ExcludedFromContext: message.ExcludedFromContext,
 		MarkAgentDone:       markAgentDone,
 	}
+	// The loop's empty terminal marker records state, not an LLM request.
+	// Keep its usage NULL so call counts exclude it, without dropping paid
+	// excluded output or zero-usage records from actual requests and errors.
+	if message.Role == llm.MessageRoleAssistant && message.EndOfTurn && message.ExcludedFromContext &&
+		len(message.Content) == 0 && message.ErrorType == llm.ErrorTypeNone && usage == (llm.Usage{}) {
+		params.UsageData = nil
+	}
 	if len(otherUsage) > 0 {
 		params.OtherUsageData = otherUsage
 	}
