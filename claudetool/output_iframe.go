@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"shelley.exe.dev/llm"
 )
@@ -285,6 +286,16 @@ func (t *OutputIframeTool) run(ctx context.Context, input outputIframeInput) llm
 	if err != nil {
 		return llm.ErrorfToolOut("failed to read file: %v", err)
 	}
+	// The HTML is stored as a JSON string in the conversation and rendered
+	// as text/html by the clients. A binary/non-UTF-8 file (an image, a
+	// gzip, a compiled binary) can't be valid HTML: JSON marshaling would
+	// replace its bad bytes with U+FFFD and the UI would render the garbage
+	// as visible mojibake (a real bug report: an image passed to this tool
+	// rendered as a screen of replacement characters). Reject it up front
+	// with an actionable message so the agent picks an HTML file instead.
+	if !utf8.Valid(data) {
+		return llm.ErrorfToolOut("file %q is not valid UTF-8 text — output_iframe expects a self-contained HTML file, not a binary file (image, archive, or compiled binary). To show an image, embed it in HTML (e.g. a data: URL or an <img> tag).", input.Path)
+	}
 
 	// Read additional files
 	var embeddedFiles []EmbeddedFile
@@ -296,6 +307,12 @@ func (t *OutputIframeTool) run(ctx context.Context, input outputIframeInput) llm
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			return llm.ErrorfToolOut("failed to read file %q: %v", name, err)
+		}
+		// Embedded files are surfaced verbatim as JS strings / <style> bodies,
+		// so they too must be UTF-8 text (JSON, CSS, JS, CSV). A binary blob
+		// here corrupts the same way the main HTML does.
+		if !utf8.Valid(content) {
+			return llm.ErrorfToolOut("bundled file %q (%s) is not valid UTF-8 text — output_iframe files must be text (JSON, CSS, JS, CSV), not binary. To include an image, inline it as a data: URL in the HTML.", name, input.Files[name])
 		}
 		embeddedFiles = append(embeddedFiles, EmbeddedFile{
 			Name:    name,

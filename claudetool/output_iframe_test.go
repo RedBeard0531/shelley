@@ -36,6 +36,12 @@ func TestOutputIframeRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Create a binary (non-UTF-8) file to exercise the validity guard.
+	binFile := filepath.Join(tmpDir, "blob.bin")
+	if err := os.WriteFile(binFile, []byte{0x00, 0xff, 0xfe, 0x88, 0x99, 0x3c, 0x68}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	workingDir := &MutableWorkingDir{}
 	workingDir.Set(tmpDir)
 
@@ -143,6 +149,25 @@ func TestOutputIframeRun(t *testing.T) {
 				"path": "chart.html",
 				"files": map[string]any{
 					"missing.json": "missing.json",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			// A binary file (e.g. an image accidentally passed as the HTML
+			// path) must be rejected rather than stored as U+FFFD mojibake.
+			name: "binary html file",
+			input: map[string]any{
+				"path": "blob.bin",
+			},
+			wantErr: true,
+		},
+		{
+			name: "binary bundled file",
+			input: map[string]any{
+				"path": "chart.html",
+				"files": map[string]any{
+					"blob.bin": "blob.bin",
 				},
 			},
 			wantErr: true,
