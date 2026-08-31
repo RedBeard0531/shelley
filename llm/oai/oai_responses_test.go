@@ -1,9 +1,13 @@
 package oai
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +17,7 @@ import (
 	"time"
 
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/imageutil"
 	"shelley.exe.dev/llm/llmhttp"
 )
 
@@ -244,6 +249,54 @@ func TestResponsesContentOmitsEmptyTextForImages(t *testing.T) {
 	}
 	if strings.Contains(string(got), `"text"`) {
 		t.Fatalf("image content should not include empty text field: %s", got)
+	}
+}
+
+func TestFitResponsesImagesToPatchLimit(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 100, 80))
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, img); err != nil {
+		t.Fatal(err)
+	}
+	originalData := base64.StdEncoding.EncodeToString(encoded.Bytes())
+	messages := []llm.Message{{
+		Role: llm.MessageRoleUser,
+		Content: []llm.Content{{
+			Type:      llm.ContentTypeToolResult,
+			ToolUseID: "call_image",
+			ToolResult: []llm.Content{{
+				Type:      llm.ContentTypeText,
+				MediaType: "image/png",
+				Data:      originalData,
+			}},
+		}},
+	}}
+
+	got, err := fitResponsesImagesToPatchLimit(messages, 10, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := got[0].Content[0].ToolResult[0]
+	if content.Data == originalData {
+		t.Fatal("oversized image was not resized")
+	}
+	data, err := base64.StdEncoding.DecodeString(content.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	width, height, err := imageutil.DecodeDimensions(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patches := ((width + 9) / 10) * ((height + 9) / 10)
+	if patches > 20 {
+		t.Fatalf("resized image is %dx%d (%d patches), want <= 20", width, height, patches)
+	}
+	if content.DisplayWidth != width || content.DisplayHeight != height {
+		t.Fatalf("display dimensions = %dx%d, want %dx%d", content.DisplayWidth, content.DisplayHeight, width, height)
+	}
+	if messages[0].Content[0].ToolResult[0].Data != originalData {
+		t.Fatal("input messages were mutated")
 	}
 }
 

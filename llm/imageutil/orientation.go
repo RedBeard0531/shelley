@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"image"
+	"image/color"
 )
 
 // Orientation is an EXIF orientation tag value (1..8). It says how a decoder
@@ -142,4 +144,53 @@ func DecodeDisplayDimensions(data []byte) (width, height int, err error) {
 	}
 	w, h = DecodeOrientation(data).DisplayDimensions(w, h)
 	return w, h, nil
+}
+
+// orientedImage presents stored pixels in display orientation without first
+// allocating a full-size transformed copy. The resize scaler reads through
+// this view and writes the final, smaller image directly.
+type orientedImage struct {
+	image.Image
+	orientation Orientation
+	bounds      image.Rectangle
+}
+
+func newOrientedImage(src image.Image, orientation Orientation) image.Image {
+	if orientation == OrientationNormal {
+		return src
+	}
+	width, height := orientation.DisplayDimensions(src.Bounds().Dx(), src.Bounds().Dy())
+	return orientedImage{
+		Image:       src,
+		orientation: orientation,
+		bounds:      image.Rect(0, 0, width, height),
+	}
+}
+
+func (img orientedImage) Bounds() image.Rectangle { return img.bounds }
+func (img orientedImage) ColorModel() color.Model { return img.Image.ColorModel() }
+
+func (img orientedImage) At(x, y int) color.Color {
+	bounds := img.Image.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	var sourceX, sourceY int
+	switch img.orientation {
+	case 2:
+		sourceX, sourceY = width-1-x, y
+	case 3:
+		sourceX, sourceY = width-1-x, height-1-y
+	case 4:
+		sourceX, sourceY = x, height-1-y
+	case 5:
+		sourceX, sourceY = y, x
+	case 6:
+		sourceX, sourceY = y, height-1-x
+	case 7:
+		sourceX, sourceY = width-1-y, height-1-x
+	case 8:
+		sourceX, sourceY = width-1-y, x
+	default:
+		sourceX, sourceY = x, y
+	}
+	return img.Image.At(bounds.Min.X+sourceX, bounds.Min.Y+sourceY)
 }

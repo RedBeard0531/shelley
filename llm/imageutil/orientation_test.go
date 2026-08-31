@@ -43,6 +43,26 @@ func TestDecodeOrientationRotatedJPEG(t *testing.T) {
 	}
 }
 
+func TestResizeImageAutoOrientsJPEG(t *testing.T) {
+	resized, format, didResize, err := ResizeImage(decodeFixture(t), 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !didResize || format != "jpeg" {
+		t.Fatalf("didResize=%v format=%q, want true/jpeg", didResize, format)
+	}
+	width, height, err := DecodeDimensions(resized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width != 30 || height != 60 {
+		t.Fatalf("resized display dimensions = %dx%d, want 30x60", width, height)
+	}
+	if orientation := DecodeOrientation(resized); orientation != OrientationNormal {
+		t.Fatalf("resized orientation = %d, want normal", orientation)
+	}
+}
+
 func TestDecodeOrientationAbsentIsNormal(t *testing.T) {
 	png := createTestPNG(t, 137, 91)
 	if got := DecodeOrientation(png); got != OrientationNormal {

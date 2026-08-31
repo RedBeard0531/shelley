@@ -70,16 +70,16 @@ func Prepare(data []byte, source string, maxDimension, maxBytes int) (Prepared, 
 	resized := false
 	format := strings.TrimPrefix(mediaType, "image/")
 	// Dimensions before any downscaling. A format with no decoder registered in
-	// this binary (WebP, GIF) fails here, leaving these zero — but such an image
-	// also cannot be resized below, so Width/Height stay equal to the source's
-	// and callers never need the pre-resize numbers. Whenever Resized is true,
-	// these are populated.
+	// this binary (such as SVG or AVIF) fails here, leaving these zero — but such
+	// an image also cannot be resized below, so Width/Height stay equal to the
+	// source's and callers never need the pre-resize numbers. Whenever Resized
+	// is true, these are populated.
 	sourceWidth, sourceHeight, _ := DecodeDisplayDimensions(data)
 	sourceOrientation := DecodeOrientation(data)
 	if maxDimension > 0 {
 		// ResizeImage returns the original bytes when the image already fits.
-		// If it cannot decode a format such as WebP, leave the bytes unchanged
-		// and continue to the byte-limit check.
+		// If it cannot decode a format such as SVG or AVIF, leave the bytes
+		// unchanged and continue to the byte-limit check.
 		resizedData, resizedFormat, didResize, err := ResizeImage(data, maxDimension)
 		if err == nil {
 			data = resizedData
