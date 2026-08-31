@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 
 	"shelley.exe.dev/dtach"
 	"shelley.exe.dev/exescroll"
+	"shelley.exe.dev/sockdial"
 )
 
 const (
@@ -127,7 +127,11 @@ func (t *TerminalSessions) socketAlive(path string) bool {
 	if _, err := os.Stat(path); err != nil {
 		return false
 	}
-	conn, err := net.DialTimeout("unix", path, 500*time.Millisecond)
+	// sockdial.Dial (not net.DialTimeout) so a session whose absolute socket
+	// path exceeds sun_path -- routine on macOS, where the sessions dir lives
+	// under a deep Application Support / var/folders path -- is still detected
+	// as alive on restart instead of being reaped as dead.
+	conn, err := sockdial.Dial(path, 500*time.Millisecond)
 	if err != nil {
 		return false
 	}

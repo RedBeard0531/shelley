@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"shelley.exe.dev/sockdial"
 )
 
 // Client is a programmatic attachment to a dtach session. Use Attach to dial
@@ -23,7 +25,9 @@ func Attach(socketPath string) (*Client, error) {
 	if _, err := os.Stat(socketPath); err != nil {
 		return nil, ErrNotRunning
 	}
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	// sockdial.Dial tolerates socket paths longer than sun_path (see its
+	// docs); relevant on macOS where session sockets live under deep paths.
+	conn, err := sockdial.Dial(socketPath, 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotRunning, err)
 	}

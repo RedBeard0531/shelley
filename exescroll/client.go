@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"shelley.exe.dev/sockdial"
 )
 
 const (
@@ -47,7 +49,10 @@ type Client struct {
 
 // Attach connects to an existing exe-scroll session and requests full scrollback.
 func Attach(socket, exitFile string, cols, rows uint16) (*Client, error) {
-	conn, err := net.DialTimeout("unix", socket, 2*time.Second)
+	// sockdial.Dial handles socket paths longer than sun_path (common on macOS,
+	// where the sessions dir lives under a deep absolute path); a plain
+	// net.DialTimeout would fail such reattaches with ENAMETOOLONG.
+	conn, err := sockdial.Dial(socket, 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("exe-scroll: attach: %w", err)
 	}
