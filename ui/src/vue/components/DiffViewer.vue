@@ -46,7 +46,7 @@
             :is-mobile="isMobile"
             @change="onCommitChange"
           />
-          <div class="diff-viewer-file-selector-wrapper">
+          <div v-if="diffView === 'files'" class="diff-viewer-file-selector-wrapper">
             <select
               :value="selectedFile || ''"
               class="diff-viewer-select"
@@ -130,7 +130,7 @@
                 @change="onCommitChange"
               />
             </div>
-            <div class="diff-viewer-selector-group">
+            <div v-if="diffView === 'files'" class="diff-viewer-selector-group">
               <label class="diff-viewer-selector-label">Commit messages and changed files</label>
               <div class="diff-viewer-file-selector-wrapper">
                 <select
@@ -155,63 +155,65 @@
           </div>
 
           <div class="diff-viewer-controls-row">
-            <div class="diff-viewer-nav-buttons">
-              <button
-                v-tooltip.top="'Previous file (<)'"
-                class="diff-viewer-nav-btn"
-                :disabled="!hasPrevFile"
-                aria-label="Previous file (<)"
-                @click="goToPreviousFile"
-              >
-                <span v-html="PREV_FILE_ICON" />
-              </button>
-              <button
-                v-tooltip.top="'Previous change (,)'"
-                class="diff-viewer-nav-btn"
-                :disabled="!fileDiff"
-                aria-label="Previous change (,)"
-                @click="goToPreviousChange"
-              >
-                <span v-html="PREV_CHANGE_ICON" />
-              </button>
-              <button
-                v-tooltip.top="'Next change (.)'"
-                class="diff-viewer-nav-btn"
-                :disabled="!fileDiff"
-                aria-label="Next change (.)"
-                @click="goToNextChange"
-              >
-                <span v-html="NEXT_CHANGE_ICON" />
-              </button>
-              <button
-                v-tooltip.top="'Next file (>)'"
-                class="diff-viewer-nav-btn"
-                :disabled="!hasNextFile"
-                aria-label="Next file (>)"
-                @click="goToNextFile()"
-              >
-                <span v-html="NEXT_FILE_ICON" />
-              </button>
-            </div>
-            <div class="diff-viewer-mode-toggle">
-              <button
-                v-tooltip.top="'Comment mode'"
-                :class="`diff-viewer-mode-btn ${mode === 'comment' ? 'active' : ''}`"
-                aria-label="Comment mode"
-                @click="mode = 'comment'"
-              >
-                💬
-              </button>
-              <button
-                v-tooltip.top="'Edit mode'"
-                :class="`diff-viewer-mode-btn ${mode === 'edit' ? 'active' : ''}`"
-                aria-label="Edit mode"
-                @click="mode = 'edit'"
-              >
-                ✏️
-              </button>
-            </div>
-            <VimToggle :enabled="vimEnabled" @change="setVimEnabled" />
+            <template v-if="diffView === 'files'">
+              <div class="diff-viewer-nav-buttons">
+                <button
+                  v-tooltip.top="'Previous file (<)'"
+                  class="diff-viewer-nav-btn"
+                  :disabled="!hasPrevFile"
+                  aria-label="Previous file (<)"
+                  @click="goToPreviousFile"
+                >
+                  <span v-html="PREV_FILE_ICON" />
+                </button>
+                <button
+                  v-tooltip.top="'Previous change (,)'"
+                  class="diff-viewer-nav-btn"
+                  :disabled="!fileDiff"
+                  aria-label="Previous change (,)"
+                  @click="goToPreviousChange"
+                >
+                  <span v-html="PREV_CHANGE_ICON" />
+                </button>
+                <button
+                  v-tooltip.top="'Next change (.)'"
+                  class="diff-viewer-nav-btn"
+                  :disabled="!fileDiff"
+                  aria-label="Next change (.)"
+                  @click="goToNextChange"
+                >
+                  <span v-html="NEXT_CHANGE_ICON" />
+                </button>
+                <button
+                  v-tooltip.top="'Next file (>)'"
+                  class="diff-viewer-nav-btn"
+                  :disabled="!hasNextFile"
+                  aria-label="Next file (>)"
+                  @click="goToNextFile()"
+                >
+                  <span v-html="NEXT_FILE_ICON" />
+                </button>
+              </div>
+              <div class="diff-viewer-mode-toggle">
+                <button
+                  v-tooltip.top="'Comment mode'"
+                  :class="`diff-viewer-mode-btn ${mode === 'comment' ? 'active' : ''}`"
+                  aria-label="Comment mode"
+                  @click="mode = 'comment'"
+                >
+                  💬
+                </button>
+                <button
+                  v-tooltip.top="'Edit mode'"
+                  :class="`diff-viewer-mode-btn ${mode === 'edit' ? 'active' : ''}`"
+                  aria-label="Edit mode"
+                  @click="mode = 'edit'"
+                >
+                  ✏️
+                </button>
+              </div>
+              <VimToggle :enabled="vimEnabled" @change="setVimEnabled" />
+            </template>
             <button
               v-tooltip.top="`Git directory: ${cwd}\nClick to change`"
               class="diff-viewer-dir-btn"
@@ -232,8 +234,32 @@
         </div>
       </div>
 
+      <div
+        v-if="tourAvailable"
+        class="diff-viewer-view-switcher"
+        role="group"
+        aria-label="Diff view"
+      >
+        <button
+          type="button"
+          :class="{ active: diffView === 'tour' }"
+          :aria-pressed="diffView === 'tour'"
+          @click="diffView = 'tour'"
+        >
+          Tour
+        </button>
+        <button
+          type="button"
+          :class="{ active: diffView === 'files' }"
+          :aria-pressed="diffView === 'files'"
+          @click="diffView = 'files'"
+        >
+          Files
+        </button>
+      </div>
+
       <!-- Error banner -->
-      <div v-if="error" class="diff-viewer-error">{{ error }}</div>
+      <div v-if="error && diffView === 'files'" class="diff-viewer-error">{{ error }}</div>
 
       <!-- Main content -->
       <div
@@ -267,6 +293,7 @@
                       <span class="diff-viewer-commit-list-subject">{{
                         d.id === "working" ? "Working Changes" : d.message
                       }}</span>
+                      <span v-if="d.hasTour" class="commit-picker-tour-badge">tour</span>
                     </div>
                     <div
                       v-if="d.id !== 'working' && ((d.refs ?? []).length > 0 || d.isMergeBase)"
@@ -301,7 +328,7 @@
                   <DiffFileTree
                     :entries="treeEntries"
                     :selected-real-path="selectedFile"
-                    @select="(p: string) => (selectedFile = p)"
+                    @select="selectSidebarFile"
                   />
                 </div>
               </div>
@@ -309,46 +336,61 @@
           </div>
         </aside>
         <div ref="mainRef" class="diff-viewer-main">
-          <div v-if="loading && !fileDiff" class="diff-viewer-loading">
-            <div class="spinner"></div>
-            <span>Loading...</span>
+          <div v-if="diffView === 'tour'" class="diff-viewer-tour-pane">
+            <div v-if="tourLoading" class="diff-viewer-loading">
+              <div class="spinner"></div>
+              <span>Loading tour...</span>
+            </div>
+            <div v-else-if="tourError" class="diff-viewer-tour-error">{{ tourError }}</div>
+            <CommitTourView
+              v-else-if="tourResponse"
+              :tour="tourResponse"
+              :commit-message="selectedTourCommitMessage"
+              @open-comment="openTourComment"
+            />
           </div>
-          <div v-if="!loading && !monacoLoaded && !error" class="diff-viewer-loading">
-            <div class="spinner"></div>
-            <span>Loading editor...</span>
+          <div v-show="diffView === 'files'" class="diff-viewer-files-pane">
+            <div v-if="loading && !fileDiff" class="diff-viewer-loading">
+              <div class="spinner"></div>
+              <span>Loading...</span>
+            </div>
+            <div v-if="!loading && !monacoLoaded && !error" class="diff-viewer-loading">
+              <div class="spinner"></div>
+              <span>Loading editor...</span>
+            </div>
+            <div v-if="!loading && monacoLoaded && !fileDiff && !error" class="diff-viewer-empty">
+              <p>Select a diff and file to view changes.</p>
+              <p class="diff-viewer-hint">
+                Click a line to comment, or select text and click Comment.
+              </p>
+            </div>
+            <div
+              ref="editorContainerRef"
+              class="diff-viewer-editor"
+              :style="{ display: fileDiff && monacoLoaded ? 'block' : 'none' }"
+            />
+            <div
+              v-if="!isMobile && vimEnabled && fileDiff && monacoLoaded"
+              ref="vimStatusRef"
+              class="monaco-vim-status"
+            />
+            <!-- Floating "add comment" prompt shown next to a selection in comment mode -->
+            <button
+              v-if="commentPrompt"
+              v-tooltip.top="'Add comment on selection'"
+              class="diff-viewer-comment-prompt"
+              :style="{ top: `${commentPrompt.top}px`, left: `${commentPrompt.left}px` }"
+              @mousedown.prevent
+              @click="openCommentFromPrompt"
+            >
+              💬 Comment
+            </button>
           </div>
-          <div v-if="!loading && monacoLoaded && !fileDiff && !error" class="diff-viewer-empty">
-            <p>Select a diff and file to view changes.</p>
-            <p class="diff-viewer-hint">
-              Click a line to comment, or select text and click Comment.
-            </p>
-          </div>
-          <div
-            ref="editorContainerRef"
-            class="diff-viewer-editor"
-            :style="{ display: fileDiff && monacoLoaded ? 'block' : 'none' }"
-          />
-          <div
-            v-if="!isMobile && vimEnabled && fileDiff && monacoLoaded"
-            ref="vimStatusRef"
-            class="monaco-vim-status"
-          />
-          <!-- Floating "add comment" prompt shown next to a selection in comment mode -->
-          <button
-            v-if="commentPrompt"
-            v-tooltip.top="'Add comment on selection'"
-            class="diff-viewer-comment-prompt"
-            :style="{ top: `${commentPrompt.top}px`, left: `${commentPrompt.left}px` }"
-            @mousedown.prevent
-            @click="openCommentFromPrompt"
-          >
-            💬 Comment
-          </button>
         </div>
       </div>
 
       <!-- Mobile floating nav buttons -->
-      <div v-if="isMobile" class="diff-viewer-mobile-nav">
+      <div v-if="isMobile && diffView === 'files'" class="diff-viewer-mobile-nav">
         <button
           v-tooltip.top="
             mode === 'comment' ? 'Comment mode (tap to switch)' : 'Edit mode (tap to switch)'
@@ -401,7 +443,16 @@
 
       <!-- Comment dialog -->
       <CommentDialog
-        v-if="showCommentDialog"
+        v-if="tourCommentTarget"
+        :key="`tour-${tourCommentDialogOpens}`"
+        v-model:text="tourCommentText"
+        :where="tourCommentTarget.where"
+        :quoted="tourCommentTarget.selectedText"
+        @submit="handleAddTourComment"
+        @cancel="tourCommentTarget = null"
+      />
+      <CommentDialog
+        v-else-if="showCommentDialog"
         :key="commentDialogOpens"
         v-model:text="commentText"
         :where="lineCommentLabel(showCommentDialog, true)"
@@ -425,9 +476,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import type * as Monaco from "monaco-editor";
-import { api } from "../../services/api";
+import { api, type GitTourResponse } from "../../services/api";
 import { loadMonaco } from "../../services/monaco";
 import { isDarkModeActive } from "../../services/theme";
+import { buildTourCommentBlock, type TourCommentTarget } from "../composables/tourComments";
 import { useVimEnabled, useMonacoVim } from "../composables/monacoVim";
 import {
   lineCommentLabel,
@@ -436,6 +488,7 @@ import {
 } from "../composables/monacoComments";
 import VimToggle from "./VimToggle.vue";
 import CommentDialog from "./CommentDialog.vue";
+import CommitTourView from "./CommitTourView.vue";
 import CommitPicker from "./CommitPicker.vue";
 import RangeToggle from "./RangeToggle.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
@@ -499,6 +552,10 @@ const gitRoot = ref<string | null>(null);
 const showDirPicker = ref(false);
 const selectedDiff = ref<string | null>(null);
 const selectedTo = ref<"working" | "self">("working");
+const diffView = ref<"tour" | "files">("files");
+const tourResponse = ref<GitTourResponse | null>(null);
+const tourLoading = ref(false);
+const tourError = ref<string | null>(null);
 const files = ref<GitFileInfo[]>([]);
 const selectedFile = ref<string | null>(null);
 const fileDiff = ref<GitFileDiff | null>(null);
@@ -509,9 +566,21 @@ const currentChangeIndex = ref(-1);
 const saveStatus = ref<"idle" | "saving" | "saved" | "error">("idle");
 const mode = ref<ViewMode>("comment");
 const commitMessages = ref<GitCommitMessage[]>([]);
+const selectedTourCommitMessage = computed(() => {
+  const hash = tourResponse.value?.hash;
+  return hash ? (commitMessages.value.find((message) => message.hash === hash) ?? null) : null;
+});
 const amendStatus = ref<"idle" | "saving" | "saved" | "error">("idle");
 const showKeyboardHint = ref(false);
 const isMobile = ref(window.innerWidth < 768);
+const tourCommentTarget = ref<TourCommentTarget | null>(null);
+const tourCommentText = ref("");
+const tourCommentDialogOpens = ref(0);
+// Switching between Tour and Files closes any pending tour comment dialog.
+watch(diffView, () => {
+  tourCommentTarget.value = null;
+  tourCommentText.value = "";
+});
 const [vimEnabledRef, setVimEnabledFn] = useVimEnabled();
 const vimEnabled = vimEnabledRef;
 function setVimEnabled(v: boolean) {
@@ -536,6 +605,50 @@ function setLayout(v: "header" | "sidebar") {
     // ignore
   }
 }
+
+const tourAvailable = computed(() => {
+  if (!selectedDiff.value || selectedDiff.value === "working" || selectedTo.value !== "self") {
+    return false;
+  }
+  return !!diffs.value.find((diff) => diff.id === selectedDiff.value)?.hasTour;
+});
+
+const tourSelectionKey = computed(() =>
+  props.isOpen && tourAvailable.value && selectedDiff.value
+    ? `${props.cwd}\n${selectedDiff.value}`
+    : "",
+);
+
+let tourRequestId = 0;
+watch(
+  tourSelectionKey,
+  async (key) => {
+    const requestId = ++tourRequestId;
+    tourResponse.value = null;
+    tourError.value = null;
+    tourLoading.value = false;
+    tourCommentTarget.value = null;
+    tourCommentText.value = "";
+    if (!key || !selectedDiff.value) {
+      diffView.value = "files";
+      return;
+    }
+
+    diffView.value = "tour";
+    tourLoading.value = true;
+    try {
+      const response = await api.getGitTour(props.cwd, selectedDiff.value);
+      if (requestId !== tourRequestId) return;
+      tourResponse.value = response;
+    } catch (err) {
+      if (requestId !== tourRequestId) return;
+      tourError.value = `Failed to load commit tour: ${String(err)}`;
+    } finally {
+      if (requestId === tourRequestId) tourLoading.value = false;
+    }
+  },
+  { immediate: true },
+);
 
 // The vim adapter attaches to the modified (right-hand) code editor.
 // Must be shallowRef, not ref: a deep reactive proxy over Monaco's internal
@@ -689,6 +802,8 @@ watch(
       diffs.value = [];
       error.value = null;
       resetComments();
+      tourCommentTarget.value = null;
+      tourCommentText.value = "";
       commitMessages.value = [];
       amendStatus.value = "idle";
       if (amendTimeout) {
@@ -963,7 +1078,9 @@ async function loadDiffs() {
   }
 }
 
+let loadFilesRequestId = 0;
 async function loadFiles(diffId: string) {
+  const requestId = ++loadFilesRequestId;
   try {
     loading.value = true;
     error.value = null;
@@ -974,13 +1091,13 @@ async function loadFiles(diffId: string) {
     if (diffId !== "working") {
       try {
         msgs = await api.getGitCommitMessages(props.cwd, diffId, toArg);
-        commitMessages.value = msgs;
       } catch {
-        commitMessages.value = [];
+        msgs = [];
       }
-    } else {
-      commitMessages.value = [];
     }
+    // A newer selection's load supersedes this one; don't overwrite its state.
+    if (requestId !== loadFilesRequestId) return;
+    commitMessages.value = msgs;
 
     const commitFileEntries: GitFileInfo[] = msgs.map((msg) => ({
       path: COMMIT_MSG_PREFIX + msg.hash,
@@ -999,9 +1116,10 @@ async function loadFiles(diffId: string) {
       fileDiff.value = null;
     }
   } catch (err) {
+    if (requestId !== loadFilesRequestId) return;
     error.value = `Failed to load files: ${err}`;
   } finally {
-    loading.value = false;
+    if (requestId === loadFilesRequestId) loading.value = false;
   }
 }
 
@@ -1212,13 +1330,16 @@ function handleKeyDown(e: KeyboardEvent) {
     ) {
       return;
     }
-    if (showCommentDialog.value) {
+    if (tourCommentTarget.value) {
+      tourCommentTarget.value = null;
+    } else if (showCommentDialog.value) {
       showCommentDialog.value = null;
     } else {
       emit("close");
     }
     return;
   }
+  if (diffView.value === "tour") return;
   if ((e.ctrlKey || e.metaKey) && e.key === "s") {
     e.preventDefault();
     saveImmediately();
@@ -1248,8 +1369,8 @@ function handleKeyDown(e: KeyboardEvent) {
     }
     return;
   }
-  // Comment mode navigation (only when comment dialog is closed).
-  if (mode.value === "comment" && !showCommentDialog.value) {
+  // Comment mode navigation (only when comment dialogs are closed).
+  if (mode.value === "comment" && !showCommentDialog.value && !tourCommentTarget.value) {
     if (e.key === ".") {
       e.preventDefault();
       goToNextChange();
@@ -1331,6 +1452,9 @@ watch(navOrder, (v) => (navOrderRef.value = v), { immediate: true });
 
 // Title for the sidebar layout's header.
 const currentTitleText = computed<string | null>(() => {
+  if (diffView.value === "tour") {
+    return tourResponse.value?.tour.title || selectedDiff.value?.slice(0, 8) || null;
+  }
   const sf = selectedFile.value;
   if (!sf) return null;
   if (isCommitMessageFile(sf)) {
@@ -1342,6 +1466,10 @@ const currentTitleText = computed<string | null>(() => {
   return sf;
 });
 const currentTitleTooltip = computed<string | null>(() => {
+  if (diffView.value === "tour") {
+    const commit = diffs.value.find((diff) => diff.id === selectedDiff.value);
+    return commit ? `${commit.id}\n\n${commit.message}` : selectedDiff.value;
+  }
   const sf = selectedFile.value;
   if (!sf) return null;
   if (isCommitMessageFile(sf)) {
@@ -1447,6 +1575,28 @@ function onCommitListClick(d: GitDiffInfo) {
 }
 
 // --- Event handlers from child components ---
+function selectSidebarFile(path: string) {
+  selectedFile.value = path;
+  diffView.value = "files";
+}
+
+function openTourComment(target: TourCommentTarget) {
+  resetComments();
+  tourCommentTarget.value = target;
+  tourCommentText.value = "";
+  tourCommentDialogOpens.value++;
+}
+
+function handleAddTourComment() {
+  if (!tourCommentTarget.value || !tourCommentText.value.trim()) return;
+  emit(
+    "comment-text-change",
+    buildTourCommentBlock(tourCommentTarget.value, tourCommentText.value),
+  );
+  tourCommentTarget.value = null;
+  tourCommentText.value = "";
+}
+
 function onCommitChange(diff: string, to: "working" | "self") {
   selectedDiff.value = diff;
   selectedTo.value = to;

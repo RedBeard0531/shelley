@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"shelley.exe.dev/committour"
 )
 
 // GitDiffInfo represents a commit or working changes
@@ -28,6 +31,7 @@ type GitDiffInfo struct {
 	Refs []string `json:"refs,omitempty"`
 	// IsMergeBase indicates the commit is the merge-base with @{upstream}.
 	IsMergeBase bool `json:"isMergeBase,omitempty"`
+	HasTour     bool `json:"hasTour,omitempty"`
 }
 
 // GitFileInfo represents a file in a diff
@@ -260,13 +264,96 @@ func (s *Server) handleGitDiffs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	diffs = append(diffs, gitLogDiffs(gitRoot, limit, mergeBase)...)
+	commits := gitLogDiffs(gitRoot, limit, mergeBase)
+	// hasTour is decoration; a notes lookup failure must not break the diff list.
+	tours, _ := committour.ListNotes(gitRoot)
+	for i := range commits {
+		commits[i].HasTour = tours[commits[i].ID]
+	}
+	diffs = append(diffs, commits...)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"diffs":   diffs,
 		"gitRoot": gitRoot,
 	})
+}
+
+type GitTourResponse struct {
+	Hash string          `json:"hash"`
+	Tour json.RawMessage `json:"tour"`
+}
+
+// handleGitTour returns a commit's verified guided tour.
+func (s *Server) handleGitTour(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cwd := r.URL.Query().Get("cwd")
+	hash := r.URL.Query().Get("hash")
+	if cwd == "" || hash == "" {
+		http.Error(w, "cwd and hash are required", http.StatusBadRequest)
+		return
+	}
+	if len(hash) < 4 || len(hash) > 64 {
+		http.Error(w, "invalid hash", http.StatusBadRequest)
+		return
+	}
+	for _, c := range hash {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			http.Error(w, "invalid hash", http.StatusBadRequest)
+			return
+		}
+	}
+	if fi, err := os.Stat(cwd); err != nil || !fi.IsDir() {
+		http.Error(w, "invalid cwd", http.StatusBadRequest)
+		return
+	}
+	gitRoot, err := getGitRoot(cwd)
+	if err != nil {
+		http.Error(w, "not a git repository", http.StatusBadRequest)
+		return
+	}
+
+	fullHashCmd := exec.Command("git", "rev-parse", hash+"^{commit}")
+	fullHashCmd.Dir = gitRoot
+	fullHashBytes, err := fullHashCmd.Output()
+	if err != nil {
+		http.Error(w, "failed to read commit", http.StatusInternalServerError)
+		return
+	}
+	fullHash := strings.TrimSpace(string(fullHashBytes))
+
+	note, err := committour.ReadNote(gitRoot, fullHash)
+	if errors.Is(err, committour.ErrNoNote) {
+		writeGitTourNotFound(w)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// A malformed or stale note (e.g. attached before an amend) is as good
+	// as no tour.
+	tour, err := committour.ParseTour(note)
+	if err != nil {
+		writeGitTourNotFound(w)
+		return
+	}
+	if _, err := committour.Verify(gitRoot, fullHash, tour); err != nil {
+		writeGitTourNotFound(w)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(GitTourResponse{Hash: fullHash, Tour: note})
+}
+
+func writeGitTourNotFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]string{"error": "no tour"})
 }
 
 // nameStatusEntry is one record from `git diff --name-status -z`: a status code

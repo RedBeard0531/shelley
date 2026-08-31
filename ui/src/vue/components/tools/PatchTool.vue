@@ -101,10 +101,7 @@
 
     <div v-if="isExpanded" class="patch-tool-details">
       <div v-if="isComplete && !hasError && hasDiff" class="patch-tool-section">
-        <div
-          v-if="patchFiles.length > 1"
-          class="patch-tool-diffs-container patch-tool-file-list"
-        >
+        <div v-if="patchFiles.length > 1" class="patch-tool-diffs-container patch-tool-file-list">
           <PatchFileDiff
             v-for="file in patchFiles"
             :key="file.path"
@@ -161,6 +158,7 @@ import type {
 } from "@pierre/diffs";
 import { getSingularPatch, parseDiffFromFile } from "@pierre/diffs";
 import { isDarkModeActive } from "../../../services/theme";
+import { useSideBySidePreference } from "../../composables/diffViewPreference";
 import { useFileDiffInstance } from "../../composables/fileDiffInstance";
 import { useNearViewport } from "../../composables/nearViewport";
 import { useOpenFileEditor } from "../../composables/fileEditor";
@@ -168,28 +166,7 @@ import ToolChevron from "./ToolChevron.vue";
 import ToolStatusIcon from "./ToolStatusIcon.vue";
 import PatchFileDiff from "./PatchFileDiff.vue";
 
-// LocalStorage key for side-by-side preference
-const STORAGE_KEY_SIDE_BY_SIDE = "shelley-diff-side-by-side";
-
-function getSideBySidePreference(): boolean {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY_SIDE_BY_SIDE);
-    if (stored !== null) {
-      return stored === "true";
-    }
-    return window.innerWidth >= 768;
-  } catch {
-    return window.innerWidth >= 768;
-  }
-}
-
-function setSideBySidePreference(value: boolean): void {
-  try {
-    localStorage.setItem(STORAGE_KEY_SIDE_BY_SIDE, value ? "true" : "false");
-  } catch {
-    // Ignore storage errors
-  }
-}
+const DIFF_THEMES: ThemesType = { dark: "github-dark", light: "github-light" };
 
 interface PatchDisplayData {
   path: string;
@@ -205,8 +182,6 @@ interface PatchFile {
   additions: number;
   deletions: number;
 }
-
-const DIFF_THEMES: ThemesType = { dark: "github-dark", light: "github-light" };
 
 // Map file extension to language for syntax highlighting
 function getLanguageFromPath(path: string): SupportedLanguages {
@@ -277,7 +252,8 @@ const props = defineProps<{
 // State
 const isExpanded = ref(!props.hasError);
 const isMobile = ref(window.innerWidth < 768);
-const sideBySide = ref(!isMobile.value && getSideBySidePreference());
+const { sideBySidePreference, setSideBySidePreference } = useSideBySidePreference();
+const sideBySide = computed(() => !isMobile.value && sideBySidePreference.value);
 // Host element for the FileDiff renderer's <diffs-container>.
 const diffHostEl = ref<HTMLElement | null>(null);
 // Whether this tool has ever been near the viewport. Diff parsing + FileDiff
@@ -305,11 +281,7 @@ onUnmounted(() => {
 
 // Viewport resize handler
 function handleResize() {
-  const mobile = window.innerWidth < 768;
-  isMobile.value = mobile;
-  if (mobile) {
-    sideBySide.value = false;
-  }
+  isMobile.value = window.innerWidth < 768;
 }
 
 onMounted(() => {
@@ -320,9 +292,7 @@ onUnmounted(() => {
 });
 
 function toggleSideBySide() {
-  const newValue = !sideBySide.value;
-  sideBySide.value = newValue;
-  setSideBySidePreference(newValue);
+  setSideBySidePreference(!sideBySidePreference.value);
 }
 
 // Computed properties

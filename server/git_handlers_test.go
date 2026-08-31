@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"shelley.exe.dev/committour"
 )
 
 // TestGetGitRoot tests the getGitRoot function
@@ -284,6 +286,171 @@ func TestHandleGitDiffs(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200 for git subdirectory, got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+func TestHandleGitDiffsHasTour(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	dir := setupTestGitRepo(t)
+
+	firstCmd := exec.Command("git", "rev-parse", "HEAD")
+	firstCmd.Dir = dir
+	firstOut, err := firstCmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.TrimSpace(string(firstOut))
+
+	if err := os.WriteFile(filepath.Join(dir, "second.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, dir, "add", "second.txt")
+	testGit(t, dir, "commit", "--no-verify", "-m", "Second commit")
+	secondCmd := exec.Command("git", "rev-parse", "HEAD")
+	secondCmd.Dir = dir
+	secondOut, err := secondCmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := strings.TrimSpace(string(secondOut))
+
+	if err := committour.WriteNote(dir, first, []byte(`{"version":1,"chunks":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/git/diffs?cwd=%s", dir), nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitDiffs(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleGitDiffs: %d: %s", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		Diffs []map[string]any `json:"diffs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	foundFirst, foundSecond := false, false
+	for _, diff := range response.Diffs {
+		switch diff["id"] {
+		case first:
+			foundFirst = true
+			if diff["hasTour"] != true {
+				t.Errorf("annotated commit hasTour = %v", diff["hasTour"])
+			}
+		case second:
+			foundSecond = true
+			if _, ok := diff["hasTour"]; ok {
+				t.Errorf("unannotated commit hasTour = %v, want omitted", diff["hasTour"])
+			}
+		}
+	}
+	if !foundFirst || !foundSecond {
+		t.Fatalf("commits found: annotated=%v unannotated=%v", foundFirst, foundSecond)
+	}
+}
+
+func TestHandleGitTour(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	dir := setupTestGitRepo(t)
+	hash := strings.TrimSpace(testGitOutput(t, dir, "rev-parse", "HEAD"))
+	_, fragments, err := committour.Chunks(dir, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fragments) != 1 {
+		t.Fatalf("fragments = %d, want 1", len(fragments))
+	}
+
+	request := func(ref string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/git/tour?cwd=%s&hash=%s", dir, ref), nil)
+		w := httptest.NewRecorder()
+		h.server.handleGitTour(w, req)
+		return w
+	}
+
+	t.Run("no note", func(t *testing.T) {
+		w := request(hash)
+		if w.Code != http.StatusNotFound || w.Body.String() != "{\"error\":\"no tour\"}\n" {
+			t.Fatalf("got %d %s", w.Code, w.Body.String())
+		}
+		if w.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("content type = %q", w.Header().Get("Content-Type"))
+		}
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		if err := committour.WriteNote(dir, hash, []byte(`not JSON`)); err != nil {
+			t.Fatal(err)
+		}
+		w := request(hash)
+		if w.Code != http.StatusNotFound || w.Body.String() != "{\"error\":\"no tour\"}\n" {
+			t.Fatalf("got %d %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("verification failure", func(t *testing.T) {
+		stale := strings.Replace(fragments[0], "+Hello, World!", "+stale", 1)
+		note, err := json.Marshal(committour.Tour{Version: 1, Chunks: []committour.TourChunk{{Patch: stale, Comment: "old"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := committour.WriteNote(dir, hash, note); err != nil {
+			t.Fatal(err)
+		}
+		w := request(hash)
+		if w.Code != http.StatusNotFound || w.Body.String() != "{\"error\":\"no tour\"}\n" {
+			t.Fatalf("got %d %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("verified tour", func(t *testing.T) {
+		note, err := json.Marshal(committour.Tour{
+			Version: 1,
+			Title:   "Initial tour",
+			Intro:   "Welcome",
+			Chunks:  []committour.TourChunk{{Patch: fragments[0], Comment: "Start here"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := committour.WriteNote(dir, hash, note); err != nil {
+			t.Fatal(err)
+		}
+		w := request(hash[:8])
+		if w.Code != http.StatusOK {
+			t.Fatalf("got %d: %s", w.Code, w.Body.String())
+		}
+		var response GitTourResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Hash != hash {
+			t.Errorf("hash = %q, want %q", response.Hash, hash)
+		}
+		if string(response.Tour) != string(note) {
+			t.Errorf("tour = %s, want %s", response.Tour, note)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := fields["chunks"]; ok {
+			t.Fatalf("response still contains chunks: %s", w.Body.String())
+		}
+	})
+}
+
+func testGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(out)
 }
 
 // testGit runs a git command in dir, failing the test on error.

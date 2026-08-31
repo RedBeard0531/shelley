@@ -173,6 +173,8 @@ export interface GitDiffInfo {
   filesCount: number;
   additions: number;
   deletions: number;
+  // True when this commit has a guided tour git note.
+  hasTour?: boolean;
   // Decorating refs (branches, tags, HEAD), like git log --decorate.
   refs?: string[];
   // True if this commit is the merge-base with @{upstream}.

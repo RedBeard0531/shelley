@@ -79,6 +79,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  client [flags] <subcommand>   CLI client (chat, read, list, archive) (experimental)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  skill <cat|ls|new> [name]     Read, list, or create skills\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  dtach <new|attach> ...        Legacy persistent PTY session helper\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  tour <chunks|verify|attach|show> ...  Commit guided tours (git notes)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  exe-scroll [args]              Run the embedded exe-scroll binary\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  unpack-template <name> <dir>  Unpack a project template to a directory\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  version                       Print version information as JSON\n")
@@ -106,6 +107,8 @@ func main() {
 		runSkill(args[1:])
 	case "dtach":
 		runDtach(args[1:])
+	case "tour":
+		runTour(args[1:])
 	case "exe-scroll":
 		runExeScroll(args[1:])
 	case "unpack-template":

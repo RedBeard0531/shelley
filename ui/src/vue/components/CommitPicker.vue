@@ -207,6 +207,7 @@ function renderCommitRow(d: GitDiffInfo, idx: number): VNode {
         h("div", { class: "commit-picker-row-text" }, [
           h("div", { class: "commit-picker-row-subject" }, [
             renderRefs(d),
+            d.hasTour ? h("span", { class: "commit-picker-tour-badge" }, "tour") : null,
             h("span", { class: "commit-picker-row-message" }, d.message),
           ]),
           h("div", { class: "commit-picker-row-meta" }, [

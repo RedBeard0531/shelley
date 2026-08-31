@@ -38,6 +38,30 @@ export interface AvailableModel {
   supports_images?: boolean;
 }
 
+export interface GitTourHeaderEntry {
+  header: string;
+}
+
+export interface GitTourPatchEntry {
+  patch: string;
+  comment?: string;
+  trivial?: boolean;
+}
+
+export type GitTourEntry = GitTourHeaderEntry | GitTourPatchEntry;
+
+export interface GitTour {
+  version: 1;
+  title?: string;
+  intro?: string;
+  chunks: GitTourEntry[];
+}
+
+export interface GitTourResponse {
+  hash: string;
+  tour: GitTour;
+}
+
 class ApiService {
   private baseUrl = "/api";
 
@@ -500,6 +524,15 @@ class ApiService {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+
+  async getGitTour(cwd: string, hash: string): Promise<GitTourResponse> {
+    const params = new URLSearchParams({ cwd, hash });
+    const response = await fetch(`${this.baseUrl}/git/tour?${params}`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to get commit tour");
     }
     return response.json();
   }
