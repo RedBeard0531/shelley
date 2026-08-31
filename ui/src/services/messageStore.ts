@@ -440,10 +440,10 @@ export class MessageStore {
    * Conversations whose IDB row has been read (or proven absent) — i.e.
    * `hot` is authoritative for them. Only hydrate() and the paths that
    * make the disk read unnecessary (applyFullHistory: we just replaced the
-   * whole row) may add to this set. Notably NOT the metadata mutators:
-   * App pumps setMaxSequenceIdKnown/setConversation for every conversation
-   * in the list on page load, and marking those hydrated made the very
-   * first focus skip the disk read and full-REST-reload instead.
+   * whole row) may add to this set. Notably NOT metadata seeding:
+   * App seeds the server-known maximum for every conversation in the list
+   * before any is focused, and marking those hydrated would make the first
+   * focus skip the disk read and full-REST-reload instead.
    */
   private hydrated = new Set<string>();
   private listenersById = new Map<string, Set<Listener>>();
@@ -451,6 +451,8 @@ export class MessageStore {
   private allListeners = new Set<Listener>();
   /** Pending write-behind operations. `settle()` awaits these. */
   private inflight = new Set<Promise<unknown>>();
+  /** This tab must re-check any disk cache first hydrated after a reconnect. */
+  private refreshAfterReconnect = false;
   /**
    * Tail of the serialized write-behind chain per conversation, keyed by
    * conversation_id. Every persister that read-modify-writes the encrypted
@@ -474,14 +476,6 @@ export class MessageStore {
    * per conversation with a write in flight.
    */
   private writeChains = new Map<string, Promise<unknown>>();
-  /**
-   * Conversations with a hydrate() in flight, and whether markAllStale ran
-   * while it was in flight. A cold hydrate builds its record from the disk
-   * row, so a reconnect landing mid-read would otherwise be overwritten by
-   * the pre-reconnect on-disk value and the conversation would never
-   * re-check with the server.
-   */
-  private hydrating = new Map<string, { staleWhileHydrating: boolean }>();
   /** Cross-tab rotation channel; null when BroadcastChannel is unavailable. */
   private rotateChannel: BroadcastChannel | null = null;
 
@@ -911,21 +905,10 @@ export class MessageStore {
     if (this.hydrated.has(id)) {
       return this.hot.get(id) ?? null;
     }
-    // Track the in-flight read so a markAllStale() landing while we're
-    // reading isn't lost when we install the disk-derived record.
-    const inFlight = this.hydrating.get(id) ?? { staleWhileHydrating: false };
-    this.hydrating.set(id, inFlight);
-    try {
-      return await this._hydrate(id, inFlight);
-    } finally {
-      this.hydrating.delete(id);
-    }
+    return this._hydrate(id);
   }
 
-  private async _hydrate(
-    id: string,
-    inFlight: { staleWhileHydrating: boolean },
-  ): Promise<ConversationCacheRecord | null> {
+  private async _hydrate(id: string): Promise<ConversationCacheRecord | null> {
     let rec: ConversationCacheRecord | null = null;
     let undecryptable = 0;
     try {
@@ -1028,15 +1011,9 @@ export class MessageStore {
       rec = mergeRecords(rec, hot);
     }
     if (rec) {
-      // A stream reconnect during the read applies to the record we're about
-      // to install — the disk row predates the reconnect, so its
-      // needs_refresh cannot reflect it.
-      if (inFlight.staleWhileHydrating && !rec.needsRefresh) {
-        rec.needsRefresh = true;
-        this.queueWrite(id, () => this._patchMeta(id, { needs_refresh: true })).catch((err) =>
-          cacheDiag("fail", "persist.mark_stale_failed", { error: String(err) }, id),
-        );
-      }
+      // Every disk row predates this tab's most recent stream reconnect unless
+      // it was already hydrated and refreshed in memory.
+      if (this.refreshAfterReconnect) rec.needsRefresh = true;
       this.hot.set(id, rec);
       this.notify(id);
       cacheDiag("hit", hot ? "hydrate.merged" : "hydrate.loaded", {
@@ -1535,18 +1512,25 @@ export class MessageStore {
   // ── setMaxSequenceIdKnown ──────────────────────────────────────────────────
 
   /**
-   * Update the server-reported max sequence_id for a conversation.
-   * Called by globalStream when StreamResponse.max_sequence_id > 0,
-   * and by App when the conversation list is loaded or patched.
+   * Seed the server-reported max from the conversation list without touching
+   * IndexedDB. The list is re-fetched on every page load, and persisting every
+   * row here would enqueue one readwrite transaction per conversation before
+   * the focused conversation can hydrate.
+   */
+  seedMaxSequenceIdsKnown(
+    conversations: Iterable<{ conversation_id: string; max_sequence_id: number }>,
+  ): void {
+    for (const conv of conversations) {
+      this.advanceMaxSequenceIdKnown(conv.conversation_id, conv.max_sequence_id);
+    }
+  }
+
+  /**
+   * Persist a server-reported max from the live stream. Unlike list seeding,
+   * stream updates may be the only record of newly-arrived messages.
    */
   setMaxSequenceIdKnown(id: string, maxSeq: number): void {
-    if (maxSeq <= 0) return;
-    const rec = this.hot.get(id) ?? emptyRecord(id);
-    if (rec.maxSequenceIdKnown >= maxSeq) return;
-    rec.maxSequenceIdKnown = maxSeq;
-    rec.updatedAt = Date.now();
-    this.hot.set(id, rec);
-    this.notify(id);
+    if (!this.advanceMaxSequenceIdKnown(id, maxSeq)) return;
     this.queueWrite(id, () => this._patchMeta(id, { max_sequence_id_known: maxSeq })).catch((err) =>
       cacheDiag(
         "fail",
@@ -1555,6 +1539,17 @@ export class MessageStore {
         id,
       ),
     );
+  }
+
+  private advanceMaxSequenceIdKnown(id: string, maxSeq: number): boolean {
+    if (maxSeq <= 0) return false;
+    const rec = this.hot.get(id) ?? emptyRecord(id);
+    if (rec.maxSequenceIdKnown >= maxSeq) return false;
+    rec.maxSequenceIdKnown = maxSeq;
+    rec.updatedAt = Date.now();
+    this.hot.set(id, rec);
+    this.notify(id);
+    return true;
   }
 
   /**
@@ -1566,8 +1561,7 @@ export class MessageStore {
    *   - Patches touching only plaintext bookkeeping (max_sequence_id_*,
    *     has_full_history): the existing row's iv+ct are reused inside the
    *     tx, so the whole RMW is atomic vs other writers. This is what
-   *     setMaxSequenceIdKnown and markAllStale hit — they are the only
-   *     paths that fire on every stream event so they must stay atomic.
+   *     setMaxSequenceIdKnown hits on live stream updates.
    *   - Patches touching the encrypted payload (conversation,
    *     context_window_size): we snapshot+decrypt+re-encrypt outside the
    *     tx (because crypto.subtle awaits would auto-commit the tx).
@@ -1775,6 +1769,7 @@ export class MessageStore {
    * conversations (which for a long conversation is megabytes).
    */
   markAllStale(): void {
+    this.refreshAfterReconnect = true;
     const dirty: string[] = [];
     for (const rec of this.hot.values()) {
       if (!rec.needsRefresh) {
@@ -1785,24 +1780,10 @@ export class MessageStore {
         if (set) for (const cb of set) cb();
       }
     }
-    // A hydrate() in flight will install a record built from a disk row that
-    // predates this reconnect, which would silently drop the flag. Tell it.
-    for (const state of this.hydrating.values()) {
-      state.staleWhileHydrating = true;
-    }
-    // Conversations not currently in the hot map are handled by hydrate():
-    // a disk row that predates this reconnect is only reachable through
-    // hydrate, which happens on focus, and focus always re-checks the tail
-    // when the list's known-max is ahead of the cache.
     if (dirty.length > 0) {
-      cacheDiag("info", "stale.reconnect", { conversations: dirty.length });
       for (const cb of this.allListeners) cb();
-      for (const id of dirty) {
-        this.queueWrite(id, () => this._patchMeta(id, { needs_refresh: true })).catch((err) =>
-          cacheDiag("fail", "persist.mark_stale_failed", { error: String(err) }, id),
-        );
-      }
     }
+    cacheDiag("info", "stale.reconnect", { conversations: dirty.length });
   }
 
   // ── delete ─────────────────────────────────────────────────────────────────

@@ -504,8 +504,8 @@ function handleConversationListPatch(event: ConversationListPatchEvent) {
   for (const removedId of result.removedIds) {
     void messageStore.delete(removedId);
   }
+  messageStore.seedMaxSequenceIdsKnown(result.state.list);
   for (const conv of result.state.list) {
-    messageStore.setMaxSequenceIdKnown(conv.conversation_id, conv.max_sequence_id);
     // Seed from `working` — the list's authoritative working flag, which the
     // drawer indicator also renders — so the status bar and the conversation
     // list (the source of truth) never disagree.
@@ -537,9 +537,7 @@ async function loadConversations() {
     loading.value = true;
     error.value = null;
     const snapshot = await api.getConversationsSnapshot();
-    for (const conv of snapshot.conversations) {
-      messageStore.setMaxSequenceIdKnown(conv.conversation_id, conv.max_sequence_id);
-    }
+    messageStore.seedMaxSequenceIdsKnown(snapshot.conversations);
     const activeIds = snapshot.conversations.map((c) => c.conversation_id);
     void messageStore.pruneStale(activeIds, 7 * 24 * 60 * 60 * 1000);
     const streamHash = conversationListHash;
