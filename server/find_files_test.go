@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,15 +12,26 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
 // findFiles issues a GET /api/find-files and decodes the response.
 func findFiles(t *testing.T, h *TestHarness, dir, query string) FindFilesResponse {
 	t.Helper()
+	return findFilesMode(t, h, dir, query, "")
+}
+
+// findFilesMode is findFiles with an explicit content mode ("skip", "only",
+// "merge"; empty omits the parameter, exercising the default).
+func findFilesMode(t *testing.T, h *TestHarness, dir, query, content string) FindFilesResponse {
+	t.Helper()
 	u := "/api/find-files?dir=" + url.QueryEscape(dir)
 	if query != "" {
 		u += "&q=" + url.QueryEscape(query)
+	}
+	if content != "" {
+		u += "&content=" + url.QueryEscape(content)
 	}
 	req := httptest.NewRequest(http.MethodGet, u, nil)
 	w := httptest.NewRecorder()
@@ -853,6 +865,477 @@ func TestHandleReadFile(t *testing.T) {
 			t.Errorf("expected 400, got %d", w.Code)
 		}
 	})
+}
+
+// findMatch returns the match for path, failing the test when it's absent.
+func findMatch(t *testing.T, matches []FindFilesMatch, path string) FindFilesMatch {
+	t.Helper()
+	for _, m := range matches {
+		if m.Path == path {
+			return m
+		}
+	}
+	t.Fatalf("expected %q among matches, got %+v", path, matches)
+	return FindFilesMatch{}
+}
+
+// snippetRunes renders the highlighted runes of a match's snippet, failing on
+// out-of-range offsets, so tests can assert exactly what would light up.
+func snippetRunes(t *testing.T, m FindFilesMatch) string {
+	t.Helper()
+	runes := []rune(m.Snippet)
+	var out string
+	for _, idx := range m.SnippetMatchedIndexes {
+		if idx < 0 || idx >= len(runes) {
+			t.Fatalf("snippet index %d out of rune range [0,%d) for %q", idx, len(runes), m.Snippet)
+		}
+		out += string(runes[idx])
+	}
+	return out
+}
+
+// TestFindFilesContentSearch verifies "universal find": inside a git repo the
+// finder also surfaces files whose *contents* match the query (via git grep),
+// carrying a snippet of the matching line, while name matches keep ranking
+// first.
+func TestFindFilesContentSearch(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	// flamingo.md matches by name AND content; notes.txt only by content;
+	// other.txt by neither.
+	writeFile(t, filepath.Join(dir, "flamingo.md"), "a flamingo appears\n")
+	writeFile(t, filepath.Join(dir, "notes.txt"), "first line\n  the Flamingo stands\n")
+	writeFile(t, filepath.Join(dir, "other.txt"), "nothing here\n")
+
+	t.Run("content_match_has_line_and_snippet", func(t *testing.T) {
+		resp := findFiles(t, h, dir, "flamingo")
+		m := findMatch(t, resp.Matches, "notes.txt")
+		if m.Line != 2 {
+			t.Errorf("line = %d, want 2", m.Line)
+		}
+		if m.Snippet != "the Flamingo stands" {
+			t.Errorf("snippet = %q, want the trimmed matching line", m.Snippet)
+		}
+		if got := snippetRunes(t, m); got != "Flamingo" {
+			t.Errorf("highlighted snippet runes = %q, want %q (indexes %v)", got, "Flamingo", m.SnippetMatchedIndexes)
+		}
+		// Content-only matches have no path highlight: the name didn't match.
+		if len(m.MatchedIndexes) != 0 {
+			t.Errorf("unexpected path highlights on a content-only match: %v", m.MatchedIndexes)
+		}
+		if hasPath(resp.Matches, "other.txt") {
+			t.Errorf("other.txt matches neither name nor content: %+v", resp.Matches)
+		}
+	})
+
+	t.Run("name_match_ranks_before_content_match", func(t *testing.T) {
+		resp := findFiles(t, h, dir, "flamingo")
+		if len(resp.Matches) == 0 || resp.Matches[0].Path != "flamingo.md" {
+			t.Errorf("expected the name match first, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("name_match_carries_snippet", func(t *testing.T) {
+		resp := findFiles(t, h, dir, "flamingo")
+		m := findMatch(t, resp.Matches, "flamingo.md")
+		if m.Line != 1 || m.Snippet != "a flamingo appears" {
+			t.Errorf("expected the content hit attached to the name match, got line=%d snippet=%q", m.Line, m.Snippet)
+		}
+		if len(m.MatchedIndexes) == 0 {
+			t.Errorf("the name match must keep its path highlights")
+		}
+	})
+}
+
+// TestFindFilesContentSearchMultiTerm verifies content search ANDs the query's
+// terms at the file level, matching the fuzzy matcher's multi-term semantics.
+func TestFindFilesContentSearchMultiTerm(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	writeFile(t, filepath.Join(dir, "both.txt"), "qqalpha and qqbeta together\n")
+	writeFile(t, filepath.Join(dir, "single.txt"), "only qqalpha here\n")
+
+	resp := findFiles(t, h, dir, "qqalpha qqbeta")
+	m := findMatch(t, resp.Matches, "both.txt")
+	if hasPath(resp.Matches, "single.txt") {
+		t.Errorf("single.txt lacks qqbeta and must not match: %+v", resp.Matches)
+	}
+	if m.Line != 1 {
+		t.Errorf("line = %d, want 1", m.Line)
+	}
+	// Both terms occur on the printed line, so both highlight.
+	if got := snippetRunes(t, m); got != "qqalphaqqbeta" {
+		t.Errorf("highlighted snippet runes = %q, want %q (snippet %q, indexes %v)", got, "qqalphaqqbeta", m.Snippet, m.SnippetMatchedIndexes)
+	}
+}
+
+// TestFindFilesContentSnippetWindow verifies a long matched line is windowed
+// so the first term hit is visible, with ellipses marking the cuts and the
+// highlight offsets pointing into the *final* snippet.
+func TestFindFilesContentSnippetWindow(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	long := strings.Repeat("x", 100) + " needleword here " + strings.Repeat("y", 200)
+	writeFile(t, filepath.Join(dir, "long.txt"), long+"\n")
+
+	resp := findFiles(t, h, dir, "needleword")
+	m := findMatch(t, resp.Matches, "long.txt")
+	if !strings.HasPrefix(m.Snippet, "…") || !strings.HasSuffix(m.Snippet, "…") {
+		t.Errorf("expected the snippet windowed on both ends, got %q", m.Snippet)
+	}
+	if n := len([]rune(m.Snippet)); n > snippetMaxRunes+2 {
+		t.Errorf("snippet is %d runes, cap is %d (+ellipses)", n, snippetMaxRunes)
+	}
+	if !strings.Contains(m.Snippet, "needleword") {
+		t.Fatalf("the windowed snippet must show the match, got %q", m.Snippet)
+	}
+	if got := snippetRunes(t, m); got != "needleword" {
+		t.Errorf("highlighted snippet runes = %q, want %q (indexes %v)", got, "needleword", m.SnippetMatchedIndexes)
+	}
+}
+
+// TestFindFilesContentSearchNonGit verifies content search stays off outside a
+// git repo: a query matching only file contents finds nothing there.
+func TestFindFilesContentSearchNonGit(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "notes.txt"), "the flamingo stands\n")
+
+	resp := findFiles(t, h, dir, "flamingo")
+	if len(resp.Matches) != 0 {
+		t.Errorf("expected no matches outside a repo, got %+v", resp.Matches)
+	}
+}
+
+// TestFindFilesContentModes verifies the `content` parameter that lets the UI
+// split one keystroke into two parallel requests: content=skip must be pure
+// name search (no grep artifacts at all), content=only must be pure content
+// search (no listing, no fuzzy highlights, no pin), and the default must keep
+// merging both — the existing content-search tests are its regression suite.
+//
+// Subtests run in order and some add files to the shared repo as they go
+// (skip_still_pins, only_reroots_path_queries); later subtests' exact match
+// lists account for that, so don't reorder or parallelize them.
+func TestFindFilesContentModes(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	// flamingo.md matches by name AND content; notes.txt and zebra.txt only by
+	// content (two content hits make the sort order observable).
+	writeFile(t, filepath.Join(dir, "flamingo.md"), "a flamingo appears\n")
+	writeFile(t, filepath.Join(dir, "notes.txt"), "the flamingo stands\n")
+	writeFile(t, filepath.Join(dir, "zebra.txt"), "flamingo adjacent\n")
+	writeFile(t, filepath.Join(dir, "other.txt"), "nothing here\n")
+
+	t.Run("skip_returns_names_without_snippets", func(t *testing.T) {
+		resp := findFilesMode(t, h, dir, "flamingo", "skip")
+		if !hasPath(resp.Matches, "flamingo.md") {
+			t.Fatalf("expected the name match, got %+v", resp.Matches)
+		}
+		if hasPath(resp.Matches, "notes.txt") || hasPath(resp.Matches, "zebra.txt") {
+			t.Errorf("content-only files must not appear in skip mode: %+v", resp.Matches)
+		}
+		for _, m := range resp.Matches {
+			if m.Line != 0 || m.Snippet != "" || len(m.SnippetMatchedIndexes) != 0 {
+				t.Errorf("skip mode leaked grep fields: %+v", m)
+			}
+		}
+	})
+
+	t.Run("skip_still_pins", func(t *testing.T) {
+		// The pin rescues files the listing can't see; that belongs to the
+		// name phase, so it must survive in skip mode.
+		writeFile(t, filepath.Join(dir, ".gitignore"), "secret.env\n")
+		writeFile(t, filepath.Join(dir, "secret.env"), "TOKEN=1\n")
+		resp := findFilesMode(t, h, dir, "secret.env", "skip")
+		if len(resp.Matches) == 0 || resp.Matches[0].Path != "secret.env" {
+			t.Errorf("expected the pinned file first in skip mode, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("only_returns_content_hits_sorted", func(t *testing.T) {
+		resp := findFilesMode(t, h, dir, "flamingo", "only")
+		want := []string{"flamingo.md", "notes.txt", "zebra.txt"}
+		var got []string
+		for _, m := range resp.Matches {
+			got = append(got, m.Path)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("matches = %v, want %v (sorted by path)", got, want)
+		}
+		if resp.Total != len(want) {
+			t.Errorf("total = %d, want %d", resp.Total, len(want))
+		}
+		for _, m := range resp.Matches {
+			if m.Line == 0 || m.Snippet == "" {
+				t.Errorf("content hit missing line/snippet: %+v", m)
+			}
+			if len(m.MatchedIndexes) != 0 {
+				t.Errorf("content=only must not report path highlights: %+v", m)
+			}
+		}
+		m := findMatch(t, resp.Matches, "notes.txt")
+		if got := snippetRunes(t, m); got != "flamingo" {
+			t.Errorf("highlighted snippet runes = %q, want %q", got, "flamingo")
+		}
+	})
+
+	t.Run("only_respects_limit", func(t *testing.T) {
+		u := "/api/find-files?dir=" + url.QueryEscape(dir) + "&q=flamingo&content=only&limit=2"
+		req := httptest.NewRequest(http.MethodGet, u, nil)
+		w := httptest.NewRecorder()
+		h.server.handleFindFiles(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp FindFilesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		// The limit cuts the path-sorted list, so the survivors are the two
+		// alphabetically first hits, and Total still counts all three.
+		if len(resp.Matches) != 2 || resp.Matches[0].Path != "flamingo.md" || resp.Matches[1].Path != "notes.txt" {
+			t.Errorf("matches = %+v, want the first two hits by path", resp.Matches)
+		}
+		if !resp.Truncated {
+			t.Error("expected truncated=true when the limit cuts content hits")
+		}
+		if resp.Total != 3 {
+			t.Errorf("total = %d, want the pre-limit hit count 3", resp.Total)
+		}
+	})
+
+	t.Run("only_reroots_path_queries", func(t *testing.T) {
+		// Both phases of a keystroke must agree on searchDir, or the UI would
+		// join name and content rows against different roots.
+		sub := filepath.Join(dir, "sub")
+		writeFile(t, filepath.Join(sub, "inner.txt"), "flamingo inside\n")
+		resp := findFilesMode(t, h, dir, sub+"/flamingo", "only")
+		if resp.SearchDir != sub {
+			t.Errorf("search_dir = %q, want %q", resp.SearchDir, sub)
+		}
+		if resp.MatchQuery != "flamingo" {
+			t.Errorf("match_query = %q, want %q", resp.MatchQuery, "flamingo")
+		}
+		if !hasPath(resp.Matches, "inner.txt") {
+			t.Errorf("expected the re-rooted content hit, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("only_empty_query_finds_nothing", func(t *testing.T) {
+		resp := findFilesMode(t, h, dir, "", "only")
+		if len(resp.Matches) != 0 || resp.Total != 0 {
+			t.Errorf("empty query must grep nothing, got %+v (total %d)", resp.Matches, resp.Total)
+		}
+	})
+
+	t.Run("only_non_repo_finds_nothing", func(t *testing.T) {
+		plain := t.TempDir()
+		writeFile(t, filepath.Join(plain, "notes.txt"), "the flamingo stands\n")
+		resp := findFilesMode(t, h, plain, "flamingo", "only")
+		if len(resp.Matches) != 0 {
+			t.Errorf("expected no content hits outside a repo, got %+v", resp.Matches)
+		}
+	})
+
+	t.Run("merge_explicit_equals_default", func(t *testing.T) {
+		def := findFiles(t, h, dir, "flamingo")
+		merged := findFilesMode(t, h, dir, "flamingo", "merge")
+		if !slices.EqualFunc(def.Matches, merged.Matches, func(a, b FindFilesMatch) bool {
+			return a.Path == b.Path && a.Line == b.Line && a.Snippet == b.Snippet
+		}) {
+			t.Errorf("content=merge diverged from the default:\n%+v\n%+v", def.Matches, merged.Matches)
+		}
+	})
+
+	t.Run("invalid_value_is_rejected", func(t *testing.T) {
+		u := "/api/find-files?dir=" + url.QueryEscape(dir) + "&q=flamingo&content=bogus"
+		req := httptest.NewRequest(http.MethodGet, u, nil)
+		w := httptest.NewRecorder()
+		h.server.handleFindFiles(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 for content=bogus, got %d: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "content") {
+			t.Errorf("error should name the bad parameter: %q", w.Body.String())
+		}
+	})
+}
+
+// TestFindFilesConcurrentModes hammers the handler with all three modes in
+// parallel against the same directory. It asserts nothing beyond findFiles's
+// own status/decode checks; its value is under -race, where it would catch a
+// data race between the default mode's grep goroutine and the listing/fuzzy
+// phase it now overlaps with.
+func TestFindFilesConcurrentModes(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	writeFile(t, filepath.Join(dir, "flamingo.md"), "a flamingo appears\n")
+	writeFile(t, filepath.Join(dir, "notes.txt"), "the flamingo stands\n")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		for _, mode := range []string{"", "skip", "only", "merge"} {
+			wg.Add(1)
+			go func(mode string) {
+				defer wg.Done()
+				// Not findFilesMode: t.Fatalf must not run off the test
+				// goroutine, so report via Errorf (which is safe) instead.
+				u := "/api/find-files?dir=" + url.QueryEscape(dir) + "&q=flamingo"
+				if mode != "" {
+					u += "&content=" + mode
+				}
+				req := httptest.NewRequest(http.MethodGet, u, nil)
+				w := httptest.NewRecorder()
+				h.server.handleFindFiles(w, req)
+				if w.Code != http.StatusOK {
+					t.Errorf("mode %q: expected 200, got %d: %s", mode, w.Code, w.Body.String())
+				}
+			}(mode)
+		}
+	}
+	wg.Wait()
+}
+
+// TestFindFilesContentNewlinePath verifies a filename containing a raw newline
+// (legal on Linux; with -z git prints it *unquoted*) doesn't shear the record
+// stream: a \n-split parser would fabricate a phantom hit for the path's
+// second half. The real file must be found, the phantom must not exist.
+func TestFindFilesContentNewlinePath(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	weird := "we\nird.txt"
+	// The matching line is the file's second, so the phantom record a naive
+	// parser would see ("ird.txt\x002\x00...") even parses cleanly — the only
+	// defense is not splitting on \n in the first place.
+	writeFile(t, filepath.Join(dir, weird), "first line\nflamingo here\n")
+	writeFile(t, filepath.Join(dir, "plain.txt"), "a flamingo too\n")
+
+	resp := findFiles(t, h, dir, "flamingo")
+	if hasPath(resp.Matches, "ird.txt") {
+		t.Errorf("phantom entry for the path's post-newline half: %+v", resp.Matches)
+	}
+	m := findMatch(t, resp.Matches, weird)
+	if m.Line != 2 || m.Snippet != "flamingo here" {
+		t.Errorf("newline-named file: line=%d snippet=%q, want 2 / %q", m.Line, m.Snippet, "flamingo here")
+	}
+	if m := findMatch(t, resp.Matches, "plain.txt"); m.Line != 1 {
+		t.Errorf("the record after the newline-named file was mis-parsed: %+v", m)
+	}
+}
+
+// TestFindFilesPinnedMatchCarriesSnippet verifies a pinned exact-path match
+// gains the grep snippet even when the file was absent from the (cached) name
+// listing — the very situation pinning exists for — rather than being
+// fabricated bare.
+func TestFindFilesPinnedMatchCarriesSnippet(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	// A decoy that fuzzy-matches the query so the single result slot is
+	// contested, and warms the file-list cache before the real file exists.
+	writeFile(t, filepath.Join(dir, "pinned.txt.bak"), "nothing relevant\n")
+	findFiles(t, h, dir, "pinned.txt")
+
+	// Created after the cache warmed: the listing won't include it for the
+	// cache TTL, but git grep (run fresh per request) sees it immediately.
+	writeFile(t, filepath.Join(dir, "pinned.txt"), "see pinned.txt for details\n")
+
+	u := "/api/find-files?dir=" + url.QueryEscape(dir) + "&q=pinned.txt&limit=1"
+	req := httptest.NewRequest(http.MethodGet, u, nil)
+	w := httptest.NewRecorder()
+	h.server.handleFindFiles(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp FindFilesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Matches) != 1 || resp.Matches[0].Path != "pinned.txt" {
+		t.Fatalf("expected the pinned file alone, got %+v", resp.Matches)
+	}
+	m := resp.Matches[0]
+	if m.Line != 1 || m.Snippet != "see pinned.txt for details" {
+		t.Errorf("pinned match lost its content hit: line=%d snippet=%q", m.Line, m.Snippet)
+	}
+	if got := snippetRunes(t, m); got != "pinned.txt" {
+		t.Errorf("highlighted snippet runes = %q, want %q (indexes %v)", got, "pinned.txt", m.SnippetMatchedIndexes)
+	}
+}
+
+// TestGrepReadField verifies the bounded field reader: oversized fields are
+// consumed to their delimiter (keeping the stream aligned) but reported not-ok
+// with only the capped prefix retained.
+func TestGrepReadField(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fits", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("abc\x00rest"))
+		field, ok, err := readField(r, 0, 10)
+		if err != nil || !ok || field != "abc" {
+			t.Errorf("got %q ok=%v err=%v", field, ok, err)
+		}
+	})
+
+	t.Run("oversized_consumed_to_delimiter", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("abcdef\nNEXT\n"))
+		field, ok, err := readField(r, '\n', 3)
+		if err != nil || ok || field != "abc" {
+			t.Errorf("got %q ok=%v err=%v, want capped prefix, ok=false", field, ok, err)
+		}
+		// The stream must resume exactly at the next record.
+		next, ok, err := readField(r, '\n', 10)
+		if err != nil || !ok || next != "NEXT" {
+			t.Errorf("stream misaligned after oversized field: %q ok=%v err=%v", next, ok, err)
+		}
+	})
+
+	t.Run("missing_delimiter_is_an_error", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("trailing garbage"))
+		if _, _, err := readField(r, '\n', 100); err == nil {
+			t.Error("expected an error for a field with no delimiter")
+		}
+	})
+}
+
+// TestGrepTrimPartialRune verifies the mid-rune-cut repair used when the
+// content byte cap slices a multi-byte character.
+func TestGrepTrimPartialRune(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ in, want string }{
+		{"abc", "abc"},
+		{"café", "café"},
+		{"café"[:len("café")-1], "caf"}, // é cut after its first byte
+		{"世界"[:5], "世"},                 // 3-byte rune cut at 2 bytes
+		{"😀"[:3], ""},                   // 4-byte rune cut at 3 bytes
+		{"", ""},
+	} {
+		if got := trimPartialRune(tc.in); got != tc.want {
+			t.Errorf("trimPartialRune(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
 }
 
 func writeFile(t *testing.T, path, content string) {

@@ -1,7 +1,10 @@
 <!-- Server-based fuzzy file finder. Lists files under a working directory and
      ranks them against the query on the server (/api/find-files), so the
-     browser never needs the full file list. Selecting a file emits its
-     absolute path (the parent opens EditableFileModal on it). A "change
+     browser never needs the full file list. The search runs in two phases:
+     a fast name-only request renders immediately, and a parallel git-grep
+     content request folds its hits in when it lands (snippets attach to
+     visible rows; content-only files append below). Selecting a file emits
+     its absolute path (the parent opens EditableFileModal on it). A "change
      directory" affordance re-roots the search via DirectoryPickerModal, and a
      query that announces itself as a path (a leading /, ~, ./ or ../) re-roots
      it for that query alone — the server reports the directory it actually
@@ -95,15 +98,32 @@
                 <template v-else>{{ seg.text }}</template>
               </template>
             </span>
+            <!-- Content match: the grep excerpt that earned this file its row
+                 (or bolstered a name match), with the matched term marked. -->
+            <span v-if="hit.snippet" class="ff-snippet" :title="hit.snippet">
+              <span class="ff-snippet-line">{{ hit.line }}:</span>
+              <template
+                v-for="(seg, si) in highlightSegments(hit.snippet, hit.snippet_matched_indexes)"
+                :key="si"
+              >
+                <mark v-if="seg.hit" class="grp-hit">{{ seg.text }}</mark>
+                <template v-else>{{ seg.text }}</template>
+              </template>
+            </span>
           </span>
         </button>
 
-        <div v-if="!loading && matches.length === 0 && !error" class="grp-empty">
+        <div v-if="!loading && !grepPending && matches.length === 0 && !error" class="grp-empty">
           {{ matchQuery ? "No matching files." : "No files in this directory." }}
         </div>
-        <div v-if="loading && matches.length === 0" class="grp-empty">Searching…</div>
+        <div v-if="(loading || grepPending) && matches.length === 0" class="grp-empty">
+          Searching…
+        </div>
       </div>
 
+      <!-- Name matches render as soon as the fast pass returns; this footer
+           admits the slower git-grep pass is still out looking. -->
+      <div v-if="grepPending" class="ff-grep-pending">Searching file contents…</div>
       <div v-if="truncated" class="grp-truncated">Showing top results — keep typing to narrow.</div>
     </div>
 
@@ -127,6 +147,11 @@ import { tildifyPath } from "../../utils/tildify";
 interface FileMatch {
   path: string;
   matched_indexes?: number[];
+  // Present when the file's content matched (git grep in a repo): the 1-based
+  // line number, its trimmed text, and rune offsets to highlight within it.
+  line?: number;
+  snippet?: string;
+  snippet_matched_indexes?: number[];
 }
 
 const props = defineProps<{
@@ -147,6 +172,10 @@ const matches = ref<FileMatch[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const truncated = ref(false);
+// True while the content (git grep) request is still in flight after the
+// name results have been requested; drives the "Searching file contents…"
+// footer and keeps the empty state from claiming "no matches" prematurely.
+const grepPending = ref(false);
 const activeIdx = ref(0);
 const showDirPicker = ref(false);
 const inputRef = ref<HTMLInputElement | null>(null);
@@ -160,10 +189,16 @@ const displayDir = computed(() => tildifyPath(dir.value));
 // directory; that's the case the user needs told about.
 const scopeDir = computed(() => (searchDir.value === dir.value ? null : searchDir.value));
 
-// Split a path into highlighted/plain segments using the server-provided
-// rune offsets. Contiguous matched indexes are coalesced into one <mark>.
+// Split a path/snippet into highlighted/plain segments using the
+// server-provided rune offsets. Contiguous matched indexes are coalesced into
+// one <mark>. The offsets count Unicode code points (Go runes), while JS
+// String.slice counts UTF-16 code units — an astral character (an emoji in a
+// matched content line, say) before the match would shift every highlight if
+// we sliced the string directly — so segment over Array.from(text), whose
+// elements are whole code points.
 function highlightSegments(text: string, positions?: number[]): { text: string; hit: boolean }[] {
   if (!positions || positions.length === 0) return [{ text, hit: false }];
+  const chars = Array.from(text);
   const sorted = [...positions].sort((a, b) => a - b);
   const out: { text: string; hit: boolean }[] = [];
   let cursor = 0;
@@ -173,15 +208,59 @@ function highlightSegments(text: string, positions?: number[]): { text: string; 
     while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
     const start = sorted[i];
     const end = sorted[j] + 1;
-    if (start > cursor) out.push({ text: text.slice(cursor, start), hit: false });
-    out.push({ text: text.slice(start, end), hit: true });
+    if (start > cursor) out.push({ text: chars.slice(cursor, start).join(""), hit: false });
+    out.push({ text: chars.slice(start, end).join(""), hit: true });
     cursor = end;
     i = j + 1;
   }
-  if (cursor < text.length) out.push({ text: text.slice(cursor), hit: false });
+  if (cursor < chars.length) out.push({ text: chars.slice(cursor).join(""), hit: false });
   return out;
 }
 
+// The list never grows past this many rows: name matches first (the server
+// already caps those), then appended content hits up to the cap.
+const MAX_ROWS = 100;
+
+// Fold the content-phase (git grep) results into the list the name phase
+// already rendered: attach snippets to rows that are present (including the
+// pinned row), append the rest in the server's path order. Never reorders or
+// resets the selection — the user may already be arrowing through the list.
+function applyContentMatches(res: {
+  search_dir: string;
+  matches: FileMatch[];
+  truncated: boolean;
+}) {
+  // Both phases resolve a path query against the filesystem independently, so
+  // a directory appearing/vanishing between the two requests can leave them
+  // rooted in different trees. Joining such content paths against the name
+  // phase's search_dir would emit wrong absolute paths; drop them instead.
+  if (res.search_dir !== searchDir.value) return;
+  const byPath = new Map(matches.value.map((m) => [m.path, m]));
+  const appended: FileMatch[] = [];
+  let capped = false;
+  for (const hit of res.matches) {
+    const existing = byPath.get(hit.path);
+    if (existing) {
+      existing.line = hit.line;
+      existing.snippet = hit.snippet;
+      existing.snippet_matched_indexes = hit.snippet_matched_indexes;
+    } else if (matches.value.length + appended.length >= MAX_ROWS) {
+      // Past the cap new rows are dropped, but later hits can still attach
+      // snippets to rows already on screen, so keep scanning.
+      capped = true;
+    } else {
+      appended.push(hit);
+    }
+  }
+  if (appended.length > 0) matches.value = [...matches.value, ...appended];
+  if (capped || res.truncated) truncated.value = true;
+}
+
+// Two-phase search: a fast name-only request and a slower git-grep content
+// request fire together, sharing one AbortController so the next keystroke
+// cancels whichever is still in flight. Name results apply the moment they
+// arrive; content results wait for them (they attach to/append after the name
+// rows) and are a silent bonus — their failure never disturbs the list.
 async function runSearch() {
   if (!dir.value) return;
   abortController?.abort();
@@ -189,30 +268,64 @@ async function runSearch() {
   abortController = controller;
   loading.value = true;
   error.value = null;
+  const q = query.value.trim();
+
+  const namePromise = api.findFiles(dir.value, q, controller.signal, { content: "skip" });
+  // An empty query lists the directory alphabetically; there is no term to
+  // grep for, so skip the content request entirely.
+  const contentPromise = q
+    ? api.findFiles(dir.value, q, controller.signal, { content: "only" })
+    : null;
+  grepPending.value = contentPromise !== null;
+  // The content promise can reject before it's awaited below (abort, or an
+  // early bail on name failure); pre-attach a handler so the rejection is
+  // never reported as unhandled.
+  contentPromise?.catch(() => {});
+
+  let nameApplied = false;
   try {
-    const res = await api.findFiles(dir.value, query.value.trim(), controller.signal);
-    if (controller.signal.aborted) return;
-    // The server resolves an empty/relative dir (e.g. to $HOME) and echoes
-    // the absolute path back; adopt it so joinPath produces valid paths.
-    dir.value = res.dir;
-    // Matches are relative to search_dir, which a path query moves elsewhere.
-    searchDir.value = res.search_dir;
-    matchQuery.value = res.match_query;
-    matches.value = res.matches;
-    truncated.value = res.truncated;
-    activeIdx.value = 0;
+    const res = await namePromise;
+    if (!controller.signal.aborted) {
+      // The server resolves an empty/relative dir (e.g. to $HOME) and echoes
+      // the absolute path back; adopt it so joinPath produces valid paths.
+      dir.value = res.dir;
+      // Matches are relative to search_dir, which a path query moves elsewhere.
+      searchDir.value = res.search_dir;
+      matchQuery.value = res.match_query;
+      matches.value = res.matches;
+      truncated.value = res.truncated;
+      activeIdx.value = 0;
+      nameApplied = true;
+    }
   } catch (err) {
     if (controller.signal.aborted || (err as Error).name === "AbortError") return;
     error.value = err instanceof Error ? err.message : String(err);
     // Nothing was searched, so don't leave the previous scope line claiming
-    // otherwise next to the error.
+    // otherwise next to the error, nor a footer promising content results
+    // that won't be applied. Abort the content request too: its result is
+    // useless without name results to attach to, and cancelling frees the
+    // server from a grep that can run for seconds.
+    controller.abort();
     searchDir.value = dir.value;
     matches.value = [];
+    grepPending.value = false;
   } finally {
-    if (abortController === controller) {
-      loading.value = false;
-      abortController = null;
+    if (abortController === controller) loading.value = false;
+  }
+
+  if (contentPromise) {
+    try {
+      const res = await contentPromise;
+      // Applied only on top of successfully-applied name results: if those
+      // failed or were superseded, these rows have nothing to attach to.
+      if (!controller.signal.aborted && nameApplied) applyContentMatches(res);
+    } catch {
+      // Content search is best-effort; the name results are already up.
     }
+  }
+  if (abortController === controller) {
+    grepPending.value = false;
+    abortController = null;
   }
 }
 
@@ -244,6 +357,7 @@ watch(
     matchQuery.value = "";
     matches.value = [];
     error.value = null;
+    grepPending.value = false;
     activeIdx.value = 0;
     void runSearch();
     nextTick(() => inputRef.value?.focus());

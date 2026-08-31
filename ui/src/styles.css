@@ -11882,6 +11882,39 @@ kbd {
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 
+/* Fuzzy file finder: content-match snippet under the path line. .grp-main is
+   a flex row (path | meta); wrapping lets the full-width snippet drop onto
+   its own line without disturbing GitRepoPicker's use of the same classes. */
+.ff-modal .grp-main {
+  flex-wrap: wrap;
+  row-gap: 0.1rem;
+}
+.ff-snippet {
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: 0.75em;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ff-snippet-line {
+  color: var(--text-tertiary);
+  margin-right: 0.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fuzzy file finder: footer shown while the slower git-grep content pass is
+   still in flight behind already-rendered name matches. Matches the muted
+   .grp-truncated footer it shares the space with. */
+.ff-grep-pending {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-align: center;
+  flex-shrink: 0;
+}
+
 /* Fuzzy file finder: the scope line appears only when a path query moved the
    search off the working directory shown in the header chip. */
 .ff-scope {
@@ -11945,6 +11978,11 @@ kbd {
     flex-direction: column;
     align-items: stretch;
     gap: 0.1rem;
+  }
+  /* .grp-main is a column here, so the snippet's full-width flex-basis (a
+     row-layout device) would resolve against the height; let content size it. */
+  .ff-snippet {
+    flex-basis: auto;
   }
   .grp-row {
     align-items: flex-start;

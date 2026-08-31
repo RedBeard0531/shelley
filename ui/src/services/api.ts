@@ -603,23 +603,35 @@ class ApiService {
   // vm-storage-s3-design.md. A query that announces itself as a path (a
   // leading /, ~, ./ or ../) re-roots the search at the directory it names:
   // `search_dir` is then the directory matches are relative to, and
-  // `match_query` the part of the query matched within it. `signal` lets
+  // `match_query` the part of the query matched within it. Content search is
+  // a second phase: pass `opts.content` "skip" for the fast name-only pass
+  // (no snippets), then "only" for git-grep hits alone — each match then
+  // carries `line`/`snippet`/`snippet_matched_indexes` and no path highlights
+  // — so name matches render immediately while grep catches up. `signal` lets
   // callers abort superseded requests while the user types.
   async findFiles(
     dir: string,
     query: string,
     signal?: AbortSignal,
+    opts?: { content?: "skip" | "only" },
   ): Promise<{
     dir: string;
     search_dir: string;
     query: string;
     match_query: string;
-    matches: Array<{ path: string; matched_indexes?: number[] }>;
+    matches: Array<{
+      path: string;
+      matched_indexes?: number[];
+      line?: number;
+      snippet?: string;
+      snippet_matched_indexes?: number[];
+    }>;
     total: number;
     truncated: boolean;
   }> {
     const params = new URLSearchParams({ dir });
     if (query) params.set("q", query);
+    if (opts?.content) params.set("content", opts.content);
     const response = await fetch(`${this.baseUrl}/find-files?${params.toString()}`, { signal });
     if (!response.ok) {
       throw await responseError(response, "Failed to find files");

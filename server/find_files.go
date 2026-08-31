@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -40,6 +41,38 @@ const (
 	fileListCacheMaxFiles = 200000
 	// findFilesWalkBudget bounds the time spent listing a directory.
 	findFilesWalkBudget = 3 * time.Second
+	// findFilesGrepBudget bounds the time spent content-searching a repo with
+	// `git grep`. Same order as the walk budget: long enough for a big repo's
+	// cold cache, short enough that a keystroke never feels hung.
+	findFilesGrepBudget = 3 * time.Second
+	// findFilesGrepMaxEntries caps how many grep records we parse. `git grep`
+	// prints at most one line per file (--max-count=1) but a broad term in a
+	// huge repo can still hit most files, and only `limit` of them can ever be
+	// shown; a generous cap bounds the parse without changing what users see.
+	findFilesGrepMaxEntries = 5000
+	// grepMaxPathBytes caps the path field of a parsed grep record. Real
+	// repository paths are far shorter (PATH_MAX is 4096 on Linux); anything
+	// longer is garbage we skip rather than buffer.
+	grepMaxPathBytes = 4096
+	// grepMaxLineNumBytes caps the line-number field. Any real line number
+	// fits in a handful of digits; a longer field means a corrupt record.
+	grepMaxLineNumBytes = 32
+	// grepMaxContentBytes caps how much of a matched line we read; the rest is
+	// discarded unparsed. --max-count=1 limits git to one line per *file*, but
+	// a single line of minified JS can be megabytes, and the snippet only ever
+	// shows the first snippetMaxRunes anyway. A term that occurs only beyond
+	// this cap simply doesn't highlight: buildSnippet already tolerates a line
+	// containing no term occurrence (git's -i folding can exceed ASCII's).
+	grepMaxContentBytes = 4096
+	// snippetMaxRunes caps the length of a content-match snippet. Measured in
+	// runes so multi-byte content is never split mid-character.
+	snippetMaxRunes = 160
+	// snippetMatchLeadRunes is how far into the line the first term hit may
+	// sit before the snippet is windowed to bring it into view.
+	snippetMatchLeadRunes = 48
+	// snippetContextRunes is how many runes of leading context a windowed
+	// snippet keeps before the first term hit.
+	snippetContextRunes = 16
 )
 
 // fileListCache memoizes the (relatively expensive) directory file listing so
@@ -135,6 +168,12 @@ type FindFilesMatch struct {
 	// MatchedIndexes are rune (code-point) offsets into Path that matched the
 	// query, used by the UI to highlight the fuzzy match.
 	MatchedIndexes []int `json:"matched_indexes,omitempty"`
+	// Line is the 1-based line number of the content match (0 when the match is by name only).
+	Line int `json:"line,omitempty"`
+	// Snippet is a trimmed excerpt of the matching line for content matches.
+	Snippet string `json:"snippet,omitempty"`
+	// SnippetMatchedIndexes are rune offsets into Snippet to highlight.
+	SnippetMatchedIndexes []int `json:"snippet_matched_indexes,omitempty"`
 }
 
 // FindFilesResponse is the response from /api/find-files.
@@ -152,8 +191,11 @@ type FindFilesResponse struct {
 	// path named a directory (so Matches is the whole listing).
 	MatchQuery string           `json:"match_query"`
 	Matches    []FindFilesMatch `json:"matches"`
-	Total      int              `json:"total"`
-	Truncated  bool             `json:"truncated"`
+	// Total counts the candidates behind Matches before the limit was applied:
+	// the size of the directory listing in name-search modes, the number of
+	// grep hits in content=only mode.
+	Total     int  `json:"total"`
+	Truncated bool `json:"truncated"`
 }
 
 // handleFindFiles fuzzy-searches files under a working directory. The query
@@ -161,9 +203,34 @@ type FindFilesResponse struct {
 // needs the full file list. Files are enumerated with `git ls-files`
 // (tracked + untracked, honoring .gitignore) when dir is inside a repo, else
 // via a bounded filesystem walk.
+//
+// The `content` parameter selects how file *contents* participate (see
+// grepContent), so the UI can split the two phases into parallel requests and
+// paint name matches without waiting for a grep of the whole repo:
+//
+//   - "skip": names only — no grep, no Line/Snippet on any match. The fast
+//     path (a listing is ~10x quicker than a grep, more when caches are cold).
+//   - "only": contents only — no listing, no fuzzy matching, no pin. Matches
+//     are the grep hits sorted by path, each carrying Line/Snippet and never
+//     MatchedIndexes (the path didn't fuzzy-match anything in this mode).
+//     Path queries still re-root searchDir exactly as in the other modes, so
+//     the two phases of one keystroke always grep and list the same tree.
+//   - "merge" or absent: both, in one response — name matches first (with
+//     snippets attached where the grep also hit), then content-only matches.
+//     Kept for API compatibility and single-request callers; the grep runs
+//     concurrently with the listing+fuzzy phase, so its cost is max() rather
+//     than sum().
 func (s *Server) handleFindFiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	contentMode := r.URL.Query().Get("content")
+	switch contentMode {
+	case "", "merge", "skip", "only":
+	default:
+		http.Error(w, "invalid content parameter "+strconv.Quote(contentMode)+": want \"merge\", \"skip\", or \"only\"", http.StatusBadRequest)
 		return
 	}
 
@@ -202,6 +269,32 @@ func (s *Server) handleFindFiles(w http.ResponseWriter, r *http.Request) {
 	searchDir, matchQuery := dir, query
 	if pq.IsPath {
 		searchDir, matchQuery = pq.Dir, pq.Tail
+	}
+
+	if contentMode == "only" {
+		// Content-only phase: no listing, no fuzzy matching, no pin — the name
+		// phase (a parallel content=skip request) owns all of that, and the UI
+		// joins the two by path. Skipping the fileListCache here matters: this
+		// request races the name request per keystroke, and contending on the
+		// cache's load would serialize exactly what splitting parallelized.
+		s.writeFindFilesContentOnly(w, r, dir, searchDir, query, matchQuery, limit)
+		return
+	}
+
+	// Start the grep before the listing so the two run concurrently: measured
+	// on a warm mid-size repo the listing takes ~35ms and the grep ~235ms, so
+	// sequencing them charges the sum where max() is available for free. The
+	// nil channel doubles as "no grep": skip mode and empty queries (grep of
+	// nothing) never start the goroutine, and receiving from grepDone below
+	// only happens when it's non-nil.
+	var hits map[string]contentHit
+	var grepDone chan struct{}
+	if contentMode != "skip" && matchQuery != "" {
+		grepDone = make(chan struct{})
+		go func() {
+			defer close(grepDone)
+			hits = grepContent(r.Context(), searchDir, dedupeFold(strings.Fields(matchQuery)))
+		}()
 	}
 
 	var files []string
@@ -250,6 +343,49 @@ func (s *Server) handleFindFiles(w http.ResponseWriter, r *http.Request) {
 			MatchedIndexes: byteToRuneOffsets(m.str, m.matchedIndexes),
 		})
 	}
+	// "Universal find": inside a git repo the same terms also match file
+	// *contents* via `git grep`, so a query can locate a file the user only
+	// remembers a line from. Name matches that also hit on content gain a
+	// snippet (useful context either way); content-only hits are appended
+	// after every name match, sorted by path, because a name match is what
+	// the picker's primary affordance (the highlighted path) promises.
+	// grepContent returns nothing outside a repo, so non-repo dirs are
+	// untouched, and in skip mode grepDone is nil so hits stays nil.
+	if grepDone != nil {
+		<-grepDone
+	}
+	if len(hits) > 0 {
+		named := make(map[string]bool, len(resp.Matches))
+		for i := range resp.Matches {
+			m := &resp.Matches[i]
+			named[m.Path] = true
+			if h, ok := hits[m.Path]; ok {
+				m.Line, m.Snippet, m.SnippetMatchedIndexes = h.line, h.snippet, h.matchedIndexes
+			}
+		}
+		contentOnly := make([]string, 0, len(hits))
+		for p := range hits {
+			if !named[p] {
+				contentOnly = append(contentOnly, p)
+			}
+		}
+		sort.Strings(contentOnly) // map order is random; sort for determinism
+		for _, p := range contentOnly {
+			if len(resp.Matches) >= limit {
+				resp.Truncated = true
+				break
+			}
+			h := hits[p]
+			// No MatchedIndexes: the path itself didn't match the query, so
+			// there is nothing in it to highlight.
+			resp.Matches = append(resp.Matches, FindFilesMatch{
+				Path:                  p,
+				Line:                  h.line,
+				Snippet:               h.snippet,
+				SnippetMatchedIndexes: h.matchedIndexes,
+			})
+		}
+	}
 	// A query naming an existing file always offers that file, even when the
 	// listing can't surface it (`git ls-files` hides .gitignore'd files, and a
 	// walk stops at its budget): typing the path is an unambiguous request.
@@ -257,6 +393,60 @@ func (s *Server) handleFindFiles(w http.ResponseWriter, r *http.Request) {
 		var dropped bool
 		resp.Matches, dropped = pinMatch(resp.Matches, rel, limit)
 		resp.Truncated = resp.Truncated || dropped
+		// A pinned file absent from the listing (that's what pinning is for)
+		// was fabricated bare by pinMatch; if the grep found content in it,
+		// attach the snippet so the pin is as informative as any other row.
+		// An entry promoted from the existing matches already carries its
+		// snippet and must keep it (hits lacks paths beyond the entry cap).
+		if pin := &resp.Matches[0]; pin.Snippet == "" && pin.Line == 0 {
+			if h, ok := hits[pin.Path]; ok {
+				pin.Line, pin.Snippet, pin.SnippetMatchedIndexes = h.line, h.snippet, h.matchedIndexes
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// writeFindFilesContentOnly answers a content=only request: grep hits alone,
+// sorted by path ascending for determinism (grep output order is walk order,
+// which is not contractual), capped at limit. Total counts the hits before
+// the cap so the UI can say "N files matched" even when it shows fewer. No
+// pinning: the parallel name-phase request pins, and pinning here too would
+// duplicate the row when the UI concatenates the two responses. An empty
+// matchQuery greps nothing (grepContent refuses zero terms) rather than
+// devolving into "list everything", which is the name phase's job; a non-repo
+// searchDir likewise yields no hits.
+func (s *Server) writeFindFilesContentOnly(w http.ResponseWriter, r *http.Request, dir, searchDir, query, matchQuery string, limit int) {
+	hits := grepContent(r.Context(), searchDir, dedupeFold(strings.Fields(matchQuery)))
+
+	resp := FindFilesResponse{
+		Dir:        dir,
+		SearchDir:  searchDir,
+		Query:      query,
+		MatchQuery: matchQuery,
+		Total:      len(hits),
+		Matches:    []FindFilesMatch{},
+	}
+	paths := make([]string, 0, len(hits))
+	for p := range hits {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	if len(paths) > limit {
+		paths = paths[:limit]
+		resp.Truncated = true
+	}
+	for _, p := range paths {
+		h := hits[p]
+		// Never MatchedIndexes: in this mode the path wasn't fuzzy-matched
+		// against anything, so there is no path highlight to report.
+		resp.Matches = append(resp.Matches, FindFilesMatch{
+			Path:                  p,
+			Line:                  h.line,
+			Snippet:               h.snippet,
+			SnippetMatchedIndexes: h.matchedIndexes,
+		})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -634,6 +824,224 @@ func byteToRuneOffsets(s string, byteIdx []int) []int {
 		}
 	}
 	return out
+}
+
+// contentHit is one file-level content match found by grepContent: the first
+// matching line's number, a display snippet of it, and the rune offsets into
+// that snippet to highlight.
+type contentHit struct {
+	line           int
+	snippet        string
+	matchedIndexes []int
+}
+
+// grepContent finds files under dir whose contents contain every term, using
+// `git grep`. Terms are matched as literal, case-insensitive strings, ANDed at
+// the file level (--all-match) to mirror findFuzzyMulti's multi-term AND; the
+// reported line is the file's first line matching *any* term (--max-count=1
+// stops git at one line per file), which is enough context for a picker row.
+// Binary files are skipped (-I), untracked-but-not-ignored files are searched
+// (--untracked) to mirror what `git ls-files -co --exclude-standard` lists.
+//
+// The timeout derives from ctx (the HTTP request's context), so a grep dies
+// with the keystroke that spawned it: the UI aborts superseded find requests
+// as the user types, and without this plumbing every abandoned keystroke
+// would keep a full-repo grep running for its whole budget.
+//
+// Returns nil on any failure — dir not in a repo, git too old for a flag,
+// timeout before any output — because content search is a bonus on top of
+// name search, never a reason to fail the request. `git grep` exits 1 with no
+// output for "no matches", which yields no records and correctly returns nil.
+func grepContent(ctx context.Context, dir string, terms []string) map[string]contentHit {
+	if len(terms) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, findFilesGrepBudget)
+	defer cancel()
+	args := []string{"grep", "-I", "-i", "-F", "-n", "--no-color", "--max-count=1", "--untracked", "--all-match"}
+	for _, t := range terms {
+		args = append(args, "-e", t)
+	}
+	// -z NUL-terminates the path and line-number fields so a path containing
+	// ":" (or even a newline — with -z git does NOT quote such paths) can't be
+	// confused with the separators; the matched line itself is \n-terminated,
+	// which is unambiguous because a grep-matched line cannot contain a
+	// newline, and -I guarantees it contains no NUL either.
+	args = append(args, "-z", "--")
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	// Stream rather than cmd.Output(): --max-count=1 bounds git to one line
+	// per file, but one line of minified JS can be megabytes and a broad term
+	// can hit most files of a huge repo, so buffering everything would let a
+	// single keystroke allocate without bound. Reading incrementally also lets
+	// us stop at findFilesGrepMaxEntries and kill git mid-stream.
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil
+	}
+	if err := cmd.Start(); err != nil {
+		return nil
+	}
+
+	hits := make(map[string]contentHit)
+	r := bufio.NewReader(stdout)
+	for len(hits) < findFilesGrepMaxEntries {
+		// Each record is path\x00linenum\x00content\n. Parse the stream
+		// sequentially — never by splitting on \n first, because the *path*
+		// may legitimately contain a newline, and splitting would shear such a
+		// record into a phantom hit for a file that doesn't exist. Skip
+		// malformed or oversized records rather than guessing: one bad row
+		// shouldn't kill the rest.
+		path, pathOK, err := readField(r, 0, grepMaxPathBytes)
+		if err != nil {
+			break // clean EOF between records, or a read error: done either way
+		}
+		lineField, lineOK, err := readField(r, 0, grepMaxLineNumBytes)
+		if err != nil {
+			break
+		}
+		content, contentFit, err := readField(r, '\n', grepMaxContentBytes)
+		if err != nil {
+			break // a record missing its terminator is unusable; so is the stream
+		}
+		if !pathOK || !lineOK || path == "" {
+			continue
+		}
+		lineNum, err := strconv.Atoi(lineField)
+		if err != nil || lineNum <= 0 {
+			continue
+		}
+		// The content cap can cut a multi-byte rune in half; trim the partial
+		// tail so one truncated rune doesn't disqualify the whole hit below.
+		// Only a capped field can have been cut mid-rune — an intact one that
+		// merely *ends* oddly is genuinely invalid and should be skipped.
+		if !contentFit {
+			content = trimPartialRune(content)
+		}
+		// Non-UTF-8 content can't be sliced into runes for the snippet (and
+		// would render as replacement characters anyway), so skip it.
+		if !utf8.ValidString(content) {
+			continue
+		}
+		snippet, idx := buildSnippet(content, terms)
+		hits[path] = contentHit{line: lineNum, snippet: snippet, matchedIndexes: idx}
+	}
+	// Kill git if it's still producing (entry cap reached) and reap it. The
+	// hits parsed so far are valid regardless of how git exits — including
+	// exit 1, its "no matches" status.
+	cancel()
+	cmd.Wait()
+	return hits
+}
+
+// readField reads one delimiter-terminated field from r. delim 0 means
+// NUL-terminated (how -z separates path and line number); '\n' terminates the
+// content field. A field longer than maxBytes is consumed to its delimiter
+// but reported ok=false with as much as fit — the caller decides whether a
+// truncated value is still usable (a cut content line is; a cut path or line
+// number is not). err is non-nil only when the delimiter never arrived (EOF
+// or read failure), which ends the whole parse.
+func readField(r *bufio.Reader, delim byte, maxBytes int) (field string, ok bool, err error) {
+	var buf []byte
+	total := 0 // bytes seen, including any discarded past the cap
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return string(buf), false, err
+		}
+		if b == delim {
+			return string(buf), total <= maxBytes, nil
+		}
+		total++
+		if len(buf) < maxBytes {
+			buf = append(buf, b)
+		}
+		// Past the cap: keep discarding until the delimiter so the stream
+		// stays aligned on record boundaries.
+	}
+}
+
+// trimPartialRune removes an incomplete trailing UTF-8 sequence from s, as
+// left behind when a byte cap cuts a line mid-rune. Only the final rune can
+// have been cut, so at most the last utf8.UTFMax-1 bytes go; invalid bytes
+// deeper in s are left for the caller's validity check to reject.
+func trimPartialRune(s string) string {
+	for i := len(s) - 1; i >= 0 && i > len(s)-utf8.UTFMax; i-- {
+		if !utf8.RuneStart(s[i]) {
+			continue // a continuation byte; keep looking for its start
+		}
+		if utf8.ValidString(s[i:]) {
+			return s // the final rune is complete
+		}
+		return s[:i] // start byte whose sequence was cut short
+	}
+	// No start byte within one rune's reach of the end: either s ends with a
+	// complete 4-byte rune (all continuations in view) or it's invalid in a
+	// way no trim can fix; both are the caller's ValidString call to judge.
+	return s
+}
+
+// buildSnippet turns a grep-matched line into a display snippet plus the rune
+// offsets of the terms to highlight in it. The line is whitespace-trimmed and,
+// when long, windowed so the first term hit is visible: if that hit starts
+// beyond snippetMatchLeadRunes the front is cut (keeping snippetContextRunes
+// of context) and marked with "…", and the whole snippet is capped at
+// snippetMaxRunes with a trailing "…" when cut. All slicing is in runes so
+// multi-byte content is never split mid-character.
+//
+// Highlights cover the first occurrence of each term that literally appears in
+// the final snippet (ASCII case-insensitively, matching `git grep -i -F` for
+// the ASCII terms a finder query realistically contains). The printed line is
+// only guaranteed to contain *one* of a multi-term query's terms — --all-match
+// ANDs at the file level — so terms that don't appear simply don't highlight.
+func buildSnippet(line string, terms []string) (snippet string, matchedIndexes []int) {
+	s := strings.TrimSpace(line)
+	runes := []rune(s)
+
+	// Locate the first (byte) offset where any term occurs, to anchor the
+	// window. -1 when none does (possible: git's -i can fold beyond ASCII).
+	firstByte := -1
+	for _, t := range terms {
+		if i := indexASCIIFold(s, t); i >= 0 && (firstByte < 0 || i < firstByte) {
+			firstByte = i
+		}
+	}
+
+	var front, back bool
+	if firstByte >= 0 {
+		if firstRune := utf8.RuneCountInString(s[:firstByte]); firstRune > snippetMatchLeadRunes {
+			runes = runes[firstRune-snippetContextRunes:]
+			front = true
+		}
+	}
+	if len(runes) > snippetMaxRunes {
+		runes = runes[:snippetMaxRunes]
+		back = true
+	}
+	snippet = string(runes)
+	if front {
+		snippet = "…" + snippet
+	}
+	if back {
+		snippet += "…"
+	}
+
+	// Highlight offsets are computed against the *final* snippet (ellipses
+	// included) so the UI can use them directly. indexASCIIFold returns byte
+	// offsets; convert to runes by counting the prefix. The matched region has
+	// the term's exact byte layout (ASCII folding is length-preserving,
+	// non-ASCII must match exactly), so its rune length is the term's.
+	for _, t := range terms {
+		b := indexASCIIFold(snippet, t)
+		if b < 0 {
+			continue
+		}
+		start := utf8.RuneCountInString(snippet[:b])
+		for i := 0; i < utf8.RuneCountInString(t); i++ {
+			matchedIndexes = append(matchedIndexes, start+i)
+		}
+	}
+	return snippet, dedupeSorted(matchedIndexes)
 }
 
 // listWorkingDirFiles returns file paths (relative to dir) under dir. It

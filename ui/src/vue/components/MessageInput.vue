@@ -818,9 +818,7 @@ interface ModelArgOption {
 const modelArgTarget = computed(() => {
   const prior = modelArgContext.value?.prior ?? [];
   const models = props.modelOptions ?? [];
-  const typed = prior
-    .map((t) => models.find((m) => m.id === t))
-    .find((m) => m !== undefined);
+  const typed = prior.map((t) => models.find((m) => m.id === t)).find((m) => m !== undefined);
   return typed ?? models.find((m) => m.id === props.currentModelId);
 });
 const modelArgOptions = computed<ModelArgOption[]>(() => [
@@ -1146,12 +1144,17 @@ watch(submitting, (now) => {
   }
 });
 
-// autoFocus — re-attempt focus when the textarea becomes enabled.
+// autoFocus — re-attempt focus when the textarea becomes enabled. Skips when
+// focus is inside an open modal (e.g. the file finder opened right after page
+// load): stealing focus there sends the user's typing to the composer instead.
 watch(
   () => [props.autoFocus, props.disabled] as const,
   ([af, dis]) => {
     if (af && !dis && textareaRef.value) {
-      setTimeout(() => textareaRef.value?.focus(), 0);
+      setTimeout(() => {
+        if (document.activeElement?.closest('[aria-modal="true"]')) return;
+        textareaRef.value?.focus();
+      }, 0);
     }
   },
   { immediate: true },
