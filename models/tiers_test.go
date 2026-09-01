@@ -23,6 +23,16 @@ func TestAssignTiers(t *testing.T) {
 		}
 	})
 
+	t.Run("fable 5.1 shadows fable 5", func(t *testing.T) {
+		tiers := AssignTiers([]string{"claude-fable-5.1", "claude-fable-5"})
+		if tiers["claude-fable-5.1"] != Tier1 {
+			t.Errorf("fable-5.1 tier = %d, want %d", tiers["claude-fable-5.1"], Tier1)
+		}
+		if tiers["claude-fable-5"] != Tier2 {
+			t.Errorf("fable-5 tier = %d, want %d", tiers["claude-fable-5"], Tier2)
+		}
+	})
+
 	t.Run("worse model stays tier 1 when better absent", func(t *testing.T) {
 		tiers := AssignTiers([]string{"claude-opus-4.7"})
 		if tiers["claude-opus-4.7"] != Tier1 {

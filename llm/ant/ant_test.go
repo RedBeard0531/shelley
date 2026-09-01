@@ -910,6 +910,15 @@ func TestMaxOutputTokensCapping(t *testing.T) {
 	if got4.MaxTokens != 128000 {
 		t.Errorf("Sonnet 4.6 capped: MaxTokens = %d, want 128000", got4.MaxTokens)
 	}
+	// Fable 5.1 has a 128k limit and uses adaptive thinking.
+	s5 := &Service{Model: ClaudeFable51, MaxTokens: 200000, ThinkingLevel: llm.ThinkingLevelMedium}
+	got5 := s5.fromLLMRequest(simpleReq)
+	if got5.MaxTokens != 128000 {
+		t.Errorf("Fable 5.1 capped: MaxTokens = %d, want 128000", got5.MaxTokens)
+	}
+	if got5.Thinking == nil || got5.Thinking.Type != "adaptive" {
+		t.Errorf("Fable 5.1 thinking = %+v, want adaptive", got5.Thinking)
+	}
 }
 
 // TestMaxOutputTokensMatchModelsDevAPI validates our maxOutputTokens() values against
@@ -944,6 +953,7 @@ func TestMaxOutputTokensMatchModelsDevAPI(t *testing.T) {
 
 	// Every model constant we define must match models.dev
 	for _, model := range []string{
+		ClaudeFable51,
 		Claude45Haiku,
 		Claude45Opus,
 		Claude46Opus,
@@ -2897,6 +2907,7 @@ func TestUseAdaptiveThinking(t *testing.T) {
 		{Claude47Opus, true},
 		{Claude5Opus, true},
 		{Claude5Sonnet, true},
+		{ClaudeFable51, true},
 		{ClaudeFable5, true},
 		{"claude-opus-4-8-20260115", true},
 		{"claude-opus-5-20260724", true},
@@ -2938,6 +2949,7 @@ func TestSupportedReasoningLevels(t *testing.T) {
 		want  string
 	}{
 		{Claude48Opus, "low,medium,high,xhigh,max"},
+		{ClaudeFable51, "low,medium,high,xhigh,max"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
@@ -2966,6 +2978,7 @@ func TestFromLLMRequestThinkingLevels(t *testing.T) {
 		wantBudgetGreat int // wantBudgetGreat: BudgetTokens must equal this when set
 	}{
 		{name: "adaptive default medium", model: Claude47Opus, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
+		{name: "adaptive fable 5.1 default medium", model: ClaudeFable51, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive req xhigh", model: Claude47Opus, svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelXHigh, wantType: "adaptive", wantEffort: "xhigh"},
 		{name: "adaptive opus48 xhigh", model: Claude48Opus, svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelXHigh, wantType: "adaptive", wantEffort: "xhigh"},
 		{name: "adaptive minimal maps to low", model: Claude48Opus, svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelMinimal, wantType: "adaptive", wantEffort: "low"},

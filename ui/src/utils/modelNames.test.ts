@@ -21,6 +21,7 @@ eq("claude-opus-4-5", "Claude Opus 4.5");
 eq("claude-opus-4-1", "Claude Opus 4.1");
 eq("claude-sonnet-5", "Claude Sonnet 5");
 eq("claude-haiku-4-5", "Claude Haiku 4.5");
+eq("claude-fable-5.1", "Claude Fable 5.1");
 eq("claude-fable-5", "Claude Fable 5");
 
 // OpenAI gpt-*
