@@ -10,8 +10,6 @@
     ref="containerRef"
     :data-terminal-id="term.id"
     :style="{
-      width: '100%',
-      height: '100%',
       display: isVisible ? 'block' : 'none',
       backgroundColor: isDark ? '#1a1b26' : '#f8f9fa',
     }"
@@ -36,8 +34,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   // status-change: id, status, exitCode (React onStatusChange)
   (e: "status-change", id: string, status: TermStatus, exitCode: number | null): void;
-  // register/unregister: id, xterm instance (React onRegister/onUnregister)
-  (e: "register", id: string, xterm: Terminal): void;
+  // register/unregister: id, xterm instance, and its fit callback
+  (e: "register", id: string, xterm: Terminal, fit: () => void): void;
   (e: "unregister", id: string): void;
   // attached: id, termId (React onAttached)
   (e: "attached", id: string, termId: string): void;
@@ -52,6 +50,20 @@ let handlePointerDown: ((e: PointerEvent) => void) | null = null;
 // settled is set once the server reported a definitive outcome (exit or
 // error) for this session, so a later socket close is not mistaken for one.
 let settled = false;
+
+function fitAndNotifyServer() {
+  if (!fitAddon) return;
+  fitAddon.fit();
+  if (ws?.readyState === WebSocket.OPEN && xtermInst) {
+    ws.send(
+      JSON.stringify({
+        type: "resize",
+        cols: xtermInst.cols,
+        rows: xtermInst.rows,
+      }),
+    );
+  }
+}
 
 onMounted(() => {
   if (!containerRef.value) return;
@@ -88,8 +100,8 @@ onMounted(() => {
   xterm.loadAddon(new WebLinksAddon());
 
   xterm.open(containerRef.value);
-  fitAddon.fit();
-  emit("register", props.term.id, xterm);
+  fitAndNotifyServer();
+  emit("register", props.term.id, xterm, fitAndNotifyServer);
 
   // Mobile soft-keyboard fix: on touch devices the xterm helper textarea
   // can't be focused by tapping (it has pointer-events: none so the
@@ -175,19 +187,7 @@ onMounted(() => {
     }
   });
 
-  ro = new ResizeObserver(() => {
-    if (!fitAddon) return;
-    fitAddon.fit();
-    if (socket.readyState === WebSocket.OPEN && xtermInst) {
-      socket.send(
-        JSON.stringify({
-          type: "resize",
-          cols: xtermInst.cols,
-          rows: xtermInst.rows,
-        }),
-      );
-    }
-  });
+  ro = new ResizeObserver(fitAndNotifyServer);
   ro.observe(containerRef.value);
 });
 

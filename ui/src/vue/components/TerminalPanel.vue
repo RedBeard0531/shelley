@@ -61,7 +61,11 @@
                  server has already forgotten the session, so a scope PUT
                  would 404. The tooltip lives on a wrapper because a disabled
                  button does not emit hover events. -->
-            <span v-if="isAlive(t.id)" v-tooltip.top="scopeTooltip(t)" class="terminal-panel-tab-scope">
+            <span
+              v-if="isAlive(t.id)"
+              v-tooltip.top="scopeTooltip(t)"
+              class="terminal-panel-tab-scope"
+            >
               <button
                 :class="`terminal-panel-tab-pin${t.conversationId !== null ? ' terminal-panel-tab-pin-pinned' : ''}`"
                 :disabled="scopeDisabled(t)"
@@ -175,7 +179,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { Terminal } from "@xterm/xterm";
 import { isDarkModeActive } from "../../services/theme";
 import TerminalInstance from "./TerminalInstance.vue";
@@ -379,13 +383,16 @@ function showFeedback(type: string) {
   setTimeout(() => (copyFeedback.value = null), 1500);
 }
 
-// Registry of xterm instances by terminal id.
+// Registry of xterm instances and fit callbacks by terminal id.
 const xtermRegistry = new Map<string, Terminal>();
-function registerXterm(id: string, xterm: Terminal) {
+const fitRegistry = new Map<string, () => void>();
+function registerXterm(id: string, xterm: Terminal, fit: () => void) {
   xtermRegistry.set(id, xterm);
+  fitRegistry.set(id, fit);
 }
 function unregisterXterm(id: string) {
   xtermRegistry.delete(id);
+  fitRegistry.delete(id);
 }
 
 // Auto-focus terminal when autoFocusId is set (React effect on
@@ -507,26 +514,20 @@ function onTabClick(id: string) {
   if (minimized.value) minimized.value = false;
 }
 
-// Refit terminals when un-minimizing by nudging the container to trigger
-// ResizeObserver (React effect on [minimized, activeTabId]).
+// Refit the active terminal once un-minimizing has updated the DOM.
 const wasMinimizedRef = { current: minimized.value };
 watch(
   () => [minimized.value, activeTabId.value] as const,
   () => {
     const wasMinimized = wasMinimizedRef.current;
     wasMinimizedRef.current = minimized.value;
-    if (wasMinimized && !minimized.value && activeTabId.value) {
-      const timer = setTimeout(() => {
-        const el = document.querySelector(`[data-terminal-id="${activeTabId.value}"]`);
-        if (el) {
-          (el as HTMLElement).style.height = "99.9%";
-          requestAnimationFrame(() => {
-            (el as HTMLElement).style.height = "100%";
-          });
+    const id = activeTabId.value;
+    if (wasMinimized && !minimized.value && id) {
+      void nextTick(() => {
+        if (!minimized.value && activeTabId.value === id) {
+          fitRegistry.get(id)?.();
         }
-      }, 30);
-      // No explicit cleanup needed; the timer is short-lived.
-      void timer;
+      });
     }
   },
 );
