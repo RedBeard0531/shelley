@@ -437,6 +437,127 @@ func TestTourChunkJSON(t *testing.T) {
 	}
 }
 
+func TestResolveChunkReferences(t *testing.T) {
+	dir, git := gitRepo(t)
+	write(t, dir, "a.txt", []byte(numbered(1, 30)))
+	write(t, dir, "b.txt", []byte("b\n"))
+	commit(t, git, "base")
+	write(t, dir, "a.txt", []byte("CHANGED\n"+numbered(2, 29)+"ALSO CHANGED\n"))
+	write(t, dir, "b.txt", []byte("B\n"))
+	hash := commit(t, git, "change")
+
+	_, fragments, err := Chunks(dir, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fragments) != 3 {
+		t.Fatalf("got %d fragments, want 3", len(fragments))
+	}
+
+	ref := func(i int) *int { return &i }
+	tour := &Tour{Version: 1, Chunks: []TourChunk{
+		{Header: "## H"},
+		{Ref: ref(1), Comment: "second hunk first"},
+		{Ref: ref(0), Comment: "first hunk"},
+		{Ref: ref(2), Trivial: true},
+	}}
+	requireVerify(t, dir, hash, tour)
+	if tour.Chunks[1].Patch != fragments[1] || tour.Chunks[1].Ref != nil {
+		t.Fatalf("chunk not resolved: %+v", tour.Chunks[1])
+	}
+
+	for name, chunks := range map[string][]TourChunk{
+		"out of range":   {{Ref: ref(9)}},
+		"negative":       {{Ref: ref(-1)}},
+		"ref and patch":  {{Ref: ref(0), Patch: "diff"}},
+		"ref and header": {{Ref: ref(0), Header: "## H"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Verify(dir, hash, &Tour{Version: 1, Chunks: chunks}); err == nil {
+				t.Fatal("Verify succeeded")
+			}
+		})
+	}
+
+	// Duplicate references must fail tree verification (chunk applied twice).
+	dup := &Tour{Version: 1, Chunks: []TourChunk{
+		{Ref: ref(0), Trivial: true}, {Ref: ref(0), Trivial: true},
+	}}
+	if _, err := Verify(dir, hash, dup); err == nil {
+		t.Fatal("duplicate reference verified")
+	}
+}
+
+func TestMeta(t *testing.T) {
+	dir, git := gitRepo(t)
+	write(t, dir, "dir/file.go", []byte(numbered(1, 20)))
+	commit(t, git, "base")
+	write(t, dir, "dir/file.go", []byte("x\n"+numbered(2, 19)+"y\ny2\n"))
+	hash := commit(t, git, "change")
+
+	_, fragments, err := Chunks(dir, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fragments) != 2 {
+		t.Fatalf("got %d fragments", len(fragments))
+	}
+	m := Meta(fragments[0])
+	if m.File != "dir/file.go" || !strings.HasPrefix(m.Hunk, "@@ ") || m.Adds != 1 || m.Dels != 1 {
+		t.Fatalf("meta = %+v", m)
+	}
+	m = Meta(fragments[1])
+	if m.File != "dir/file.go" || m.Adds != 2 || m.Dels != 1 {
+		t.Fatalf("meta = %+v", m)
+	}
+
+	// Deletion reports the old path; rename fragments report the new path.
+	git("rm", "-q", "dir/file.go")
+	delHash := commit(t, git, "delete")
+	_, delFrags, err := Chunks(dir, delHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := Meta(delFrags[0]); m.File != "dir/file.go" {
+		t.Fatalf("deletion meta = %+v", m)
+	}
+
+	write(t, dir, "ren.txt", []byte(numbered(1, 50)))
+	commit(t, git, "add ren")
+	git("mv", "ren.txt", "ren2.txt")
+	renHash := commit(t, git, "rename")
+	_, renFrags, err := Chunks(dir, renHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := Meta(renFrags[0]); m.File != "ren2.txt" || m.Hunk != "" {
+		t.Fatalf("rename meta = %+v", m)
+	}
+
+	// Diff-like content inside hunk bodies must not clobber file or counts.
+	write(t, dir, "notes.md", []byte("one\n"))
+	commit(t, git, "add notes")
+	write(t, dir, "notes.md", []byte("one\n++ b/evil\n-- a/evil\n"))
+	trapHash := commit(t, git, "diff-like")
+	_, trapFrags, err := Chunks(dir, trapHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := Meta(trapFrags[0]); m.File != "notes.md" || m.Adds != 2 || m.Dels != 0 {
+		t.Fatalf("diff-like meta = %+v", m)
+	}
+}
+
+func TestSubject(t *testing.T) {
+	dir, git := gitRepo(t)
+	write(t, dir, "a.txt", []byte("a\n"))
+	hash := commit(t, git, "my subject line")
+	subject, err := Subject(dir, hash)
+	if err != nil || subject != "my subject line" {
+		t.Fatalf("Subject = %q, %v", subject, err)
+	}
+}
+
 func TestGitEnvIgnoresRepoOverrides(t *testing.T) {
 	dir, git := gitRepo(t)
 	write(t, dir, "f.txt", []byte("a\n"))

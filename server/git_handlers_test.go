@@ -440,6 +440,35 @@ func TestHandleGitTour(t *testing.T) {
 			t.Fatalf("response still contains chunks: %s", w.Body.String())
 		}
 	})
+
+	t.Run("chunk-ref note served resolved", func(t *testing.T) {
+		ref := 0
+		note, err := json.Marshal(committour.Tour{
+			Version: 1,
+			Chunks:  []committour.TourChunk{{Ref: &ref, Comment: "by reference"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := committour.WriteNote(dir, hash, note); err != nil {
+			t.Fatal(err)
+		}
+		w := request(hash[:8])
+		if w.Code != http.StatusOK {
+			t.Fatalf("got %d: %s", w.Code, w.Body.String())
+		}
+		var response GitTourResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		tour, err := committour.ParseTour(response.Tour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tour.Chunks) != 1 || tour.Chunks[0].Ref != nil || tour.Chunks[0].Patch != fragments[0] {
+			t.Fatalf("served tour not resolved: %s", response.Tour)
+		}
+	})
 }
 
 func testGitOutput(t *testing.T, dir string, args ...string) string {

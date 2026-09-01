@@ -345,9 +345,16 @@ func (s *Server) handleGitTour(w http.ResponseWriter, r *http.Request) {
 		writeGitTourNotFound(w)
 		return
 	}
+	// attach stores chunk references resolved, but a note written by other
+	// means may still contain them; serve the resolved form the UI renders.
+	resolved, err := json.Marshal(tour)
+	if err != nil {
+		writeGitTourNotFound(w)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(GitTourResponse{Hash: fullHash, Tour: note})
+	json.NewEncoder(w).Encode(GitTourResponse{Hash: fullHash, Tour: resolved})
 }
 
 func writeGitTourNotFound(w http.ResponseWriter) {

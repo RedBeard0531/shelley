@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const notesRef = "shelley-tour"
@@ -21,12 +22,121 @@ type Tour struct {
 	Chunks  []TourChunk `json:"chunks"`
 }
 
-// TourChunk is either a markdown section header or a self-contained patch.
+// TourChunk is either a markdown section header, a self-contained patch, or
+// a reference to a suggested chunk id (resolved to a patch by Resolve).
 type TourChunk struct {
 	Header  string `json:"header,omitempty"`
 	Patch   string `json:"patch,omitempty"`
+	Ref     *int   `json:"ref,omitempty"`
 	Comment string `json:"comment,omitempty"`
 	Trivial bool   `json:"trivial,omitempty"`
+}
+
+// FragmentMeta describes a patch fragment for compact listings.
+type FragmentMeta struct {
+	File string // new path (or old path for deletions)
+	Hunk string // "@@ ... @@" header, empty for hunkless fragments
+	Adds int
+	Dels int
+}
+
+// Meta extracts listing metadata from a patch fragment. File headers are only
+// honored before the first hunk: added lines whose content begins with "++ "
+// or "-- " would otherwise masquerade as +++/--- headers.
+func Meta(fragment string) FragmentMeta {
+	var m FragmentMeta
+	var oldFile string
+	for _, line := range splitLines(fragment) {
+		switch {
+		case strings.HasPrefix(line, "@@"):
+			if m.Hunk == "" {
+				m.Hunk = strings.TrimSuffix(line, "\n")
+			}
+		case m.Hunk != "":
+			if strings.HasPrefix(line, "+") {
+				m.Adds++
+			} else if strings.HasPrefix(line, "-") {
+				m.Dels++
+			}
+		case strings.HasPrefix(line, "+++ "):
+			m.File = cutPathPrefix(strings.TrimSuffix(line[4:], "\n"), "b/")
+		case strings.HasPrefix(line, "--- "):
+			oldFile = cutPathPrefix(strings.TrimSuffix(line[4:], "\n"), "a/")
+		case strings.HasPrefix(line, "rename to "), strings.HasPrefix(line, "copy to "):
+			if m.File == "" {
+				_, m.File, _ = strings.Cut(strings.TrimSuffix(line, "\n"), " to ")
+			}
+		}
+	}
+	if m.File == "" || m.File == "/dev/null" {
+		m.File = oldFile
+	}
+	if m.File == "" {
+		// Fall back to the "diff --git a/x b/y" line (e.g. binary changes).
+		for _, line := range splitLines(fragment) {
+			if rest, ok := strings.CutPrefix(line, "diff --git a/"); ok {
+				if _, after, found := strings.Cut(strings.TrimSuffix(rest, "\n"), " b/"); found {
+					m.File = after
+				}
+				break
+			}
+		}
+	}
+	return m
+}
+
+func cutPathPrefix(path, prefix string) string {
+	if rest, ok := strings.CutPrefix(path, prefix); ok {
+		return rest
+	}
+	return path
+}
+
+// Subject returns the commit's subject line.
+func Subject(dir, commit string) (string, error) {
+	out, err := gitOutput(dir, "", nil, "log", "-1", "--format=%s", commit+"^{commit}", "--")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// Resolve replaces ref entries with the referenced suggested patches for the
+// given commit. It reports whether any refs were resolved. Tours without refs
+// are returned unchanged.
+func Resolve(dir, commit string, tour *Tour) (bool, error) {
+	if tour == nil {
+		return false, errors.New("tour is nil")
+	}
+	var refs []int
+	for i, entry := range tour.Chunks {
+		if entry.Ref == nil {
+			continue
+		}
+		if entry.Header != "" || entry.Patch != "" {
+			return false, fmt.Errorf("chunks[%d] has ref alongside header or patch", i)
+		}
+		refs = append(refs, i)
+	}
+	if len(refs) == 0 {
+		return false, nil
+	}
+	_, fragments, err := Chunks(dir, commit)
+	if err != nil {
+		return false, err
+	}
+	for _, i := range refs {
+		id := *tour.Chunks[i].Ref
+		if len(fragments) == 0 {
+			return false, fmt.Errorf("chunks[%d] references chunk %d, but the commit has no chunks", i, id)
+		}
+		if id < 0 || id >= len(fragments) {
+			return false, fmt.Errorf("chunks[%d] references chunk %d, but the commit has chunks 0..%d", i, id, len(fragments)-1)
+		}
+		tour.Chunks[i].Patch = fragments[id]
+		tour.Chunks[i].Ref = nil
+	}
+	return true, nil
 }
 
 // Chunks returns the full commit hash and one suggested patch fragment per hunk.
@@ -124,7 +234,11 @@ func ParseTour(data []byte) (*Tour, error) {
 
 // Verify applies the tour patches to a temporary index containing the commit's
 // first-parent tree and requires the resulting tree to equal the commit tree.
+// Chunk-index references are resolved against the commit's suggested chunks.
 func Verify(dir, commit string, tour *Tour) ([]string, error) {
+	if _, err := Resolve(dir, commit, tour); err != nil {
+		return nil, err
+	}
 	warnings, patches, err := validateTour(tour)
 	if err != nil {
 		return warnings, err
@@ -231,7 +345,8 @@ func validateTour(tour *Tour) ([]string, []string, error) {
 		}
 		patches = append(patches, entry.Patch)
 		if !entry.Trivial && strings.TrimSpace(entry.Comment) == "" {
-			warnings = append(warnings, fmt.Sprintf("chunks[%d] is non-trivial but has no comment", i))
+			meta := Meta(entry.Patch)
+			warnings = append(warnings, fmt.Sprintf("chunks[%d] (%s %s) is non-trivial but has no comment", i, meta.File, meta.Hunk))
 		}
 	}
 	return warnings, patches, nil
@@ -265,8 +380,15 @@ func WriteNote(dir, commit string, data []byte) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close tour note file: %w", err)
 	}
-	_, err = gitOutput(dir, "", nil, "notes", "--ref="+notesRef, "add", "-f", "-F", name, commit)
-	return err
+	// Retry on notes-ref lock contention: concurrent attachers (e.g. parallel
+	// subagents annotating different commits) race on refs/notes/<ref>.lock.
+	for attempt := 0; ; attempt++ {
+		_, err = gitOutput(dir, "", nil, "notes", "--ref="+notesRef, "add", "-f", "-F", name, commit)
+		if err == nil || attempt >= 5 || !strings.Contains(err.Error(), ".lock") {
+			return err
+		}
+		time.Sleep(time.Duration(50<<attempt) * time.Millisecond)
+	}
 }
 
 func ListNotes(dir string) (map[string]bool, error) {

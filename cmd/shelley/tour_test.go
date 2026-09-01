@@ -66,20 +66,59 @@ func TestTourCLI(t *testing.T) {
 
 	out := run(0, "tour", "chunks", "-C", repo, "HEAD")
 	var response struct {
-		Hash   string `json:"hash"`
-		Chunks []struct {
+		Hash    string `json:"hash"`
+		Subject string `json:"subject"`
+		Chunks  []struct {
+			ID    int    `json:"id"`
+			File  string `json:"file"`
 			Patch string `json:"patch"`
 		} `json:"chunks"`
 	}
 	if err := json.Unmarshal([]byte(out), &response); err != nil {
 		t.Fatalf("chunks output: %v\n%s", err, out)
 	}
-	if response.Hash != hash || len(response.Chunks) != 1 || response.Chunks[0].Patch == "" {
+	if response.Hash != hash || response.Subject != "change" || len(response.Chunks) != 1 ||
+		response.Chunks[0].Patch == "" || response.Chunks[0].File != "f.txt" || response.Chunks[0].ID != 0 {
 		t.Fatalf("chunks output = %s", out)
 	}
-	if strings.Contains(out, `"index"`) || strings.Contains(out, `"file"`) {
-		t.Fatalf("old chunk metadata remains: %s", out)
+
+	indexOut := run(0, "tour", "chunks", "-C", repo, "-index", "HEAD")
+	if !strings.Contains(indexOut, "commit "+hash+" change") || !strings.Contains(indexOut, "f.txt") ||
+		!strings.Contains(indexOut, "0  +1 -1  @@") || strings.Contains(indexOut, "diff --git") {
+		t.Fatalf("index output = %q", indexOut)
 	}
+
+	onlyOut := run(0, "tour", "chunks", "-C", repo, "-only", "f.txt", "HEAD")
+	if !strings.Contains(onlyOut, `"file": "f.txt"`) {
+		t.Fatalf("only output = %q", onlyOut)
+	}
+	textOut := run(0, "tour", "chunks", "-C", repo, "-text", "HEAD")
+	if !strings.HasPrefix(textOut, "=== chunk 0 f.txt\ndiff --git") || strings.Contains(textOut, `\n`) {
+		t.Fatalf("text output = %q", textOut)
+	}
+	run(1, "tour", "chunks", "-C", repo, "-only", "5", "HEAD")
+	run(1, "tour", "chunks", "-C", repo, "-only", "nope.txt", "HEAD")
+	if got := run(1, "tour", "chunks", "-C", repo, "-only", "3-1", "HEAD"); !strings.Contains(got, "start exceeds end") {
+		t.Fatalf("inverted range output = %q", got)
+	}
+	if got := run(1, "tour", "chunks", "-C", repo, "-only", "0,x", "HEAD"); !strings.Contains(got, "invalid chunk selection") {
+		t.Fatalf("malformed selection output = %q", got)
+	}
+
+	// scaffold emits a complete, immediately verifiable all-refs tour.
+	scaffoldOut := run(0, "tour", "scaffold", "-C", repo, "HEAD")
+	var scaffold committour.Tour
+	if err := json.Unmarshal([]byte(scaffoldOut), &scaffold); err != nil {
+		t.Fatalf("scaffold output: %v\n%s", err, scaffoldOut)
+	}
+	if scaffold.Title != "change" || len(scaffold.Chunks) != 1 || scaffold.Chunks[0].Ref == nil || *scaffold.Chunks[0].Ref != 0 {
+		t.Fatalf("scaffold = %s", scaffoldOut)
+	}
+	scaffoldPath := filepath.Join(tempDir, "scaffold.json")
+	if err := os.WriteFile(scaffoldPath, []byte(scaffoldOut), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(0, "tour", "verify", "-C", repo, "HEAD", scaffoldPath)
 
 	tour := &committour.Tour{Version: 1, Title: "T", Chunks: []committour.TourChunk{{
 		Patch: response.Chunks[0].Patch, Comment: "explanation",
@@ -117,5 +156,44 @@ func TestTourCLI(t *testing.T) {
 	run(1, "tour", "attach", "-C", repo, "HEAD", badPath)
 	if got := run(0, "tour", "show", "-C", repo, "HEAD"); strings.TrimSpace(got) != string(tourData) {
 		t.Fatalf("note overwritten by failing attach: %q", got)
+	}
+
+	// Chunk references resolve at verify time and attach stores resolved patches.
+	refData := []byte(`{"version":1,"title":"R","chunks":[{"ref":0,"comment":"by reference"}]}`)
+	refPath := filepath.Join(tempDir, "ref.json")
+	if err := os.WriteFile(refPath, refData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(0, "tour", "verify", "-C", repo, "HEAD", refPath)
+	run(0, "tour", "attach", "-C", repo, "HEAD", refPath)
+	shown := run(0, "tour", "show", "-C", repo, "HEAD")
+	if strings.Contains(shown, `"ref"`) || !strings.Contains(shown, "diff --git") || !strings.Contains(shown, "by reference") {
+		t.Fatalf("resolved note = %q", shown)
+	}
+
+	badRefData := []byte(`{"version":1,"chunks":[{"ref":7}]}`)
+	badRefPath := filepath.Join(tempDir, "badref.json")
+	if err := os.WriteFile(badRefPath, badRefData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(1, "tour", "verify", "-C", repo, "HEAD", badRefPath); !strings.Contains(got, "references chunk 7") {
+		t.Fatalf("bad ref output = %q", got)
+	}
+}
+
+func TestGeneratedPath(t *testing.T) {
+	for path, want := range map[string]bool{
+		"go.sum":                      true,
+		"ui/pnpm-lock.yaml":           true,
+		"db/generated/queries.sql.go": true,
+		"api/v1/service.pb.go":        true,
+		"vendor/lib/x.go":             true,
+		"execore/server.go":           false,
+		"docs/generated-notes.md":     false,
+		"locksmith/go.sum.bak":        false,
+	} {
+		if got := generatedPath(path); got != want {
+			t.Errorf("generatedPath(%q) = %v, want %v", path, got, want)
+		}
 	}
 }
