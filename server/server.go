@@ -971,6 +971,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 			managerConfig.SubagentDepth++
 		}
 		manager := NewConversationManager(conversationID, s.db, s.logger, managerConfig, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
+		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
 		manager.btwReader = btwReader
@@ -1041,6 +1042,7 @@ func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, con
 		subagentConfig := s.toolSetConfig
 		subagentConfig.SubagentDepth++
 		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
+		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.serverPort = s.listenPort
 		manager.onDone = func() { s.dispatchSubagentDone(conversationID) }
 		// See getOrCreateConversationManager for why we don't hold s.mu here.
