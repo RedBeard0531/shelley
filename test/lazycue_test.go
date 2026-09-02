@@ -254,6 +254,12 @@ func TestNewPageBashTool(t *testing.T) {
 	lazyTest(t, `Navigate to /new. Type the text bash: echo "hello world" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for the agent text that begins with "I'll run the command:" and includes echo "hello world". A completed tool call (an element with data-testid "tool-call-completed") should become visible, and the text "bash" should be visible somewhere on the page.`)
 }
 
+// Replaces the Playwright test that treated predictable's "think:" response
+// as a tool call and reused whichever shared conversation happened to be open.
+func TestNewPageConsecutiveToolCalls(t *testing.T) {
+	lazyTest(t, `Navigate to /new and confirm selector "[data-testid='tool-call-completed']" initially matches exactly 0 elements. Send three consecutive tool turns in this same conversation. For the first turn, type the text bash: echo "first command" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for exactly one completed tool call, then wait for the turn-ending agent message by evaluating "Array.from(document.querySelectorAll('.message-agent')).filter(function(el){return el.textContent.trim()==='Done.';}).length" and expecting "1"; this eval step must set timeout "30s". For the second turn, type the text bash: echo "second command" into the same message input and click the send button; wait for exactly two completed tool calls, then run the same eval and expect "2" with timeout "30s". For the third turn, type the text bash: echo "third command" into the same message input and click the send button; wait for exactly three completed tool calls, then run the same eval and expect "3" with timeout "30s". Finally, selector ".bash-tool-success" should match exactly 3 elements, and evaluate "Array.from(document.querySelectorAll('.bash-tool-command')).map(function(el){return el.textContent.trim();}).join('|')" expecting "echo \"first command\"|echo \"second command\"|echo \"third command\"". The three sent user messages should all remain visible.`)
+}
+
 // Regression test for tool-progress render churn. A running tool reports
 // partial output every ~500ms (claudetool/bash.go progressInterval); each
 // report used to replace ChatInterface's toolProgress object, which was
