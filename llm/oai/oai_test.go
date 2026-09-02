@@ -1708,7 +1708,7 @@ func TestServiceDoSendsMaxCompletionTokens(t *testing.T) {
 	if gotReq["max_completion_tokens"] != float64(DefaultMaxTokens) {
 		t.Fatalf("max_completion_tokens = %#v, want %d; body = %#v", gotReq["max_completion_tokens"], DefaultMaxTokens, gotReq)
 	}
-	if _, ok := gotReq["stream"]; ok {
+	if stream, _ := gotReq["stream"].(bool); stream {
 		t.Fatalf("non-Fireworks request unexpectedly enabled streaming: %#v", gotReq)
 	}
 }

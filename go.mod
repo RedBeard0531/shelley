@@ -15,7 +15,7 @@ require (
 	github.com/pkg/diff v0.0.0-20241224192749-4e6772a4315c
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/samber/slog-http v1.12.1
-	github.com/sashabaranov/go-openai v1.41.2
+	github.com/sashabaranov/go-openai v1.42.0
 	go.skia.org/infra v0.0.0-20260709164234-a736e8709729
 	golang.org/x/crypto v0.54.0
 	golang.org/x/image v0.44.0
