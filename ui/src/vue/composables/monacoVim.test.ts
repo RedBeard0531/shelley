@@ -66,7 +66,7 @@ function makeHarness() {
     getStatusBar: () => null,
     getEnabled: () => enabled,
     loadVim,
-    ensureQuitCommands: () => Promise.resolve(),
+    ensureExtensions: () => Promise.resolve(),
   });
 
   return {

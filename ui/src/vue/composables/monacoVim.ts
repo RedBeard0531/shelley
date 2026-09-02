@@ -6,7 +6,7 @@ import {
   getVimModeEnabled,
   setVimModeEnabled,
   loadMonacoVim,
-  ensureVimQuitCommands,
+  ensureVimExtensions,
   setVimQuitHandler,
   clearVimQuitHandlerIf,
 } from "../../services/monaco";
@@ -58,7 +58,7 @@ export interface VimAttachDeps {
   getEnabled: () => boolean;
   onQuit?: (opts: { save: boolean }) => void;
   loadVim?: () => Promise<typeof import("monaco-vim")>;
-  ensureQuitCommands?: () => Promise<void>;
+  ensureExtensions?: () => Promise<void>;
 }
 
 export function createVimAttachController(deps: VimAttachDeps): {
@@ -71,7 +71,7 @@ export function createVimAttachController(deps: VimAttachDeps): {
     getEnabled,
     onQuit,
     loadVim = loadMonacoVim,
-    ensureQuitCommands = ensureVimQuitCommands,
+    ensureExtensions = ensureVimExtensions,
   } = deps;
   let adapter: { dispose: () => void } | null = null;
   let generation = 0;
@@ -93,7 +93,7 @@ export function createVimAttachController(deps: VimAttachDeps): {
     loadVim()
       .then(async (mod) => {
         if (gen !== generation) return;
-        await ensureQuitCommands();
+        await ensureExtensions();
         if (gen !== generation) return;
         if (onQuit) setVimQuitHandler(onQuit);
         adapter = mod.initVimMode(editor, statusBarNode ?? undefined);
