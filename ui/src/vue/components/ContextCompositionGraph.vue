@@ -73,31 +73,50 @@
           current <b>{{ formatTokenCount(points.at(-1)!.total) }}</b> · {{ (points.at(-1)!.total / props.maxContextTokens * 100).toFixed(1) }}%
         </template>
       </div>
-      <div
-        class="token-cost-legend context-composition-legend"
-        role="list"
-        aria-label="Estimated context composition"
-      >
+      <div class="context-composition-legend" role="table" aria-label="Estimated context composition">
+        <div class="context-composition-legend-row context-composition-legend-head">
+          <span class="context-composition-legend-label">category</span>
+          <span class="context-composition-legend-tokens">args</span>
+          <span class="context-composition-legend-tokens">output</span>
+          <span class="context-composition-legend-total">total</span>
+          <span class="context-composition-legend-pct" />
+        </div>
         <div
-          v-for="category in categories"
-          :key="category.key"
-          class="context-composition-legend-item"
-          role="listitem"
+          v-for="row in breakdownRows"
+          :key="row.key"
+          v-tooltip.top="row.hint"
+          role="row"
+          :aria-label="`${row.label}: ${row.hint}`"
+          class="context-composition-legend-row"
         >
-          <button
-            type="button"
-            class="token-cost-legend-row context-composition-legend-row"
-            v-tooltip.focus.top="categoryHint(category.key, legendPoint)"
-            :aria-label="`${category.label}: ${formatTokenCount(categoryTokens(legendPoint, category.key))}. ${categoryHint(category.key, legendPoint)}`"
-            @mouseenter="showLegendTooltipOnHover"
-            @mouseleave="hideLegendTooltipOnHover"
-          >
-            <span class="token-cost-chip" :style="{ background: category.color }" aria-hidden="true" />
-            <span class="token-cost-legend-label context-composition-legend-label">{{ category.label }}</span>
-            <span class="token-cost-legend-tokens context-composition-legend-tokens">{{
-              formatTokenCount(categoryTokens(legendPoint, category.key))
-            }}</span>
-          </button>
+          <span class="context-composition-legend-label">
+            <i :style="{ background: row.color }" />{{ row.label }}
+          </span>
+          <span class="context-composition-legend-tokens">
+            <TokenCount v-if="row.args !== null" :tokens="row.args" />
+          </span>
+          <span class="context-composition-legend-tokens">
+            <TokenCount v-if="row.output !== null" :tokens="row.output" />
+          </span>
+          <span class="context-composition-legend-total">
+            <TokenCount :tokens="row.total" />
+          </span>
+          <span class="context-composition-legend-pct">
+            {{ breakdownTotal > 0 ? ((row.total / breakdownTotal) * 100).toFixed(0) + "%" : "" }}
+          </span>
+        </div>
+        <div class="context-composition-legend-row context-composition-total-row">
+          <span class="context-composition-legend-label">total</span>
+          <span class="context-composition-legend-tokens">
+            <TokenCount v-if="breakdownArgsTotal" :tokens="breakdownArgsTotal" />
+          </span>
+          <span class="context-composition-legend-tokens">
+            <TokenCount v-if="breakdownOutputTotal" :tokens="breakdownOutputTotal" />
+          </span>
+          <span class="context-composition-legend-total">
+            <TokenCount :tokens="breakdownTotal" />
+          </span>
+          <span class="context-composition-legend-pct">100%</span>
         </div>
       </div>
       <div v-if="compactionStarts.length" class="context-composition-compaction-note">
@@ -109,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, h, ref, watch } from "vue";
 import type { LLMContent, Message, Usage } from "../../types";
 import { formatTokenCount } from "../../utils/tokenCostGraph";
 
@@ -138,12 +157,18 @@ type Point = {
   total: number;
   generation: number;
   parts: Composition;
+  args: Composition;
   toolBreakdown: ToolBreakdown;
   model?: string;
 };
-type Category = { key: string; label: string; color: string };
+type Category = { key: string; label: string; color: string; isTool?: boolean };
 type Attribution = { key: string; detail?: string };
 type CommandInvocation = { name: string; args: string[] };
+
+// Tool-call tokens (name + input) are recorded under this suffix during the
+// walk, then split out into Point.args at mapping time so the breakdown
+// table can show args vs. output per tool category.
+const ARGS_SUFFIX = "\u0000args";
 
 const BASH_CATEGORIES = [
   "bash:code search",
@@ -251,9 +276,17 @@ const points = computed<Point[]>(() => {
   }
   return raw.map((point) => {
     const scale = scaleByGeneration.get(point.generation) || 1;
-    const parts = Object.fromEntries(
-      Object.entries(point.parts).map(([key, tokens]) => [key, Math.round(tokens * scale)]),
-    );
+    const parts: Composition = {};
+    const args: Composition = {};
+    for (const [key, tokens] of Object.entries(point.parts)) {
+      if (key.endsWith(ARGS_SUFFIX)) {
+        const base = key.slice(0, -ARGS_SUFFIX.length);
+        args[base] = Math.round((args[base] || 0) + tokens * scale);
+        parts[base] = (parts[base] || 0) + tokens * scale;
+      } else {
+        parts[key] = Math.round(tokens * scale);
+      }
+    }
     const toolBreakdown = Object.fromEntries(
       Object.entries(point.toolBreakdown).map(([key, details]) => [
         key,
@@ -266,6 +299,7 @@ const points = computed<Point[]>(() => {
       total: point.total,
       generation: point.generation,
       parts,
+      args,
       toolBreakdown,
       model: point.model,
     };
@@ -287,19 +321,22 @@ const categories = computed<Category[]>(() => {
       key,
       label: CATEGORY_LABELS[key],
       color: CATEGORY_COLORS[key],
+      isTool: true,
     })),
     ...TOOL_CATEGORIES.slice(0, 2).filter((key) => keys.has(key)).map((key) => ({
       key,
       label: CATEGORY_LABELS[key],
       color: CATEGORY_COLORS[key],
+      isTool: true,
     })),
     ...(keys.has("bash:other")
-      ? [{ key: "bash:other", label: CATEGORY_LABELS["bash:other"], color: CATEGORY_COLORS["bash:other"] }]
+      ? [{ key: "bash:other", label: CATEGORY_LABELS["bash:other"], color: CATEGORY_COLORS["bash:other"], isTool: true }]
       : []),
     ...TOOL_CATEGORIES.slice(2).filter((key) => keys.has(key)).map((key) => ({
       key,
       label: CATEGORY_LABELS[key],
       color: CATEGORY_COLORS[key],
+      isTool: true,
     })),
   ];
 });
@@ -336,7 +373,40 @@ const hoverX = ref<number | null>(null);
 const hoverPoint = computed(() =>
   hoverIndex.value === null ? null : points.value[hoverIndex.value] || null,
 );
-const legendPoint = computed(() => hoverPoint.value || points.value.at(-1)!);
+
+/** Rendered token count with a bold+italic unit suffix (k/M/B) in the
+ *  breakdown table. */
+const TokenCount = (props: { tokens: number }) => {
+  const text = formatTokenCount(props.tokens);
+  const match = text.match(/^([\d,.]+)([kMB]?)$/)!;
+  return match[2]
+    ? [match[1], h("i", { class: "context-composition-unit" }, match[2])]
+    : text;
+};
+TokenCount.props = ["tokens"];
+
+// The breakdown table reflects the hovered call when hovering the graph,
+// otherwise the current (last) point.
+const lastPoint = computed(() => points.value.at(-1) || null);
+const breakdownPoint = computed(() => hoverPoint.value || lastPoint.value);
+const breakdownRows = computed(() => {
+  const point = breakdownPoint.value;
+  if (!point) return [];
+  return categories.value.map((category) => {
+    const total = point.parts[category.key] || 0;
+    const args = point.args[category.key] || 0;
+    return {
+      ...category,
+      args: category.isTool ? args : null,
+      output: category.isTool ? total - args : null,
+      total,
+      hint: CATEGORY_HINTS[category.key] || categoryHint(category.key, point),
+    };
+  });
+});
+const breakdownTotal = computed(() => breakdownRows.value.reduce((sum, row) => sum + row.total, 0));
+const breakdownArgsTotal = computed(() => breakdownRows.value.reduce((sum, row) => sum + (row.args || 0), 0));
+const breakdownOutputTotal = computed(() => breakdownRows.value.reduce((sum, row) => sum + (row.output || 0), 0));
 
 // A shrinking or replaced message list (conversation switch) invalidates the
 // stale hover point.
@@ -347,18 +417,6 @@ watch(
     hoverX.value = null;
   },
 );
-
-function dispatchTooltipFocus(target: EventTarget | null, type: "focus" | "blur") {
-  if (target instanceof HTMLElement) target.dispatchEvent(new FocusEvent(type));
-}
-
-function showLegendTooltipOnHover(event: MouseEvent) {
-  dispatchTooltipFocus(event.currentTarget, "focus");
-}
-
-function hideLegendTooltipOnHover(event: MouseEvent) {
-  dispatchTooltipFocus(event.currentTarget, "blur");
-}
 
 function areaPath(categoryIndex: number) {
   if (points.value.length === 0) return "";
@@ -460,6 +518,7 @@ function addContent(
         runningToolBreakdown,
         attribution,
         estimateTokens(content.ToolName || "") + estimateTokens(stringify(content.ToolInput)),
+        true,
       );
       return false;
     }
@@ -542,8 +601,9 @@ function addAttributedTokens(
   runningToolBreakdown: ToolBreakdown,
   attribution: Attribution,
   tokens: number,
+  isArgs = false,
 ) {
-  addTokens(running, attribution.key, tokens);
+  addTokens(running, isArgs ? attribution.key + ARGS_SUFFIX : attribution.key, tokens);
   if (!attribution.detail || !isToolCategory(attribution.key)) return;
   const breakdown = (runningToolBreakdown[attribution.key] ||= {});
   breakdown[attribution.detail] = (breakdown[attribution.detail] || 0) + tokens;
