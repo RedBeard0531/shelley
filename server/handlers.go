@@ -1146,8 +1146,30 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 
 	llmService, err := s.llmManager.GetService(modelID)
 	if err != nil {
+		modelList := s.getModelList()
+		// A removed persisted model must not trap an established conversation.
+		// An explicit /model switch does not need the old service, so let it
+		// replace the stale model before rejecting ordinary sends. Drafts retain
+		// their existing promotion semantics below.
+		if !existing.IsDraft && modelCommandSelectsReadyModel(req.Message, modelList) {
+			userEmail := r.Header.Get("X-ExeDev-Email")
+			recoveryCtx := contextWithUserEmail(ctx, userEmail)
+			manager, managerErr := s.getOrCreateConversationManager(recoveryCtx, conversationID, userEmail)
+			if errors.Is(managerErr, errConversationModelMismatch) {
+				http.Error(w, managerErr.Error(), http.StatusBadRequest)
+				return
+			}
+			if managerErr != nil {
+				s.logger.Error("Failed to get conversation manager", "conversationID", conversationID, "error", managerErr)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			if s.handleModelCommand(recoveryCtx, w, conversationID, modelID, manager, req.Message) {
+				return
+			}
+		}
 		s.logger.Error("Unsupported model requested", "model", modelID, "error", err)
-		http.Error(w, unsupportedModelMessage(modelID, s.getModelList()), http.StatusBadRequest)
+		http.Error(w, unsupportedModelMessage(modelID, modelList), http.StatusBadRequest)
 		return
 	}
 
@@ -2669,6 +2691,21 @@ func resolveReasoningArg(arg string) (string, bool) {
 		return matches[0], true
 	}
 	return "", false
+}
+
+func modelCommandSelectsReadyModel(message string, modelList []ModelInfo) bool {
+	fields := strings.Fields(strings.TrimSpace(message))
+	if len(fields) < 2 || fields[0] != "/model" {
+		return false
+	}
+	for _, arg := range fields[1:] {
+		_, isLevel := resolveReasoningArg(arg)
+		modelID, _, strong := resolveModelArg(arg, modelList)
+		if modelID != "" && (!isLevel || strong) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveModelArg matches a /model argument to a ready model id, leniently. In

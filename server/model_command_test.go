@@ -195,6 +195,43 @@ func lastModelChange(msgs []generated.Message) *generated.Message {
 	return nil
 }
 
+func TestModelCommandSwitchesAwayFromUnavailablePersistedModel(t *testing.T) {
+	t.Parallel()
+	srv, database := newTwoModelTestServer(t)
+	ctx := context.Background()
+
+	removedModel := "removed-model"
+	conv, err := database.CreateConversation(ctx, nil, true, nil, &removedModel, db.ConversationOptions{})
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	id := conv.ConversationID
+
+	if w := postChat(t, srv, id, "/model model-b"); w.Code != http.StatusAccepted {
+		t.Fatalf("chat /model: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	updated, err := database.GetConversationByID(ctx, id)
+	if err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	if updated.Model == nil || *updated.Model != "model-b" {
+		t.Fatalf("expected model-b persisted after /model, got %v", updated.Model)
+	}
+
+	marker := lastModelChange(listMessages(t, database, id))
+	if marker == nil || marker.UserData == nil {
+		t.Fatal("expected modelchange marker")
+	}
+	var change ModelChangeUserData
+	if err := json.Unmarshal([]byte(*marker.UserData), &change); err != nil {
+		t.Fatalf("decode modelchange marker: %v", err)
+	}
+	if change.From != removedModel || change.To != "model-b" {
+		t.Fatalf("modelchange = %q -> %q, want %q -> model-b", change.From, change.To, removedModel)
+	}
+}
+
 // TestModelSwitchSticksAgainstStaleRequestModel reproduces the bug where a
 // /model switch is silently undone by the very next chat send. The web UI
 // hides the model picker on an existing conversation but still attaches its
