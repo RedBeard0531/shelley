@@ -161,8 +161,14 @@ const TOOL_CATEGORIES = [
   "tool:other",
 ] as const;
 
+// Displayed as separate bands rather than one "text" lump.
+const TEXT_CATEGORIES = ["system", "user", "assistant", "reasoning"] as const;
+
 const CATEGORY_LABELS: Record<string, string> = {
-  text: "text",
+  system: "system",
+  user: "user",
+  assistant: "assistant",
+  reasoning: "reasoning",
   "bash:code search": "bash · code search",
   "bash:file read": "bash · file read",
   "bash:build/test": "bash · build/test",
@@ -178,7 +184,10 @@ const CATEGORY_LABELS: Record<string, string> = {
 const CATEGORY_COLORS: Record<string, string> = {
   // Cost graph-adjacent blue, purple, teal, and orange hues, with spaced
   // shades for neighboring context bands.
-  text: "hsl(174 58% 48%)",
+  system: "hsl(210 30% 55%)",
+  user: "hsl(160 64% 48%)",
+  assistant: "hsl(140 55% 45%)",
+  reasoning: "hsl(184 60% 44%)",
   "bash:code search": "hsl(199 92% 56%)",
   "bash:file read": "hsl(199 68% 66%)",
   "bash:build/test": "hsl(234 75% 59%)",
@@ -269,9 +278,11 @@ const categories = computed<Category[]>(() => {
     for (const key of Object.keys(point.parts)) keys.add(key);
   }
   return [
-    ...(["user", "assistant", "reasoning"].some((key) => keys.has(key))
-      ? [{ key: "text", label: CATEGORY_LABELS.text, color: CATEGORY_COLORS.text }]
-      : []),
+    ...TEXT_CATEGORIES.filter((key) => keys.has(key)).map((key) => ({
+      key,
+      label: CATEGORY_LABELS[key],
+      color: CATEGORY_COLORS[key],
+    })),
     ...BASH_CATEGORIES.filter((key) => key !== "bash:other" && keys.has(key)).map((key) => ({
       key,
       label: CATEGORY_LABELS[key],
@@ -413,7 +424,10 @@ function addMessage(
     return false;
   try {
     const llm = typeof message.llm_data === "string" ? JSON.parse(message.llm_data) : message.llm_data;
-    const fallback = { key: message.type === "user" ? "user" : "assistant" };
+    const fallback = {
+      key:
+        message.type === "user" ? "user" : message.type === "system" ? "system" : "assistant",
+    };
     let hasMedia = false;
     for (const content of (llm?.Content || []) as LLMContent[]) {
       hasMedia =
@@ -489,7 +503,6 @@ function addContent(
 }
 
 function categoryTokens(point: Point, key: string) {
-  if (key === "text") return ["user", "assistant", "reasoning"].reduce((sum, part) => sum + (point.parts[part] || 0), 0);
   return point.parts[key] || 0;
 }
 
@@ -497,10 +510,15 @@ function plottedTotal(point: Point) {
   return categories.value.reduce((sum, category) => sum + categoryTokens(point, category.key), 0);
 }
 
+const CATEGORY_HINTS: Record<string, string> = {
+  system: "System prompt injected before the first user message",
+  user: "Text typed by the user, plus mid-conversation injections (e.g. subagent-done pokes)",
+  assistant: "Assistant text output",
+  reasoning: "Assistant thinking blocks",
+};
+
 function categoryHint(key: string, point: Point) {
-  if (key === "text") {
-    return ["user", "assistant", "reasoning"].map((part) => `${part} ${formatTokenCount(point.parts[part] || 0)}`).join(" · ");
-  }
+  if (CATEGORY_HINTS[key]) return CATEGORY_HINTS[key];
   const breakdown = point.toolBreakdown[key];
   if (!breakdown) return "Tool output";
   const details = Object.entries(breakdown)
