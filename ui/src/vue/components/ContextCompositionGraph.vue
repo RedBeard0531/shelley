@@ -33,6 +33,15 @@
           :y2="H - PADB"
           class="token-cost-gen-line"
         />
+        <line
+          v-for="index in modelChangePoints"
+          :key="`model-change-${index}`"
+          :x1="xAt(index)"
+          :y1="PADT"
+          :x2="xAt(index)"
+          :y2="H - PADB"
+          class="context-composition-model-line"
+        />
         <line :x1="PADL" :y1="H - PADB" :x2="W - PADR" :y2="H - PADB" class="token-cost-axis" />
         <line
           v-if="hoverX !== null"
@@ -100,7 +109,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import type { LLMContent, Message, Usage } from "../../types";
 import { formatTokenCount } from "../../utils/tokenCostGraph";
 
@@ -130,6 +139,7 @@ type Point = {
   generation: number;
   parts: Composition;
   toolBreakdown: ToolBreakdown;
+  model?: string;
 };
 type Category = { key: string; label: string; color: string };
 type Attribution = { key: string; detail?: string };
@@ -190,6 +200,7 @@ const points = computed<Point[]>(() => {
     generation: number;
     parts: Composition;
     toolBreakdown: ToolBreakdown;
+    model?: string;
   }[] = [];
   let generation: number | undefined;
   let generationHasMedia = false;
@@ -215,6 +226,7 @@ const points = computed<Point[]>(() => {
       generation: message.generation,
       parts: estimated > 0 ? { ...running } : generationHasMedia ? {} : { assistant: total },
       toolBreakdown: copyToolBreakdown(runningToolBreakdown),
+      model: message.model_name || undefined,
     });
   }
 
@@ -246,6 +258,7 @@ const points = computed<Point[]>(() => {
       generation: point.generation,
       parts,
       toolBreakdown,
+      model: point.model,
     };
   });
 });
@@ -291,12 +304,38 @@ const compactionStarts = computed(() =>
   ),
 );
 
+// Red vertical lines at mid-generation model changes: switching the model
+// rebuilds the context, so the user's action causes a cache miss there.
+const modelChangePoints = computed<Set<number>>(() => {
+  const set = new Set<number>();
+  for (let i = 1; i < points.value.length; i++) {
+    if (points.value[i].generation !== points.value[i - 1].generation) continue;
+    if (
+      points.value[i].model &&
+      points.value[i - 1].model &&
+      points.value[i].model !== points.value[i - 1].model
+    )
+      set.add(i);
+  }
+  return set;
+});
+
 const hoverIndex = ref<number | null>(null);
 const hoverX = ref<number | null>(null);
 const hoverPoint = computed(() =>
   hoverIndex.value === null ? null : points.value[hoverIndex.value] || null,
 );
 const legendPoint = computed(() => hoverPoint.value || points.value.at(-1)!);
+
+// A shrinking or replaced message list (conversation switch) invalidates the
+// stale hover point.
+watch(
+  () => points.value.length,
+  () => {
+    hoverIndex.value = null;
+    hoverX.value = null;
+  },
+);
 
 function dispatchTooltipFocus(target: EventTarget | null, type: "focus" | "blur") {
   if (target instanceof HTMLElement) target.dispatchEvent(new FocusEvent(type));
@@ -367,7 +406,11 @@ function addMessage(
   toolKeys: Map<string, Attribution>,
   message: Message,
 ): boolean {
-  if (!message.llm_data) return false;
+  // gitinfo/modelchange/error messages are user-visible only — the server
+  // never sends them to the LLM, so they are not part of the context the
+  // graph reconstructs.
+  if (!message.llm_data || ["gitinfo", "modelchange", "error"].includes(message.type))
+    return false;
   try {
     const llm = typeof message.llm_data === "string" ? JSON.parse(message.llm_data) : message.llm_data;
     const fallback = { key: message.type === "user" ? "user" : "assistant" };
@@ -501,6 +544,8 @@ function toolAttribution(name: string | undefined, input?: unknown): Attribution
       case "browser":
       case "web_search":
       case "keyword_search":
+      case "WebSearch":
+      case "WebFetch":
         key = "tool:browser/web";
         break;
       case "apply_patch":

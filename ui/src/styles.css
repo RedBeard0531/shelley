@@ -9742,11 +9742,52 @@ kbd {
   font-size: 0.68rem;
   font-variant-numeric: tabular-nums;
 }
+.context-composition-graph-header > span:first-child {
+  align-self: center;
+}
 
+.context-composition-readout {
+  min-height: 1.35em;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.context-composition-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  color: var(--text-secondary);
   font-size: 0.65rem;
   line-height: 1.4;
 }
 
+.context-composition-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-composition-legend-head {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.context-composition-legend-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-composition-legend-label i {
+  width: 7px;
+  height: 7px;
   border-radius: 2px;
   flex-shrink: 0;
 }
@@ -9858,6 +9899,14 @@ kbd {
    total input. */
 .token-cost-miss-line {
   stroke: var(--text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.context-composition-model-line {
+  stroke: var(--error-text, #b91c1c);
   stroke-width: 1;
   stroke-dasharray: 4 3;
   opacity: 0.7;
