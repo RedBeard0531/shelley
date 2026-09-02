@@ -194,6 +194,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   user: "user",
   assistant: "assistant",
   reasoning: "reasoning",
+  images: "images",
   "bash:code search": "bash · code search",
   "bash:file read": "bash · file read",
   "bash:build/test": "bash · build/test",
@@ -213,6 +214,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   user: "hsl(160 64% 48%)",
   assistant: "hsl(140 55% 45%)",
   reasoning: "hsl(184 60% 44%)",
+  images: "hsl(325 65% 58%)",
   "bash:code search": "hsl(199 92% 56%)",
   "bash:file read": "hsl(199 68% 66%)",
   "bash:build/test": "hsl(234 75% 59%)",
@@ -235,9 +237,12 @@ const points = computed<Point[]>(() => {
     parts: Composition;
     toolBreakdown: ToolBreakdown;
     model?: string;
+    fallback: boolean;
+    imageCount: number;
   }[] = [];
   let generation: number | undefined;
   let generationHasMedia = false;
+  const counts = { images: 0 };
 
   for (const message of props.messages) {
     if (generation !== undefined && message.generation !== generation) {
@@ -245,10 +250,11 @@ const points = computed<Point[]>(() => {
       for (const key of Object.keys(runningToolBreakdown)) delete runningToolBreakdown[key];
       toolKeys.clear();
       generationHasMedia = false;
+      counts.images = 0;
     }
     generation = message.generation;
     generationHasMedia =
-      addMessage(running, runningToolBreakdown, toolKeys, message) || generationHasMedia;
+      addMessage(running, runningToolBreakdown, toolKeys, message, counts) || generationHasMedia;
     if (message.type !== "agent") continue;
     const usage = parseUsage(message);
     const total = usage ? contextWindowUsed(usage) : 0;
@@ -261,20 +267,93 @@ const points = computed<Point[]>(() => {
       parts: estimated > 0 ? { ...running } : generationHasMedia ? {} : { assistant: total },
       toolBreakdown: copyToolBreakdown(runningToolBreakdown),
       model: message.model_name || undefined,
+      fallback: estimated === 0,
+      imageCount: counts.images,
     });
+  }
+
+  // Provider-accurate image tokens. The server strips base64 image data from
+  // stored llm_data, so the chars/4 estimate gives every image block ~1
+  // token. Instead, when a point introduces new images, attribute the
+  // unexplained growth in the reported context total to them:
+  //   residual = clamp(total[i] - total[i-1] - estimatedOthersDelta,
+  //                    0, max(0, total[i] - total[i-1]))
+  // Imprecise by nature: if a big text/tool-result lands in the same window
+  // as an image, the residual lumps them; and if the server prunes old
+  // screenshots from actual requests, the carried-forward images value
+  // overstates later points. Both are unfixable client-side.
+  const correctedImagesByPoint = new Map<number, number>();
+  {
+    let start = 0;
+    while (start < raw.length) {
+      let end = start;
+      while (end < raw.length && raw[end].generation === raw[start].generation) end++;
+      // diffBoundary[i]: point i may be diffed against i-1 (same generation,
+      // neither side a fallback point whose parts were replaced by a reported
+      // total).
+      const boundary = new Set<number>([start]);
+      for (let i = start + 1; i < end; i++)
+        if (raw[i].fallback || raw[i - 1].fallback) boundary.add(i);
+
+      // Lookahead: the first image point's growth / new-image count defines
+      // the per-image value used to seed the chain base.
+      let perImage: number | null = null;
+      for (let i = start + 1; i < end; i++) {
+        const added = raw[i].imageCount - raw[i - 1].imageCount;
+        if (added <= 0 || boundary.has(i) || boundary.has(i - 1)) continue;
+        const growth = Math.max(0, raw[i].total - raw[i - 1].total);
+        const othersDelta = othersEstimate(raw[i]) - othersEstimate(raw[i - 1]);
+        const residual = Math.min(growth, Math.max(0, raw[i].total - raw[i - 1].total - othersDelta));
+        perImage = residual / added;
+        break;
+      }
+
+      let prev: number | null = null;
+      for (let i = start; i < end; i++) {
+        const point = raw[i];
+        if (point.fallback) continue;
+        if (prev === null || boundary.has(i)) {
+          const images = point.parts.images || 0;
+          correctedImagesByPoint.set(
+            i,
+            perImage !== null ? perImage * point.imageCount : images,
+          );
+        } else {
+          const growth = Math.max(0, point.total - raw[prev].total);
+          const othersDelta = othersEstimate(point) - othersEstimate(raw[prev]);
+          const residual = Math.min(
+            growth,
+            Math.max(0, point.total - raw[prev].total - othersDelta),
+          );
+          correctedImagesByPoint.set(
+            i,
+            (correctedImagesByPoint.get(prev) || 0) +
+              (point.imageCount > raw[prev].imageCount ? residual : 0),
+          );
+        }
+        prev = i;
+      }
+      start = end;
+    }
   }
 
   // A per-call scale made old text appear to shrink whenever a large tool
   // result changed the estimate/provider ratio. Calibrate once at the last
   // call in each generation instead: within a generation, reconstructed
   // context is cumulative and must only grow. A compaction starts a new
-  // generation and is the one legitimate reset.
+  // generation and is the one legitimate reset. Image tokens are
+  // provider-derived and excluded from the scaling.
   const scaleByGeneration = new Map<number, number>();
-  for (const point of raw) {
-    const estimated = Object.values(point.parts).reduce((sum, tokens) => sum + tokens, 0);
-    scaleByGeneration.set(point.generation, estimated > 0 ? point.total / estimated : 1);
-  }
-  return raw.map((point) => {
+  raw.forEach((point, index) => {
+    if (point.fallback) return;
+    const estimatedOthers = othersEstimate(point);
+    const images = correctedImagesByPoint.get(index) || 0;
+    scaleByGeneration.set(
+      point.generation,
+      estimatedOthers > 0 ? Math.max(0, (point.total - images) / estimatedOthers) : 1,
+    );
+  });
+  return raw.map((point, index) => {
     const scale = scaleByGeneration.get(point.generation) || 1;
     const parts: Composition = {};
     const args: Composition = {};
@@ -283,10 +362,13 @@ const points = computed<Point[]>(() => {
         const base = key.slice(0, -ARGS_SUFFIX.length);
         args[base] = Math.round((args[base] || 0) + tokens * scale);
         parts[base] = (parts[base] || 0) + tokens * scale;
-      } else {
-        parts[key] = Math.round(tokens * scale);
+      } else if (key !== "images") {
+        parts[key] = (parts[key] || 0) + tokens * scale;
       }
     }
+    const images = correctedImagesByPoint.get(index);
+    if (images !== undefined && images > 0) parts.images = Math.round(images);
+    for (const key of Object.keys(parts)) if (key !== "images") parts[key] = Math.round(parts[key]);
     const toolBreakdown = Object.fromEntries(
       Object.entries(point.toolBreakdown).map(([key, details]) => [
         key,
@@ -317,6 +399,9 @@ const categories = computed<Category[]>(() => {
       label: CATEGORY_LABELS[key],
       color: CATEGORY_COLORS[key],
     })),
+    ...(keys.has("images")
+      ? [{ key: "images", label: CATEGORY_LABELS.images, color: CATEGORY_COLORS.images }]
+      : []),
     ...BASH_CATEGORIES.filter((key) => key !== "bash:other" && keys.has(key)).map((key) => ({
       key,
       label: CATEGORY_LABELS[key],
@@ -474,6 +559,7 @@ function addMessage(
   runningToolBreakdown: ToolBreakdown,
   toolKeys: Map<string, Attribution>,
   message: Message,
+  counts: { images: number },
 ): boolean {
   // gitinfo/modelchange/error messages are user-visible only — the server
   // never sends them to the LLM, so they are not part of the context the
@@ -489,7 +575,8 @@ function addMessage(
     let hasMedia = false;
     for (const content of (llm?.Content || []) as LLMContent[]) {
       hasMedia =
-        addContent(running, runningToolBreakdown, toolKeys, content, fallback) || hasMedia;
+        addContent(running, runningToolBreakdown, toolKeys, content, fallback, counts) ||
+        hasMedia;
     }
     return hasMedia;
   } catch {
@@ -505,8 +592,14 @@ function addContent(
   toolKeys: Map<string, Attribution>,
   content: LLMContent,
   fallback: Attribution,
+  counts: { images: number },
 ): boolean {
   if (content.MediaType || content.DisplayImageURL || content.Data) {
+    counts.images++;
+    // Placeholder seed only (the server strips base64 data from stored
+    // llm_data, so this estimates ~1 token); provider-derived residuals
+    // replace it below.
+    addTokens(running, "images", Math.max(1, estimateTokens(content.Data || "")));
     return true;
   }
   switch (content.Type) {
@@ -530,7 +623,8 @@ function addContent(
       let hasMedia = false;
       for (const result of content.ToolResult || []) {
         hasMedia =
-          addContent(running, runningToolBreakdown, toolKeys, result, attribution) || hasMedia;
+          addContent(running, runningToolBreakdown, toolKeys, result, attribution, counts) ||
+          hasMedia;
       }
       return hasMedia;
     }
@@ -574,6 +668,7 @@ const CATEGORY_HINTS: Record<string, string> = {
   user: "Text typed by the user, plus mid-conversation injections (e.g. subagent-done pokes)",
   assistant: "Assistant text output",
   reasoning: "Assistant thinking blocks",
+  images: "Image content in messages or tool results (provider-derived: reported context growth not explained by text/tool estimates)",
 };
 
 function categoryHint(key: string, point: Point) {
@@ -590,6 +685,15 @@ function categoryHint(key: string, point: Point) {
 
 function isToolCategory(key: string) {
   return key.startsWith("bash:") || key.startsWith("tool:") || key.startsWith("repo/");
+}
+
+/** Estimated tokens across all non-image categories of a raw point (images
+ *  are handled separately via provider-derived residuals). */
+function othersEstimate(point: { parts: Composition; fallback: boolean }) {
+  if (point.fallback) return 0;
+  let sum = 0;
+  for (const [key, tokens] of Object.entries(point.parts)) if (key !== "images") sum += tokens;
+  return sum;
 }
 
 function addTokens(running: Composition, key: string, tokens: number) {
