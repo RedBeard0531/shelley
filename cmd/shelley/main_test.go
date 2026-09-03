@@ -472,15 +472,13 @@ func TestSystemdListenerIntegration(t *testing.T) {
 	}
 	file.Close() // Close our copy after child inherits it
 
-	// Wait a bit for the server to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Try to connect to the server
+	// Poll until the server answers on the inherited socket.
 	var resp *http.Response
 	client := &http.Client{Timeout: 2 * time.Second}
-	for i := 0; i < 10; i++ {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
 		resp, err = client.Get(fmt.Sprintf("http://127.0.0.1:%d/version", port))
-		if err == nil {
+		if err == nil || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)

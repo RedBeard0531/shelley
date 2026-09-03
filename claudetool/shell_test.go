@@ -185,12 +185,19 @@ func TestShellContextCancelKills(t *testing.T) {
 	s := newTestShell(t)
 	s.DefaultYield = 30 * time.Second // would otherwise yield slowly
 
+	// Cancel once the command has visibly started: the progress tail reports
+	// its first line of output, which proves the process is running when the
+	// cancel lands.
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		cancel()
-	}()
-	out := s.Tool().Run(ctx, json.RawMessage(`{"command":"sleep 30"}`))
+	defer cancel()
+	var cancelOnce sync.Once
+	ctx = WithToolProgress(ctx, func(p llm.ToolProgress) {
+		if strings.Contains(p.Output, "started") {
+			cancelOnce.Do(cancel)
+		}
+	})
+	ctx = WithToolUseID(ctx, "tool-use-cancel")
+	out := s.Tool().Run(ctx, json.RawMessage(`{"command":"echo started; sleep 30"}`))
 	if out.Error == nil {
 		t.Fatalf("expected error after cancel")
 	}

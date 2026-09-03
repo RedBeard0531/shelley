@@ -460,7 +460,15 @@ func TestBrowserIdleShutdownAndRestart(t *testing.T) {
 		t.Fatal("Expected non-nil browser context")
 	}
 
-	time.Sleep(idleTimeout + 50*time.Millisecond)
+	// The idle timer fires against a real browser process, so wait for the
+	// shutdown to be observable rather than for the timer's nominal duration.
+	deadline := time.Now().Add(10 * time.Second)
+	for browserCtx1.Err() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("browser context not cancelled by idle shutdown")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	browserCtx2, err := tools.GetBrowserContext()
 	if err != nil {

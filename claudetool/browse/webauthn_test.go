@@ -130,8 +130,29 @@ func TestWebAuthnPageDoesNotCrash(t *testing.T) {
 		t.Fatalf("Failed to navigate to WebAuthn test page: %v", err)
 	}
 
-	// Step 2: Wait for JS to execute
-	time.Sleep(1 * time.Second)
+	// Step 2: Wait for the page's script to settle. It rewrites #status once
+	// the credentials.create attempt resolves, rejects, or throws; a browser
+	// that crashed on that attempt fails the read instead.
+	var statusText string
+	evalCtx, evalCancel := context.WithTimeout(browserCtx, 20*time.Second)
+	defer evalCancel()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		err = chromedp.Run(
+			evalCtx,
+			chromedp.Text("#status", &statusText, chromedp.NodeVisible),
+		)
+		if err != nil {
+			t.Fatalf("Failed to read page status (browser may have crashed): %v", err)
+		}
+		if strings.Contains(statusText, "Page loaded") || strings.Contains(statusText, "unexpected") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("page script never settled; last status %q", statusText)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	// Step 3: Verify browser is still alive by checking the context
 	browserCtx2, err := tools.GetBrowserContext()
@@ -140,19 +161,6 @@ func TestWebAuthnPageDoesNotCrash(t *testing.T) {
 	}
 	if browserCtx2.Err() != nil {
 		t.Fatalf("Browser context cancelled after WebAuthn page: %v", browserCtx2.Err())
-	}
-
-	// Step 4: Verify the page loaded correctly by reading the status element
-	var statusText string
-	evalCtx, evalCancel := context.WithTimeout(browserCtx2, 10*time.Second)
-	defer evalCancel()
-
-	err = chromedp.Run(
-		evalCtx,
-		chromedp.Text("#status", &statusText, chromedp.NodeVisible),
-	)
-	if err != nil {
-		t.Fatalf("Failed to read page status (browser may have crashed): %v", err)
 	}
 
 	t.Logf("Page status: %q", statusText)

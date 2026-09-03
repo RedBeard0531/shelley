@@ -39,6 +39,27 @@ func newPredictableLLMConfig(logger *slog.Logger) *server.LLMConfig {
 	}
 }
 
+// waitForTurnDone polls until the conversation's agent is no longer working.
+// A chat POST flips agent_working on before it returns 202, and the loop
+// clears it when the turn (tool calls and subagents included) has finished.
+func waitForTurnDone(t *testing.T, database *db.DB, conversationID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		conv, err := database.GetConversationByID(context.Background(), conversationID)
+		if err != nil {
+			t.Fatalf("GetConversationByID: %v", err)
+		}
+		if !conv.AgentWorking {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("conversation %s still working after %v", conversationID, timeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestServerEndToEnd(t *testing.T) {
 	// Create temporary database
 	tempDB := t.TempDir() + "/test.db"
@@ -141,8 +162,7 @@ func TestServerEndToEnd(t *testing.T) {
 			t.Fatalf("Expected status 202, got %d", resp.StatusCode)
 		}
 
-		// Wait a bit for processing
-		time.Sleep(500 * time.Millisecond)
+		waitForTurnDone(t, database, conv.ConversationID, 10*time.Second)
 
 		// Check messages
 		msgResp, err := http.Get(testServer.URL + "/api/conversation/" + conv.ConversationID)
@@ -1228,8 +1248,9 @@ func TestSubagentEndToEnd(t *testing.T) {
 	parentConvID := createResp.ConversationID
 	t.Logf("Created parent conversation: %s", parentConvID)
 
-	// Wait for the conversation to complete (subagent should be created and executed)
-	time.Sleep(3 * time.Second)
+	// The subagent tool runs inside the parent's turn, so the parent going
+	// idle means the subagent has been created and run.
+	waitForTurnDone(t, database, parentConvID, 30*time.Second)
 
 	// Check that subagents were created
 	subagentsResp, err := client.Get(ts.URL + "/api/conversation/" + parentConvID + "/subagents")

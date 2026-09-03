@@ -103,8 +103,8 @@ func TestWithAnthropicAPI(t *testing.T) {
 			t.Fatalf("Expected status 202, got %d", resp.StatusCode)
 		}
 
-		// Wait for processing (Claude API can be slow)
-		time.Sleep(5 * time.Second)
+		// Claude API can be slow; wait for the turn itself, not a guess.
+		waitForTurnDone(t, database, conv.ConversationID, 60*time.Second)
 
 		// Check messages
 		msgResp, err := http.Get(testServer.URL + "/api/conversation/" + conv.ConversationID)
@@ -160,9 +160,17 @@ func TestWithAnthropicAPI(t *testing.T) {
 					t.Fatal("Assistant response has no content")
 				}
 
-				responseText := llmMsg.Content[0].Text
+				// The reply may lead with a thinking block; the text block
+				// is what the user sees.
+				var responseText string
+				for _, c := range llmMsg.Content {
+					if c.Type == llm.ContentTypeText && c.Text != "" {
+						responseText = c.Text
+						break
+					}
+				}
 				if responseText == "" {
-					t.Fatal("Assistant response text is empty")
+					t.Fatalf("Assistant response has no text content: %+v", llmMsg.Content)
 				}
 
 				// Claude should mention being Claude or an AI assistant
@@ -212,8 +220,8 @@ func TestWithAnthropicAPI(t *testing.T) {
 			t.Fatalf("Expected status 202, got %d", resp.StatusCode)
 		}
 
-		// Wait for processing (tool use might take longer)
-		time.Sleep(8 * time.Second)
+		// Tool use might take longer; wait for the turn itself, not a guess.
+		waitForTurnDone(t, database, conv.ConversationID, 90*time.Second)
 
 		// Check messages
 		msgResp, err := http.Get(testServer.URL + "/api/conversation/" + conv.ConversationID)

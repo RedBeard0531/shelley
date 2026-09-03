@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/llm"
@@ -49,49 +50,51 @@ func (s *failingService) SupportsImages() bool    { return false }
 // context was already dead.
 func TestCancelledTurnDoesNotRecordErrorMessage(t *testing.T) {
 	t.Parallel()
-	var mu sync.Mutex
-	var recorded []llm.Message
-	l := NewLoop(Config{
-		LLM: &blockingService{},
-		// Accept every write, even on a dead context. The point under test is
-		// that the loop never ATTEMPTS to record an LLM-error row for a
-		// cancelled turn — CancelConversation owns that bookkeeping — so a
-		// permissive recorder is what discriminates: pre-fix the loop called
-		// it (via a dead ctx) and a row would land here.
-		RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
-			mu.Lock()
-			recorded = append(recorded, message)
-			mu.Unlock()
-			return nil
-		},
-	})
-	l.QueueUserMessage(llm.Message{
-		Role:    llm.MessageRoleUser,
-		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}},
-	})
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		var recorded []llm.Message
+		l := NewLoop(Config{
+			LLM: &blockingService{},
+			// Accept every write, even on a dead context. The point under test is
+			// that the loop never ATTEMPTS to record an LLM-error row for a
+			// cancelled turn — CancelConversation owns that bookkeeping — so a
+			// permissive recorder is what discriminates: pre-fix the loop called
+			// it (via a dead ctx) and a row would land here.
+			RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+				mu.Lock()
+				recorded = append(recorded, message)
+				mu.Unlock()
+				return nil
+			},
+		})
+		l.QueueUserMessage(llm.Message{
+			Role:    llm.MessageRoleUser,
+			Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}},
+		})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- l.Go(ctx) }()
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- l.Go(ctx) }()
 
-	// Give the loop a moment to enter the blocked Do, then cancel like
-	// CancelConversation does.
-	time.Sleep(50 * time.Millisecond)
-	cancel()
+		// Once the loop is parked in the blocked Do, cancel like
+		// CancelConversation does.
+		synctest.Wait()
+		cancel()
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("loop did not stop after cancel")
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	for _, m := range recorded {
-		if m.ErrorType == llm.ErrorTypeLLMRequest {
-			t.Fatalf("cancelled turn recorded an LLM error message: %+v", m)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("loop did not stop after cancel")
 		}
-	}
+
+		mu.Lock()
+		defer mu.Unlock()
+		for _, m := range recorded {
+			if m.ErrorType == llm.ErrorTypeLLMRequest {
+				t.Fatalf("cancelled turn recorded an LLM error message: %+v", m)
+			}
+		}
+	})
 }
 
 // TestLLMErrorRecordedDespiteExpiredContext verifies the inverse case: a
