@@ -50,6 +50,7 @@ func TestByID(t *testing.T) {
 		wantID  string
 		wantNil bool
 	}{
+		{id: "gpt-6-astra", wantID: "gpt-6-astra"},
 		{id: "gpt-5.6-sol", wantID: "gpt-5.6-sol"},
 		{id: "gpt-5.6-terra", wantID: "gpt-5.6-terra"},
 		{id: "gpt-5.6-luna", wantID: "gpt-5.6-luna"},
@@ -86,6 +87,25 @@ func TestByID(t *testing.T) {
 				t.Errorf("ByID(%q).ID = %q, want %q", tt.id, m.ID, tt.wantID)
 			}
 		})
+	}
+}
+
+func TestGPT6AstraCatalogEntry(t *testing.T) {
+	m := ByID("gpt-6-astra")
+	if m == nil {
+		t.Fatal("ByID(gpt-6-astra) = nil, want non-nil")
+	}
+	if m.Provider != ProviderOpenAI {
+		t.Errorf("Provider = %q, want %q", m.Provider, ProviderOpenAI)
+	}
+	if m.APIType != APITypeOpenAIResponses {
+		t.Errorf("APIType = %q, want %q", m.APIType, APITypeOpenAIResponses)
+	}
+	if m.APIModelName != "gpt-6-astra" {
+		t.Errorf("APIModelName = %q, want gpt-6-astra", m.APIModelName)
+	}
+	if m.DefaultBaseURL != DefaultOpenAIBaseURL {
+		t.Errorf("DefaultBaseURL = %q, want %q", m.DefaultBaseURL, DefaultOpenAIBaseURL)
 	}
 }
 

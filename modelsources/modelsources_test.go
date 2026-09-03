@@ -110,6 +110,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 	integ := &LLMIntegrationConfig{
 		Name: "llm", Host: "llm.int.exe.xyz", URL: "https://llm.int.exe.xyz",
 		Models: []IntegrationModel{
+			{ID: "openai/gpt-6-astra", Provider: "openai", NativeID: "gpt-6-astra", APIs: []string{"openai_chat", "openai_responses"}},
 			{ID: "anthropic/claude-opus-4-8", Provider: "anthropic", NativeID: "claude-opus-4-8", APIs: []string{"anthropic_messages"}},
 			{ID: "anthropic/claude-opus-4-7", Provider: "anthropic", NativeID: "claude-opus-4-7", APIs: []string{"anthropic_messages"}},
 			{ID: "anthropic/claude-opus-4-6", Provider: "anthropic", NativeID: "claude-opus-4-6", APIs: []string{"anthropic_messages"}},
@@ -127,6 +128,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 	bs := Build(models.All(), []Source{LLMIntegration(integ, ""), Predictable()}, &http.Client{}, nil)
 	wantLabel := "llm.int.exe.xyz"
 	for _, id := range []string{
+		"gpt-6-astra",
 		"claude-opus-4.8",
 		"claude-opus-4.7",
 		"claude-opus-4.6",
@@ -147,6 +149,20 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		}
 		if b.Source != wantLabel {
 			t.Errorf("%s source = %q, want %q", id, b.Source, wantLabel)
+		}
+	}
+	if astra := findBuilt(bs, "gpt-6-astra"); astra == nil {
+		t.Fatal("gpt-6-astra should be built")
+	} else {
+		if astra.APIType != models.APITypeOpenAIResponses {
+			t.Errorf("gpt-6-astra APIType = %q, want %q", astra.APIType, models.APITypeOpenAIResponses)
+		}
+		svc, ok := astra.Service.(*oai.ResponsesService)
+		if !ok {
+			t.Fatalf("gpt-6-astra service = %T, want *oai.ResponsesService", astra.Service)
+		}
+		if svc.Model != oai.GPT6Astra {
+			t.Errorf("gpt-6-astra model = %+v, want built-in Astra model", svc.Model)
 		}
 	}
 	for _, id := range []string{

@@ -382,6 +382,17 @@ var (
 		SupportsImages:     true,
 	}
 
+	GPT6Astra = Model{
+		UserName:           "gpt-6-astra",
+		ModelName:          "gpt-6-astra",
+		TextVerbosity:      "low",
+		URL:                OpenAIURL,
+		APIKeyEnv:          OpenAIAPIKeyEnv,
+		IsReasoningModel:   true,
+		SupportsApplyPatch: true,
+		SupportsImages:     true,
+	}
+
 	GPT56Sol = Model{
 		UserName:           "gpt-5.6-sol",
 		ModelName:          "gpt-5.6-sol",
@@ -533,6 +544,7 @@ var _ llm.Service = (*Service)(nil)
 // Declaration order is display order — keep current models at top, old models at bottom.
 var ModelsRegistry = []Model{
 	// Current OpenAI
+	GPT6Astra,
 	GPT56Sol,
 	GPT56Terra,
 	GPT56Luna,
@@ -1215,8 +1227,8 @@ func (s *Service) TokenContextWindow() int {
 	// OpenAI models generally have 128k context windows
 	// Some newer models have larger windows, but 128k is a safe default
 	switch model.ModelName {
-	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
-		return 272000
+	case "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		return 272000 // keep Astra and GPT-5.6 requests below long-context pricing
 	case "gpt-5.5", "gpt-5.5-2026-04-23", "gpt-5.5-pro", "gpt-5.5-pro-2026-04-23":
 		return 272000
 	case "gpt-4.1-2025-04-14", "gpt-4.1-mini-2025-04-14", "gpt-4.1-nano-2025-04-14":
@@ -1259,6 +1271,21 @@ func (s *Service) MaxImageBytes() int {
 }
 
 func modelReasoningCapabilities(endpoint string, model Model) (modelsdev.ReasoningCapabilities, bool) {
+	// TODO: Remove this override once the embedded models.dev snapshot includes Astra's reasoning efforts.
+	if model.ModelName == GPT6Astra.ModelName {
+		caps, found := modelsdev.LookupReasoningCapabilities(cmp.Or(endpoint, model.URL), GPT56Sol.ModelName)
+		if !found {
+			return modelsdev.ReasoningCapabilities{}, false
+		}
+		levels := make([]llm.ThinkingLevel, 0, len(caps.Levels))
+		for _, level := range caps.Levels {
+			if level != llm.ThinkingLevelOff {
+				levels = append(levels, level)
+			}
+		}
+		caps.Levels = levels
+		return caps, true
+	}
 	return modelsdev.LookupReasoningCapabilities(cmp.Or(endpoint, model.URL), model.ModelName)
 }
 

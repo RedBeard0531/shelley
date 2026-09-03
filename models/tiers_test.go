@@ -3,6 +3,21 @@ package models
 import "testing"
 
 func TestAssignTiers(t *testing.T) {
+	t.Run("Astra shadows Sol without demoting Terra or Luna", func(t *testing.T) {
+		tiers := AssignTiers([]string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"})
+		if tiers["gpt-6-astra"] != Tier1 {
+			t.Errorf("Astra tier = %d, want %d", tiers["gpt-6-astra"], Tier1)
+		}
+		if tiers["gpt-5.6-sol"] != Tier2 {
+			t.Errorf("Sol tier = %d, want %d", tiers["gpt-5.6-sol"], Tier2)
+		}
+		for _, id := range []string{"gpt-5.6-terra", "gpt-5.6-luna"} {
+			if tiers[id] != Tier1 {
+				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier1)
+			}
+		}
+	})
+
 	t.Run("shadowed model drops to tier 2 when both present", func(t *testing.T) {
 		tiers := AssignTiers([]string{"claude-opus-4.8", "claude-opus-4.7"})
 		if tiers["claude-opus-4.8"] != Tier1 {

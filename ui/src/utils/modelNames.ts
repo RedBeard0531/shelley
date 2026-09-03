@@ -46,6 +46,7 @@ const WORDS: Record<string, string> = {
   thinking: "Thinking",
   preview: "Preview",
   turbo: "Turbo",
+  astra: "Astra",
   sol: "Sol",
   terra: "Terra",
   luna: "Luna",

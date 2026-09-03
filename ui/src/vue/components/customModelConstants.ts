@@ -25,11 +25,13 @@ export const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: st
     { name: "Claude Haiku 4.5", model_name: "claude-haiku-4-5" },
   ],
   openai: [
+    { name: "GPT-6 Astra", model_name: "gpt-6-astra" },
     { name: "GPT-5.6 Sol", model_name: "gpt-5.6-sol" },
     { name: "GPT-5.5", model_name: "gpt-5.5" },
     { name: "GPT-5.4", model_name: "gpt-5.4" },
   ],
   "openai-responses": [
+    { name: "GPT-6 Astra", model_name: "gpt-6-astra" },
     { name: "GPT-5.5", model_name: "gpt-5.5" },
     { name: "GPT-5.4", model_name: "gpt-5.4" },
     { name: "GPT-5.4 mini", model_name: "gpt-5.4-mini" },

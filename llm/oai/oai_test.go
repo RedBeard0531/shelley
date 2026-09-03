@@ -1385,6 +1385,11 @@ func TestTokenContextWindowAdditionalCases(t *testing.T) {
 			expected: 256000,
 		},
 		{
+			name:     "GPT-6 Astra model",
+			model:    GPT6Astra,
+			expected: 272000,
+		},
+		{
 			name:     "GPT-5.6 Sol model",
 			model:    GPT56Sol,
 			expected: 272000,
@@ -2112,6 +2117,7 @@ func TestServiceSupportedReasoningLevels(t *testing.T) {
 		model Model
 		want  string
 	}{
+		{name: "GPT-6 Astra", model: GPT6Astra, want: "low,medium,high,xhigh,max"},
 		{name: "GPT 5.6", model: GPT56Sol, want: "off,low,medium,high,xhigh,max"},
 		{name: "unknown", model: Model{ModelName: "totally-unknown-model"}, want: ""},
 	}
