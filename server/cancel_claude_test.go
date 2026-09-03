@@ -33,7 +33,13 @@ type ClaudeTestHarness struct {
 	llmService       *ant.Service
 	requestTokens    []uint64 // Track total tokens for each request
 	lastMessageCount int      // Track message count after last operation
-	mu               sync.Mutex
+	// loopRequests counts conversation-loop requests sent to the API (slug
+	// generation requests are excluded). loopRequestsAtSend is its value when
+	// the last NewConversation/Chat was issued; the difference tells whether
+	// the loop has sent this turn's request yet.
+	loopRequests       int
+	loopRequestsAtSend int
+	mu                 sync.Mutex
 }
 
 // NewClaudeTestHarness creates a test harness that uses the real Claude API
@@ -59,8 +65,9 @@ func NewClaudeTestHarness(t *testing.T) *ClaudeTestHarness {
 	// Create HTTP client with custom transport for token tracking
 	httpc := &http.Client{
 		Transport: &tokenTrackingTransport{
-			base:        http.DefaultTransport,
-			recordToken: h.recordHTTPResponse,
+			base:          http.DefaultTransport,
+			recordRequest: h.recordHTTPRequest,
+			recordToken:   h.recordHTTPResponse,
 		},
 	}
 
@@ -86,13 +93,25 @@ func NewClaudeTestHarness(t *testing.T) *ClaudeTestHarness {
 	return h
 }
 
-// tokenTrackingTransport wraps an HTTP transport to track token usage from responses
+// tokenTrackingTransport wraps an HTTP transport to observe requests as they
+// are sent and to track token usage from responses.
 type tokenTrackingTransport struct {
-	base        http.RoundTripper
-	recordToken func(responseBody []byte, statusCode int)
+	base          http.RoundTripper
+	recordRequest func(requestBody []byte)
+	recordToken   func(responseBody []byte, statusCode int)
 }
 
 func (t *tokenTrackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		body, err := io.ReadAll(req.Body)
+		req.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		t.recordRequest(body)
+	}
+
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return resp, err
@@ -107,6 +126,18 @@ func (t *tokenTrackingTransport) RoundTrip(req *http.Request) (*http.Response, e
 	return resp, nil
 }
 
+// recordHTTPRequest notes each conversation-loop request as it leaves for the
+// API. The loop's requests carry a tool set; slug generation's do not, and
+// those are ignored so WaitForLLMCall is not satisfied by the slug request.
+func (h *ClaudeTestHarness) recordHTTPRequest(requestBody []byte) {
+	if !bytes.Contains(requestBody, []byte(`"tools"`)) {
+		return
+	}
+	h.mu.Lock()
+	h.loopRequests++
+	h.mu.Unlock()
+}
+
 // recordHTTPResponse is a callback to record HTTP responses for token tracking
 func (h *ClaudeTestHarness) recordHTTPResponse(responseBody []byte, statusCode int) {
 	h.t.Logf("HTTP callback: status=%d, responseLen=%d", statusCode, len(responseBody))
@@ -115,26 +146,49 @@ func (h *ClaudeTestHarness) recordHTTPResponse(responseBody []byte, statusCode i
 		return
 	}
 
-	// Parse response to get token usage (including cache tokens)
-	var resp struct {
-		Usage struct {
-			InputTokens              uint64 `json:"input_tokens"`
-			OutputTokens             uint64 `json:"output_tokens"`
-			CacheCreationInputTokens uint64 `json:"cache_creation_input_tokens"`
-			CacheReadInputTokens     uint64 `json:"cache_read_input_tokens"`
-		} `json:"usage"`
+	usage, ok := usageFromStream(responseBody)
+	if !ok {
+		h.t.Logf("No message_start usage in response")
+		return
 	}
-	if jsonErr := json.Unmarshal(responseBody, &resp); jsonErr == nil {
-		// Total tokens = input + cache_creation + cache_read (this represents total context)
-		totalTokens := resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens
-		h.mu.Lock()
-		h.requestTokens = append(h.requestTokens, totalTokens)
-		h.mu.Unlock()
-		h.t.Logf("Recorded request: input=%d, cache_creation=%d, cache_read=%d, total=%d",
-			resp.Usage.InputTokens, resp.Usage.CacheCreationInputTokens, resp.Usage.CacheReadInputTokens, totalTokens)
-	} else {
-		h.t.Logf("Failed to parse response: %v", jsonErr)
+	// Total tokens = input + cache_creation + cache_read (this represents total context)
+	totalTokens := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	h.mu.Lock()
+	h.requestTokens = append(h.requestTokens, totalTokens)
+	h.mu.Unlock()
+	h.t.Logf("Recorded request: input=%d, cache_creation=%d, cache_read=%d, total=%d",
+		usage.InputTokens, usage.CacheCreationInputTokens, usage.CacheReadInputTokens, totalTokens)
+}
+
+// apiUsage is the usage block of an Anthropic API message.
+type apiUsage struct {
+	InputTokens              uint64 `json:"input_tokens"`
+	OutputTokens             uint64 `json:"output_tokens"`
+	CacheCreationInputTokens uint64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     uint64 `json:"cache_read_input_tokens"`
+}
+
+// usageFromStream extracts the usage block from a streamed (SSE) API response.
+// The message_start event carries the input and cache token counts for the
+// whole request.
+func usageFromStream(body []byte) (apiUsage, bool) {
+	for _, line := range strings.Split(string(body), "\n") {
+		data, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
+		}
+		var ev struct {
+			Type    string `json:"type"`
+			Message struct {
+				Usage apiUsage `json:"usage"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(data), &ev); err != nil || ev.Type != "message_start" {
+			continue
+		}
+		return ev.Message.Usage, true
 	}
+	return apiUsage{}, false
 }
 
 // GetRequestTokens returns a copy of recorded request token counts
@@ -191,6 +245,8 @@ func (h *ClaudeTestHarness) Close() {
 func (h *ClaudeTestHarness) NewConversation(msg, cwd string) *ClaudeTestHarness {
 	h.t.Helper()
 
+	h.markSend()
+
 	chatReq := ChatRequest{
 		Message: msg,
 		Model:   "claude",
@@ -235,6 +291,7 @@ func (h *ClaudeTestHarness) Chat(msg string) *ClaudeTestHarness {
 	h.mu.Lock()
 	h.lastMessageCount = len(h.GetMessagesUnsafe())
 	h.mu.Unlock()
+	h.markSend()
 
 	chatReq := ChatRequest{
 		Message: msg,
@@ -253,6 +310,35 @@ func (h *ClaudeTestHarness) Chat(msg string) *ClaudeTestHarness {
 	return h
 }
 
+// markSend records the loop request count as of a new user message, so
+// WaitForLLMCall can tell this turn's request from earlier ones.
+func (h *ClaudeTestHarness) markSend() {
+	h.mu.Lock()
+	h.loopRequestsAtSend = h.loopRequests
+	h.mu.Unlock()
+}
+
+// WaitForLLMCall waits until the conversation loop has sent this turn's
+// request to Claude, i.e. the loop is blocked waiting on the API. A Cancel
+// issued after this lands mid-request.
+func (h *ClaudeTestHarness) WaitForLLMCall() *ClaudeTestHarness {
+	h.t.Helper()
+
+	deadline := time.Now().Add(h.timeout)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		sent := h.loopRequests > h.loopRequestsAtSend
+		h.mu.Unlock()
+		if sent {
+			return h
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	h.t.Fatal("WaitForLLMCall: timed out waiting for the loop to send its request")
+	return h
+}
+
 // GetMessagesUnsafe gets messages without locking (internal use only)
 func (h *ClaudeTestHarness) GetMessagesUnsafe() []generated.Message {
 	var messages []generated.Message
@@ -264,7 +350,9 @@ func (h *ClaudeTestHarness) GetMessagesUnsafe() []generated.Message {
 	return messages
 }
 
-// Cancel cancels the current conversation
+// Cancel cancels the current conversation. The cancel handler is synchronous:
+// when it returns, the loop has exited, cancelled tool results are recorded,
+// and the "[Operation cancelled]" end-of-turn message is in the database.
 func (h *ClaudeTestHarness) Cancel() *ClaudeTestHarness {
 	h.t.Helper()
 
@@ -577,9 +665,6 @@ func TestClaudeCancelDuringToolCall(t *testing.T) {
 	h.Cancel()
 	t.Log("Cancelled conversation")
 
-	// Wait a bit for cancellation to complete
-	time.Sleep(500 * time.Millisecond)
-
 	// Verify cancellation was recorded properly
 	if !h.HasCancelledToolResult() {
 		t.Error("expected cancelled tool result to be recorded")
@@ -605,15 +690,10 @@ func TestClaudeCancelDuringLLMCall(t *testing.T) {
 	// Start a conversation with a message that will take some time to process
 	h.NewConversation("Please write a very detailed essay about the history of computing, covering at least 10 major milestones.", "")
 
-	// Wait briefly for the request to be sent to Claude
-	time.Sleep(500 * time.Millisecond)
-
 	// Cancel during the LLM call
+	h.WaitForLLMCall()
 	h.Cancel()
 	t.Log("Cancelled during LLM call")
-
-	// Wait for cancellation
-	time.Sleep(500 * time.Millisecond)
 
 	// Verify cancellation message exists
 	if !h.HasCancellationMessage() {
@@ -636,13 +716,10 @@ func TestClaudeCancelDuringLLMCallThenResume(t *testing.T) {
 	// Start a conversation with context we can verify later
 	h.NewConversation("Remember this code: BLUE42. Write a long essay about colors.", "")
 
-	// Wait briefly for the request to be sent to Claude
-	time.Sleep(300 * time.Millisecond)
-
 	// Cancel during the LLM call (before response arrives)
+	h.WaitForLLMCall()
 	h.Cancel()
 	t.Log("Cancelled during LLM call")
-	time.Sleep(500 * time.Millisecond)
 
 	if !h.HasCancellationMessage() {
 		t.Error("expected cancellation message to be recorded")
@@ -673,24 +750,21 @@ func TestClaudeCancelDuringLLMCallMultipleTimes(t *testing.T) {
 
 	// First: cancel during LLM call
 	h.NewConversation("Write a very long detailed story about space exploration.", "")
-	time.Sleep(300 * time.Millisecond)
+	h.WaitForLLMCall()
 	h.Cancel()
 	t.Log("First cancel during LLM")
-	time.Sleep(500 * time.Millisecond)
 
 	// Second: cancel during LLM call again
 	h.Chat("Write a very long detailed story about ocean exploration.")
-	time.Sleep(300 * time.Millisecond)
+	h.WaitForLLMCall()
 	h.Cancel()
 	t.Log("Second cancel during LLM")
-	time.Sleep(500 * time.Millisecond)
 
 	// Third: cancel during LLM call again
 	h.Chat("Write a very long detailed story about mountain climbing.")
-	time.Sleep(300 * time.Millisecond)
+	h.WaitForLLMCall()
 	h.Cancel()
 	t.Log("Third cancel during LLM")
-	time.Sleep(500 * time.Millisecond)
 
 	// Now resume normally - the conversation should still work
 	h.Chat("Just say 'conversation recovered' and nothing else.")
@@ -714,9 +788,8 @@ func TestClaudeCancelDuringLLMCallAndVerifyMessageStructure(t *testing.T) {
 	defer h.Close()
 
 	h.NewConversation("Write a very long detailed story about a wizard.", "")
-	time.Sleep(300 * time.Millisecond)
+	h.WaitForLLMCall()
 	h.Cancel()
-	time.Sleep(500 * time.Millisecond)
 
 	// Check message structure
 	messages := h.GetMessages()
@@ -781,7 +854,6 @@ func TestClaudeResumeAfterCancellation(t *testing.T) {
 	// Cancel
 	h.Cancel()
 	t.Log("Cancelled")
-	time.Sleep(500 * time.Millisecond)
 
 	// Verify cancellation
 	if !h.HasCancellationMessage() {
@@ -817,28 +889,32 @@ func TestClaudeTokensMonotonicallyIncreasing(t *testing.T) {
 	h := NewClaudeTestHarness(t)
 	defer h.Close()
 
+	// A turn's request tokens are recorded by the transport before the
+	// response reaches the loop, so they are in place once WaitResponse sees
+	// the end-of-turn message. The slug generation request runs concurrently
+	// and may land at any point; it is filtered out below rather than waited
+	// for.
+
 	// First conversation turn
 	h.NewConversation("Hello, please respond with 'first response' and nothing else.", "")
 	h.WaitResponse()
-	time.Sleep(500 * time.Millisecond) // Wait for any pending operations
 
 	tokens1 := h.GetRequestTokens()
-	if len(tokens1) == 0 {
+	lastToken1 := lastConversationRequestTokens(tokens1)
+	if lastToken1 == 0 {
 		t.Skip("No token data recorded (API may not be returning it)")
 	}
-	lastToken1 := tokens1[len(tokens1)-1]
 	t.Logf("First turn total tokens: %d", lastToken1)
 
 	// Second conversation turn
 	h.Chat("Now please respond with 'second response' and nothing else.")
 	h.WaitResponse()
-	time.Sleep(500 * time.Millisecond)
 
 	tokens2 := h.GetRequestTokens()
 	if len(tokens2) <= len(tokens1) {
 		t.Fatal("expected more requests in second turn")
 	}
-	lastToken2 := tokens2[len(tokens2)-1]
+	lastToken2 := lastConversationRequestTokens(tokens2)
 	t.Logf("Second turn total tokens: %d", lastToken2)
 
 	// With prompt caching, tokens should increase or stay similar
@@ -850,13 +926,12 @@ func TestClaudeTokensMonotonicallyIncreasing(t *testing.T) {
 	// Third turn
 	h.Chat("Third turn - respond with 'third response' only.")
 	h.WaitResponse()
-	time.Sleep(500 * time.Millisecond)
 
 	tokens3 := h.GetRequestTokens()
 	if len(tokens3) <= len(tokens2) {
 		t.Fatal("expected more requests in third turn")
 	}
-	lastToken3 := tokens3[len(tokens3)-1]
+	lastToken3 := lastConversationRequestTokens(tokens3)
 	t.Logf("Third turn total tokens: %d", lastToken3)
 
 	// Each subsequent turn should have at least as many tokens as the first turn
@@ -866,6 +941,19 @@ func TestClaudeTokensMonotonicallyIncreasing(t *testing.T) {
 	}
 
 	t.Logf("Token progression: %d -> %d -> %d", lastToken1, lastToken2, lastToken3)
+}
+
+// lastConversationRequestTokens returns the token count of the most recent
+// conversation request, skipping small slug generation requests using the
+// same >1000 cutoff as VerifyTokensNonDecreasing. It returns 0 if there is
+// no such request.
+func lastConversationRequestTokens(tokens []uint64) uint64 {
+	for i := len(tokens) - 1; i >= 0; i-- {
+		if tokens[i] > 1000 {
+			return tokens[i]
+		}
+	}
+	return 0
 }
 
 // TestClaudeResumeAfterCancellationPreservesContext tests context preservation after cancellation
@@ -891,7 +979,6 @@ func TestClaudeResumeAfterCancellationPreservesContext(t *testing.T) {
 
 	// Cancel
 	h.Cancel()
-	time.Sleep(500 * time.Millisecond)
 
 	tokensAfterCancel := h.GetRequestTokens()
 	t.Logf("Tokens after cancel: %v", tokensAfterCancel)
@@ -923,7 +1010,6 @@ func TestClaudeMultipleCancellations(t *testing.T) {
 	h.NewConversation("Run: sleep 10", "")
 	h.WaitForAgentWorking()
 	h.Cancel()
-	time.Sleep(300 * time.Millisecond)
 
 	if !h.HasCancellationMessage() {
 		t.Error("expected first cancellation message")
@@ -931,9 +1017,8 @@ func TestClaudeMultipleCancellations(t *testing.T) {
 
 	// Second cancellation
 	h.Chat("Run: sleep 10")
-	time.Sleep(2 * time.Second) // Wait for Claude to respond and start tool
+	h.WaitForAgentWorking()
 	h.Cancel()
-	time.Sleep(300 * time.Millisecond)
 
 	// Third: complete normally
 	h.Chat("Just say 'done' and nothing else.")
@@ -952,11 +1037,9 @@ func TestClaudeCancelImmediately(t *testing.T) {
 
 	h.NewConversation("Write a very long essay about everything.", "")
 
-	// Cancel immediately
-	time.Sleep(50 * time.Millisecond)
+	// Cancel immediately: the loop exists as soon as NewConversation returns,
+	// and may or may not have sent its request yet.
 	h.Cancel()
-
-	time.Sleep(500 * time.Millisecond)
 
 	// Should still be able to resume
 	h.Chat("Just say 'hello'")
@@ -983,7 +1066,6 @@ func TestClaudeCancelWithPendingToolResult(t *testing.T) {
 
 	// Cancel during tool execution
 	h.Cancel()
-	time.Sleep(500 * time.Millisecond)
 
 	// Resume - this should handle the missing tool result
 	h.Chat("Please just say 'recovered' if you can hear me.")
@@ -1013,9 +1095,8 @@ func TestClaudeCancelDuringLLMCallRapidFire(t *testing.T) {
 		} else {
 			h.Chat("Write another long story.")
 		}
-		time.Sleep(100 * time.Millisecond)
+		h.WaitForLLMCall()
 		h.Cancel()
-		time.Sleep(200 * time.Millisecond)
 		t.Logf("Rapid cancel %d complete", i+1)
 	}
 
@@ -1038,12 +1119,10 @@ func TestClaudeCancelDuringLLMCallWithToolUseResponse(t *testing.T) {
 	// Cancel before the tool actually executes
 	h.NewConversation("Run: echo hello world", "")
 
-	// Wait just enough for the LLM request to be sent but not for tool execution
-	time.Sleep(500 * time.Millisecond)
-
-	// Cancel - this might catch the LLM responding with tool_use but before tool execution
+	// Cancel once the LLM request is in flight - this might catch the LLM
+	// responding with tool_use but before tool execution
+	h.WaitForLLMCall()
 	h.Cancel()
-	time.Sleep(500 * time.Millisecond)
 
 	t.Logf("Cancelled during potential tool_use response")
 
