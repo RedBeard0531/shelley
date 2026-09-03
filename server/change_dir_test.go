@@ -49,7 +49,7 @@ func TestChangeDirAffectsBash(t *testing.T) {
 	server := NewServer(database, llmManager, toolSetConfig, logger, true, "predictable", "")
 
 	// Create conversation
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -100,7 +100,7 @@ func waitForBashResult(t *testing.T, database *db.DB, conversationID, expectedTe
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		messages, err := database.ListMessages(context.Background(), conversationID)
+		messages, err := database.ListMessages(t.Context(), conversationID)
 		if err != nil {
 			t.Fatalf("failed to get messages: %v", err)
 		}
@@ -122,7 +122,7 @@ func waitForBashResult(t *testing.T, database *db.DB, conversationID, expectedTe
 	}
 
 	// Print debug info on failure
-	messages, _ := database.ListMessages(context.Background(), conversationID)
+	messages, _ := database.ListMessages(t.Context(), conversationID)
 	t.Log("Messages in conversation:")
 	for i, msg := range messages {
 		t.Logf("  Message %d: type=%s", i, msg.Type)
@@ -138,7 +138,7 @@ func waitForMessageContaining(t *testing.T, database *db.DB, conversationID, tex
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		messages, err := database.ListMessages(context.Background(), conversationID)
+		messages, err := database.ListMessages(t.Context(), conversationID)
 		if err != nil {
 			t.Fatalf("failed to get messages: %v", err)
 		}
@@ -207,7 +207,7 @@ func TestChangeDirBroadcastsCwdUpdate(t *testing.T) {
 	defer ts.Close()
 
 	// Create conversation with initial cwd
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &tmpDir, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &tmpDir, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestChangeDirBroadcastsCwdUpdate(t *testing.T) {
 	}
 
 	// Connect to SSE stream
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/api/conversation/"+conversationID+"/stream", nil)
@@ -302,12 +302,12 @@ func TestChangeDirBroadcastsConversationListPatch(t *testing.T) {
 	llmManager := &testLLMManager{service: predictableService}
 	server := NewServer(database, llmManager, claudetool.ToolSetConfig{WorkingDir: tmpDir}, slog.Default(), true, "predictable", "")
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &tmpDir, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &tmpDir, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	streamCtx, streamCancel := context.WithCancel(context.Background())
+	streamCtx, streamCancel := context.WithCancel(t.Context())
 	defer streamCancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(streamCtx)
@@ -325,11 +325,11 @@ func TestChangeDirBroadcastsConversationListPatch(t *testing.T) {
 	// Hydrate may write a system prompt and bump updated_at, producing one or
 	// more interstitial patch events before the cwd write lands. Apply
 	// whatever arrives until the cwd we requested is visible.
-	_, err = server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	_, err = server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpdateConversationCwd(context.Background(), conversation.ConversationID, subDir); err != nil {
+	if err := database.UpdateConversationCwd(t.Context(), conversation.ConversationID, subDir); err != nil {
 		t.Fatal(err)
 	}
 

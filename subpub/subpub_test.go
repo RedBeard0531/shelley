@@ -12,7 +12,7 @@ import (
 func TestSubPubBasic(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sp := New[string]()
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Subscribe waiting for messages after index 0
 		next := sp.Subscribe(ctx, 0)
@@ -36,7 +36,7 @@ func TestSubPubBasic(t *testing.T) {
 func TestSubPubMultipleSubscribers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sp := New[string]()
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Create multiple subscribers
 		next1 := sp.Subscribe(ctx, 0)
@@ -64,7 +64,7 @@ func TestSubPubMultipleSubscribers(t *testing.T) {
 func TestSubPubSubscriberAlreadyHasMessage(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sp := New[int]()
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Subscriber already has index 5, waiting for index > 5
 		next := sp.Subscribe(ctx, 5)
@@ -100,7 +100,7 @@ func TestSubPubOutOfOrderPublish(t *testing.T) {
 	sp := New[int]()
 	// A deadline so a regression reports the messages it did get instead of
 	// blocking in next() forever.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	// Joining at 2: the subscriber has already replayed everything up to and
@@ -131,7 +131,7 @@ func TestSubPubOutOfOrderPublish(t *testing.T) {
 func TestSubPubContextCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sp := New[string]()
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 
 		next, status := sp.SubscribeWithStatus(ctx, 0)
 
@@ -155,7 +155,7 @@ func TestSubPubSubscriberBehind(t *testing.T) {
 		t.Fatalf("SubscriberQueueCapacity = %d, want 200", SubscriberQueueCapacity)
 	}
 	sp := New[string]()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Subscriber waiting for messages after index 0
 	next := sp.Subscribe(ctx, 0)
@@ -191,7 +191,7 @@ func TestSubPubSubscriberBehind(t *testing.T) {
 func TestSubPubSequentialMessages(t *testing.T) {
 	// Don't use synctest for this test as mutex blocking doesn't work well with it
 	sp := New[int]()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	next := sp.Subscribe(ctx, 0)
 
@@ -222,7 +222,7 @@ func TestSubPubSequentialMessages(t *testing.T) {
 func TestSubPubLateSubscriber(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sp := New[string]()
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Publish some messages before anyone subscribes
 		sp.Publish(1, "early1")
@@ -249,7 +249,7 @@ func TestSubPubLateSubscriber(t *testing.T) {
 
 func TestSubPubWithTimeout(t *testing.T) {
 	sp := New[string]()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
 	next := sp.Subscribe(ctx, 0)
@@ -264,7 +264,7 @@ func TestSubPubWithTimeout(t *testing.T) {
 func TestSubPubMultiplePublishes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sp := New[string]()
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Start two subscribers at different positions
 		next1 := sp.Subscribe(ctx, 0)
@@ -312,7 +312,7 @@ func TestSubPubMultiplePublishes(t *testing.T) {
 func TestSubPubSubscriberContextCancelled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sp := New[string]()
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 
 		next := sp.Subscribe(ctx, 0)
 
@@ -333,7 +333,7 @@ func TestSubPubSubscriberContextCancelled(t *testing.T) {
 // TestSubPubSubscriberDisconnected tests that subscribers get disconnected when channel is full
 func TestSubPubSubscriberDisconnected(t *testing.T) {
 	sp := New[string]()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create subscriber
 	next := sp.Subscribe(ctx, 0)
@@ -365,7 +365,7 @@ func TestSubPubSubscriberDisconnected(t *testing.T) {
 // cancellation signal does not wait for buffered messages to be drained.
 func TestSubPubStatusReportsSubscriberFellBehind(t *testing.T) {
 	sp := New[string]()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	next, status := sp.SubscribeWithStatus(ctx, 0)
 
 	for i := 1; i <= SubscriberQueueCapacity+1; i++ {
@@ -400,7 +400,7 @@ func TestSubPubStatusReportsSubscriberFellBehind(t *testing.T) {
 func TestSubPubSubscriberNotInterested(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sp := New[int]()
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Subscriber already has index 5, waiting for messages after index 5
 		next := sp.Subscribe(ctx, 5)
@@ -429,7 +429,7 @@ func TestSubPubSubscriberNotInterested(t *testing.T) {
 // TestSubPubSubscriberContextDoneDuringPublish tests subscriber context cancellation during publish
 func TestSubPubSubscriberContextDoneDuringPublish(t *testing.T) {
 	sp := New[string]()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	// Create subscriber
 	next := sp.Subscribe(ctx, 0)

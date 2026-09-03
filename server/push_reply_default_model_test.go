@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -36,7 +35,7 @@ func TestChatEmptyModelUsesConversationModel(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -53,7 +52,7 @@ func TestChatEmptyModelUsesConversationModel(t *testing.T) {
 	// returns 202 (it writes the model, then spawns the loop goroutine),
 	// so the second send below can resolve it without any wait. Assert
 	// that invariant explicitly rather than relying on a sleep.
-	got, err := database.GetConversationByID(context.Background(), conversationID)
+	got, err := database.GetConversationByID(t.Context(), conversationID)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}
@@ -79,7 +78,7 @@ func TestChatEmptyModelUsesDraftModel(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	model := "some-other-model"
-	draft, err := database.CreateDraftConversation(context.Background(), nil, &model, db.ConversationOptions{}, "echo: draft body")
+	draft, err := database.CreateDraftConversation(t.Context(), nil, &model, db.ConversationOptions{}, "echo: draft body")
 	if err != nil {
 		t.Fatalf("failed to create draft conversation: %v", err)
 	}

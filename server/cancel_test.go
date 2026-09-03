@@ -67,7 +67,7 @@ func TestCancelWithPredictableModel(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create conversation
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -93,9 +93,9 @@ func TestCancelWithPredictableModel(t *testing.T) {
 	// Wait for agent to record an assistant message with tool use
 	waitFor(t, 5*time.Second, func() bool {
 		var messages []generated.Message
-		err := database.Queries(context.Background(), func(q *generated.Queries) error {
+		err := database.Queries(t.Context(), func(q *generated.Queries) error {
 			var qerr error
-			messages, qerr = q.ListMessages(context.Background(), conversationID)
+			messages, qerr = q.ListMessages(t.Context(), conversationID)
 			return qerr
 		})
 		if err != nil || len(messages) < 2 {
@@ -145,9 +145,9 @@ func TestCancelWithPredictableModel(t *testing.T) {
 
 	// Verify that a cancelled tool result was recorded
 	var messages []generated.Message
-	err = database.Queries(context.Background(), func(q *generated.Queries) error {
+	err = database.Queries(t.Context(), func(q *generated.Queries) error {
 		var qerr error
-		messages, qerr = q.ListMessages(context.Background(), conversationID)
+		messages, qerr = q.ListMessages(t.Context(), conversationID)
 		return qerr
 	})
 	if err != nil {
@@ -227,9 +227,9 @@ func TestCancelWithPredictableModel(t *testing.T) {
 	})
 
 	// Verify conversation continued
-	err = database.Queries(context.Background(), func(q *generated.Queries) error {
+	err = database.Queries(t.Context(), func(q *generated.Queries) error {
 		var qerr error
-		messages, qerr = q.ListMessages(context.Background(), conversationID)
+		messages, qerr = q.ListMessages(t.Context(), conversationID)
 		return qerr
 	})
 	if err != nil {
@@ -273,7 +273,7 @@ func TestCancelWithNoActiveConversation(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create a conversation but don't start it
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestCancelDuringTextGeneration(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -349,9 +349,9 @@ func TestCancelDuringTextGeneration(t *testing.T) {
 
 	// Verify that no cancelled tool result was added (since there was no tool call)
 	var messages []generated.Message
-	err = database.Queries(context.Background(), func(q *generated.Queries) error {
+	err = database.Queries(t.Context(), func(q *generated.Queries) error {
 		var qerr error
-		messages, qerr = q.ListMessages(context.Background(), conversationID)
+		messages, qerr = q.ListMessages(t.Context(), conversationID)
 		return qerr
 	})
 	if err != nil {
@@ -452,7 +452,7 @@ func TestRetryAfterLLMFailure(t *testing.T) {
 		svr.terminals.SetSpawner(InProcessSpawner)
 	}
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
@@ -466,9 +466,9 @@ func TestRetryAfterLLMFailure(t *testing.T) {
 	// Wait for an error message to be recorded.
 	waitFor(t, 10*time.Second, func() bool {
 		var msgs []generated.Message
-		database.Queries(context.Background(), func(q *generated.Queries) error {
+		database.Queries(t.Context(), func(q *generated.Queries) error {
 			var e error
-			msgs, e = q.ListMessages(context.Background(), conversationID)
+			msgs, e = q.ListMessages(t.Context(), conversationID)
 			return e
 		})
 		for _, m := range msgs {
@@ -499,9 +499,9 @@ func TestRetryAfterLLMFailure(t *testing.T) {
 	// the conversation log (append-only) and stay byte-for-byte unmutated.
 	waitFor(t, 10*time.Second, func() bool {
 		var msgs []generated.Message
-		database.Queries(context.Background(), func(q *generated.Queries) error {
+		database.Queries(t.Context(), func(q *generated.Queries) error {
 			var e error
-			msgs, e = q.ListMessages(context.Background(), conversationID)
+			msgs, e = q.ListMessages(t.Context(), conversationID)
 			return e
 		})
 		hasAgent := false
@@ -516,9 +516,9 @@ func TestRetryAfterLLMFailure(t *testing.T) {
 	// Verify the error message is still present and was NOT mutated: it must
 	// still be retryable and must never have gained a retried flag.
 	var finalMsgs []generated.Message
-	database.Queries(context.Background(), func(q *generated.Queries) error {
+	database.Queries(t.Context(), func(q *generated.Queries) error {
 		var e error
-		finalMsgs, e = q.ListMessages(context.Background(), conversationID)
+		finalMsgs, e = q.ListMessages(t.Context(), conversationID)
 		return e
 	})
 	foundErr := false
@@ -596,18 +596,18 @@ func (s *fixedMultiToolService) Do(context.Context, *llm.Request) (*llm.Response
 func TestCancelMultiToolHTTPPersistsCompleteOrderedBatch(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
 	conversationID := conversation.ConversationID
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversationID, "")
 	if err != nil {
 		t.Fatalf("get manager: %v", err)
 	}
 
 	userMessage := llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "run tools"}}}
-	if err := server.recordMessage(context.Background(), conversationID, userMessage, llm.Usage{}, nil); err != nil {
+	if err := server.recordMessage(t.Context(), conversationID, userMessage, llm.Usage{}, nil); err != nil {
 		t.Fatalf("record user: %v", err)
 	}
 
@@ -642,7 +642,7 @@ func TestCancelMultiToolHTTPPersistsCompleteOrderedBatch(t *testing.T) {
 		},
 	}
 	service := &fixedMultiToolService{Service: predictable.NewService(), content: uses}
-	processCtx, processCancel := context.WithCancel(context.Background())
+	processCtx, processCancel := context.WithCancel(t.Context())
 	loopInstance := loop.NewLoop(loop.Config{
 		LLM:     service,
 		History: []llm.Message{userMessage},
@@ -679,9 +679,9 @@ func TestCancelMultiToolHTTPPersistsCompleteOrderedBatch(t *testing.T) {
 	}
 
 	var messages []generated.Message
-	if err := database.Queries(context.Background(), func(q *generated.Queries) error {
+	if err := database.Queries(t.Context(), func(q *generated.Queries) error {
 		var queryErr error
-		messages, queryErr = q.ListMessages(context.Background(), conversationID)
+		messages, queryErr = q.ListMessages(t.Context(), conversationID)
 		return queryErr
 	}); err != nil {
 		t.Fatalf("list messages: %v", err)
@@ -736,18 +736,18 @@ func TestCancelMultiToolHTTPPersistsCompleteOrderedBatch(t *testing.T) {
 func TestCancelSlowLoopWaitsForOrderedFinalization(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
 	conversationID := conversation.ConversationID
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversationID, "")
 	if err != nil {
 		t.Fatalf("get manager: %v", err)
 	}
 
 	userMessage := llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "run tool"}}}
-	if err := server.recordMessage(context.Background(), conversationID, userMessage, llm.Usage{}, nil); err != nil {
+	if err := server.recordMessage(t.Context(), conversationID, userMessage, llm.Usage{}, nil); err != nil {
 		t.Fatalf("record user: %v", err)
 	}
 
@@ -769,7 +769,7 @@ func TestCancelSlowLoopWaitsForOrderedFinalization(t *testing.T) {
 	recordStarted := make(chan struct{})
 	var stallOnce sync.Once
 	service := &fixedMultiToolService{Service: predictable.NewService(), content: uses}
-	processCtx, processCancel := context.WithCancel(context.Background())
+	processCtx, processCancel := context.WithCancel(t.Context())
 	loopInstance := loop.NewLoop(loop.Config{
 		LLM:     service,
 		History: []llm.Message{userMessage},
@@ -824,9 +824,9 @@ func TestCancelSlowLoopWaitsForOrderedFinalization(t *testing.T) {
 
 	listTranscript := func() []llm.Message {
 		var messages []generated.Message
-		if err := database.Queries(context.Background(), func(q *generated.Queries) error {
+		if err := database.Queries(t.Context(), func(q *generated.Queries) error {
 			var queryErr error
-			messages, queryErr = q.ListMessages(context.Background(), conversationID)
+			messages, queryErr = q.ListMessages(t.Context(), conversationID)
 			return queryErr
 		}); err != nil {
 			t.Fatalf("list messages: %v", err)
@@ -872,7 +872,7 @@ func TestCancelSlowLoopWaitsForOrderedFinalization(t *testing.T) {
 	applyDone := make(chan error, 1)
 	go func() {
 		close(applyStarted)
-		applyDone <- manager.ApplyModelSettings(context.Background(), ModelSettingsChange{
+		applyDone <- manager.ApplyModelSettings(t.Context(), ModelSettingsChange{
 			OldModel: "predictable", NewModel: "predictable",
 		})
 	}()
@@ -966,17 +966,17 @@ func TestCancelSlowLoopWaitsForOrderedFinalization(t *testing.T) {
 func TestResetDoesNotDeadlockWithConcurrentFatalExit(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatalf("get manager: %v", err)
 	}
 
 	oldLoop := loop.NewLoop(loop.Config{})
-	processCtx, processCancel := context.WithCancel(context.Background())
+	processCtx, processCancel := context.WithCancel(t.Context())
 	loopDone := make(chan struct{})
 	cancelStarted := make(chan struct{})
 	var cancelOnce sync.Once
@@ -1032,17 +1032,17 @@ func TestResetDoesNotDeadlockWithConcurrentFatalExit(t *testing.T) {
 func TestResetLoopWaitsForExitBeforeReplacement(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatalf("get manager: %v", err)
 	}
 
 	userMessage := llm.Message{Role: llm.MessageRoleUser, Content: llm.TextContent("reset while tool runs")}
-	if err := server.recordMessage(context.Background(), conversation.ConversationID, userMessage, llm.Usage{}, nil); err != nil {
+	if err := server.recordMessage(t.Context(), conversation.ConversationID, userMessage, llm.Usage{}, nil); err != nil {
 		t.Fatalf("record user: %v", err)
 	}
 
@@ -1077,7 +1077,7 @@ func TestResetLoopWaitsForExitBeforeReplacement(t *testing.T) {
 			return server.recordMessage(ctx, conversation.ConversationID, message, usage, otherUsage)
 		},
 	})
-	processCtx, cancelProcess := context.WithCancel(context.Background())
+	processCtx, cancelProcess := context.WithCancel(t.Context())
 	loopDone := make(chan struct{})
 	processDone := make(chan error, 1)
 	manager.mu.Lock()

@@ -72,14 +72,14 @@ func TestSSEUserMessageAppearsImmediately(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create conversation
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
 	conversationID := conversation.ConversationID
 
 	// Set up a context we can cancel to stop the SSE handler
-	sseCtx, sseCancel := context.WithCancel(context.Background())
+	sseCtx, sseCancel := context.WithCancel(t.Context())
 	defer sseCancel()
 
 	// Start the SSE stream handler in a goroutine
@@ -208,7 +208,7 @@ func TestSSEUserMessageWithRealHTTPServer(t *testing.T) {
 	srv, database, _ := newTestServer(t)
 
 	// Create conversation
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -313,20 +313,20 @@ func TestSSEUserMessageWithExistingConnection(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create conversation and get a manager (simulating an established SSE connection)
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
 	conversationID := conversation.ConversationID
 
 	// Get the conversation manager to set up subscription
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
 
 	// Subscribe to updates
-	subCtx, subCancel := context.WithCancel(context.Background())
+	subCtx, subCancel := context.WithCancel(t.Context())
 	defer subCancel()
 	next := manager.subpub.Subscribe(subCtx, -1)
 

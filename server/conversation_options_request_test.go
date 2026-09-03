@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,7 +41,7 @@ func TestClientInternalConversationOptionsAreRejected(t *testing.T) {
 		{
 			name: "chat",
 			run: func(server *Server, database *db.DB) *httptest.ResponseRecorder {
-				conversation, err := database.CreateConversation(context.Background(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
+				conversation, err := database.CreateConversation(t.Context(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}

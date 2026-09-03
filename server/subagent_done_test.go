@@ -37,7 +37,7 @@ func newSubagentDoneFixture(t *testing.T, subResponse string) *subagentDoneFixtu
 	t.Helper()
 	server, database, ps := newTestServer(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Parent conversation.
 	parentConv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
@@ -213,7 +213,7 @@ func TestSubagentDone(t *testing.T) {
 
 func TestManualSubagentTurnDoesNotNotifyParent(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	parentManager, err := server.getOrCreateConversationManager(ctx, parent.ConversationID, "")
 	if err != nil {
 		t.Fatal(err)
@@ -292,7 +292,7 @@ func testSubagentDone_EvictedParentManagerStillNotified(t *testing.T) {
 func TestCleanupSkipsWorkingConversations(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mkStale := func(working bool) (string, *ConversationManager) {
 		conv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
@@ -483,7 +483,7 @@ func testSubagentDone_SuppressedDespiteSlugRename(t *testing.T) {
 		// history-parsing suppression keyed off.
 		requestedSlug := f.subSlug + "-DIFFERENT-REQUESTED"
 		pendingInput, _ := json.Marshal(map[string]any{"slug": requestedSlug, "prompt": "go", "wait": true})
-		if err := f.server.recordMessage(context.Background(), f.parentID, llm.Message{
+		if err := f.server.recordMessage(t.Context(), f.parentID, llm.Message{
 			Role: llm.MessageRoleAssistant,
 			Content: []llm.Content{{
 				Type:      llm.ContentTypeToolUse,
@@ -592,7 +592,7 @@ func testSubagentDone_CancellationDoesNotNotifyParent(t *testing.T) {
 		f.subagentMgr.SetAgentWorking(true)
 
 		before := len(f.parentMessages())
-		if err := f.subagentMgr.CancelConversation(context.Background()); err != nil {
+		if err := f.subagentMgr.CancelConversation(t.Context()); err != nil {
 			t.Fatalf("CancelConversation: %v", err)
 		}
 
@@ -853,7 +853,7 @@ func testSubagentDone_ToolResultCorrectness(t *testing.T) {
 // end-of-turn drain.
 func testSubagentDone_InjectedMidTurn(t *testing.T) {
 	f := newSubagentDoneFixture(t, "review complete: LGTM")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Start a real parent turn whose first round calls the bash tool with a
 	// sleep, giving the subagent completion a window to arrive mid-turn.
@@ -943,7 +943,7 @@ func testSubagentDone_InjectedMidTurn(t *testing.T) {
 // QueuedDuringDistillation).
 func testSubagentDone_InjectionSkippedWhileDistilling(t *testing.T) {
 	f := newSubagentDoneFixture(t, "subagent response")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	f.parentMgr.SetDistilling(true)
 	defer f.parentMgr.SetDistilling(false)
@@ -985,7 +985,7 @@ func testSubagentDone_StaleQueuedNotificationDroppedAfterSyncDelivery(t *testing
 	synctest.Test(t, func(t *testing.T) {
 		f := newSubagentDoneFixture(t, "first-turn response")
 		defer stopActiveConversationLoops(f.server)
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Parent is mid-turn: enqueued subagent-done batches wait in
 		// pendingBatches rather than draining immediately.
@@ -1051,7 +1051,7 @@ func testSubagentDone_StaleQueuedNotificationDroppedOnWaitFalseSend(t *testing.T
 	f.subagentMgr.SetAgentWorking(true)
 
 	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(context.Background(), f.subagentID, "do the next thing", false, time.Minute, "predictable", "")
+	res, err := runner.RunSubagent(t.Context(), f.subagentID, "do the next thing", false, time.Minute, "predictable", "")
 	if err != nil {
 		t.Fatalf("RunSubagent(wait=false): %v", err)
 	}
@@ -1097,7 +1097,7 @@ func testSubagentDone_StaleQueuedNotificationDroppedOnWaitTrueReprompt(t *testin
 		}()
 
 		runner := NewSubagentRunner(f.server)
-		res, err := runner.RunSubagent(context.Background(), f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
+		res, err := runner.RunSubagent(t.Context(), f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
 		if err != nil {
 			t.Fatalf("RunSubagent(wait=true): %v", err)
 		}
@@ -1134,7 +1134,7 @@ func testSubagentDone_RepromptThenTimeoutStillDropsStale(t *testing.T) {
 	// outlives the 1s deadline, so waitForResponse returns a progress summary
 	// without ever reaching the delivery path.
 	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(context.Background(), f.subagentID, "delay: 4", true, time.Second, "predictable", "")
+	res, err := runner.RunSubagent(t.Context(), f.subagentID, "delay: 4", true, time.Second, "predictable", "")
 	if err != nil {
 		t.Fatalf("RunSubagent(wait=true, timeout): %v", err)
 	}
@@ -1172,7 +1172,7 @@ func testSubagentDone_NotificationEnqueuedMidWaitDroppedAtDelivery(t *testing.T)
 	done := make(chan result, 1)
 	runner := NewSubagentRunner(f.server)
 	go func() {
-		res, err := runner.RunSubagent(context.Background(), f.subagentID, "delay: 1", true, 10*time.Second, "predictable", "")
+		res, err := runner.RunSubagent(t.Context(), f.subagentID, "delay: 1", true, 10*time.Second, "predictable", "")
 		done <- result{res, err}
 	}()
 
@@ -1243,7 +1243,7 @@ func testSubagentDone_TimeoutDoesNotDropQueuedNotification(t *testing.T) {
 	defer f.subagentMgr.SetAgentWorking(false)
 
 	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(context.Background(), f.subagentID, "echo: foo", true, 700*time.Millisecond, "predictable", "")
+	res, err := runner.RunSubagent(t.Context(), f.subagentID, "echo: foo", true, 700*time.Millisecond, "predictable", "")
 	if err != nil {
 		t.Fatalf("RunSubagent(wait=true, timeout): %v", err)
 	}
@@ -1267,7 +1267,7 @@ func testSubagentDone_TimeoutDoesNotDropQueuedNotification(t *testing.T) {
 // enqueue time and discards the batch.
 func testSubagentDone_StragglerNotifierSkipsAfterSyncDelivery(t *testing.T) {
 	f := newSubagentDoneFixture(t, "the response")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Parent is mid-turn, so any enqueued notification would stay queued.
 	f.parentMgr.SetAgentWorking(true)
@@ -1304,7 +1304,7 @@ func testSubagentDone_StragglerNotifierSkipsAfterSyncDelivery(t *testing.T) {
 // watermark covers the captured response's sequence id.
 func testSubagentDone_StragglerNotifierSkipsAfterWaitFalseSupersede(t *testing.T) {
 	f := newSubagentDoneFixture(t, "previous-turn response")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Parent is mid-turn, so an enqueued notification would stay queued.
 	f.parentMgr.SetAgentWorking(true)
@@ -1494,7 +1494,7 @@ func dumpMessages(t *testing.T, msgs []generated.Message) string {
 func testSubagentDone_ConcurrentFinishes(t *testing.T) {
 	f := newSubagentDoneFixture(t, "alpha done")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	subConv2, err := f.database.CreateSubagentConversation(ctx, "sub-test-2", f.parentID, nil)
 	if err != nil {
 		t.Fatalf("create subagent 2: %v", err)
@@ -1648,7 +1648,7 @@ func testSubagentDone_LastMessageIsToolUse(t *testing.T) {
 			ToolInput: []byte(`{"command":"echo hi"}`),
 		}},
 	}
-	if err := f.server.recordMessage(context.Background(), f.subagentID, toolUseOnly, llm.Usage{}, nil); err != nil {
+	if err := f.server.recordMessage(t.Context(), f.subagentID, toolUseOnly, llm.Usage{}, nil); err != nil {
 		t.Fatalf("record tool_use-only message: %v", err)
 	}
 
@@ -1692,7 +1692,7 @@ func testSubagentDone_GitInfoIgnored(t *testing.T) {
 		Role:    llm.MessageRoleAssistant,
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: `~/exe-subagent-done (subagent-done-notify) now at 7b2a11b65 "shelley: notify parent agent when subagent finishes"`}},
 	}
-	if _, err := f.database.CreateMessage(context.Background(), db.CreateMessageParams{
+	if _, err := f.database.CreateMessage(t.Context(), db.CreateMessageParams{
 		ConversationID: f.subagentID,
 		Type:           db.MessageTypeGitInfo,
 		LLMData:        gitMsg,

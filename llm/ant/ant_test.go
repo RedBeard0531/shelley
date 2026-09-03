@@ -1092,7 +1092,7 @@ func TestDo(t *testing.T) {
 	}
 
 	// Call Do
-	resp, err := s.Do(context.Background(), req)
+	resp, err := s.Do(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Do() error = %v, want nil", err)
 	}
@@ -1808,7 +1808,7 @@ func TestDoRetriesOnInvalidThinkingSignature(t *testing.T) {
 		},
 	}
 
-	resp, err := s.Do(context.Background(), req)
+	resp, err := s.Do(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Do() error = %v, want nil", err)
 	}
@@ -1862,7 +1862,7 @@ func TestDoClientError(t *testing.T) {
 	}
 
 	// Call Do - should fail immediately
-	resp, err := s.Do(context.Background(), req)
+	resp, err := s.Do(t.Context(), req)
 	if err == nil {
 		t.Fatalf("Do() error = nil, want error")
 	}
@@ -1960,7 +1960,7 @@ func TestDoStartTimeEndTime(t *testing.T) {
 	}
 
 	// Call Do
-	resp, err := s.Do(context.Background(), req)
+	resp, err := s.Do(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Do() error = %v, want nil", err)
 	}
@@ -2027,7 +2027,7 @@ func TestLiveAnthropicModels(t *testing.T) {
 				ThinkingLevel: llm.ThinkingLevelMedium,
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 			defer cancel()
 
 			resp, err := svc.Do(ctx, req)
@@ -2225,7 +2225,7 @@ func TestDoRetriesOnTruncatedStream(t *testing.T) {
 		}},
 	}
 
-	resp, err := s.Do(context.Background(), req)
+	resp, err := s.Do(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Do() error = %v, want nil (expected retry to succeed)", err)
 	}
@@ -2262,7 +2262,7 @@ func TestDoStopsRetryingOnContextCancel(t *testing.T) {
 	}
 
 	// Cancel context after first attempt completes
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
@@ -2311,7 +2311,7 @@ func TestDoFailsAfterMaxRetriesOnTruncatedStream(t *testing.T) {
 		}},
 	}
 
-	_, err := s.Do(context.Background(), req)
+	_, err := s.Do(t.Context(), req)
 	if err == nil {
 		t.Fatal("Do() expected error after max retries on truncated stream")
 	}
@@ -3279,7 +3279,7 @@ func TestServerToolBlocksLiveAnthropic(t *testing.T) {
 				{Role: llm.MessageRoleUser, Content: []llm.Content{text("Actually, what's 2+2?")}},
 			},
 		}
-		resp, err := s.Do(context.Background(), ir)
+		resp, err := s.Do(t.Context(), ir)
 		if err != nil {
 			t.Fatalf("sanitized request rejected: %v", err)
 		}
@@ -3315,7 +3315,7 @@ func TestServerToolBlocksLiveAnthropic(t *testing.T) {
 				{Role: llm.MessageRoleUser, Content: []llm.Content{text("what's a hashline anchor?")}},
 			},
 		}
-		resp, err := s.Do(context.Background(), ir)
+		resp, err := s.Do(t.Context(), ir)
 		if err != nil {
 			t.Fatalf("split history rejected after sanitize: %v", err)
 		}
@@ -3338,7 +3338,7 @@ func postRawAnthropic(t *testing.T, apiKey string, req *request) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpReq, err := http.NewRequestWithContext(context.Background(), "POST", DefaultURL, strings.NewReader(string(payload)))
+	httpReq, err := http.NewRequestWithContext(t.Context(), "POST", DefaultURL, strings.NewReader(string(payload)))
 	if err != nil {
 		t.Fatal(err)
 	}

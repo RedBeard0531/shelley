@@ -29,7 +29,7 @@ import (
 func TestPromotedDraftAnnouncesSystemPrompt(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	model := "predictable"
 	draft, err := database.CreateDraftConversation(ctx, nil, &model, db.ConversationOptions{}, "hello")

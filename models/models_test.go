@@ -223,7 +223,7 @@ func TestLoggingService(t *testing.T) {
 	logger := slog.Default()
 	loggingSvc := &loggingService{service: mockService, logger: logger, modelID: "test-model", provider: ProviderBuiltIn}
 
-	response, err := loggingSvc.Do(context.Background(), &llm.Request{Messages: []llm.Message{llm.UserStringMessage("Hello")}})
+	response, err := loggingSvc.Do(t.Context(), &llm.Request{Messages: []llm.Message{llm.UserStringMessage("Hello")}})
 	if err != nil || response == nil {
 		t.Fatalf("Do: response=%v err=%v", response, err)
 	}
@@ -244,7 +244,7 @@ func TestLoggingServiceUsageCollector(t *testing.T) {
 		modelID: "test-model",
 	}
 	req := &llm.Request{Messages: []llm.Message{llm.UserStringMessage("hi")}}
-	ctxWithCollector := llm.WithUsageCollector(context.Background(), func(purpose string, usage llm.Usage) {
+	ctxWithCollector := llm.WithUsageCollector(t.Context(), func(purpose string, usage llm.Usage) {
 		got = append(got, collected{purpose, usage})
 	})
 
@@ -283,7 +283,7 @@ func TestLoggingServiceUsageCollector(t *testing.T) {
 
 	// Purpose tag but no collector in ctx: no panic, nothing collected.
 	svc.service = &mockLLMService{}
-	if _, err := svc.Do(llm.WithPurpose(context.Background(), "keyword_search"), req); err != nil {
+	if _, err := svc.Do(llm.WithPurpose(t.Context(), "keyword_search"), req); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 {
@@ -368,10 +368,10 @@ func TestRefreshCustomModelsConcurrent(t *testing.T) {
 		t.Fatalf("failed to create test db: %v", err)
 	}
 	defer testDB.Close()
-	if err := testDB.Migrate(context.Background()); err != nil {
+	if err := testDB.Migrate(t.Context()); err != nil {
 		t.Fatalf("failed to migrate test db: %v", err)
 	}
-	if _, err := testDB.CreateModel(context.Background(), generated.CreateModelParams{
+	if _, err := testDB.CreateModel(t.Context(), generated.CreateModelParams{
 		ModelID:      "custom-test-model",
 		DisplayName:  "Test Model",
 		ProviderType: "openai",
@@ -720,10 +720,10 @@ func TestRefreshBuiltModelsReplacesBuiltModelsAndPreservesCustomModels(t *testin
 		t.Fatalf("failed to create test db: %v", err)
 	}
 	defer testDB.Close()
-	if err := testDB.Migrate(context.Background()); err != nil {
+	if err := testDB.Migrate(t.Context()); err != nil {
 		t.Fatalf("failed to migrate test db: %v", err)
 	}
-	if _, err := testDB.CreateModel(context.Background(), generated.CreateModelParams{
+	if _, err := testDB.CreateModel(t.Context(), generated.CreateModelParams{
 		ModelID:      "custom-test-model",
 		DisplayName:  "Test Model",
 		ProviderType: "openai",
@@ -793,13 +793,13 @@ func TestReasoningServiceMapping(t *testing.T) {
 	if got := []string{levels[0].Name(), levels[1].Name(), levels[2].Name(), levels[3].Name()}; !reflect.DeepEqual(got, []string{"off", "minimal", "medium", "max"}) {
 		t.Fatalf("levels = %v", got)
 	}
-	if _, err := svc.Do(context.Background(), &llm.Request{ThinkingLevel: llm.ThinkingLevelMinimal}); err != nil {
+	if _, err := svc.Do(t.Context(), &llm.Request{ThinkingLevel: llm.ThinkingLevelMinimal}); err != nil {
 		t.Fatal(err)
 	}
 	if inner.got != llm.ThinkingLevelLow {
 		t.Fatalf("mapped level = %s, want low", inner.got.Name())
 	}
-	if _, err := svc.Do(context.Background(), &llm.Request{ThinkingLevel: llm.ThinkingLevelMax}); err != nil {
+	if _, err := svc.Do(t.Context(), &llm.Request{ThinkingLevel: llm.ThinkingLevelMax}); err != nil {
 		t.Fatal(err)
 	}
 	if inner.got != llm.ThinkingLevelMax {
@@ -821,7 +821,7 @@ func TestReasoningServiceDisabled(t *testing.T) {
 	if llm.SupportsReasoning(svc) {
 		t.Fatal("disabled service reports reasoning support")
 	}
-	if _, err := svc.Do(context.Background(), &llm.Request{ThinkingLevel: llm.ThinkingLevelHigh}); err != nil {
+	if _, err := svc.Do(t.Context(), &llm.Request{ThinkingLevel: llm.ThinkingLevelHigh}); err != nil {
 		t.Fatal(err)
 	}
 	if inner.got != llm.ThinkingLevelOff {
@@ -851,7 +851,7 @@ func (s *captureThinkingService) Do(_ context.Context, req *llm.Request) (*llm.R
 
 func TestReasoningServiceRejectsUnsupportedLevel(t *testing.T) {
 	svc := WrapReasoningConfig(&captureThinkingService{}, "", "unknown", "yes", `{"low":"low"}`)
-	_, err := svc.Do(context.Background(), &llm.Request{ThinkingLevel: llm.ThinkingLevelHigh})
+	_, err := svc.Do(t.Context(), &llm.Request{ThinkingLevel: llm.ThinkingLevelHigh})
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("error = %v, want unsupported-level error", err)
 	}
@@ -863,7 +863,7 @@ func TestReasoningServiceMapsServiceDefault(t *testing.T) {
 	if got := llm.ServiceDefaultReasoningLevel(svc); got != "low" {
 		t.Fatalf("default = %q, want low", got)
 	}
-	if _, err := svc.Do(context.Background(), &llm.Request{}); err != nil {
+	if _, err := svc.Do(t.Context(), &llm.Request{}); err != nil {
 		t.Fatal(err)
 	}
 	if inner.got != llm.ThinkingLevelLow {

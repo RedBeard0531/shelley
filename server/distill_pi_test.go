@@ -185,7 +185,7 @@ func TestPiDistillCopiesRecentMessagesIntoNewGeneration(t *testing.T) {
 		h.WaitResponse()
 		synctest.Wait()
 		convID := h.convID
-		ctx := context.Background()
+		ctx := t.Context()
 		const imageData = "small-image-data-that-fits-the-retention-budget"
 		if err := h.server.recordMessage(ctx, convID, llm.Message{
 			Role: llm.MessageRoleUser,
@@ -286,7 +286,7 @@ func TestPiDistillForcesSummaryWhenOverBudget(t *testing.T) {
 		h.WaitResponse()
 		synctest.Wait()
 		convID := h.convID
-		ctx := context.Background()
+		ctx := t.Context()
 
 		reqBody := DistillNewGenerationRequest{
 			SourceConversationID: convID,
@@ -352,7 +352,7 @@ func TestPiReDistillPreservesPriorSummary(t *testing.T) {
 		h.WaitResponse()
 		synctest.Wait()
 		convID := h.convID
-		ctx := context.Background()
+		ctx := t.Context()
 
 		distill := func() {
 			reqBody := DistillNewGenerationRequest{
@@ -500,7 +500,7 @@ func TestCompactBatchesMessageWrites(t *testing.T) {
 		synctest.Wait()
 
 		// Count how many context messages were carried forward.
-		ctx := context.Background()
+		ctx := t.Context()
 		msgs, err := h.db.ListMessages(ctx, convID)
 		if err != nil {
 			t.Fatalf("ListMessages: %v", err)
@@ -649,7 +649,7 @@ func TestPiDistillFailureRollsBackGeneration(t *testing.T) {
 		h.WaitResponse()
 		synctest.Wait()
 		convID := h.convID
-		ctx := context.Background()
+		ctx := t.Context()
 
 		before, err := h.db.GetConversationByID(ctx, convID)
 		if err != nil {
@@ -790,7 +790,7 @@ func TestPiDistillRetriesFableWithOpusOnRefusal(t *testing.T) {
 		h.WaitResponse()
 		synctest.Wait()
 		convID := h.convID
-		ctx := context.Background()
+		ctx := t.Context()
 
 		before, err := h.db.GetConversationByID(ctx, convID)
 		if err != nil {
@@ -863,7 +863,7 @@ func TestDistillNewGenerationRejectsConcurrent(t *testing.T) {
 	h.NewConversation("echo: hello", "")
 	h.WaitResponse()
 
-	manager, err := h.server.getOrCreateConversationManager(context.Background(), h.convID, "")
+	manager, err := h.server.getOrCreateConversationManager(t.Context(), h.convID, "")
 	if err != nil {
 		t.Fatalf("getOrCreateConversationManager: %v", err)
 	}

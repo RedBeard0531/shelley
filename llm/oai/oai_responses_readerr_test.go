@@ -1,7 +1,6 @@
 package oai
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -81,7 +80,7 @@ func TestResponsesServiceRetriesServerErrorWithResetBody(t *testing.T) {
 
 	var retries []llm.RetryEvent
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
-	resp, err := svc.Do(context.Background(), &llm.Request{
+	resp, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
 	})
@@ -118,7 +117,7 @@ func TestResponsesServiceDoesNotRetryClientErrorWithResetBody(t *testing.T) {
 	defer server.Close()
 
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 	})
 	if err == nil {
@@ -163,7 +162,7 @@ func TestResponsesServiceRetryBannerStatusMatchesAttempt(t *testing.T) {
 
 	var retries []llm.RetryEvent
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
-	if _, err := svc.Do(context.Background(), &llm.Request{
+	if _, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
 	}); err != nil {
@@ -208,7 +207,7 @@ func TestResponsesServiceRetriesOKBodyReset(t *testing.T) {
 			defer server.Close()
 
 			svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
-			resp, err := svc.Do(context.Background(), &llm.Request{
+			resp, err := svc.Do(t.Context(), &llm.Request{
 				Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 			})
 			if err != nil {

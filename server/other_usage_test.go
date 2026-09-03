@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -151,7 +150,7 @@ func TestCompactionRecordsUsage(t *testing.T) {
 		waitForConversationDistillingToClear(t, srv, convID)
 		synctest.Wait()
 
-		messages, err := database.ListMessages(context.Background(), convID)
+		messages, err := database.ListMessages(t.Context(), convID)
 		if err != nil {
 			t.Fatal(err)
 		}

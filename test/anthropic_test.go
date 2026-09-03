@@ -2,7 +2,6 @@ package test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -37,7 +36,7 @@ func TestWithAnthropicAPI(t *testing.T) {
 	defer database.Close()
 
 	// Run migrations
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
@@ -77,7 +76,7 @@ func TestWithAnthropicAPI(t *testing.T) {
 		// Create a conversation
 		// Using database directly instead of service
 		slug := "claude-test"
-		conv, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{})
+		conv, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{})
 		if err != nil {
 			t.Fatalf("Failed to create conversation: %v", err)
 		}
@@ -194,7 +193,7 @@ func TestWithAnthropicAPI(t *testing.T) {
 		// Create a conversation
 		// Using database directly instead of service
 		slug := "tool-test"
-		conv, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{})
+		conv, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{})
 		if err != nil {
 			t.Fatalf("Failed to create conversation: %v", err)
 		}
@@ -260,7 +259,7 @@ func TestWithAnthropicAPI(t *testing.T) {
 		// Using database directly instead of service
 		// Using database directly instead of service
 		slug := "stream-test"
-		conv, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{})
+		conv, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{})
 		if err != nil {
 			t.Fatalf("Failed to create conversation: %v", err)
 		}
@@ -272,7 +271,7 @@ func TestWithAnthropicAPI(t *testing.T) {
 				{Type: llm.ContentTypeText, Text: "Hello streaming test"},
 			},
 		}
-		_, err = database.CreateMessage(context.Background(), db.CreateMessageParams{
+		_, err = database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conv.ConversationID,
 			Type:           db.MessageTypeUser,
 			LLMData:        testMsg,

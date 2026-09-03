@@ -76,7 +76,7 @@ func newUsageCollectingServer(t *testing.T) (*Server, *db.DB) {
 func TestSlugUsageAppendsRatherThanMutating(t *testing.T) {
 	t.Parallel()
 	svr, database := newUsageCollectingServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	body, _ := json.Marshal(ChatRequest{Message: "hello", Model: "predictable"})
 	req := httptest.NewRequest("POST", "/api/conversations/new", strings.NewReader(string(body)))
@@ -172,7 +172,7 @@ func TestRetryWorksWithTrailingSlugMarker(t *testing.T) {
 	if svr.terminals != nil {
 		svr.terminals.SetSpawner(InProcessSpawner)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -255,7 +255,7 @@ func TestSlugMarkerReachesUnifiedStream(t *testing.T) {
 	svr, _ := newUsageCollectingServer(t)
 
 	// Subscribe the way handleStream does, before the conversation exists.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	next := svr.streamPub.Subscribe(ctx, -1)
 

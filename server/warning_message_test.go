@@ -17,7 +17,7 @@ func TestPredictableFailRecordsWarningMessage(t *testing.T) {
 
 	var messages []string
 	waitFor(t, 5*time.Second, func() bool {
-		msgs, err := h.db.ListMessages(context.Background(), h.ConversationID())
+		msgs, err := h.db.ListMessages(t.Context(), h.ConversationID())
 		if err != nil {
 			t.Fatalf("ListMessages: %v", err)
 		}
@@ -57,7 +57,7 @@ func TestWarningMessageReachesUnifiedStream(t *testing.T) {
 
 	// Subscribe to the server-wide stream the way handleStream does, before
 	// triggering the warning.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	next := h.server.streamPub.Subscribe(ctx, -1)
 

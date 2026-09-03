@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +26,7 @@ func testMessageQueuedDuringThinking(t *testing.T) {
 	defer stopActiveConversationLoops(server)
 
 	// Create conversation
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -78,9 +77,9 @@ func testMessageQueuedDuringThinking(t *testing.T) {
 	synctest.Wait()
 
 	var messages []generated.Message
-	err = database.Queries(context.Background(), func(q *generated.Queries) error {
+	err = database.Queries(t.Context(), func(q *generated.Queries) error {
 		var qerr error
-		messages, qerr = q.ListMessages(context.Background(), conversationID)
+		messages, qerr = q.ListMessages(t.Context(), conversationID)
 		return qerr
 	})
 	if err != nil {
@@ -119,9 +118,9 @@ func testMessageQueuedDuringThinking(t *testing.T) {
 	// Wait for everything to complete
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		err = database.Queries(context.Background(), func(q *generated.Queries) error {
+		err = database.Queries(t.Context(), func(q *generated.Queries) error {
 			var qerr error
-			messages, qerr = q.ListMessages(context.Background(), conversationID)
+			messages, qerr = q.ListMessages(t.Context(), conversationID)
 			return qerr
 		})
 		if err != nil {
@@ -155,7 +154,7 @@ func TestContextPreservedAfterCancel(t *testing.T) {
 	server, database, predictableService := newTestServer(t)
 
 	// Create conversation
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -284,7 +283,7 @@ func TestContextPreservedAfterCancel(t *testing.T) {
 func waitForToolUseRecorded(t *testing.T, database *db.DB, conversationID string) {
 	t.Helper()
 	waitFor(t, 10*time.Second, func() bool {
-		messages, err := database.ListMessages(context.Background(), conversationID)
+		messages, err := database.ListMessages(t.Context(), conversationID)
 		if err != nil {
 			return false
 		}

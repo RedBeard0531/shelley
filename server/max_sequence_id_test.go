@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +41,7 @@ func TestMaxSequenceIDInConversationsList(t *testing.T) {
 	}
 
 	// Cross-check via the bulk per-conv query.
-	maxSeqs, err := database.GetMaxSequenceIDsForAllConversations(context.Background())
+	maxSeqs, err := database.GetMaxSequenceIDsForAllConversations(t.Context())
 	if err != nil {
 		t.Fatalf("GetMaxSequenceIDsForAllConversations: %v", err)
 	}

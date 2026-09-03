@@ -45,7 +45,7 @@ func TestSetConversationCwd(t *testing.T) {
 
 	start := t.TempDir()
 	dest := t.TempDir()
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &start, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestSetConversationCwd(t *testing.T) {
 
 	// A live manager, as if the user had already sent a turn: this is the case
 	// where a stale in-memory cwd would outlive the database write.
-	manager, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestSetConversationCwd(t *testing.T) {
 	}
 
 	// 1. Persisted, so a reload and the conversation list agree.
-	got, err := database.GetConversationByID(context.Background(), id)
+	got, err := database.GetConversationByID(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestSetConversationCwd(t *testing.T) {
 	// 3. The agent is told, in a message it will actually read. A marker
 	// excluded from context would leave it running commands against a
 	// directory it believes is still the old one.
-	messages, err := database.ListMessages(context.Background(), id)
+	messages, err := database.ListMessages(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestSetConversationCwdNoticeReachesLiveLoop(t *testing.T) {
 
 	start := t.TempDir()
 	dest := t.TempDir()
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &start, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestSetConversationCwdNoticeReachesLiveLoop(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	manager, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestSetConversationCwdNoticeReachesNextLLMRequest(t *testing.T) {
 
 	start := t.TempDir()
 	dest := t.TempDir()
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &start, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestSetConversationCwdNoticeReachesNextLLMRequest(t *testing.T) {
 
 	// The move itself must not have provoked a turn: the notice informs the
 	// next request, it does not ask the agent for anything.
-	manager, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestSetConversationCwdRedirectsBash(t *testing.T) {
 
 	start := t.TempDir()
 	dest := t.TempDir()
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &start, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestSetConversationCwdRedirectsBash(t *testing.T) {
 // this, or they race the very mid-turn guard they aren't trying to test.
 func waitForIdle(t *testing.T, s *Server, conversationID string) {
 	t.Helper()
-	manager, err := s.getOrCreateConversationManager(context.Background(), conversationID, "")
+	manager, err := s.getOrCreateConversationManager(t.Context(), conversationID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestSetConversationCwdRejectsBadPaths(t *testing.T) {
 		{"relative", "./somewhere"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+			conversation, err := database.CreateConversation(t.Context(), nil, true, &start, nil, db.ConversationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -384,7 +384,7 @@ func TestSetConversationCwdRejectsBadPaths(t *testing.T) {
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 			}
-			got, err := database.GetConversationByID(context.Background(), id)
+			got, err := database.GetConversationByID(t.Context(), id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -405,7 +405,7 @@ func TestSetConversationCwdConcurrent(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	start := t.TempDir()
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &start, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,11 +431,11 @@ func TestSetConversationCwdConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	manager, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := database.GetConversationByID(context.Background(), id)
+	got, err := database.GetConversationByID(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestSetConversationCwdRefusesDrafts(t *testing.T) {
 
 	start := t.TempDir()
 	dest := t.TempDir()
-	conversation, err := database.CreateDraftConversation(context.Background(), &start, nil, db.ConversationOptions{}, "")
+	conversation, err := database.CreateDraftConversation(t.Context(), &start, nil, db.ConversationOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestSetConversationCwdRefusesDrafts(t *testing.T) {
 	}
 
 	// Nothing was hydrated on its behalf: no system prompt, no messages at all.
-	messages, err := database.ListMessages(context.Background(), id)
+	messages, err := database.ListMessages(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +492,7 @@ func TestSetConversationCwdRefusesWhileWorking(t *testing.T) {
 
 	start := t.TempDir()
 	dest := t.TempDir()
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &start, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestSetConversationCwdRefusesWhileWorking(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	server.handleChatConversation(httptest.NewRecorder(), req, id)
 
-	manager, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), id, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +512,7 @@ func TestSetConversationCwdRefusesWhileWorking(t *testing.T) {
 	if w := postSetCwd(t, server, id, dest); w.Code != http.StatusConflict {
 		t.Fatalf("expected 409 while the agent works, got %d: %s", w.Code, w.Body.String())
 	}
-	got, err := database.GetConversationByID(context.Background(), id)
+	got, err := database.GetConversationByID(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +536,7 @@ func TestSetConversationCwdBeforeFirstSend(t *testing.T) {
 	start := t.TempDir()
 	dest := t.TempDir()
 	// userInitiated=true, isDraft=false: gets a full system prompt on hydrate.
-	conversation, err := database.CreateConversation(context.Background(), nil, true, &start, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, &start, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +551,7 @@ func TestSetConversationCwdBeforeFirstSend(t *testing.T) {
 	// hydration. If something later made SetCwd build a loop eagerly, this would
 	// quietly become a duplicate of TestSetConversationCwdNoticeReachesNextLLMRequest
 	// while still claiming to cover the other delivery path.
-	premise, err := server.getOrCreateConversationManager(context.Background(), id, "")
+	premise, err := server.getOrCreateConversationManager(t.Context(), id, "")
 	if err != nil {
 		t.Fatal(err)
 	}

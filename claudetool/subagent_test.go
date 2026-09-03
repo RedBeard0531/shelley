@@ -41,7 +41,7 @@ func TestSubagentToolRunHoldsSlugLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := defined.Run(context.Background(), input); result.Error != nil {
+	if result := defined.Run(t.Context(), input); result.Error != nil {
 		t.Fatalf("subagent run failed: %v", result.Error)
 	}
 }
@@ -128,7 +128,7 @@ func TestSubagentTool_Run(t *testing.T) {
 	}
 	inputJSON, _ := json.Marshal(input)
 
-	result := tool.Tool().Run(context.Background(), inputJSON)
+	result := tool.Tool().Run(t.Context(), inputJSON)
 	if result.Error != nil {
 		t.Fatalf("unexpected error: %v", result.Error)
 	}
@@ -170,7 +170,7 @@ func TestSubagentTool_Validation(t *testing.T) {
 	t.Run("empty slug", func(t *testing.T) {
 		input := subagentInput{Slug: "", Prompt: "test"}
 		inputJSON, _ := json.Marshal(input)
-		result := tool.Tool().Run(context.Background(), inputJSON)
+		result := tool.Tool().Run(t.Context(), inputJSON)
 		if result.Error == nil {
 			t.Error("expected error for empty slug")
 		}
@@ -180,7 +180,7 @@ func TestSubagentTool_Validation(t *testing.T) {
 	t.Run("empty prompt", func(t *testing.T) {
 		input := subagentInput{Slug: "test", Prompt: ""}
 		inputJSON, _ := json.Marshal(input)
-		result := tool.Tool().Run(context.Background(), inputJSON)
+		result := tool.Tool().Run(t.Context(), inputJSON)
 		if result.Error == nil {
 			t.Error("expected error for empty prompt")
 		}
@@ -190,7 +190,7 @@ func TestSubagentTool_Validation(t *testing.T) {
 	t.Run("invalid slug", func(t *testing.T) {
 		input := subagentInput{Slug: "@#$%", Prompt: "test"}
 		inputJSON, _ := json.Marshal(input)
-		result := tool.Tool().Run(context.Background(), inputJSON)
+		result := tool.Tool().Run(t.Context(), inputJSON)
 		if result.Error == nil {
 			t.Error("expected error for invalid slug")
 		}
@@ -212,7 +212,7 @@ func TestSubagentTool_InheritsModel(t *testing.T) {
 
 	input := subagentInput{Slug: "test", Prompt: "do something"}
 	inputJSON, _ := json.Marshal(input)
-	tool.Tool().Run(context.Background(), inputJSON)
+	tool.Tool().Run(t.Context(), inputJSON)
 
 	if runner.lastModelID != "claude-sonnet-4-6" {
 		t.Errorf("expected model 'claude-sonnet-4-6', got %q", runner.lastModelID)
@@ -259,7 +259,7 @@ func TestSubagentTool_ModelOverride(t *testing.T) {
 	// Override model
 	input := subagentInput{Slug: "test", Prompt: "do something", Model: "claude-haiku-4.5"}
 	inputJSON, _ := json.Marshal(input)
-	tool.Tool().Run(context.Background(), inputJSON)
+	tool.Tool().Run(t.Context(), inputJSON)
 
 	if runner.lastModelID != "claude-haiku-4.5" {
 		t.Errorf("expected model 'claude-haiku-4.5', got %q", runner.lastModelID)
@@ -285,7 +285,7 @@ func TestSubagentTool_ModelOverride_InvalidModel(t *testing.T) {
 
 	input := subagentInput{Slug: "test", Prompt: "do something", Model: "nonexistent-model"}
 	inputJSON, _ := json.Marshal(input)
-	result := tool.Tool().Run(context.Background(), inputJSON)
+	result := tool.Tool().Run(t.Context(), inputJSON)
 	if result.Error == nil {
 		t.Fatal("expected error for invalid model")
 	}
@@ -333,7 +333,7 @@ func TestSubagentTool_InheritsReasoning(t *testing.T) {
 	runner := tool.Runner.(*mockSubagentRunner)
 	input := subagentInput{Slug: "test", Prompt: "do something"}
 	inputJSON, _ := json.Marshal(input)
-	tool.Tool().Run(context.Background(), inputJSON)
+	tool.Tool().Run(t.Context(), inputJSON)
 
 	if runner.lastReasoning != "high" {
 		t.Errorf("expected inherited reasoning 'high', got %q", runner.lastReasoning)
@@ -358,7 +358,7 @@ func TestSubagentTool_ReasoningOverride(t *testing.T) {
 	runner := tool.Runner.(*mockSubagentRunner)
 	input := subagentInput{Slug: "test", Prompt: "do something", Reasoning: "max"}
 	inputJSON, _ := json.Marshal(input)
-	tool.Tool().Run(context.Background(), inputJSON)
+	tool.Tool().Run(t.Context(), inputJSON)
 
 	if runner.lastReasoning != "max" {
 		t.Errorf("expected reasoning override 'max', got %q", runner.lastReasoning)
@@ -375,7 +375,7 @@ func TestSubagentTool_ReasoningOverride_Invalid(t *testing.T) {
 
 	input := subagentInput{Slug: "test", Prompt: "do something", Reasoning: "turbo"}
 	inputJSON, _ := json.Marshal(input)
-	result := tool.Tool().Run(context.Background(), inputJSON)
+	result := tool.Tool().Run(t.Context(), inputJSON)
 	if result.Error == nil {
 		t.Fatal("expected error for invalid reasoning level")
 	}

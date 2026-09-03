@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net"
 	"testing"
@@ -17,7 +16,7 @@ import (
 // process leaves behind when it exits mid-turn.
 func seedInterruptedConversation(t *testing.T, database *db.DB, parentID *string) string {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	model := "predictable"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &model, db.ConversationOptions{})
 	if err != nil {
@@ -83,7 +82,7 @@ func TestResumeAfterUpgradeRestart(t *testing.T) {
 	t.Parallel()
 	srv, database, _ := newTestServer(t)
 	convID := seedInterruptedConversation(t, database, nil)
-	if err := database.SetSetting(context.Background(), db.ResumeAfterUpgradeSettingKey, "1"); err != nil {
+	if err := database.SetSetting(t.Context(), db.ResumeAfterUpgradeSettingKey, "1"); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 
@@ -121,7 +120,7 @@ func TestResumeAfterUpgradeRestart(t *testing.T) {
 		}
 	}
 	// The flag is one-shot.
-	if v, err := database.GetSetting(context.Background(), db.ResumeAfterUpgradeSettingKey); err != nil || v != "" {
+	if v, err := database.GetSetting(t.Context(), db.ResumeAfterUpgradeSettingKey); err != nil || v != "" {
 		t.Errorf("resume flag after boot = %q, %v; want consumed", v, err)
 	}
 }
@@ -140,7 +139,7 @@ func TestResumeAfterUpgradeSkips(t *testing.T) {
 			name: "not working",
 			seed: func(t *testing.T, database *db.DB) string {
 				id := seedInterruptedConversation(t, database, nil)
-				if err := database.SetConversationAgentWorking(context.Background(), id, false); err != nil {
+				if err := database.SetConversationAgentWorking(t.Context(), id, false); err != nil {
 					t.Fatalf("SetConversationAgentWorking: %v", err)
 				}
 				return id
@@ -157,7 +156,7 @@ func TestResumeAfterUpgradeSkips(t *testing.T) {
 			name: "turn already finished",
 			seed: func(t *testing.T, database *db.DB) string {
 				id := seedInterruptedConversation(t, database, nil)
-				if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+				if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 					ConversationID: id,
 					Type:           db.MessageTypeAgent,
 					LLMData: llm.Message{
@@ -179,14 +178,14 @@ func TestResumeAfterUpgradeSkips(t *testing.T) {
 			convID := tt.seed(t, database)
 			before := listMessages(t, database, convID)
 
-			if err := srv.resumeConversation(context.Background(), convID); err != nil {
+			if err := srv.resumeConversation(t.Context(), convID); err != nil {
 				t.Fatalf("resumeConversation: %v", err)
 			}
 
 			if got := len(listMessages(t, database, convID)); got != len(before) {
 				t.Errorf("message count = %d, want unchanged %d (conversation must not be resumed)", got, len(before))
 			}
-			conv, err := database.GetConversationByID(context.Background(), convID)
+			conv, err := database.GetConversationByID(t.Context(), convID)
 			if err != nil {
 				t.Fatalf("GetConversationByID: %v", err)
 			}

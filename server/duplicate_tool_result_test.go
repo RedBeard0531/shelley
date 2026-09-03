@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +29,7 @@ func TestCancelAfterToolCompletesCreatesDuplicateToolResult(t *testing.T) {
 	server, database, predictableService := newTestServer(t)
 
 	// Create conversation
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -58,9 +57,9 @@ func TestCancelAfterToolCompletesCreatesDuplicateToolResult(t *testing.T) {
 	var toolResultFound bool
 	for time.Now().Before(deadline) {
 		var messages []generated.Message
-		err := database.Queries(context.Background(), func(q *generated.Queries) error {
+		err := database.Queries(t.Context(), func(q *generated.Queries) error {
 			var qerr error
-			messages, qerr = q.ListMessages(context.Background(), conversationID)
+			messages, qerr = q.ListMessages(t.Context(), conversationID)
 			return qerr
 		})
 		if err != nil {
@@ -118,9 +117,9 @@ func TestCancelAfterToolCompletesCreatesDuplicateToolResult(t *testing.T) {
 
 	// Check the messages to see if there are duplicate tool_results for the same tool_use_id
 	var messages []generated.Message
-	err = database.Queries(context.Background(), func(q *generated.Queries) error {
+	err = database.Queries(t.Context(), func(q *generated.Queries) error {
 		var qerr error
-		messages, qerr = q.ListMessages(context.Background(), conversationID)
+		messages, qerr = q.ListMessages(t.Context(), conversationID)
 		return qerr
 	})
 	if err != nil {

@@ -1,14 +1,13 @@
 package db
 
 import (
-	"context"
 	"testing"
 )
 
 func TestFeatureFlagOverrides(t *testing.T) {
 	db, cleanup := NewTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	got, err := db.GetAllFeatureFlagOverrides(ctx)
 	if err != nil {

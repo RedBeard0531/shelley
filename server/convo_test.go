@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -71,7 +70,7 @@ func TestSystemPromptDisplayDataIncludesSourceMetadata(t *testing.T) {
 func TestHydrateGeneratesSystemPromptWithSubagentTool(t *testing.T) {
 	t.Parallel()
 	h := NewTestHarness(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a new conversation
 	h.NewConversation("Hello", "")
@@ -149,8 +148,8 @@ func TestHydrateSystemPromptDisplayDataRespectsToolOverrides(t *testing.T) {
 		t.Fatalf("parse response: %v", err)
 	}
 
-	messages, err := db.WithTxRes(h.db, context.Background(), func(q *generated.Queries) ([]generated.Message, error) {
-		return q.ListMessages(context.Background(), resp.ConversationID)
+	messages, err := db.WithTxRes(h.db, t.Context(), func(q *generated.Queries) ([]generated.Message, error) {
+		return q.ListMessages(t.Context(), resp.ConversationID)
 	})
 	if err != nil {
 		t.Fatalf("list messages: %v", err)

@@ -162,7 +162,7 @@ func TestKeywordRun(t *testing.T) {
 		Query:       "what files exist in this project",
 		SearchTerms: stringSlice{"test", "file"},
 	}
-	result := keywordTool.keywordRun(context.Background(), input)
+	result := keywordTool.keywordRun(t.Context(), input)
 
 	if result.Error != nil {
 		t.Errorf("unexpected error: %v", result.Error)

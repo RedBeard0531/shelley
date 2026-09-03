@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -33,10 +32,10 @@ func TestCachedReflectionEmoji(t *testing.T) {
 		}, nil
 	})}
 
-	if got := cachedReflectionEmojiIn(context.Background(), env); got != "🐚" {
+	if got := cachedReflectionEmojiIn(t.Context(), env); got != "🐚" {
 		t.Fatalf("cachedReflectionEmojiIn() = %q, want 🐚", got)
 	}
-	if got := cachedReflectionEmojiIn(context.Background(), env); got != "🐚" {
+	if got := cachedReflectionEmojiIn(t.Context(), env); got != "🐚" {
 		t.Fatalf("cachedReflectionEmojiIn() = %q, want 🐚", got)
 	}
 	if requests != 1 {
@@ -62,7 +61,7 @@ func TestReflectionEmojiFallback(t *testing.T) {
 		}, nil
 	})}
 
-	if got := cachedReflectionEmojiIn(context.Background(), env); got != "" {
+	if got := cachedReflectionEmojiIn(t.Context(), env); got != "" {
 		t.Fatalf("cachedReflectionEmojiIn() = %q, want empty", got)
 	}
 }

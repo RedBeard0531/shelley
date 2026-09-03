@@ -131,7 +131,7 @@ func TestLLMErrorRecordedDespiteExpiredContext(t *testing.T) {
 	// is in flight. ctx.Err() here is DeadlineExceeded, not Canceled, so the
 	// loop must take the error-record path (not the user-cancel skip) and
 	// write via WithoutCancel.
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(150*time.Millisecond))
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(150*time.Millisecond))
 	defer cancel()
 
 	done := make(chan error, 1)

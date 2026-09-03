@@ -1,7 +1,6 @@
 package claudetool
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,7 +77,7 @@ func TestFilterTools(t *testing.T) {
 }
 
 func TestNewToolSetRespectsOverrides(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := NewToolSet(ctx, ToolSetConfig{
 		ToolOverrides: map[string]string{"bash": "off"},
 	})
@@ -91,7 +90,7 @@ func TestNewToolSetRespectsOverrides(t *testing.T) {
 }
 
 func TestNewToolSetDisableAllTools(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := NewToolSet(ctx, ToolSetConfig{
 		DisableAllTools: true,
 		ToolOverrides:   map[string]string{"bash": "on"},

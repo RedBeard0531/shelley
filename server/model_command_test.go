@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -175,9 +174,9 @@ func postChatModel(t *testing.T, srv *Server, conversationID, message, model str
 func listMessages(t *testing.T, database *db.DB, conversationID string) []generated.Message {
 	t.Helper()
 	var msgs []generated.Message
-	err := database.Queries(context.Background(), func(q *generated.Queries) error {
+	err := database.Queries(t.Context(), func(q *generated.Queries) error {
 		var err error
-		msgs, err = q.ListMessages(context.Background(), conversationID)
+		msgs, err = q.ListMessages(t.Context(), conversationID)
 		return err
 	})
 	if err != nil {
@@ -198,7 +197,7 @@ func lastModelChange(msgs []generated.Message) *generated.Message {
 func TestModelCommandSwitchesAwayFromUnavailablePersistedModel(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	removedModel := "removed-model"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &removedModel, db.ConversationOptions{})
@@ -240,7 +239,7 @@ func TestModelCommandSwitchesAwayFromUnavailablePersistedModel(t *testing.T) {
 func TestModelSwitchSticksAgainstStaleRequestModel(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -302,7 +301,7 @@ func TestModelSwitchSticksAgainstStaleRequestModel(t *testing.T) {
 func TestModelCommandSwitch(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -379,7 +378,7 @@ func TestModelCommandSwitch(t *testing.T) {
 func TestModelCommandSwitchMidTurn(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -422,7 +421,7 @@ func TestModelCommandSwitchMidTurn(t *testing.T) {
 // getConvOptions reads the persisted conversation options.
 func getConvReasoning(t *testing.T, database *db.DB, conversationID string) string {
 	t.Helper()
-	c, err := database.GetConversationByID(context.Background(), conversationID)
+	c, err := database.GetConversationByID(t.Context(), conversationID)
 	if err != nil {
 		t.Fatalf("get conversation: %v", err)
 	}
@@ -436,7 +435,7 @@ func TestModelCommandReasoningOnly(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
 	ps := srv.llmManager.(*twoModelLLMManager).service.(*predictable.Service)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -497,7 +496,7 @@ func TestModelCommandReasoningOnly(t *testing.T) {
 func TestModelCommandModelAndReasoning(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -538,7 +537,7 @@ func TestModelCommandModelAndReasoning(t *testing.T) {
 func TestModelCommandBareLevelSwitch(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{ThinkingLevel: "high"})
@@ -570,7 +569,7 @@ func TestModelCommandBareLevelSwitch(t *testing.T) {
 func TestModelCommandDefaultRejected(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelB := "model-b"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelB, db.ConversationOptions{})
@@ -615,7 +614,7 @@ func TestModelCommandAmbiguous(t *testing.T) {
 	if srv.terminals != nil {
 		srv.terminals.SetSpawner(InProcessSpawner)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -652,7 +651,7 @@ func TestModelCommandAmbiguous(t *testing.T) {
 func TestModelCommandBareShowsStatus(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -692,7 +691,7 @@ func TestModelCommandBareShowsStatus(t *testing.T) {
 func TestModelCommandUnknownModel(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -748,7 +747,7 @@ func forkAt(t *testing.T, srv *Server, conversationID string, cutoff int64) stri
 func TestForkUsesModelStateAtCutoff(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -800,7 +799,7 @@ func TestForkUsesModelStateAtCutoff(t *testing.T) {
 func TestForkWithoutModelSwitchKeepsModel(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelB := "model-b"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelB, db.ConversationOptions{})
@@ -938,7 +937,7 @@ func TestModelCommandLevelPrefixVsSubstringModel(t *testing.T) {
 func TestModelCommandPartialModel(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -962,7 +961,7 @@ func TestModelCommandPartialModel(t *testing.T) {
 func TestModelCommandAmbiguousPartial(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -992,7 +991,7 @@ func TestModelCommandAmbiguousPartial(t *testing.T) {
 func TestModelChangeMarkerDisplayNames(t *testing.T) {
 	t.Parallel()
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	modelA := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &modelA, db.ConversationOptions{})
@@ -1017,7 +1016,7 @@ func TestModelChangeMarkerDisplayNames(t *testing.T) {
 
 func TestChatMessageHookReceivesConversationReasoningLevel(t *testing.T) {
 	srv, database := newTwoModelTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	model := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &model, db.ConversationOptions{ThinkingLevel: "high"})
 	if err != nil {
@@ -1055,7 +1054,7 @@ func TestChatMessageHookMaterializesDefaultReasoningLevel(t *testing.T) {
 		Service: predictable.NewService(),
 		level:   "medium",
 	}}
-	ctx := context.Background()
+	ctx := t.Context()
 	model := "model-a"
 	conv, err := database.CreateConversation(ctx, nil, true, nil, &model, db.ConversationOptions{})
 	if err != nil {

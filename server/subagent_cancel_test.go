@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -47,9 +46,9 @@ func cancelConversation(t *testing.T, server *Server, conversationID string) {
 func hasCancelledEndOfTurn(t *testing.T, database *db.DB, conversationID string) bool {
 	t.Helper()
 	var messages []generated.Message
-	err := database.Queries(context.Background(), func(q *generated.Queries) error {
+	err := database.Queries(t.Context(), func(q *generated.Queries) error {
 		var qerr error
-		messages, qerr = q.ListMessages(context.Background(), conversationID)
+		messages, qerr = q.ListMessages(t.Context(), conversationID)
 		return qerr
 	})
 	if err != nil {
@@ -82,7 +81,7 @@ func hasCancelledEndOfTurn(t *testing.T, database *db.DB, conversationID string)
 func TestCancelParentCancelsRunningSubagent(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	parentConv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -110,7 +109,7 @@ func TestCancelParentCancelsRunningSubagent(t *testing.T) {
 func TestCancelParentCancelsSubagentTree(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	rootConv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -146,7 +145,7 @@ func TestCancelParentCancelsSubagentTree(t *testing.T) {
 func TestCancelledSubagentOwesNoNotification(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	parentConv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {

@@ -19,7 +19,7 @@ func TestStartNewGenerationFiltersContext(t *testing.T) {
 		h := NewTestHarness(t)
 		h.NewConversation("old context", "")
 		h.WaitResponse()
-		ctx := context.Background()
+		ctx := t.Context()
 		convID := h.convID
 
 		oldMsgs, err := h.db.ListMessagesForContext(ctx, convID)
@@ -87,7 +87,7 @@ func TestStartNewGenerationPreservesSlug(t *testing.T) {
 	h := NewTestHarness(t)
 	h.NewConversation("first message", "")
 	h.WaitResponse()
-	ctx := context.Background()
+	ctx := t.Context()
 	convID := h.convID
 
 	// Pin a known slug so we can detect any overwrite. Real first-message
@@ -140,7 +140,7 @@ func TestChatDuringDistillationQueuesEvenWithoutClientQueueFlag(t *testing.T) {
 	h := NewTestHarness(t)
 	h.NewConversation("before distill", "")
 	h.WaitResponse()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	manager, err := h.server.getOrCreateConversationManager(ctx, h.convID, "")
 	if err != nil {
@@ -249,7 +249,7 @@ func TestDistillNewGenerationResetsContextWindow(t *testing.T) {
 // message in the conversation, in sequence order.
 func distillStatusMessages(t *testing.T, h *TestHarness, convID string) []map[string]string {
 	t.Helper()
-	msgs, err := h.db.ListMessages(context.Background(), convID)
+	msgs, err := h.db.ListMessages(t.Context(), convID)
 	if err != nil {
 		t.Fatalf("ListMessages: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestStartNewGenerationSurvivesClientDisconnect(t *testing.T) {
 
 		// A context already cancelled, standing in for a client that
 		// disconnected between the bump and hydration.
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
 		conversation, err := h.server.startNewGeneration(ctx, convID)
@@ -380,7 +380,7 @@ func TestStartNewGenerationSurvivesClientDisconnect(t *testing.T) {
 
 		// The new generation must have its system prompt, or the next turn runs
 		// without one.
-		msgs, err := h.db.ListMessagesForContext(context.Background(), convID)
+		msgs, err := h.db.ListMessagesForContext(t.Context(), convID)
 		if err != nil {
 			t.Fatalf("failed to list context: %v", err)
 		}

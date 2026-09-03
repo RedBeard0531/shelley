@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,7 +58,7 @@ func TestHandleExitResume(t *testing.T) {
 				t.Fatal("exit was not scheduled")
 			}
 
-			got, err := database.GetSetting(context.Background(), db.ResumeAfterUpgradeSettingKey)
+			got, err := database.GetSetting(t.Context(), db.ResumeAfterUpgradeSettingKey)
 			if err != nil {
 				t.Fatal(err)
 			}

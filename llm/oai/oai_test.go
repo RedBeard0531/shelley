@@ -1306,7 +1306,7 @@ func TestServiceDo(t *testing.T) {
 	defer server.Close()
 
 	// Create a service with the mock server
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := &Service{
 		APIKey:   "test-api-key",
 		Model:    GPT41,
@@ -1388,7 +1388,7 @@ func TestServiceDoStreamsFireworks(t *testing.T) {
 		ModelURL:     server.URL,
 		ProviderName: "fireworks",
 	}
-	resp, err := svc.Do(context.Background(), &llm.Request{
+	resp, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 		OnStream: func(delta llm.StreamDelta) {
 			deltas = append(deltas, delta)
@@ -1444,7 +1444,7 @@ func TestServiceDoRejectsIncompleteFireworksStream(t *testing.T) {
 	defer server.Close()
 
 	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: "fireworks"}
-	_, err := svc.Do(context.Background(), &llm.Request{Messages: []llm.Message{{Role: llm.MessageRoleUser}}, OnStream: func(llm.StreamDelta) {}})
+	_, err := svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{{Role: llm.MessageRoleUser}}, OnStream: func(llm.StreamDelta) {}})
 	if err == nil || !strings.Contains(err.Error(), "no finish reason") {
 		t.Fatalf("Do() error = %v, want incomplete stream", err)
 	}
@@ -1460,7 +1460,7 @@ func TestServiceDoDoesNotRetryBrokenFireworksStream(t *testing.T) {
 	defer server.Close()
 
 	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: "fireworks", Backoff: []time.Duration{0}}
-	_, err := svc.Do(context.Background(), &llm.Request{Messages: []llm.Message{{Role: llm.MessageRoleUser}}, OnStream: func(llm.StreamDelta) {}})
+	_, err := svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{{Role: llm.MessageRoleUser}}, OnStream: func(llm.StreamDelta) {}})
 	if err == nil {
 		t.Fatal("Do() error = nil, want broken stream error")
 	}
@@ -1492,7 +1492,7 @@ func TestServiceDoSendsDefaultMaxCompletionTokens(t *testing.T) {
 		ModelURL: server.URL + "/v1",
 	}
 
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{
 			Role:    llm.MessageRoleUser,
 			Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}},
@@ -1613,7 +1613,7 @@ func TestServiceDoStreamsCompatibleProviders(t *testing.T) {
 
 			svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: tc.provider}
 			var deltas []llm.StreamDelta
-			_, err := svc.Do(context.Background(), &llm.Request{
+			_, err := svc.Do(t.Context(), &llm.Request{
 				Messages: []llm.Message{{Role: llm.MessageRoleUser}},
 				OnStream: func(delta llm.StreamDelta) { deltas = append(deltas, delta) },
 			})
@@ -1644,7 +1644,7 @@ func TestServiceUsesFirstBackoffForFirstRetry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var retry llm.RetryEvent
 	svc := &Service{
@@ -1709,7 +1709,7 @@ func TestServiceDoProxyPlainTextError(t *testing.T) {
 		}},
 	}
 
-	resp, err := svc.Do(context.Background(), req)
+	resp, err := svc.Do(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Do() error = %v, expected success after retry", err)
 	}
@@ -1740,7 +1740,7 @@ func TestServiceDoProxyPlainText4xxError(t *testing.T) {
 		}},
 	}
 
-	_, err := svc.Do(context.Background(), req)
+	_, err := svc.Do(t.Context(), req)
 	if err == nil {
 		t.Fatal("Do() expected error for 403, got nil")
 	}
@@ -1897,7 +1897,7 @@ func TestServiceDoDeepSeekRoundTripsReasoningContent(t *testing.T) {
 			}}},
 		},
 	}
-	if _, err := svc.Do(context.Background(), req); err != nil {
+	if _, err := svc.Do(t.Context(), req); err != nil {
 		t.Fatalf("Do() error = %v", err)
 	}
 	if !strings.Contains(string(gotBody), `"reasoning_content":"I should call the weather tool."`) {
@@ -1939,7 +1939,7 @@ func TestServiceDoDeepSeekPlaceholderWhenNoThinking(t *testing.T) {
 			}}},
 		},
 	}
-	if _, err := svc.Do(context.Background(), req); err != nil {
+	if _, err := svc.Do(t.Context(), req); err != nil {
 		t.Fatalf("Do() error = %v", err)
 	}
 	if !strings.Contains(string(gotBody), `"reasoning_content"`) {
@@ -1976,7 +1976,7 @@ func TestServiceDoNonDeepSeekStripsReasoningContent(t *testing.T) {
 			}}},
 		},
 	}
-	if _, err := svc.Do(context.Background(), req); err != nil {
+	if _, err := svc.Do(t.Context(), req); err != nil {
 		t.Fatalf("Do() error = %v", err)
 	}
 	if strings.Contains(string(gotBody), `"reasoning_content"`) {
@@ -2082,7 +2082,7 @@ func TestServiceReasoningEffort(t *testing.T) {
 				ThinkingLevel:   tt.svcLevel,
 				ReasoningEffort: tt.svcEffort,
 			}
-			_, err := svc.Do(context.Background(), &llm.Request{
+			_, err := svc.Do(t.Context(), &llm.Request{
 				Messages:      []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 				ThinkingLevel: tt.reqLevel,
 			})

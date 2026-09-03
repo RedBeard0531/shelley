@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,7 +55,7 @@ func withReflectionStatus(t *testing.T, status int, body string) {
 // TestModelSetupHintNotOnExeDev: off exe.dev there are no integrations to
 // blame, so the hint must stay generic ("add a model yourself").
 func TestModelSetupHintNotOnExeDev(t *testing.T) {
-	if got := modelSetupHintIn(context.Background(), false); got != modelSetupHintLocal {
+	if got := modelSetupHintIn(t.Context(), false); got != modelSetupHintLocal {
 		t.Fatalf("modelSetupHint off exe.dev = %q, want %q", got, modelSetupHintLocal)
 	}
 }
@@ -69,7 +68,7 @@ func TestModelSetupHintNotOnExeDev(t *testing.T) {
 // llm.int, so the report names both.
 func TestModelSetupHintMissingReflection(t *testing.T) {
 	withReflectionStatus(t, http.StatusForbidden, "integration not found or not attached to this VM")
-	if got := modelSetupHintIn(context.Background(), true); got != modelSetupHintMissingBoth {
+	if got := modelSetupHintIn(t.Context(), true); got != modelSetupHintMissingBoth {
 		t.Fatalf("modelSetupHint with reflection+llm 403 = %q, want %q", got, modelSetupHintMissingBoth)
 	}
 }
@@ -78,7 +77,7 @@ func TestModelSetupHintMissingReflection(t *testing.T) {
 // integration, so there is nothing for Shelley to draw models from.
 func TestModelSetupHintMissingLLM(t *testing.T) {
 	withReflectionStatus(t, http.StatusOK, `{"integrations":[{"name":"reflection","type":"reflection"}]}`)
-	if got := modelSetupHintIn(context.Background(), true); got != modelSetupHintMissingLLM {
+	if got := modelSetupHintIn(t.Context(), true); got != modelSetupHintMissingLLM {
 		t.Fatalf("modelSetupHint without llm integration = %q, want %q", got, modelSetupHintMissingLLM)
 	}
 }
@@ -99,7 +98,7 @@ func TestModelSetupHintTransientFailure(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			withReflectionStatus(t, tt.status, tt.body)
-			if got := modelSetupHintIn(context.Background(), true); got != modelSetupHintUnknown {
+			if got := modelSetupHintIn(t.Context(), true); got != modelSetupHintUnknown {
 				t.Fatalf("modelSetupHint on %s = %q, want %q", tt.name, got, modelSetupHintUnknown)
 			}
 		})
@@ -112,7 +111,7 @@ func TestModelSetupHintTransientFailure(t *testing.T) {
 func TestModelSetupHintBothPresent(t *testing.T) {
 	withReflectionStatus(t, http.StatusOK,
 		`{"integrations":[{"name":"reflection","type":"reflection"},{"name":"llm","type":"llm"}]}`)
-	if got := modelSetupHintIn(context.Background(), true); got != modelSetupHintUnknown {
+	if got := modelSetupHintIn(t.Context(), true); got != modelSetupHintUnknown {
 		t.Fatalf("modelSetupHint with both integrations = %q, want %q", got, modelSetupHintUnknown)
 	}
 }
@@ -121,11 +120,11 @@ func TestModelSetupHintBothPresent(t *testing.T) {
 // hint (and its reflection probe) is for the broken empty-list case only. A
 // server with models must not advertise setup help at all.
 func TestModelSetupHintOnlyWhenNoModels(t *testing.T) {
-	if hint := modelSetupHintForModels(context.Background(), []ModelInfo{{ID: "predictable", Ready: true}}, true); hint != "" {
+	if hint := modelSetupHintForModels(t.Context(), []ModelInfo{{ID: "predictable", Ready: true}}, true); hint != "" {
 		t.Fatalf("modelSetupHint with models present = %q, want empty", hint)
 	}
 	withReflectionStatus(t, http.StatusForbidden, "nope")
-	if hint := modelSetupHintForModels(context.Background(), nil, true); hint != modelSetupHintMissingBoth {
+	if hint := modelSetupHintForModels(t.Context(), nil, true); hint != modelSetupHintMissingBoth {
 		t.Fatalf("modelSetupHint with no models = %q, want %q", hint, modelSetupHintMissingBoth)
 	}
 }
@@ -338,7 +337,7 @@ func TestReflectionProbeCachedAndCollapsed(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			arrived <- struct{}{}
-			got[i] = cachedReflectionState(context.Background(), env)
+			got[i] = cachedReflectionState(t.Context(), env)
 		}()
 	}
 	for range racers {
@@ -359,7 +358,7 @@ func TestReflectionProbeCachedAndCollapsed(t *testing.T) {
 	}
 
 	// A later caller inside the TTL must reuse the cached answer.
-	if st := cachedReflectionState(context.Background(), env); st != reflectionUnavailable {
+	if st := cachedReflectionState(t.Context(), env); st != reflectionUnavailable {
 		t.Errorf("cached read got %v, want reflectionUnavailable", st)
 	}
 	if n := probes.Load(); n != 1 {
@@ -369,7 +368,7 @@ func TestReflectionProbeCachedAndCollapsed(t *testing.T) {
 	// Once the TTL lapses the diagnosis must be re-probed, so that a user who
 	// fixes their integrations sees recovery without restarting Shelley.
 	resetReflectionStateCache()
-	if st := cachedReflectionState(context.Background(), env); st != reflectionUnavailable {
+	if st := cachedReflectionState(t.Context(), env); st != reflectionUnavailable {
 		t.Errorf("re-probe got %v, want reflectionUnavailable", st)
 	}
 	if n := probes.Load(); n != 2 {
@@ -445,10 +444,10 @@ const llmCatalogWithModels = `{"schema_version":1,"models":[{"id":"openai/gpt-5.
 func TestReflectionDownButLLMServing(t *testing.T) {
 	env := exeenv.FromHostname("box.exe.xyz")
 	withReflectionAndLLM(t, env, http.StatusForbidden, "", http.StatusOK, llmCatalogWithModels)
-	if got := modelSetupHintIn(context.Background(), true); got == modelSetupHintMissingLLM {
+	if got := modelSetupHintIn(t.Context(), true); got == modelSetupHintMissingLLM {
 		t.Fatalf("hint = %q, but llm.int is serving models; must not blame the llm integration", got)
 	}
-	if got := cachedReflectionState(context.Background(), env); got != reflectionLLMReachable {
+	if got := cachedReflectionState(t.Context(), env); got != reflectionLLMReachable {
 		t.Fatalf("state = %v, want reflectionLLMReachable", got)
 	}
 }
@@ -461,7 +460,7 @@ func TestReflectionDownButLLMServing(t *testing.T) {
 func TestBothIntegrationsDetached(t *testing.T) {
 	env := exeenv.FromHostname("box.exe.xyz")
 	withReflectionAndLLM(t, env, http.StatusForbidden, "", http.StatusForbidden, "")
-	if got := modelSetupHintIn(context.Background(), true); got != modelSetupHintMissingBoth {
+	if got := modelSetupHintIn(t.Context(), true); got != modelSetupHintMissingBoth {
 		t.Fatalf("hint with both detached = %q, want %q", got, modelSetupHintMissingBoth)
 	}
 }
@@ -472,7 +471,7 @@ func TestBothIntegrationsDetached(t *testing.T) {
 func TestLLMTransientFailureIsNotDiagnosed(t *testing.T) {
 	env := exeenv.FromHostname("box.exe.xyz")
 	withReflectionAndLLM(t, env, http.StatusForbidden, "", http.StatusInternalServerError, "")
-	if got := modelSetupHintIn(context.Background(), true); got != modelSetupHintUnknown {
+	if got := modelSetupHintIn(t.Context(), true); got != modelSetupHintUnknown {
 		t.Fatalf("hint with llm 500 = %q, want %q", got, modelSetupHintUnknown)
 	}
 }
@@ -488,7 +487,7 @@ func TestLLMCatalogWithNoServeableModels(t *testing.T) {
 	env := exeenv.FromHostname("box.exe.xyz")
 	const unserveable = `{"schema_version":1,"models":[{"id":"weird/model","provider":"weird","native_id":"weird","apis":["telepathy"]}]}`
 	withReflectionAndLLM(t, env, http.StatusForbidden, "", http.StatusOK, unserveable)
-	if got := cachedReflectionState(context.Background(), env); got == reflectionLLMReachable {
+	if got := cachedReflectionState(t.Context(), env); got == reflectionLLMReachable {
 		t.Fatal("state = reflectionLLMReachable, but no catalog model is serveable by Shelley")
 	}
 }

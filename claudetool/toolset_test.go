@@ -1,7 +1,6 @@
 package claudetool
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -20,7 +19,7 @@ func TestNewToolSet(t *testing.T) {
 		WorkingDir:  "/test",
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := NewToolSet(ctx, cfg)
 
 	if ts == nil {
@@ -45,7 +44,7 @@ func TestToolSet_Tools(t *testing.T) {
 		WorkingDir:  "/test",
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := NewToolSet(ctx, cfg)
 
 	tools := ts.Tools()
@@ -67,7 +66,7 @@ func TestToolSet_WorkingDir(t *testing.T) {
 		WorkingDir:  "/test",
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := NewToolSet(ctx, cfg)
 
 	wd := ts.WorkingDir()
@@ -89,7 +88,7 @@ func TestToolSet_Cleanup(t *testing.T) {
 		WorkingDir:  "/test",
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := NewToolSet(ctx, cfg)
 
 	// Cleanup should not panic
@@ -106,7 +105,7 @@ func TestNewToolSet_DefaultWorkingDir(t *testing.T) {
 		WorkingDir:  "",
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := NewToolSet(ctx, cfg)
 
 	home, err := os.UserHomeDir()
@@ -129,7 +128,7 @@ func TestNewToolSet_WithBrowser(t *testing.T) {
 		EnableBrowser: true,
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := NewToolSet(ctx, cfg)
 
 	if ts == nil {
@@ -171,7 +170,7 @@ func TestNewToolSet_SubagentDepthLimit(t *testing.T) {
 			SubagentDepth:        0,
 			MaxSubagentDepth:     1,
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if !hasSubagentTool(ts) {
 			t.Error("expected subagent tool at depth 0 with max 1")
 		}
@@ -189,7 +188,7 @@ func TestNewToolSet_SubagentDepthLimit(t *testing.T) {
 			SubagentDepth:        1,
 			MaxSubagentDepth:     1,
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if hasSubagentTool(ts) {
 			t.Error("expected no subagent tool at depth 1 with max 1")
 		}
@@ -207,7 +206,7 @@ func TestNewToolSet_SubagentDepthLimit(t *testing.T) {
 			SubagentDepth:        0,
 			MaxSubagentDepth:     0,
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if !hasSubagentTool(ts) {
 			t.Error("expected subagent tool at depth 0 with unlimited max")
 		}
@@ -225,7 +224,7 @@ func TestNewToolSet_SubagentDepthLimit(t *testing.T) {
 			SubagentDepth:        5,
 			MaxSubagentDepth:     0,
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if !hasSubagentTool(ts) {
 			t.Error("expected subagent tool at depth 5 with unlimited max")
 		}
@@ -241,7 +240,7 @@ func TestNewToolSet_SubagentDepthLimit(t *testing.T) {
 			SubagentDepth:        0,
 			MaxSubagentDepth:     1,
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if hasSubagentTool(ts) {
 			t.Error("expected no subagent tool without runner")
 		}
@@ -259,7 +258,7 @@ func TestNewToolSet_SubagentDepthLimit(t *testing.T) {
 			SubagentDepth:        2,
 			MaxSubagentDepth:     3,
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if !hasSubagentTool(ts) {
 			t.Error("expected subagent tool at depth 2 with max 3")
 		}
@@ -277,7 +276,7 @@ func TestNewToolSet_SubagentDepthLimit(t *testing.T) {
 			SubagentDepth:        3,
 			MaxSubagentDepth:     3,
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if hasSubagentTool(ts) {
 			t.Error("expected no subagent tool at depth 3 with max 3")
 		}
@@ -296,7 +295,7 @@ func TestToolDescriptions(t *testing.T) {
 		SubagentDB:           &mockSubagentDB{},
 		ParentConversationID: "parent-123",
 	}
-	ts := NewToolSet(context.Background(), cfg)
+	ts := NewToolSet(t.Context(), cfg)
 	if len(ts.Tools()) == 0 {
 		t.Fatal("NewToolSet returned no tools")
 	}
@@ -321,7 +320,7 @@ func TestToolDescriptions(t *testing.T) {
 		SubagentDB:           &mockSubagentDB{},
 		ParentConversationID: "parent-123",
 	}
-	noBrowserTS := NewToolSet(context.Background(), noBrowserCfg)
+	noBrowserTS := NewToolSet(t.Context(), noBrowserCfg)
 	for _, tool := range noBrowserTS.Tools() {
 		if tool.Name == "browser" || tool.Name == "read_image" {
 			t.Errorf("browser-disabled config should not include tool %q", tool.Name)
@@ -335,7 +334,7 @@ func TestToolDescriptions(t *testing.T) {
 		WorkingDir:    "/test",
 		EnableBrowser: true,
 	}
-	noSubagentTS := NewToolSet(context.Background(), noSubagentCfg)
+	noSubagentTS := NewToolSet(t.Context(), noSubagentCfg)
 	for _, tool := range noSubagentTS.Tools() {
 		if tool.Name == "subagent" {
 			t.Error("subagent-disabled config should not include subagent tool")
@@ -379,7 +378,7 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 		return ""
 	}
 
-	ts1 := NewToolSet(context.Background(), cfg)
+	ts1 := NewToolSet(t.Context(), cfg)
 	desc1 := findSubagent(ts1)
 	if desc1 == "" {
 		t.Fatal("expected subagent tool in first ToolSet")
@@ -391,7 +390,7 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 	// Simulate a custom model being added at runtime.
 	models = append(models, AvailableModel{ID: "model-b", DisplayName: "Model B"})
 
-	ts2 := NewToolSet(context.Background(), cfg)
+	ts2 := NewToolSet(t.Context(), cfg)
 	desc2 := findSubagent(ts2)
 	if desc2 == "" {
 		t.Fatal("expected subagent tool in second ToolSet")
@@ -406,7 +405,7 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 	// When BuildAvailableModels is nil, fall back to LLMProvider.GetAvailableModels.
 	cfgNoBuilder := cfg
 	cfgNoBuilder.BuildAvailableModels = nil
-	ts3 := NewToolSet(context.Background(), cfgNoBuilder)
+	ts3 := NewToolSet(t.Context(), cfgNoBuilder)
 	desc3 := findSubagent(ts3)
 	if desc3 == "" {
 		t.Fatal("expected subagent tool when falling back to LLMProvider")
@@ -523,7 +522,7 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 				ModelID:     modelID,
 				WorkingDir:  "/test",
 			}
-			ts := NewToolSet(context.Background(), cfg)
+			ts := NewToolSet(t.Context(), cfg)
 			if !hasWebSearchToolOfType(ts, "web_search_20250305") {
 				t.Errorf("expected anthropic web_search tool for %s", modelID)
 			}
@@ -538,7 +537,7 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 			ModelID:     "gpt-5.3-codex",
 			WorkingDir:  "/test",
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if !hasWebSearchToolOfType(ts, "web_search") {
 			t.Error("expected web_search tool for OpenAI Responses model")
 		}
@@ -555,7 +554,7 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 			ModelID:     "openai-chat",
 			WorkingDir:  "/test",
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if hasWebSearchTool(ts) {
 			t.Error("expected no web_search tool for a chat-completions openai service")
 		}
@@ -572,7 +571,7 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 			ModelID:     "third-party-model",
 			WorkingDir:  "/test",
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if hasWebSearchTool(ts) {
 			t.Error("expected no web_search tool for a non-Claude anthropic-protocol service")
 		}
@@ -585,7 +584,7 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 			ModelID:     "unknown-model",
 			WorkingDir:  "/test",
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if hasWebSearchTool(ts) {
 			t.Error("expected no web_search tool for unknown model")
 		}
@@ -598,7 +597,7 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 			ModelID:     "",
 			WorkingDir:  "/test",
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if hasWebSearchTool(ts) {
 			t.Error("expected no web_search tool for empty model ID")
 		}
@@ -611,7 +610,7 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 			ModelID:     "claude-sonnet-4.5",
 			WorkingDir:  "/test",
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		if hasWebSearchTool(ts) {
 			t.Error("expected no web_search tool with nil provider")
 		}
@@ -624,7 +623,7 @@ func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
 			ModelID:     "claude-sonnet-4.5",
 			WorkingDir:  "/test",
 		}
-		ts := NewToolSet(context.Background(), cfg)
+		ts := NewToolSet(t.Context(), cfg)
 		for _, tool := range ts.Tools() {
 			if tool.Name == "web_search" {
 				if tool.Run != nil {
@@ -671,7 +670,7 @@ func TestNewToolSetPatchStrategyFlags(t *testing.T) {
 		{name: "raw overrides simple", simple: true, raw: true, want: "apply_patch"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := NewToolSet(context.Background(), ToolSetConfig{
+			ts := NewToolSet(t.Context(), ToolSetConfig{
 				LLMProvider:           &rawPatchProvider{},
 				ModelID:               "test",
 				PatchSimpleEnabled:    boolFn(tt.simple),
@@ -704,7 +703,7 @@ func TestNewToolSetPatchStrategyFlags(t *testing.T) {
 }
 
 func TestNewToolSetRawFlagDoesNotOverrideUnsupportedService(t *testing.T) {
-	ts := NewToolSet(context.Background(), ToolSetConfig{
+	ts := NewToolSet(t.Context(), ToolSetConfig{
 		LLMProvider:           &mockLLMProvider{},
 		ModelID:               "test-model",
 		PatchOpenAIRawEnabled: func() bool { return true },

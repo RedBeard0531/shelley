@@ -274,7 +274,7 @@ func TestCustomModelWithThinking(t *testing.T) {
 	}
 
 	// Send a simple test request
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	request := &llm.Request{

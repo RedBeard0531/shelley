@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -134,7 +133,7 @@ func TestVersionCheckerSkipCheck(t *testing.T) {
 		t.Error("Expected skipCheck to be true when SHELLEY_SKIP_VERSION_CHECK=true")
 	}
 
-	info, err := vc.Check(context.Background(), false)
+	info, err := vc.Check(t.Context(), false)
 	if err != nil {
 		t.Errorf("Check() returned error: %v", err)
 	}
@@ -150,7 +149,7 @@ func TestVersionCheckerCustomized(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	vc := NewVersionChecker()
-	info, err := vc.Check(context.Background(), false)
+	info, err := vc.Check(t.Context(), false)
 	if err != nil {
 		t.Fatalf("Check() returned error: %v", err)
 	}
@@ -167,7 +166,7 @@ func TestVersionCheckerCustomized(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	info, err = vc.Check(context.Background(), false)
+	info, err = vc.Check(t.Context(), false)
 	if err != nil {
 		t.Fatalf("Check() returned error: %v", err)
 	}
@@ -180,7 +179,7 @@ func TestDoUpgradeRefusesCustomizedBuild(t *testing.T) {
 	t.Setenv("SHELLEY_CUSTOMIZED_OVERRIDE", "true")
 
 	vc := &VersionChecker{}
-	err := vc.DoUpgrade(context.Background())
+	err := vc.DoUpgrade(t.Context())
 	if err == nil {
 		t.Fatal("expected DoUpgrade to refuse customized builds")
 	}
@@ -257,7 +256,7 @@ func TestVersionCheckerCache(t *testing.T) {
 	}
 
 	// Override the fetch function by checking the cache behavior
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First call - should not use cache
 	_, err := vc.Check(ctx, false)

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,9 +17,9 @@ import (
 func findUserMessage(t *testing.T, database *db.DB, conversationID string) *generated.Message {
 	t.Helper()
 	var messages []generated.Message
-	if err := database.Queries(context.Background(), func(q *generated.Queries) error {
+	if err := database.Queries(t.Context(), func(q *generated.Queries) error {
 		var qerr error
-		messages, qerr = q.ListMessages(context.Background(), conversationID)
+		messages, qerr = q.ListMessages(t.Context(), conversationID)
 		return qerr
 	}); err != nil {
 		t.Fatalf("failed to list messages: %v", err)
@@ -40,7 +39,7 @@ func TestChatStampsUserEmail(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -73,7 +72,7 @@ func TestChatWithoutEmailHeaderStoresNull(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -105,7 +104,7 @@ func TestQueuedChatStampsUserEmail(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -143,9 +142,9 @@ func TestQueuedChatStampsUserEmail(t *testing.T) {
 	var bobMsg *generated.Message
 	waitFor(t, 10*time.Second, func() bool {
 		var messages []generated.Message
-		if err := database.Queries(context.Background(), func(q *generated.Queries) error {
+		if err := database.Queries(t.Context(), func(q *generated.Queries) error {
 			var qerr error
-			messages, qerr = q.ListMessages(context.Background(), conversationID)
+			messages, qerr = q.ListMessages(t.Context(), conversationID)
 			return qerr
 		}); err != nil {
 			return false

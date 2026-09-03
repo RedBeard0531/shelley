@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -55,7 +54,7 @@ func withReflection(t *testing.T, integrationsJSON string) {
 func TestExeNotifyEnabledWhenIntegrationPresent(t *testing.T) {
 	withReflection(t, `{"integrations":[{"name":"notify","type":"notify"}]}`)
 	s := newExeNotifyTestServer(t)
-	if !s.exeNotifyEnabled(context.Background()) {
+	if !s.exeNotifyEnabled(t.Context()) {
 		t.Fatal("expected exe_notify enabled by default when integration present")
 	}
 }
@@ -63,7 +62,7 @@ func TestExeNotifyEnabledWhenIntegrationPresent(t *testing.T) {
 func TestExeNotifyDisabledWhenNoIntegration(t *testing.T) {
 	withReflection(t, `{"integrations":[{"name":"reflection","type":"reflection"}]}`)
 	s := newExeNotifyTestServer(t)
-	if s.exeNotifyEnabled(context.Background()) {
+	if s.exeNotifyEnabled(t.Context()) {
 		t.Fatal("expected exe_notify disabled without notify integration")
 	}
 }
@@ -80,7 +79,7 @@ func TestExeNotifyDisabledInPredictableMode(t *testing.T) {
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		true /* predictableOnly */, "predictable", "")
-	if s.exeNotifyEnabled(context.Background()) {
+	if s.exeNotifyEnabled(t.Context()) {
 		t.Fatal("expected exe_notify disabled in predictable-only mode")
 	}
 }
@@ -88,10 +87,10 @@ func TestExeNotifyDisabledInPredictableMode(t *testing.T) {
 func TestExeNotifyDisabledBySetting(t *testing.T) {
 	withReflection(t, `{"integrations":[{"name":"notify","type":"notify"}]}`)
 	s := newExeNotifyTestServer(t)
-	if err := s.db.SetSetting(context.Background(), exeNotifySettingKey, "false"); err != nil {
+	if err := s.db.SetSetting(t.Context(), exeNotifySettingKey, "false"); err != nil {
 		t.Fatal(err)
 	}
-	if s.exeNotifyEnabled(context.Background()) {
+	if s.exeNotifyEnabled(t.Context()) {
 		t.Fatal("expected exe_notify disabled by setting")
 	}
 }

@@ -32,7 +32,7 @@ func hasMessageText(f StreamResponse, text string) bool {
 // cancelled and drained before returning.
 func runUnifiedStream(t *testing.T, srv *Server, query string, until func([]StreamResponse) bool, timeout time.Duration) []StreamResponse {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	url := "/api/stream2"
 	if query != "" {
 		url += "?" + query
@@ -68,7 +68,7 @@ func runUnifiedStream(t *testing.T, srv *Server, query string, until func([]Stre
 // streamPub tagged with conversation_id.
 func createLiveMessage(t *testing.T, srv *Server, database *db.DB, convID, text string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	msg, err := database.CreateMessage(ctx, db.CreateMessageParams{
 		ConversationID: convID,
 		Type:           db.MessageTypeUser,
@@ -94,15 +94,15 @@ func TestUnifiedStreamMultiplexesTwoConversations(t *testing.T) {
 	convA := seedConversation(t, database, 0)
 	convB := seedConversation(t, database, 0)
 	// Activate managers so notifySubscribersNewMessage will publish.
-	if _, err := srv.getOrCreateConversationManager(context.Background(), convA, ""); err != nil {
+	if _, err := srv.getOrCreateConversationManager(t.Context(), convA, ""); err != nil {
 		t.Fatalf("activate A: %v", err)
 	}
-	if _, err := srv.getOrCreateConversationManager(context.Background(), convB, ""); err != nil {
+	if _, err := srv.getOrCreateConversationManager(t.Context(), convB, ""); err != nil {
 		t.Fatalf("activate B: %v", err)
 	}
 
 	// Open stream, then produce a message on A and on B.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)
 	w := newResponseRecorderWithClose()
@@ -224,11 +224,11 @@ func TestUnifiedStreamReceivesCrossConversationLiveEvents(t *testing.T) {
 
 	convA := seedConversation(t, database, 1)
 	convB := seedConversation(t, database, 0)
-	if _, err := srv.getOrCreateConversationManager(context.Background(), convB, ""); err != nil {
+	if _, err := srv.getOrCreateConversationManager(t.Context(), convB, ""); err != nil {
 		t.Fatalf("activate B: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation="+convA, nil).WithContext(ctx)
 	w := newResponseRecorderWithClose()
@@ -293,11 +293,11 @@ func TestLegacyConversationStreamIsolatedFromOtherConversations(t *testing.T) {
 
 		convA := seedConversation(t, database, 1)
 		convB := seedConversation(t, database, 0)
-		if _, err := srv.getOrCreateConversationManager(context.Background(), convB, ""); err != nil {
+		if _, err := srv.getOrCreateConversationManager(t.Context(), convB, ""); err != nil {
 			t.Fatalf("activate B: %v", err)
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		req := httptest.NewRequest(http.MethodGet, "/api/conversation/"+convA+"/stream", nil).WithContext(ctx)
 		w := newResponseRecorderWithClose()

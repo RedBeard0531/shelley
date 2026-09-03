@@ -40,7 +40,7 @@ func TestBrowserNetworkClearCache(t *testing.T) {
 	server := &http.Server{Handler: mux}
 	go server.Serve(listener)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)

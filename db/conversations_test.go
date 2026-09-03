@@ -17,7 +17,7 @@ import (
 func TestCreateBtwReaderConversationIsAtomicAndStoresPointer(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	parent, err := database.CreateConversation(ctx, nil, true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestCreateBtwReaderConversationIsAtomicAndStoresPointer(t *testing.T) {
 func TestCreateBtwReaderConversationInitializationRollback(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	parent, err := database.CreateConversation(ctx, stringPtr("parent"), true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestConversationService_Create(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	tests := []struct {
@@ -176,7 +176,7 @@ func TestConversationService_GetByID(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -211,7 +211,7 @@ func TestConversationService_GetBySlug(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation with slug
@@ -246,7 +246,7 @@ func TestConversationService_UpdateSlug(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -278,7 +278,7 @@ func TestConversationService_List(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create multiple test conversations
@@ -310,7 +310,7 @@ func TestConversationService_Search(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create test conversations with different slugs
@@ -346,7 +346,7 @@ func TestConversationService_Touch(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -381,7 +381,7 @@ func TestConversationService_Delete(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -411,7 +411,7 @@ func TestConversationService_Count(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Initial count should be 0
@@ -457,7 +457,7 @@ func TestConversationService_MultipleNullSlugs(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create multiple conversations with null slugs - this should not fail
@@ -492,7 +492,7 @@ func TestConversationService_SlugUniquenessWhenNotNull(t *testing.T) {
 	defer db.Close()
 
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create first conversation with a slug
@@ -519,7 +519,7 @@ func TestConversationService_ArchiveUnarchive(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -566,7 +566,7 @@ func TestConversationService_ListArchivedConversations(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create test conversations
@@ -614,7 +614,7 @@ func TestConversationService_SearchArchivedConversations(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create test conversations
@@ -660,7 +660,7 @@ func TestConversationService_DeleteConversation(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -696,7 +696,7 @@ func TestConversationService_UpdateConversationCwd(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -736,7 +736,7 @@ func TestArchivedConversations_SortedByUpdatedAt_NotArchiveTime(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	// Create three conversations
@@ -830,7 +830,7 @@ func TestArchiveDoesNotChangeUpdatedAt(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a conversation
@@ -874,7 +874,7 @@ func TestUnarchivePreservesSortOrder(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create three conversations with known activity times
@@ -967,7 +967,7 @@ func TestQueuedMessages(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conv, err := db.CreateConversation(ctx, stringPtr("queued-test"), true, nil, nil, ConversationOptions{})
@@ -1027,7 +1027,7 @@ func TestCreateMessageRemoveQueuedIDAtomic(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conv, err := db.CreateConversation(ctx, stringPtr("atomic-drain"), true, nil, nil, ConversationOptions{})
@@ -1084,7 +1084,7 @@ func TestQueuedMessagesMutationStrictOnCorruptColumn(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conv, err := db.CreateConversation(ctx, stringPtr("corrupt-queue"), true, nil, nil, ConversationOptions{})
@@ -1136,7 +1136,7 @@ func TestQueuedMessagesMutationStrictOnCorruptColumn(t *testing.T) {
 func TestPromoteDraftAtomicOverrides(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	origModel := "model-orig"
 	origCwd := "/tmp/orig"
@@ -1206,7 +1206,7 @@ func TestListConversationsParticipants(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	shared, err := db.CreateConversation(ctx, stringPtr("shared"), true, nil, nil, ConversationOptions{})
@@ -1362,7 +1362,7 @@ func TestDecodeParticipants(t *testing.T) {
 func TestListFrozenParentMessagesReturnsExactPointerPrefix(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	parent, err := database.CreateConversation(ctx, nil, true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -1411,7 +1411,7 @@ func TestListFrozenParentMessagesReturnsExactPointerPrefix(t *testing.T) {
 func TestManagedBtwIdentityAndUserInitiatedScrubbing(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	parent, err := database.CreateConversation(ctx, nil, true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)

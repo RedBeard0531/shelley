@@ -46,7 +46,7 @@ func TestCrawlGitRepos(t *testing.T) {
 	// Dot-directory below root should be skipped.
 	mkRepo(t, filepath.Join(root, ".cache", "dotrepo"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	repos, truncated := crawlGitRepos(ctx, []string{root})
 	if truncated {
@@ -177,7 +177,7 @@ func TestCrawlGitReposConcurrent(t *testing.T) {
 		return GitRepoInfo{}, false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	repos, truncated := crawlGitReposWithReader(ctx, []string{"/root"}, reader, inspect)
 	if truncated {

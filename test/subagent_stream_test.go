@@ -111,7 +111,7 @@ func setupTestServerForSubagent(t *testing.T) (*server.Server, *db.DB, *httptest
 	t.Cleanup(func() { database.Close() })
 
 	// Run migrations
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
@@ -193,7 +193,7 @@ func readSSEEventWithTimeout(reader *bufio.Reader, timeout time.Duration) (*Stre
 func TestSubagentNotificationViaStream(t *testing.T) {
 	svr, database, testServer, _ := setupTestServerForSubagent(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create parent conversation
 	parentSlug := "parent-convo"
@@ -309,7 +309,7 @@ func TestSubagentNoExternalNotification(t *testing.T) {
 	svr, database, testServer, _ := setupTestServerForSubagent(t)
 	defer testServer.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Register a recording notification channel
 	recorder := &recordingChannel{}

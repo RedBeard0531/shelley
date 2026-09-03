@@ -1,7 +1,6 @@
 package llmhttp
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +24,7 @@ func requireIdleStall(t *testing.T, err error) llm.RequestErrorInfo {
 }
 
 func TestContextFunctions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Test ConversationID
 	ctx = WithConversationID(ctx, "conv-123")
@@ -46,7 +45,7 @@ func TestContextFunctions(t *testing.T) {
 	}
 
 	// Test empty context
-	emptyCtx := context.Background()
+	emptyCtx := t.Context()
 	if got := ConversationIDFromContext(emptyCtx); got != "" {
 		t.Errorf("ConversationIDFromContext(empty) = %q, want empty", got)
 	}
@@ -71,7 +70,7 @@ func TestTransportAddsHeaders(t *testing.T) {
 	client := NewClient(nil)
 
 	// Make a request with conversation ID in context
-	ctx := WithConversationID(context.Background(), "test-conv-id")
+	ctx := WithConversationID(t.Context(), "test-conv-id")
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 
 	resp, err := client.Do(req)
@@ -109,7 +108,7 @@ func TestTransportAddsSessionAffinityForFireworks(t *testing.T) {
 	client := NewClient(nil)
 
 	// Make a request with conversation ID and provider=fireworks in context
-	ctx := context.Background()
+	ctx := t.Context()
 	ctx = WithConversationID(ctx, "test-conv-id")
 	ctx = WithProvider(ctx, "fireworks")
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
@@ -285,7 +284,7 @@ func TestRequestTraceCapturesIDs(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(nil)
-	ctx, trace := llm.WithRequestTrace(context.Background())
+	ctx, trace := llm.WithRequestTrace(t.Context())
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -325,7 +324,7 @@ func TestRequestTraceHasShelleyIDOnStall(t *testing.T) {
 	defer close(release)
 
 	client := NewClientWithIdleTimeout(nil, 100*time.Millisecond)
-	ctx, trace := llm.WithRequestTrace(context.Background())
+	ctx, trace := llm.WithRequestTrace(t.Context())
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 	resp, err := client.Do(req)
 	if err == nil {
@@ -349,7 +348,7 @@ func TestRequestTraceHonorsExistingID(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(nil)
-	ctx, trace := llm.WithRequestTrace(context.Background())
+	ctx, trace := llm.WithRequestTrace(t.Context())
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 	req.Header.Set("Shelley-Request-Id", "preset-id")
 	resp, err := client.Do(req)
@@ -377,7 +376,7 @@ func TestRequestTraceCapturesIDOnErrorResponse(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(nil)
-	ctx, trace := llm.WithRequestTrace(context.Background())
+	ctx, trace := llm.WithRequestTrace(t.Context())
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -401,7 +400,7 @@ func TestRequestTraceCapturesIDWhenIdleDisabled(t *testing.T) {
 	defer server.Close()
 
 	client := NewClientWithIdleTimeout(nil, 0)
-	ctx, trace := llm.WithRequestTrace(context.Background())
+	ctx, trace := llm.WithRequestTrace(t.Context())
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 	resp, err := client.Do(req)
 	if err != nil {

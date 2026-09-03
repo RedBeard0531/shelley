@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"slices"
 	"testing"
 )
@@ -25,7 +24,7 @@ func TestConsumeResumeAfterUpgrade(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			database, cleanup := NewTestDB(t)
 			defer cleanup()
-			ctx := context.Background()
+			ctx := t.Context()
 
 			working, err := database.CreateConversation(ctx, nil, true, nil, nil, ConversationOptions{})
 			if err != nil {

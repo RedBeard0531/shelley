@@ -15,7 +15,7 @@ import (
 func TestConversationListPatchStreamInitialResetAndNewConversation(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	rec := newFlusherRecorder()
@@ -37,7 +37,7 @@ func TestConversationListPatchStreamInitialResetAndNewConversation(t *testing.T)
 	}
 
 	slug := "stream-test"
-	if _, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{}); err != nil {
+	if _, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	server.publishConversationListUpdate(ConversationListUpdate{Type: "update"})
@@ -66,7 +66,7 @@ func TestConversationListPatchStreamReplaysHistoryFromOldHash(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)
 	done := make(chan struct{})
@@ -77,7 +77,7 @@ func TestConversationListPatchStreamReplaysHistoryFromOldHash(t *testing.T) {
 	initial := waitForPatchEventAfter(t, rec, "")
 	lastHash := initial.NewHash
 	for _, slug := range []string{"one", "two"} {
-		if _, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{}); err != nil {
+		if _, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		server.publishConversationListUpdate(ConversationListUpdate{Type: "update"})
@@ -86,7 +86,7 @@ func TestConversationListPatchStreamReplaysHistoryFromOldHash(t *testing.T) {
 	cancel()
 	<-done
 
-	replayCtx, replayCancel := context.WithCancel(context.Background())
+	replayCtx, replayCancel := context.WithCancel(t.Context())
 	defer replayCancel()
 	replayRec := newFlusherRecorder()
 	replayReq := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation_list_hash="+initial.NewHash, nil).WithContext(replayCtx)
@@ -121,11 +121,11 @@ func TestConversationListPatchStreamUnknownHashStartsOver(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 	slug := "existing"
-	if _, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{}); err != nil {
+	if _, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation_list_hash=bogus", nil).WithContext(ctx)
@@ -150,16 +150,16 @@ func TestConversationListPatchStreamUnknownHashStartsOver(t *testing.T) {
 func TestConversationListPatchStreamWorkingState(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := server.getOrCreateConversationManager(context.Background(), conv.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conv.ConversationID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)
@@ -206,15 +206,15 @@ func TestConversationListPatchStreamWorkingState(t *testing.T) {
 func TestConversationListPatchStreamRemovesAndReorders(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	a, err := database.CreateConversation(context.Background(), strPtr("a"), true, nil, nil, db.ConversationOptions{})
+	a, err := database.CreateConversation(t.Context(), strPtr("a"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.CreateConversation(context.Background(), strPtr("b"), true, nil, nil, db.ConversationOptions{}); err != nil {
+	if _, err := database.CreateConversation(t.Context(), strPtr("b"), true, nil, nil, db.ConversationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)
@@ -228,7 +228,7 @@ func TestConversationListPatchStreamRemovesAndReorders(t *testing.T) {
 		t.Fatalf("want 2 initial entries, got %d", len(state))
 	}
 
-	if err := database.DeleteConversation(context.Background(), a.ConversationID); err != nil {
+	if err := database.DeleteConversation(t.Context(), a.ConversationID); err != nil {
 		t.Fatal(err)
 	}
 	server.publishConversationListUpdate(ConversationListUpdate{Type: "delete"})
@@ -257,7 +257,7 @@ func TestConversationListPatchStreamRemovesAndReorders(t *testing.T) {
 func TestConversationListPatchStreamRapidReordersApplyCleanly(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	convA, err := database.CreateConversation(ctx, strPtr("a"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -268,7 +268,7 @@ func TestConversationListPatchStreamRapidReordersApplyCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	streamCtx, cancel := context.WithCancel(context.Background())
+	streamCtx, cancel := context.WithCancel(t.Context())
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(streamCtx)
 	done := make(chan struct{})
@@ -306,12 +306,12 @@ func TestConversationListPatchStreamCurrentHashSendsHeartbeatNotReset(t *testing
 	t.Parallel()
 	server, _, _ := newTestServer(t)
 	// Prime current state.
-	if err := server.conversationListStream.recompute(context.Background()); err != nil {
+	if err := server.conversationListStream.recompute(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	currentHash := server.conversationListStream.currentHash
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation_list_hash="+currentHash, nil).WithContext(ctx)
@@ -338,14 +338,14 @@ func TestConversationListPatchStreamCurrentHashSendsHeartbeatNotReset(t *testing
 func TestConversationListPatchStreamHistoryEndpoint(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	_, _, release, err := server.conversationListStream.connect(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
-	if _, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{}); err != nil {
+	if _, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	server.publishConversationListUpdate(ConversationListUpdate{Type: "update"})
@@ -421,7 +421,7 @@ func TestConversationListPatchStreamSurvivesHistoryTrim(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)
 	done := make(chan struct{})
@@ -440,7 +440,7 @@ func TestConversationListPatchStreamSurvivesHistoryTrim(t *testing.T) {
 	// Cycle the working state on a single conversation enough times to
 	// overflow the history ring. We need the subscriber to be actively
 	// draining so the cap is enforced.
-	conv, err := database.CreateConversation(context.Background(), strPtr("trim-test"), true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), strPtr("trim-test"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestConversationListPatchStreamSurvivesHistoryTrim(t *testing.T) {
 	cycles := conversationListPatchHistoryLimit + 5
 	for i := 0; i < cycles; i++ {
 		want := i%2 == 0
-		if err := database.SetConversationAgentWorking(context.Background(), conv.ConversationID, want); err != nil {
+		if err := database.SetConversationAgentWorking(t.Context(), conv.ConversationID, want); err != nil {
 			t.Fatalf("set working: %v", err)
 		}
 		ev := waitForPatchEventAfter(t, rec, lastHash)
@@ -462,7 +462,7 @@ func TestConversationListPatchStreamSurvivesHistoryTrim(t *testing.T) {
 	// subscriber. This is the bit that regressed: the cursor was a slice
 	// index, so once history was trimmed, the subscriber's index pointed
 	// past the end of the slice forever.
-	if err := database.SetConversationAgentWorking(context.Background(), conv.ConversationID, false); err != nil {
+	if err := database.SetConversationAgentWorking(t.Context(), conv.ConversationID, false); err != nil {
 		t.Fatalf("set working final: %v", err)
 	}
 	final := waitForPatchEventAfter(t, rec, lastHash)
@@ -481,7 +481,7 @@ func TestConversationListPatchStreamOverrunSendsReset(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	// Connect but do NOT drain next() — we want the subscriber stalled while
@@ -499,16 +499,16 @@ func TestConversationListPatchStreamOverrunSendsReset(t *testing.T) {
 	// subscriber's stalled startIdx, which is the stream end after connect.
 	// On an empty server, connect's recompute appends the empty-list event,
 	// so startIdx is 1.
-	conv, err := database.CreateConversation(context.Background(), strPtr("overrun-test"), true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), strPtr("overrun-test"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cycles := conversationListPatchHistoryLimit + 5
 	for i := 0; i < cycles; i++ {
-		if err := database.SetConversationAgentWorking(context.Background(), conv.ConversationID, i%2 == 0); err != nil {
+		if err := database.SetConversationAgentWorking(t.Context(), conv.ConversationID, i%2 == 0); err != nil {
 			t.Fatalf("set working: %v", err)
 		}
-		if err := server.conversationListStream.recompute(context.Background()); err != nil {
+		if err := server.conversationListStream.recompute(t.Context()); err != nil {
 			t.Fatalf("recompute: %v", err)
 		}
 	}
@@ -530,10 +530,10 @@ func TestConversationListPatchStreamOverrunSendsReset(t *testing.T) {
 	// arrive as a normal continuation event whose OldHash chains from the
 	// reset's NewHash.
 	resetHash := ev.NewHash
-	if err := database.SetConversationAgentWorking(context.Background(), conv.ConversationID, false); err != nil {
+	if err := database.SetConversationAgentWorking(t.Context(), conv.ConversationID, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.conversationListStream.recompute(context.Background()); err != nil {
+	if err := server.conversationListStream.recompute(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	ev, ok = next()
@@ -566,7 +566,7 @@ func TestConversationListPatchStreamOverrunSendsReset(t *testing.T) {
 func TestUserMessageCommitCarriesWorkingTrue(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,11 +576,11 @@ func TestUserMessageCommitCarriesWorkingTrue(t *testing.T) {
 	// conversation will come from the Send below. Without this, the
 	// system-prompt insert produces a max_sequence_id bump patch with
 	// working=false that looks like the regression we're guarding against.
-	if _, err := server.getOrCreateConversationManager(context.Background(), conv.ConversationID, ""); err != nil {
+	if _, err := server.getOrCreateConversationManager(t.Context(), conv.ConversationID, ""); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)

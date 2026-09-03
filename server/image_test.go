@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -212,7 +211,7 @@ func TestHandleMessageImage(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create a conversation
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +234,7 @@ func TestHandleMessageImage(t *testing.T) {
 		},
 	}
 
-	createdMsg, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+	createdMsg, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 		ConversationID: conversation.ConversationID,
 		Type:           db.MessageTypeTool,
 		LLMData:        msg,

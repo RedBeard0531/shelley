@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"shelley.exe.dev/db/generated"
@@ -17,7 +16,7 @@ import (
 func TestGetLatestActionableMessageIgnoresSlugMarkers(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("latest-vs-slug"), true, nil, nil, ConversationOptions{})
 	if err != nil {
@@ -64,7 +63,7 @@ func TestGetLatestActionableMessageIgnoresSlugMarkers(t *testing.T) {
 func TestSlugMarkerDoesNotBreakWarningRun(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("warn-vs-slug"), true, nil, nil, ConversationOptions{})
 	if err != nil {
@@ -123,7 +122,7 @@ func TestSlugMarkerDoesNotBreakWarningRun(t *testing.T) {
 func TestListMessagesTailCountsVisibleMessages(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("tail-vs-slug"), true, nil, nil, ConversationOptions{})
 	if err != nil {
@@ -202,7 +201,7 @@ func TestListMessagesTailCountsVisibleMessages(t *testing.T) {
 func TestForkGenerationIgnoresSlugMarker(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("fork-gen-vs-slug"), true, nil, nil, ConversationOptions{})
 	if err != nil {

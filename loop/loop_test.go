@@ -74,7 +74,7 @@ func TestPredictableFixture(t *testing.T) {
 	service := predictable.NewService()
 
 	// Test simple hello response
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hello"}}},
@@ -106,7 +106,7 @@ func TestPredictableFixture(t *testing.T) {
 func TestPredictableFixtureEcho(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "echo: foo"}}},
@@ -137,7 +137,7 @@ func TestPredictableFixtureEcho(t *testing.T) {
 func TestPredictableFixtureBashTool(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "bash: ls -la"}}},
@@ -188,7 +188,7 @@ func TestPredictableFixtureBashTool(t *testing.T) {
 func TestPredictableFixtureDefaultResponse(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "some unknown input"}}},
@@ -208,7 +208,7 @@ func TestPredictableFixtureDefaultResponse(t *testing.T) {
 func TestPredictableFixtureDelay(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "delay: 0.1"}}},
@@ -258,7 +258,7 @@ func TestLoopWithPredictableFixture(t *testing.T) {
 	loop.QueueUserMessage(userMessage)
 
 	// Run the loop with a short timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
 	err := loop.Go(ctx)
@@ -313,7 +313,7 @@ func TestLoopWithTools(t *testing.T) {
 	loop.QueueUserMessage(userMessage)
 
 	// Run the loop with a short timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 
 	err := loop.Go(ctx)
@@ -398,7 +398,7 @@ func TestLoopWithKeywordTool(t *testing.T) {
 	loop.QueueUserMessage(userMessage)
 
 	// Process one turn
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	err := loop.ProcessOneTurn(ctx)
@@ -462,7 +462,7 @@ func TestLoopWithActualKeywordTool(t *testing.T) {
 	loop.QueueUserMessage(userMessage)
 
 	// Process one turn
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	err := loop.ProcessOneTurn(ctx)
@@ -961,7 +961,7 @@ func TestGitStateTracking(t *testing.T) {
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hello"}},
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	err := loop.ProcessOneTurn(ctx)
@@ -1075,7 +1075,7 @@ func TestGitStateTrackingWorktree(t *testing.T) {
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hello"}},
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	err = loop.ProcessOneTurn(ctx)
@@ -1119,7 +1119,7 @@ func TestPredictableFixtureMaxImageDimension(t *testing.T) {
 func TestPredictableFixtureThinking(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "think: This is a test thought"}}},
@@ -1158,7 +1158,7 @@ func TestPredictableFixtureThinking(t *testing.T) {
 func TestPredictableFixturePatchTool(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "patch: /tmp/test.txt"}}},
@@ -1201,7 +1201,7 @@ func TestPredictableFixturePatchTool(t *testing.T) {
 func TestPredictableFixtureMalformedPatchTool(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "patch bad json"}}},
@@ -1240,7 +1240,7 @@ func TestPredictableFixtureMalformedPatchTool(t *testing.T) {
 func TestPredictableFixtureError(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "error: test error"}}},
@@ -1276,7 +1276,7 @@ func TestPredictableFixtureRequestTracking(t *testing.T) {
 	}
 
 	// Make a request
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hello"}}},
@@ -1349,7 +1349,7 @@ func TestPredictableFixtureRequestTracking(t *testing.T) {
 func TestPredictableFixtureScreenshotTool(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "screenshot: .test-class"}}},
@@ -1392,7 +1392,7 @@ func TestPredictableFixtureScreenshotTool(t *testing.T) {
 func TestPredictableFixtureToolSmorgasbord(t *testing.T) {
 	service := predictable.NewService()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "tool smorgasbord"}}},
@@ -1446,7 +1446,7 @@ func TestProcessLLMRequestError(t *testing.T) {
 	}
 	loop.QueueUserMessage(userMessage)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 1*time.Second)
 	defer cancel()
 
 	err := loop.ProcessOneTurn(ctx)
@@ -1592,7 +1592,7 @@ func TestLLMRequestRetryOnEOF(t *testing.T) {
 	}
 	loop.QueueUserMessage(userMessage)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	err := loop.ProcessOneTurn(ctx)
@@ -1642,7 +1642,7 @@ func TestLLMRequestRetryExhausted(t *testing.T) {
 	}
 	loop.QueueUserMessage(userMessage)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	err := loop.ProcessOneTurn(ctx)
@@ -1766,7 +1766,7 @@ func TestCheckGitStateChange(t *testing.T) {
 	})
 
 	// This should not panic
-	loop.checkGitStateChange(context.Background())
+	loop.checkGitStateChange(t.Context())
 
 	// Test with actual callback
 	var gitStateChanges []*gitstate.GitState
@@ -1791,14 +1791,14 @@ func TestCheckGitStateChange(t *testing.T) {
 	runGit(t, tmpDir, "commit", "-m", "update")
 
 	// Check git state change
-	loop.checkGitStateChange(context.Background())
+	loop.checkGitStateChange(t.Context())
 
 	if len(gitStateChanges) != 1 {
 		t.Errorf("expected 1 git state change, got %d", len(gitStateChanges))
 	}
 
 	// Call again - should not trigger another change since state is the same
-	loop.checkGitStateChange(context.Background())
+	loop.checkGitStateChange(t.Context())
 
 	if len(gitStateChanges) != 1 {
 		t.Errorf("expected still 1 git state change (no new changes), got %d", len(gitStateChanges))
@@ -1826,7 +1826,7 @@ func TestExecuteToolCallsDoesNotPublishUnpersistedResults(t *testing.T) {
 		},
 	})
 
-	err := loop.executeToolCalls(context.Background(), []llm.Content{toolUse})
+	err := loop.executeToolCalls(t.Context(), []llm.Content{toolUse})
 	if err == nil || !strings.Contains(err.Error(), "database unavailable") {
 		t.Fatalf("executeToolCalls error = %v", err)
 	}
@@ -1885,7 +1885,7 @@ func TestExecuteToolCallsRunsConcurrently(t *testing.T) {
 		{ID: "second", Type: llm.ContentTypeToolUse, ToolName: testTool.Name, ToolInput: json.RawMessage(`{"name":"second"}`)},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
@@ -1958,7 +1958,7 @@ func TestExecuteToolCallsWithMissingTool(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 1*time.Second)
 	defer cancel()
 
 	err := loop.executeToolCalls(ctx, content)
@@ -2041,7 +2041,7 @@ func TestExecuteToolCallsWithErrorTool(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 1*time.Second)
 	defer cancel()
 
 	err := loop.executeToolCalls(ctx, content)
@@ -2116,7 +2116,7 @@ func TestMaxTokensTruncation(t *testing.T) {
 	loop.QueueUserMessage(userMessage)
 
 	// Run the loop - it should stop after handling truncation
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
 	err := loop.Go(ctx)
@@ -2211,7 +2211,7 @@ func TestRefusal(t *testing.T) {
 
 	// The loop should end the turn after handling the refusal, so Go returns
 	// when the queue drains (context deadline) rather than spinning.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
 	if err := loop.Go(ctx); err != context.DeadlineExceeded {
@@ -2338,7 +2338,7 @@ func TestRefusalThenRephraseNotInContext(t *testing.T) {
 		RecordMessage: func(context.Context, llm.Message, llm.Usage, []llm.PurposedUsage) error { return nil },
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	// First turn triggers a refusal. Drive it as its own complete turn so the
@@ -2483,7 +2483,7 @@ func TestPredictableFixtureFailEmitsRetryWarning(t *testing.T) {
 	service := predictable.NewService()
 	var warnings []llm.RetryEvent
 
-	ctx := context.Background()
+	ctx := t.Context()
 	req := &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "fail nope"}}},
@@ -2577,7 +2577,7 @@ func TestLoopRetryAfterPersistentFailure(t *testing.T) {
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}},
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	// First turn: exhausts retries and records an error message.
@@ -2605,7 +2605,7 @@ func TestLoopRetryAfterPersistentFailure(t *testing.T) {
 	loop.Retry()
 
 	// Use the loop's Go() so the retry signal is consumed.
-	goCtx, goCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	goCtx, goCancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer goCancel()
 	done := make(chan error, 1)
 	go func() { done <- loop.Go(goCtx) }()
@@ -2710,7 +2710,7 @@ func TestLoopResolvesPauseTurn(t *testing.T) {
 
 	loop.QueueUserMessage(llm.UserStringMessage("search the web for the answer"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := loop.ProcessOneTurn(ctx); err != nil {
 		t.Fatalf("ProcessOneTurn: %v", err)
@@ -2813,7 +2813,7 @@ func TestUserFacingLLMError(t *testing.T) {
 	}
 
 	// Trace diagnostics are appended when present.
-	_, trace := llm.WithRequestTrace(context.Background())
+	_, trace := llm.WithRequestTrace(t.Context())
 	trace.Set("shelley_request_id", "local_123")
 	trace.Set("upstream_request_id", "req_abc")
 	withIDs := userFacingLLMError(idleErr, trace)
@@ -2867,7 +2867,7 @@ func TestToolOtherUsageAttachedToToolResult(t *testing.T) {
 		Role:    llm.MessageRoleUser,
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "bash: echo hello"}},
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	if err := loop.Go(ctx); err != context.DeadlineExceeded {
 		t.Errorf("expected context deadline exceeded, got %v", err)
@@ -2913,7 +2913,7 @@ func TestToolOtherUsageAttachedToToolResult(t *testing.T) {
 // verifies that ordinary errors from those siblings are not rewritten merely
 // because their shared context is now cancelled.
 func TestExecuteToolCallsBarrierStartsAllSiblings(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	started := make(chan string, 3)
@@ -2985,7 +2985,7 @@ func TestExecuteToolCallsCancellationPreservesOutput(t *testing.T) {
 		return nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	testTool := &llm.Tool{
@@ -3088,7 +3088,7 @@ func TestExecuteToolCallsCancelActiveSuccessWins(t *testing.T) {
 		return nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	testTool := &llm.Tool{
@@ -3138,7 +3138,7 @@ func TestExecuteToolCallsAbandonsContextIgnoringTool(t *testing.T) {
 		return nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	release := make(chan struct{})

@@ -16,7 +16,7 @@ func TestMessageOpenAIResponsesReasoningMetadataRoundTrip(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	conv, err := database.CreateConversation(ctx, stringPtr("reasoning-round-trip"), true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestMessageService_Create(t *testing.T) {
 
 	// Using db directly instead of service
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -166,7 +166,7 @@ func TestMessageService_LLMModelColumns(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conv, err := db.CreateConversation(ctx, stringPtr("test-conversation"), true, nil, nil, ConversationOptions{})
@@ -215,7 +215,7 @@ func TestMessageService_GetByID(t *testing.T) {
 
 	// Using db directly instead of service
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -261,7 +261,7 @@ func TestMessageService_ListByConversation(t *testing.T) {
 
 	// Using db directly instead of service
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -315,7 +315,7 @@ func TestMessageService_ListByType(t *testing.T) {
 
 	// Using db directly instead of service
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -362,7 +362,7 @@ func TestMessageService_GetLatest(t *testing.T) {
 
 	// Using db directly instead of service
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -409,7 +409,7 @@ func TestMessageService_Delete(t *testing.T) {
 
 	// Using db directly instead of service
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -450,7 +450,7 @@ func TestMessageService_CountInConversation(t *testing.T) {
 
 	// Using db directly instead of service
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -507,7 +507,7 @@ func TestMessageService_CountByType(t *testing.T) {
 
 	// Using db directly instead of service
 	// Using db directly instead of service
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -564,7 +564,7 @@ func TestMessageService_ListMessagesByConversationPaginated(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create a test conversation
@@ -629,7 +629,7 @@ func TestMessageUserEmailRoundTrip(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	conv, err := database.CreateConversation(ctx, stringPtr("user-email-round-trip"), true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)

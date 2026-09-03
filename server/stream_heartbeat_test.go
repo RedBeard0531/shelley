@@ -20,7 +20,7 @@ func TestStreamResumeWithLastSequenceID(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a non-user-initiated conversation so that Hydrate() doesn't
 	// try to generate a system prompt (which races with the request context
@@ -66,7 +66,7 @@ func TestStreamResumeWithLastSequenceID(t *testing.T) {
 	// We also capture lastSeqID here for use in subsequent subtests.
 	var lastSeqID int64
 	t.Run("fresh_connection", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 
 		req := httptest.NewRequest("GET", "/api/conversation/"+conv.ConversationID+"/stream", nil).WithContext(ctx)
@@ -112,7 +112,7 @@ func TestStreamResumeWithLastSequenceID(t *testing.T) {
 
 	// Test 2: Resume with no new messages - should get heartbeat
 	t.Run("resume_no_new_messages", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 
 		url := fmt.Sprintf("/api/conversation/%s/stream?last_sequence_id=%d", conv.ConversationID, lastSeqID)
@@ -158,7 +158,7 @@ func TestStreamResumeWithLastSequenceID(t *testing.T) {
 			t.Fatalf("Failed to create message: %v", err)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 
 		url := fmt.Sprintf("/api/conversation/%s/stream?last_sequence_id=%d", conv.ConversationID, lastSeqID)

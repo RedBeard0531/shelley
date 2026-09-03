@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"os"
@@ -829,7 +828,7 @@ echo '{"slug": "Hello World!"}'`
 	h.NewConversation("first message", "")
 
 	// Read back the conversation; slug should have been applied + sanitized.
-	conv, err := h.db.GetConversationByID(context.Background(), h.convID)
+	conv, err := h.db.GetConversationByID(t.Context(), h.convID)
 	if err != nil {
 		t.Fatalf("GetConversation: %v", err)
 	}

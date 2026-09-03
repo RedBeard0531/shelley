@@ -90,7 +90,7 @@ func TestConversationStateAfterServerRestart(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a conversation with some messages (simulating previous activity)
 	conv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
@@ -138,7 +138,7 @@ func TestConversationStateAfterServerRestart(t *testing.T) {
 	server.RegisterRoutes(mux)
 
 	// Make a streaming request with a context that cancels after we read the first message
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
 	req := httptest.NewRequest("GET", "/api/conversation/"+conv.ConversationID+"/stream", nil).WithContext(ctx)
@@ -199,7 +199,7 @@ func TestModelRestorationAfterServerRestart(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a conversation with a specific model
 	modelID := "claude-sonnet-4.6"
@@ -248,7 +248,7 @@ func TestModelRestorationAfterServerRestart(t *testing.T) {
 	server.RegisterRoutes(mux)
 
 	// Make a streaming request
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
 	req := httptest.NewRequest("GET", "/api/conversation/"+conv.ConversationID+"/stream", nil).WithContext(ctx)

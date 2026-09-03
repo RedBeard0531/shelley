@@ -2,7 +2,6 @@ package gem
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -306,7 +305,7 @@ func TestGeminiHeaderCapture(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	res, err := model.GenerateContent(ctx, req)
 	if err != nil {
 		t.Fatalf("Failed to generate content: %v", err)
@@ -388,7 +387,7 @@ func TestHeaderCostIntegration(t *testing.T) {
 	}
 
 	// Make the request
-	ctx := context.Background()
+	ctx := t.Context()
 	res, err := service.Do(ctx, ir)
 	if err != nil {
 		t.Fatalf("Failed to make request: %v", err)

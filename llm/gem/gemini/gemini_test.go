@@ -1,7 +1,6 @@
 package gemini
 
 import (
-	"context"
 	"os"
 	"testing"
 )
@@ -19,7 +18,7 @@ func TestGenerateContent(t *testing.T) {
 		t.Skip("skipping test without API key")
 	}
 
-	res, err := m.GenerateContent(context.Background(), &Request{
+	res, err := m.GenerateContent(t.Context(), &Request{
 		Contents: []Content{{
 			Parts: []Part{{
 				Text: "What is the capital of France?",

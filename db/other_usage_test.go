@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -16,7 +15,7 @@ func TestMessageOtherUsageRoundTrip(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	conv, err := database.CreateConversation(ctx, stringPtr("other-usage-round-trip"), true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +89,7 @@ func TestCreateSlugMessage(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	conv, err := database.CreateConversation(ctx, stringPtr("slug-usage"), true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +150,7 @@ func TestCreateSlugMessage(t *testing.T) {
 func TestForkDoesNotCopySlugMarker(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("fork-slug-src"), true, nil, nil, ConversationOptions{})
 	if err != nil {
@@ -220,7 +219,7 @@ func TestGetSubagentOtherUsage(t *testing.T) {
 	database := setupTestDB(t)
 	defer database.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	parent, err := database.CreateConversation(ctx, stringPtr("other-usage-parent"), true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)

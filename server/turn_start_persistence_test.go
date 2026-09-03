@@ -14,7 +14,7 @@ func TestAcceptUserMessageRejectsUnpersistedTurn(t *testing.T) {
 	t.Parallel()
 	server, database, service := newTestServer(t)
 	defer stopActiveConversationLoops(server)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -103,7 +103,7 @@ func TestAcceptUserMessageClearsStaleWorkingWithoutPriorLoop(t *testing.T) {
 	t.Parallel()
 	server, database, service := newTestServer(t)
 	defer stopActiveConversationLoops(server)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	model := "predictable"
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, &model, db.ConversationOptions{})

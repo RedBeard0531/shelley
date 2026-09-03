@@ -98,7 +98,7 @@ func TestInjectMessagesMidTurn(t *testing.T) {
 		Role:    llm.MessageRoleUser,
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "go"}},
 	})
-	if err := loop.ProcessOneTurn(context.Background()); err != nil {
+	if err := loop.ProcessOneTurn(t.Context()); err != nil {
 		t.Fatalf("ProcessOneTurn: %v", err)
 	}
 

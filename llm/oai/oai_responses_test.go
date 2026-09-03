@@ -560,7 +560,7 @@ func TestResponsesServiceIntegration(t *testing.T) {
 		Model:  GPT53Codex,
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("simple request", func(t *testing.T) {
 		req := &llm.Request{
@@ -674,7 +674,7 @@ func TestResponsesServiceDoSendsSystemAsInstructions(t *testing.T) {
 		ModelURL: server.URL,
 	}
 
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		System: []llm.SystemContent{
 			{Text: "You are a helpful assistant"},
 			{Text: "Be concise"},
@@ -730,7 +730,7 @@ func TestResponsesServiceDoSendsDefaultMaxOutputTokens(t *testing.T) {
 		ModelURL: server.URL,
 	}
 
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{
 			Role:    llm.MessageRoleUser,
 			Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}},
@@ -782,7 +782,7 @@ func TestResponsesServiceDo(t *testing.T) {
 	defer server.Close()
 
 	// Create a service with the mock server
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := &ResponsesService{
 		APIKey:   "test-api-key",
 		Model:    GPT41,
@@ -933,7 +933,7 @@ func TestResponsesServiceDoConsumesPlainTextStream(t *testing.T) {
 		Model:    GPT41,
 		ModelURL: server.URL,
 	}
-	resp, err := svc.Do(context.Background(), &llm.Request{
+	resp, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "Hello!"}}}},
 		OnStream: func(delta llm.StreamDelta) {
 			streamed.WriteString(delta.Text)
@@ -976,7 +976,7 @@ func TestResponsesServiceRetriesPlainTextServerError(t *testing.T) {
 		ModelURL: server.URL,
 		Backoff:  []time.Duration{0},
 	}
-	resp, err := svc.Do(context.Background(), &llm.Request{
+	resp, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
 	})
@@ -1020,7 +1020,7 @@ func TestResponsesServicePrefersStructuredServerErrorMessage(t *testing.T) {
 
 	var retry llm.RetryEvent
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 		OnRetry:  func(event llm.RetryEvent) { retry = event },
 	})
@@ -1038,7 +1038,7 @@ func TestResponsesServiceUsesFirstBackoffForFirstRetry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var retry llm.RetryEvent
 	svc := &ResponsesService{
@@ -1083,7 +1083,7 @@ func TestResponsesServiceRetriesPlainTextRateLimit(t *testing.T) {
 
 	var retries []llm.RetryEvent
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
 	})
@@ -1106,7 +1106,7 @@ func TestResponsesServiceBoundsRetriedErrorBodies(t *testing.T) {
 	defer server.Close()
 
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 	})
 	if err == nil {
@@ -1126,7 +1126,7 @@ func TestResponsesServiceDoesNotRetryPlainTextClientError(t *testing.T) {
 	defer server.Close()
 
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 	})
 	if err == nil {
@@ -1148,7 +1148,7 @@ func TestResponsesServiceBoundsClientErrorBody(t *testing.T) {
 	defer server.Close()
 
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL}
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 	})
 	if err == nil {
@@ -1182,7 +1182,7 @@ func TestResponsesServiceRetriesEmptyJSONResponse(t *testing.T) {
 	defer server.Close()
 
 	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL}
-	resp, err := svc.Do(context.Background(), &llm.Request{
+	resp, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 	})
 	if err != nil {
@@ -1251,7 +1251,7 @@ func TestResponsesServiceDoWithCaching(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := &ResponsesService{
 		APIKey:   "test-api-key",
 		Model:    GPT41,
@@ -1336,7 +1336,7 @@ func TestResponsesServiceReasoningEffort(t *testing.T) {
 				ThinkingLevel:   tt.thinkingLevel,
 				ReasoningEffort: tt.reasoningEffort,
 			}
-			_, err := svc.Do(context.Background(), &llm.Request{
+			_, err := svc.Do(t.Context(), &llm.Request{
 				Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 			})
 			if err != nil {
@@ -1409,7 +1409,7 @@ func TestResponsesServiceRequestLevelThinking(t *testing.T) {
 				ThinkingLevel:   tt.svcLevel,
 				ReasoningEffort: tt.svcEffort,
 			}
-			_, err := svc.Do(context.Background(), &llm.Request{
+			_, err := svc.Do(t.Context(), &llm.Request{
 				Messages:      []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 				ThinkingLevel: tt.reqLevel,
 			})
@@ -1464,7 +1464,7 @@ func TestResponsesServiceStallTimeout(t *testing.T) {
 	// Bound the test so a regression (no idle timeout) fails fast instead of
 	// hanging the suite. The responses client retries stream failures with
 	// backoff, so this deadline also caps how long those retries run.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	_, err := svc.Do(ctx, &llm.Request{

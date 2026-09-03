@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +14,7 @@ func TestRegisterConversationHookDedupes(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -34,7 +33,7 @@ func TestRegisterConversationHookDedupes(t *testing.T) {
 		}
 	}
 
-	updated, err := database.GetConversationByID(context.Background(), conversation.ConversationID)
+	updated, err := database.GetConversationByID(t.Context(), conversation.ConversationID)
 	if err != nil {
 		t.Fatalf("failed to load conversation: %v", err)
 	}
@@ -50,19 +49,19 @@ func TestRegisterConversationHookDedupes(t *testing.T) {
 func TestEndOfTurnHooksPersistAfterRead(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{
 		EndOfTurnHooks: []db.ConversationHook{{URL: "http://notify.int.exe.xyz/"}},
 	})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
 
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get manager: %v", err)
 	}
 
-	hooks, err := manager.EndOfTurnHooks(context.Background())
+	hooks, err := manager.EndOfTurnHooks(t.Context())
 	if err != nil {
 		t.Fatalf("failed to load hooks: %v", err)
 	}
@@ -70,7 +69,7 @@ func TestEndOfTurnHooksPersistAfterRead(t *testing.T) {
 		t.Fatalf("hooks = %#v", hooks)
 	}
 
-	updated, err := database.GetConversationByID(context.Background(), conversation.ConversationID)
+	updated, err := database.GetConversationByID(t.Context(), conversation.ConversationID)
 	if err != nil {
 		t.Fatalf("failed to load conversation: %v", err)
 	}

@@ -41,7 +41,7 @@ func TestNetworkRequestsSnapshotCopiesValues(t *testing.T) {
 }
 
 func TestCombinedTool(t *testing.T) {
-	tools := NewBrowseTools(context.Background(), 0)
+	tools := NewBrowseTools(t.Context(), 0)
 	t.Cleanup(func() {
 		tools.Close()
 	})
@@ -92,12 +92,12 @@ func TestCombinedTool(t *testing.T) {
 // families dispatch through the combined browser tool without needing a live
 // browser (help actions are pure text).
 func TestCombinedToolFoldedActions(t *testing.T) {
-	tools := NewBrowseTools(context.Background(), 0)
+	tools := NewBrowseTools(t.Context(), 0)
 	t.Cleanup(func() { tools.Close() })
 
 	tool := tools.CombinedTool()
 	for _, action := range []string{"emulate_help", "network_help", "accessibility_help", "profile_help"} {
-		out := tool.Run(context.Background(), []byte(fmt.Sprintf(`{"action": %q}`, action)))
+		out := tool.Run(t.Context(), []byte(fmt.Sprintf(`{"action": %q}`, action)))
 		if out.Error != nil {
 			t.Errorf("action %q returned error: %v", action, out.Error)
 		}
@@ -108,20 +108,20 @@ func TestCombinedToolFoldedActions(t *testing.T) {
 }
 
 func TestCombinedToolUnknownAction(t *testing.T) {
-	tools := NewBrowseTools(context.Background(), 0)
+	tools := NewBrowseTools(t.Context(), 0)
 	t.Cleanup(func() {
 		tools.Close()
 	})
 
 	tool := tools.CombinedTool()
-	toolOut := tool.Run(context.Background(), []byte(`{"action": "bogus"}`))
+	toolOut := tool.Run(t.Context(), []byte(`{"action": "bogus"}`))
 	if toolOut.Error == nil {
 		t.Error("Expected error for unknown action")
 	}
 }
 
 func TestGetTools(t *testing.T) {
-	tools := NewBrowseTools(context.Background(), 0)
+	tools := NewBrowseTools(t.Context(), 0)
 	t.Cleanup(func() {
 		tools.Close()
 	})
@@ -155,7 +155,7 @@ func TestBrowserInitialization(t *testing.T) {
 	}
 
 	// Create browser tools instance
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)
@@ -192,7 +192,7 @@ func TestNavigateTool(t *testing.T) {
 		t.Skip("skipping navigate tool test in short mode")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)
@@ -241,7 +241,7 @@ func TestNavigateTool(t *testing.T) {
 // TestScreenshotTool tests that the screenshot tool properly saves files
 func TestScreenshotTool(t *testing.T) {
 	// Create browser tools instance
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -296,7 +296,7 @@ func TestScreenshotRunGatesOnImageSupport(t *testing.T) {
 		t.Skip("skipping screenshot tool test in short mode")
 	}
 
-	baseCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	baseCtx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(baseCtx, 0)
@@ -349,7 +349,7 @@ func TestScreenshotRunGatesOnImageSupport(t *testing.T) {
 }
 
 func TestReadImageTool(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	browseTools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		browseTools.Close()
@@ -397,7 +397,7 @@ func TestReadImageTool(t *testing.T) {
 
 // TestDefaultViewportSize verifies that the browser starts with the correct default viewport size
 func TestDefaultViewportSize(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	if os.Getenv("CI") != "" || os.Getenv("HEADLESS_TEST") != "" {
@@ -452,7 +452,7 @@ func TestDefaultViewportSize(t *testing.T) {
 
 // TestBrowserIdleShutdownAndRestart verifies the browser shuts down after idle and can restart
 func TestBrowserIdleShutdownAndRestart(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	idleTimeout := 100 * time.Millisecond
@@ -504,7 +504,7 @@ func TestBrowserIdleShutdownAndRestart(t *testing.T) {
 
 // TestBrowserCrashRecovery verifies the browser auto-recovers from a crash
 func TestBrowserCrashRecovery(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 30*time.Minute)
@@ -577,12 +577,12 @@ func (s limitedService) Provider() string       { return "test" }
 func (s limitedService) SupportsImages() bool   { return true }
 
 func TestReadImageToolResizesOversizedImage(t *testing.T) {
-	browseTools := NewBrowseTools(context.Background(), 0)
+	browseTools := NewBrowseTools(t.Context(), 0)
 	t.Cleanup(func() {
 		browseTools.Close()
 	})
 	// Model limit: 200px on a side. Oversized images are silently downscaled.
-	ctx := llm.WithLLMService(context.Background(), limitedService{maxDim: 200})
+	ctx := llm.WithLLMService(t.Context(), limitedService{maxDim: 200})
 
 	testDir := t.TempDir()
 	testImagePath := filepath.Join(testDir, "large_image.png")
@@ -638,12 +638,12 @@ func TestReadImageToolResizesOversizedImage(t *testing.T) {
 }
 
 func TestReadImageToolRejectsOversizedBytes(t *testing.T) {
-	browseTools := NewBrowseTools(context.Background(), 0)
+	browseTools := NewBrowseTools(t.Context(), 0)
 	t.Cleanup(func() {
 		browseTools.Close()
 	})
 	// Pick a byte limit so small that any encoded PNG will exceed it.
-	ctx := llm.WithLLMService(context.Background(), limitedService{maxBytes: 16})
+	ctx := llm.WithLLMService(t.Context(), limitedService{maxBytes: 16})
 
 	testDir := t.TempDir()
 	testImagePath := filepath.Join(testDir, "big_bytes.png")
@@ -671,7 +671,7 @@ func TestReadImageToolRejectsOversizedBytes(t *testing.T) {
 func TestReadImageToolNoServicePassesThrough(t *testing.T) {
 	// When no service is attached to the context (e.g. driven from tests or
 	// non-loop callers) the size checks should be skipped.
-	browseTools := NewBrowseTools(context.Background(), 0)
+	browseTools := NewBrowseTools(t.Context(), 0)
 	t.Cleanup(func() {
 		browseTools.Close()
 	})
@@ -690,7 +690,7 @@ func TestReadImageToolNoServicePassesThrough(t *testing.T) {
 
 	tool := browseTools.ReadImageTool()
 	input := fmt.Sprintf(`{"path": "%s"}`, testImagePath)
-	toolOut := tool.Run(context.Background(), []byte(input))
+	toolOut := tool.Run(t.Context(), []byte(input))
 	if toolOut.Error != nil {
 		t.Fatalf("unexpected error without service in context: %v", toolOut.Error)
 	}
@@ -725,7 +725,7 @@ func TestIsPort80(t *testing.T) {
 
 // TestResizeRunErrorPaths tests error paths in resize action
 func TestResizeRunErrorPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -754,7 +754,7 @@ func TestResizeRunErrorPaths(t *testing.T) {
 
 // TestScreenshotRunErrorPaths tests error paths in screenshot action
 func TestScreenshotRunErrorPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -770,7 +770,7 @@ func TestScreenshotRunErrorPaths(t *testing.T) {
 }
 
 func TestRecentConsoleLogsRunErrorPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -811,7 +811,7 @@ func TestParseTimeout(t *testing.T) {
 
 // TestRegisterBrowserTools tests the RegisterBrowserTools function
 func TestRegisterBrowserTools(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tools, cleanup := RegisterBrowserTools(ctx)
 	t.Cleanup(cleanup)
@@ -841,7 +841,7 @@ func TestGetScreenshotPath(t *testing.T) {
 
 // TestSaveScreenshotErrorPath tests error paths in SaveScreenshot
 func TestSaveScreenshotErrorPath(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -860,7 +860,7 @@ func TestSaveScreenshotErrorPath(t *testing.T) {
 
 // TestConsoleLogsWriteToFile tests that large console logs are written to file
 func TestConsoleLogsWriteToFile(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -910,7 +910,7 @@ func TestConsoleLogsWriteToFile(t *testing.T) {
 
 // TestGenerateDownloadFilename tests filename generation with randomness
 func TestGenerateDownloadFilename(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -956,7 +956,7 @@ func TestGenerateDownloadFilename(t *testing.T) {
 
 // TestDownloadTracking tests the download event handling
 func TestDownloadTracking(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -1005,7 +1005,7 @@ func TestDownloadTracking(t *testing.T) {
 
 // TestToolOutWithDownloads tests the download info appending to tool output.
 func TestToolOutWithDownloads(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -1110,7 +1110,7 @@ func TestBrowserDownload(t *testing.T) {
 	defer server.Close()
 
 	// Create browser tools
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)
@@ -1198,7 +1198,7 @@ func TestBrowserDownloadReported(t *testing.T) {
 	defer server.Close()
 
 	// Create browser tools
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)
@@ -1246,7 +1246,7 @@ func TestLargeJSOutputWriteToFile(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)
@@ -1310,7 +1310,7 @@ func TestSmallJSOutputInline(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)

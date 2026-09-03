@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +41,7 @@ func TestOrphanToolResultAfterCancellation(t *testing.T) {
 		defer stopActiveConversationLoops(server)
 
 		// Create conversation
-		conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+		conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 		if err != nil {
 			t.Fatalf("failed to create conversation: %v", err)
 		}
@@ -60,7 +59,7 @@ func TestOrphanToolResultAfterCancellation(t *testing.T) {
 				{Type: llm.ContentTypeText, Text: "bash: echo hello"},
 			},
 		}
-		if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+		if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conversationID,
 			Type:           db.MessageTypeUser,
 			LLMData:        userMsg1,
@@ -82,7 +81,7 @@ func TestOrphanToolResultAfterCancellation(t *testing.T) {
 				},
 			},
 		}
-		if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+		if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conversationID,
 			Type:           db.MessageTypeAgent,
 			LLMData:        assistantMsg1,
@@ -106,7 +105,7 @@ func TestOrphanToolResultAfterCancellation(t *testing.T) {
 				},
 			},
 		}
-		if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+		if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conversationID,
 			Type:           db.MessageTypeUser,
 			LLMData:        cancelledToolResult,
@@ -121,7 +120,7 @@ func TestOrphanToolResultAfterCancellation(t *testing.T) {
 			Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "[Operation cancelled]"}},
 			EndOfTurn: true,
 		}
-		if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+		if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conversationID,
 			Type:           db.MessageTypeAgent,
 			LLMData:        endTurnMsg,
@@ -145,7 +144,7 @@ func TestOrphanToolResultAfterCancellation(t *testing.T) {
 				},
 			},
 		}
-		if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+		if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conversationID,
 			Type:           db.MessageTypeUser,
 			LLMData:        actualToolResult,
@@ -222,7 +221,7 @@ func TestOrphanToolResultFiltering(t *testing.T) {
 		server, database, predictableService := newTestServer(t)
 		defer stopActiveConversationLoops(server)
 
-		conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+		conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 		if err != nil {
 			t.Fatalf("failed to create conversation: %v", err)
 		}
@@ -236,7 +235,7 @@ func TestOrphanToolResultFiltering(t *testing.T) {
 			Role:    llm.MessageRoleUser,
 			Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hello"}},
 		}
-		if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+		if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conversationID,
 			Type:           db.MessageTypeUser,
 			LLMData:        userMsg1,
@@ -250,7 +249,7 @@ func TestOrphanToolResultFiltering(t *testing.T) {
 			Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "Hi there!"}},
 			EndOfTurn: true,
 		}
-		if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+		if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conversationID,
 			Type:           db.MessageTypeAgent,
 			LLMData:        assistantMsg,
@@ -273,7 +272,7 @@ func TestOrphanToolResultFiltering(t *testing.T) {
 				},
 			},
 		}
-		if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+		if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conversationID,
 			Type:           db.MessageTypeUser,
 			LLMData:        orphanResult,

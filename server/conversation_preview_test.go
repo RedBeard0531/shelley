@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -12,7 +11,7 @@ import (
 // writeAgentMsg writes an agent message with the given content blocks.
 func writeAgentMsg(t *testing.T, database *db.DB, convID string, content []llm.Content) {
 	t.Helper()
-	_, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+	_, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 		ConversationID: convID,
 		Type:           db.MessageTypeAgent,
 		LLMData: llm.Message{
@@ -42,7 +41,7 @@ func previewToolBlock(name string) llm.Content {
 func TestConversationListPreview(t *testing.T) {
 	t.Parallel()
 	srv, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Conversation A: last agent message mixes text + tool calls. The final
 	// text block should win over the earlier one.

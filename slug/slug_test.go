@@ -138,7 +138,7 @@ func TestGenerateSlug_DatabaseIntegration(t *testing.T) {
 	defer database.Close()
 
 	// Run migrations
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestGenerateSlug_PreservesExisting(t *testing.T) {
 	}
 	defer database.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestGenerateSlug_LLMError(t *testing.T) {
 	mockLLM := &MockLLMProviderWithServiceError{}
 
 	// Test that LLM error is properly propagated (pass a model ID so we get a service)
-	_, err := generateSlugText(context.Background(), mockLLM, "Test message", "test-model")
+	_, err := generateSlugText(t.Context(), mockLLM, "Test message", "test-model")
 	if err == nil {
 		t.Error("Expected error from LLM service, got nil")
 	}
@@ -310,7 +310,7 @@ func TestGenerateSlug_NoModelsAvailable(t *testing.T) {
 	mockLLM := &MockLLMProviderWithError{}
 
 	// Test that error is returned when no models are available
-	_, err := generateSlugText(context.Background(), mockLLM, "Test message", "")
+	_, err := generateSlugText(t.Context(), mockLLM, "Test message", "")
 	if err == nil {
 		t.Error("Expected error when no models available, got nil")
 	}
@@ -325,7 +325,7 @@ func TestGenerateSlug_EmptyResponse(t *testing.T) {
 	// Mock LLM that returns empty response
 	mockLLM := &MockLLMProviderWithEmptyResponse{}
 
-	_, err := generateSlugText(context.Background(), mockLLM, "Test message", "test-model")
+	_, err := generateSlugText(t.Context(), mockLLM, "Test message", "test-model")
 	if err == nil {
 		t.Error("Expected error for empty LLM response, got nil")
 	}
@@ -369,7 +369,7 @@ func TestGenerateSlug_SanitizationError(t *testing.T) {
 		},
 	}
 
-	_, err := generateSlugText(context.Background(), mockLLM, "Test message", "test-model")
+	_, err := generateSlugText(t.Context(), mockLLM, "Test message", "test-model")
 	if err == nil {
 		t.Error("Expected error for empty slug after sanitization, got nil")
 	}
@@ -399,7 +399,7 @@ func TestGenerateSlug_DatabaseError(t *testing.T) {
 	}()
 
 	// Run migrations
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestGenerateSlug_PredictableModel(t *testing.T) {
 	}
 
 	// Test that predictable model is used when conversationModelID is "predictable"
-	slug, err := generateSlugText(context.Background(), mockLLM, "Test message", "predictable")
+	slug, err := generateSlugText(t.Context(), mockLLM, "Test message", "predictable")
 	if err != nil {
 		t.Fatalf("Failed to generate slug with predictable model: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestGenerateSlug_ReasoningModel(t *testing.T) {
 	}
 	defer database.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
@@ -517,7 +517,7 @@ func (p *recordingProvider) Do(_ context.Context, req *llm.Request) (*llm.Respon
 func TestGenerateSlugTextUsesWorkhorseService(t *testing.T) {
 	provider := &recordingProvider{}
 
-	slug, err := generateSlugText(context.Background(), provider, "some message", "claude-fable-5")
+	slug, err := generateSlugText(t.Context(), provider, "some message", "claude-fable-5")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,7 +561,7 @@ func TestGenerateSlug_UsageOnAppendedMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}

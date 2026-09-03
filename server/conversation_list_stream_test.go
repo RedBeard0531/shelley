@@ -19,19 +19,19 @@ func TestConversationStreamReceivesListUpdateForNewConversation(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create a conversation to subscribe to
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
 
 	// Get or create conversation manager to ensure the conversation is active
-	_, err = server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	_, err = server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
 
 	// Start the conversation stream
-	sseCtx, sseCancel := context.WithCancel(context.Background())
+	sseCtx, sseCancel := context.WithCancel(t.Context())
 	defer sseCancel()
 
 	sseRecorder := newFlusherRecorder()
@@ -112,23 +112,23 @@ func TestConversationStreamReceivesListUpdateForRename(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create two conversations
-	conv1, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv1, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation 1: %v", err)
 	}
-	conv2, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv2, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation 2: %v", err)
 	}
 
 	// Get or create conversation manager for conv1 (the one we'll subscribe to)
-	_, err = server.getOrCreateConversationManager(context.Background(), conv1.ConversationID, "")
+	_, err = server.getOrCreateConversationManager(t.Context(), conv1.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
 
 	// Start the conversation stream for conv1
-	sseCtx, sseCancel := context.WithCancel(context.Background())
+	sseCtx, sseCancel := context.WithCancel(t.Context())
 	defer sseCancel()
 
 	sseRecorder := newFlusherRecorder()
@@ -198,23 +198,23 @@ func TestConversationStreamReceivesListUpdateForDelete(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create two conversations
-	conv1, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv1, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation 1: %v", err)
 	}
-	conv2, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv2, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation 2: %v", err)
 	}
 
 	// Get or create conversation manager for conv1
-	_, err = server.getOrCreateConversationManager(context.Background(), conv1.ConversationID, "")
+	_, err = server.getOrCreateConversationManager(t.Context(), conv1.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
 
 	// Start the conversation stream for conv1
-	sseCtx, sseCancel := context.WithCancel(context.Background())
+	sseCtx, sseCancel := context.WithCancel(t.Context())
 	defer sseCancel()
 
 	sseRecorder := newFlusherRecorder()
@@ -283,23 +283,23 @@ func TestConversationStreamReceivesListUpdateForArchive(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Create two conversations
-	conv1, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv1, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation 1: %v", err)
 	}
-	conv2, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv2, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation 2: %v", err)
 	}
 
 	// Get or create conversation manager for conv1
-	_, err = server.getOrCreateConversationManager(context.Background(), conv1.ConversationID, "")
+	_, err = server.getOrCreateConversationManager(t.Context(), conv1.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
 
 	// Start the conversation stream for conv1
-	sseCtx, sseCancel := context.WithCancel(context.Background())
+	sseCtx, sseCancel := context.WithCancel(t.Context())
 	defer sseCancel()
 
 	sseRecorder := newFlusherRecorder()
@@ -365,15 +365,15 @@ func TestConversationStreamIncludesListPatchInitialReset(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), strPtr("current"), true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), strPtr("current"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.CreateConversation(context.Background(), strPtr("other"), true, nil, nil, db.ConversationOptions{}); err != nil {
+	if _, err := database.CreateConversation(t.Context(), strPtr("other"), true, nil, nil, db.ConversationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation="+conversation.ConversationID, nil).WithContext(ctx)
@@ -401,12 +401,12 @@ func TestConversationStreamListPatchReplaysFromHash(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), strPtr("current"), true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), strPtr("current"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	patchCtx, patchCancel := context.WithCancel(context.Background())
+	patchCtx, patchCancel := context.WithCancel(t.Context())
 	patchRec := newFlusherRecorder()
 	patchReq := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(patchCtx)
 	patchDone := make(chan struct{})
@@ -416,7 +416,7 @@ func TestConversationStreamListPatchReplaysFromHash(t *testing.T) {
 	}()
 	initial := waitForPatchEventAfter(t, patchRec, "")
 	for _, slug := range []string{"one", "two"} {
-		if _, err := database.CreateConversation(context.Background(), strPtr(slug), true, nil, nil, db.ConversationOptions{}); err != nil {
+		if _, err := database.CreateConversation(t.Context(), strPtr(slug), true, nil, nil, db.ConversationOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		server.publishConversationListUpdate(ConversationListUpdate{Type: "update"})
@@ -424,7 +424,7 @@ func TestConversationStreamListPatchReplaysFromHash(t *testing.T) {
 	patchCancel()
 	<-patchDone
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation="+conversation.ConversationID+"&conversation_list_hash="+initial.NewHash, nil).WithContext(ctx)
@@ -454,16 +454,16 @@ func TestConversationStreamListPatchCurrentHashSkipsInitialAndStreamsLive(t *tes
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), strPtr("current"), true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), strPtr("current"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.conversationListStream.recompute(context.Background()); err != nil {
+	if err := server.conversationListStream.recompute(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	currentHash := server.conversationListStream.currentHash
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation="+conversation.ConversationID+"&conversation_list_hash="+currentHash, nil).WithContext(ctx)
@@ -490,7 +490,7 @@ func TestConversationStreamListPatchCurrentHashSkipsInitialAndStreamsLive(t *tes
 		currentHash = ev.NewHash
 	}
 
-	if _, err := database.CreateConversation(context.Background(), strPtr("newer"), true, nil, nil, db.ConversationOptions{}); err != nil {
+	if _, err := database.CreateConversation(t.Context(), strPtr("newer"), true, nil, nil, db.ConversationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	server.publishConversationListUpdate(ConversationListUpdate{Type: "update"})

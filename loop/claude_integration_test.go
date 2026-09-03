@@ -36,7 +36,7 @@ func TestLoopWithClaude(t *testing.T) {
 	loop.QueueUserMessage(llm.UserStringMessage("Hello! Please respond with just 'Hi there!' and nothing else."))
 
 	// Run with a reasonable timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	err := loop.Go(ctx)

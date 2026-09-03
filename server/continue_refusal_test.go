@@ -108,7 +108,7 @@ func TestContinueAfterRefusalSwitchesModelAndResumes(t *testing.T) {
 	}
 
 	modelA := "model-a"
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, &modelA, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, &modelA, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}

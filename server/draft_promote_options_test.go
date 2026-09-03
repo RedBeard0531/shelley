@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +20,7 @@ func TestPromoteDraftPreservesStoredThinkingLevel(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	opts := db.ConversationOptions{ThinkingLevel: "high"}
-	draft, err := database.CreateDraftConversation(context.Background(), nil, nil, opts, "my draft")
+	draft, err := database.CreateDraftConversation(t.Context(), nil, nil, opts, "my draft")
 	if err != nil {
 		t.Fatalf("create draft: %v", err)
 	}
@@ -44,7 +43,7 @@ func TestPromoteDraftAppliesRequestThinkingLevel(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	// Draft born WITHOUT options, as the web UI's autosave createDraft does.
-	draft, err := database.CreateDraftConversation(context.Background(), nil, nil, db.ConversationOptions{}, "my draft")
+	draft, err := database.CreateDraftConversation(t.Context(), nil, nil, db.ConversationOptions{}, "my draft")
 	if err != nil {
 		t.Fatalf("create draft: %v", err)
 	}
@@ -69,7 +68,7 @@ func promoteAndCheck(t *testing.T, server *Server, database *db.DB, id string, b
 		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
 	}
 
-	got, err := database.GetConversationByID(context.Background(), id)
+	got, err := database.GetConversationByID(t.Context(), id)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

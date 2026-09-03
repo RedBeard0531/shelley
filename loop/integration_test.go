@@ -40,7 +40,7 @@ func TestLoopWithClaudeTools(t *testing.T) {
 	loop.QueueUserMessage(userMessage)
 
 	// Run the loop with a short timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
 	err := loop.Go(ctx)
@@ -96,7 +96,7 @@ func TestLoopContextCancellation(t *testing.T) {
 	})
 
 	// Cancel context immediately
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := loop.Go(ctx)

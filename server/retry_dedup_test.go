@@ -73,7 +73,7 @@ func testRetryDoubleClickDeduped(t *testing.T) {
 	}
 	defer stopActiveConversationLoops(svr)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)

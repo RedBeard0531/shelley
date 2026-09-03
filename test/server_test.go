@@ -2,7 +2,6 @@ package test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,7 +45,7 @@ func waitForTurnDone(t *testing.T, database *db.DB, conversationID string, timeo
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
-		conv, err := database.GetConversationByID(context.Background(), conversationID)
+		conv, err := database.GetConversationByID(t.Context(), conversationID)
 		if err != nil {
 			t.Fatalf("GetConversationByID: %v", err)
 		}
@@ -70,7 +69,7 @@ func TestServerEndToEnd(t *testing.T) {
 	defer database.Close()
 
 	// Run migrations
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
@@ -105,7 +104,7 @@ func TestServerEndToEnd(t *testing.T) {
 		// Create a conversation
 		// Using database directly instead of service
 		slug := "test-conversation"
-		conv, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{})
+		conv, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{})
 		if err != nil {
 			t.Fatalf("Failed to create conversation: %v", err)
 		}
@@ -139,7 +138,7 @@ func TestServerEndToEnd(t *testing.T) {
 		// Create a conversation
 		// Using database directly instead of service
 		slug := "chat-test"
-		conv, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{})
+		conv, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{})
 		if err != nil {
 			t.Fatalf("Failed to create conversation: %v", err)
 		}
@@ -201,7 +200,7 @@ func TestServerEndToEnd(t *testing.T) {
 		// Using database directly instead of service
 		// Using database directly instead of service
 		slug := "stream-test"
-		conv, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{})
+		conv, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{})
 		if err != nil {
 			t.Fatalf("Failed to create conversation: %v", err)
 		}
@@ -213,7 +212,7 @@ func TestServerEndToEnd(t *testing.T) {
 				{Type: llm.ContentTypeText, Text: "Test message"},
 			},
 		}
-		_, err = database.CreateMessage(context.Background(), db.CreateMessageParams{
+		_, err = database.CreateMessage(t.Context(), db.CreateMessageParams{
 			ConversationID: conv.ConversationID,
 			Type:           db.MessageTypeUser,
 			LLMData:        testMsg,
@@ -254,7 +253,7 @@ func TestServerEndToEnd(t *testing.T) {
 	// Test that slug updates are reflected in the stream
 	t.Run("SlugUpdateStream", func(t *testing.T) {
 		// Create a context that won't be canceled unexpectedly
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Create a conversation without a slug
 		conv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
@@ -351,7 +350,7 @@ func TestPredictableFixtureWithTools(t *testing.T) {
 	service := predictable.NewService()
 
 	// First call should return greeting
-	resp1, err := service.Do(context.Background(), &llm.Request{
+	resp1, err := service.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "Hello"}}},
 		},
@@ -365,7 +364,7 @@ func TestPredictableFixtureWithTools(t *testing.T) {
 	}
 
 	// Second call should return tool use (bash command)
-	resp2, err := service.Do(context.Background(), &llm.Request{
+	resp2, err := service.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "bash: echo hello"}}},
 		},
@@ -410,7 +409,7 @@ func TestConversationCleanup(t *testing.T) {
 	defer database.Close()
 
 	// Run migrations
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
@@ -421,7 +420,7 @@ func TestConversationCleanup(t *testing.T) {
 
 	// Create a conversation
 	// Using database directly instead of service
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create conversation: %v", err)
 	}
@@ -446,7 +445,7 @@ func TestSlugGeneration(t *testing.T) {
 	defer database.Close()
 
 	// Run migrations
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
@@ -543,7 +542,7 @@ func TestSlugGenerationWithPredictableFixture(t *testing.T) {
 	}
 	defer database.Close()
 
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
@@ -582,12 +581,12 @@ func TestSlugEndToEnd(t *testing.T) {
 	defer database.Close()
 
 	// Run migrations
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
 	// Create a conversation with a specific slug
-	ctx := context.Background()
+	ctx := t.Context()
 	testSlug := "test-conversation-slug"
 	conv, err := database.CreateConversation(ctx, &testSlug, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -634,7 +633,7 @@ func TestSSEIncrementalUpdates(t *testing.T) {
 	defer database.Close()
 
 	// Run migrations
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 
@@ -651,13 +650,13 @@ func TestSSEIncrementalUpdates(t *testing.T) {
 
 	// Create a conversation with initial message
 	slug := "test-sse"
-	conv, err := database.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create conversation: %v", err)
 	}
 
 	// Add initial message
-	_, err = database.CreateMessage(context.Background(), db.CreateMessageParams{
+	_, err = database.CreateMessage(t.Context(), db.CreateMessageParams{
 		ConversationID: conv.ConversationID,
 		Type:           db.MessageTypeUser,
 		LLMData:        &llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "Hello"}}},
@@ -692,7 +691,7 @@ func TestSSEIncrementalUpdates(t *testing.T) {
 	}
 
 	// Add a second message
-	_, err = database.CreateMessage(context.Background(), db.CreateMessageParams{
+	_, err = database.CreateMessage(t.Context(), db.CreateMessageParams{
 		ConversationID: conv.ConversationID,
 		Type:           db.MessageTypeAgent,
 		LLMData:        &llm.Message{Role: llm.MessageRoleAssistant, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "Hi there!"}}},
@@ -733,7 +732,7 @@ func TestSSEIncrementalUpdates(t *testing.T) {
 
 // TestSystemPromptSentToLLM verifies that the system prompt is included in LLM requests
 func TestSystemPromptSentToLLM(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create database and server with predictable service
 	// Note: :memory: is not supported by our DB wrapper since it requires multiple connections.
@@ -957,7 +956,7 @@ func (m *inspectableLLMManager) RefreshCustomModels() error {
 
 func TestVersionEndpoint(t *testing.T) {
 	// Create temp DB-backed server
-	ctx := context.Background()
+	ctx := t.Context()
 	tempDB := t.TempDir() + "/version_test.db"
 	database, err := db.New(db.Config{DSN: tempDB})
 	if err != nil {
@@ -1007,7 +1006,7 @@ func TestVersionEndpoint(t *testing.T) {
 
 func TestScreenshotRouteServesImage(t *testing.T) {
 	// Create temp DB-backed server
-	ctx := context.Background()
+	ctx := t.Context()
 	tempDB := t.TempDir() + "/route_test.db"
 	database, err := db.New(db.Config{DSN: tempDB})
 	if err != nil {
@@ -1062,7 +1061,7 @@ func TestScreenshotRouteServesImage(t *testing.T) {
 // TestGitStateChangeCreatesGitInfoMessage verifies that when the agent makes a git commit,
 // a gitinfo message is created in the database.
 func TestGitStateChangeCreatesGitInfoMessage(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a temp directory with a git repo
 	workDir := t.TempDir()
@@ -1190,7 +1189,7 @@ func TestSubagentEndToEnd(t *testing.T) {
 	defer database.Close()
 
 	// Run migrations
-	if err := database.Migrate(context.Background()); err != nil {
+	if err := database.Migrate(t.Context()); err != nil {
 		t.Fatalf("Failed to migrate database: %v", err)
 	}
 

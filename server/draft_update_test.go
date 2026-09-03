@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +39,7 @@ func TestUpdateDraftPartialFieldsIndependent(t *testing.T) {
 
 	origModel := "test-model"
 	origCwd := "/tmp/orig"
-	draft, err := database.CreateDraftConversation(context.Background(), &origCwd, &origModel, db.ConversationOptions{}, "my unsent draft")
+	draft, err := database.CreateDraftConversation(t.Context(), &origCwd, &origModel, db.ConversationOptions{}, "my unsent draft")
 	if err != nil {
 		t.Fatalf("failed to create draft conversation: %v", err)
 	}
@@ -51,7 +50,7 @@ func TestUpdateDraftPartialFieldsIndependent(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	got, err := database.GetConversationByID(context.Background(), id)
+	got, err := database.GetConversationByID(t.Context(), id)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}
@@ -70,7 +69,7 @@ func TestUpdateDraftPartialFieldsIndependent(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	got, err = database.GetConversationByID(context.Background(), id)
+	got, err = database.GetConversationByID(t.Context(), id)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}
@@ -89,7 +88,7 @@ func TestUpdateDraftPartialFieldsIndependent(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	got, err = database.GetConversationByID(context.Background(), id)
+	got, err = database.GetConversationByID(t.Context(), id)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}
@@ -129,7 +128,7 @@ func TestUpdateDraftRejectsNonDraft(t *testing.T) {
 
 	origModel := "test-model"
 	origCwd := "/tmp/orig"
-	conv, err := database.CreateConversation(context.Background(), nil, true, &origCwd, &origModel, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, &origCwd, &origModel, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
@@ -139,7 +138,7 @@ func TestUpdateDraftRejectsNonDraft(t *testing.T) {
 		t.Fatalf("expected 404 for non-draft, got %d: %s", w.Code, w.Body.String())
 	}
 
-	got, err := database.GetConversationByID(context.Background(), conv.ConversationID)
+	got, err := database.GetConversationByID(t.Context(), conv.ConversationID)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}
@@ -159,7 +158,7 @@ func TestUpdateDraftRejectsUnsupportedModel(t *testing.T) {
 	t.Parallel()
 	server, database := newTwoModelTestServer(t)
 
-	draft, err := database.CreateDraftConversation(context.Background(), nil, nil, db.ConversationOptions{}, "draft")
+	draft, err := database.CreateDraftConversation(t.Context(), nil, nil, db.ConversationOptions{}, "draft")
 	if err != nil {
 		t.Fatalf("failed to create draft conversation: %v", err)
 	}
@@ -174,7 +173,7 @@ func TestUpdateDraftRejectsUnsupportedModel(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for supported model, got %d: %s", w.Code, w.Body.String())
 	}
-	got, err := database.GetConversationByID(context.Background(), draft.ConversationID)
+	got, err := database.GetConversationByID(t.Context(), draft.ConversationID)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}
@@ -190,7 +189,7 @@ func TestUpdateDraftRejectsEmptyModelOrCwd(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	draft, err := database.CreateDraftConversation(context.Background(), nil, nil, db.ConversationOptions{}, "draft")
+	draft, err := database.CreateDraftConversation(t.Context(), nil, nil, db.ConversationOptions{}, "draft")
 	if err != nil {
 		t.Fatalf("failed to create draft conversation: %v", err)
 	}
@@ -210,7 +209,7 @@ func TestUpdateDraftRejectsEmptyModelOrCwd(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for empty draft text, got %d: %s", w.Code, w.Body.String())
 	}
-	got, err := database.GetConversationByID(context.Background(), draft.ConversationID)
+	got, err := database.GetConversationByID(t.Context(), draft.ConversationID)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}
@@ -228,7 +227,7 @@ func TestUpdateDraftModelFlowsToOmittedModelPromote(t *testing.T) {
 	server, database, _ := newTestServer(t)
 
 	origModel := "stale-model"
-	draft, err := database.CreateDraftConversation(context.Background(), nil, &origModel, db.ConversationOptions{}, "echo: draft body")
+	draft, err := database.CreateDraftConversation(t.Context(), nil, &origModel, db.ConversationOptions{}, "echo: draft body")
 	if err != nil {
 		t.Fatalf("failed to create draft conversation: %v", err)
 	}
@@ -243,7 +242,7 @@ func TestUpdateDraftModelFlowsToOmittedModelPromote(t *testing.T) {
 	if w := chatPost(t, server, id, ChatRequest{Message: "echo: hi"}); w.Code != http.StatusAccepted {
 		t.Fatalf("promote send: expected 202, got %d: %s", w.Code, w.Body.String())
 	}
-	got, err := database.GetConversationByID(context.Background(), id)
+	got, err := database.GetConversationByID(t.Context(), id)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}
@@ -274,7 +273,7 @@ func TestUpdateDraftEmptyBodyBumpsUpdatedAt(t *testing.T) {
 
 	origModel := "test-model"
 	origCwd := "/tmp/orig"
-	draft, err := database.CreateDraftConversation(context.Background(), &origCwd, &origModel, db.ConversationOptions{}, "my unsent draft")
+	draft, err := database.CreateDraftConversation(t.Context(), &origCwd, &origModel, db.ConversationOptions{}, "my unsent draft")
 	if err != nil {
 		t.Fatalf("failed to create draft conversation: %v", err)
 	}
@@ -282,7 +281,7 @@ func TestUpdateDraftEmptyBodyBumpsUpdatedAt(t *testing.T) {
 	// CURRENT_TIMESTAMP is second-granular; backdate the row so the bump
 	// is observable without sleeping.
 	backdated := time.Now().Add(-time.Hour).UTC()
-	if err := database.Pool().Exec(context.Background(), "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?", backdated, draft.ConversationID); err != nil {
+	if err := database.Pool().Exec(t.Context(), "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?", backdated, draft.ConversationID); err != nil {
 		t.Fatalf("backdate updated_at: %v", err)
 	}
 
@@ -290,7 +289,7 @@ func TestUpdateDraftEmptyBodyBumpsUpdatedAt(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for empty body, got %d: %s", w.Code, w.Body.String())
 	}
-	got, err := database.GetConversationByID(context.Background(), draft.ConversationID)
+	got, err := database.GetConversationByID(t.Context(), draft.ConversationID)
 	if err != nil {
 		t.Fatalf("reload conversation: %v", err)
 	}

@@ -49,7 +49,7 @@ func TestPublishConversationStateHonorsDisableNotifications(t *testing.T) {
 			ch := &recordingChannel{}
 			server.RegisterNotificationChannel(ch)
 
-			conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, tc.opts)
+			conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, tc.opts)
 			if err != nil {
 				t.Fatalf("failed to create conversation: %v", err)
 			}

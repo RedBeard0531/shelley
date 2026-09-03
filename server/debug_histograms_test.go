@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +13,7 @@ import (
 func TestDebugHistograms(t *testing.T) {
 	t.Parallel()
 	server, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed two conversations of different sizes (the second compacts).
 	if _, err := server.generateLoremConversation(ctx, 5, "claude-opus-4-5"); err != nil {

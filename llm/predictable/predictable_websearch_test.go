@@ -1,7 +1,6 @@
 package predictable
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -23,7 +22,7 @@ func TestPredictableWebSearchCitations(t *testing.T) {
 					Content: []llm.Content{{Type: llm.ContentTypeText, Text: trigger}},
 				}},
 			}
-			resp, err := svc.Do(context.Background(), req)
+			resp, err := svc.Do(t.Context(), req)
 			if err != nil {
 				t.Fatalf("Do: %v", err)
 			}

@@ -1,7 +1,6 @@
 package modelsources
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -670,7 +669,7 @@ func TestDiscoverLLMIntegrationsFallsBackWhenReflectionRequestFails(t *testing.T
 				}, nil
 			})}
 
-			result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+			result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
 			if result.Found != tt.wantFound {
 				t.Fatalf("Found = %v, want %v", result.Found, tt.wantFound)
 			}
@@ -709,7 +708,7 @@ func TestDiscoverLLMIntegrationsDoesNotFallbackAfterSuccessfulReflection(t *test
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
 	if result.Found {
 		t.Fatal("Found = true, want false")
 	}
@@ -734,7 +733,7 @@ func TestDiscoverLLMIntegrationsKeepsFoundWhenReflectedCatalogFails(t *testing.T
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
 	if !result.Found || len(result.Integrations) != 0 {
 		t.Fatalf("result = %+v, want found integration with unavailable catalog", result)
 	}
@@ -763,7 +762,7 @@ func TestDiscoverLLMIntegrationsFallbackUsesEnvironmentURLs(t *testing.T) {
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), env)
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), env)
 	if !result.Found || len(result.Integrations) != 1 {
 		t.Fatalf("result = %+v, want one found integration", result)
 	}
@@ -781,7 +780,7 @@ func TestDiscoverLLMIntegrationsDoesNotProbeOutsideExeVM(t *testing.T) {
 		t.Fatalf("unexpected discovery request outside exe VM: %s", req.URL.String())
 		return nil, nil
 	})}
-	result := DiscoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	result := DiscoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if result.Found || len(result.Integrations) != 0 {
 		t.Fatalf("result = %+v, want no discovered integration", result)
 	}
@@ -814,7 +813,7 @@ func TestDiscoverLLMIntegrationsReadsModelsJSONCatalog(t *testing.T) {
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
 	if !result.Found {
 		t.Fatal("Found = false, want true")
 	}
@@ -859,7 +858,7 @@ func TestDiscoverLLMIntegrationsUsesTeamHost(t *testing.T) {
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
 	if !result.Found {
 		t.Fatal("Found = false, want true")
 	}
@@ -913,7 +912,7 @@ func TestDiscoverLLMIntegrationsUsesEnvironmentURLs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result := discoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), env)
+			result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), env)
 			if !result.Found {
 				t.Fatal("Found = false, want true")
 			}

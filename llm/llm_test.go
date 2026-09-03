@@ -190,7 +190,7 @@ func TestRunJSON(t *testing.T) {
 		return ToolOut{LLMContent: TextContent("hello " + req.Name)}
 	})
 
-	ctx := context.WithValue(context.Background(), struct{}{}, "ctx-value")
+	ctx := context.WithValue(t.Context(), struct{}{}, "ctx-value")
 	out := run(ctx, json.RawMessage(`{"name":"Ada"}`))
 	if out.Error != nil {
 		t.Fatalf("RunJSON returned error: %v", out.Error)
@@ -217,7 +217,7 @@ func TestRunJSONInvalidJSON(t *testing.T) {
 		return ToolOut{}
 	})
 
-	out := run(context.Background(), json.RawMessage(`{"name":123}`))
+	out := run(t.Context(), json.RawMessage(`{"name":123}`))
 	if out.Error == nil {
 		t.Fatal("RunJSON returned nil error for invalid input")
 	}

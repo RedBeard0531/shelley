@@ -1,14 +1,13 @@
 package llm
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"testing"
 )
 
 func TestRequestTrace(t *testing.T) {
-	ctx, trace := WithRequestTrace(context.Background())
+	ctx, trace := WithRequestTrace(t.Context())
 	if RequestTraceFromContext(ctx) != trace {
 		t.Fatal("RequestTraceFromContext did not return attached trace")
 	}
@@ -47,7 +46,7 @@ func TestRequestTraceConcurrent(t *testing.T) {
 
 func TestIndirectUsageContext(t *testing.T) {
 	var accumulator UsageAccumulator
-	ctx := WithUsageCollector(context.Background(), accumulator.Collect)
+	ctx := WithUsageCollector(t.Context(), accumulator.Collect)
 	ctx = WithPurpose(ctx, "keyword_search")
 	collector := UsageCollectorFromContext(ctx)
 	if collector == nil {

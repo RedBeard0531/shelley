@@ -17,7 +17,7 @@ import (
 // queuedMessages reads the conversation's queued_messages array from the DB.
 func queuedMessages(t *testing.T, database *db.DB, convID string) []db.QueuedMessage {
 	t.Helper()
-	conv, err := database.GetConversationByID(context.Background(), convID)
+	conv, err := database.GetConversationByID(t.Context(), convID)
 	if err != nil {
 		t.Fatalf("GetConversationByID: %v", err)
 	}
@@ -27,7 +27,7 @@ func queuedMessages(t *testing.T, database *db.DB, convID string) []db.QueuedMes
 // userMessageRowExists reports whether a user messages row contains the text.
 func userMessageRowExists(t *testing.T, database *db.DB, convID, text string) bool {
 	t.Helper()
-	msgs, err := database.ListMessages(context.Background(), convID)
+	msgs, err := database.ListMessages(t.Context(), convID)
 	if err != nil {
 		t.Fatalf("ListMessages: %v", err)
 	}
@@ -75,7 +75,7 @@ func testQueuedMessageImmutableFlow(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
@@ -131,7 +131,7 @@ func testCancelQueuedClearsArray(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestQueuedMessageNoDoubleFeedOnRestart(t *testing.T) {
 func testQueuedMessageNoDoubleFeedOnRestart(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -265,7 +265,7 @@ func testQueuedMessageNoDoubleFeedOnRestart(t *testing.T) {
 func TestCancelQueuedNoActiveManager(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -320,7 +320,7 @@ func TestCancelConversationClearsQueueUnconditionally(t *testing.T) {
 func testCancelConversationClearsQueueUnconditionally(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -362,7 +362,7 @@ func testCancelConversationClearsQueueUnconditionally(t *testing.T) {
 func TestHydrateDedupesQueuedAgainstInMemory(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -432,7 +432,7 @@ func TestDrainNoDoubleFeedWhenInMemoryAndArrayBothHaveID(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	conversation, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {

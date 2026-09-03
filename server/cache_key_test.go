@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -200,7 +199,7 @@ func TestCacheKey_MasterSecretPersists(t *testing.T) {
 	t.Parallel()
 	svr := newCacheKeyTestServer(t, "")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	s1, err := svr.cacheMasterSecret(ctx)
 	if err != nil {
 		t.Fatalf("first: %v", err)

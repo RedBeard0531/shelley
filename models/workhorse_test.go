@@ -109,7 +109,7 @@ func TestGetWorkhorseServiceUsesSelectedPrimary(t *testing.T) {
 	}
 
 	req := &llm.Request{ThinkingLevel: llm.ThinkingLevelHigh, ReasoningEffort: "high"}
-	if _, err := service.Do(context.Background(), req); err != nil {
+	if _, err := service.Do(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
 	if workhorse.calls != 1 || conversation.calls != 0 {
@@ -141,7 +141,7 @@ func TestGetWorkhorseServiceFallsBackWhenPrimaryLookupFails(t *testing.T) {
 		service.SupportsImages() != conversation.supportsImages {
 		t.Fatal("workhorse service metadata did not delegate to the conversation fallback")
 	}
-	if _, err := service.Do(context.Background(), &llm.Request{}); err != nil {
+	if _, err := service.Do(t.Context(), &llm.Request{}); err != nil {
 		t.Fatal(err)
 	}
 	if conversation.calls != 1 {
@@ -160,7 +160,7 @@ func TestGetWorkhorseServiceDoesNotEagerlyLookupFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Do(context.Background(), &llm.Request{}); err != nil {
+	if _, err := service.Do(t.Context(), &llm.Request{}); err != nil {
 		t.Fatal(err)
 	}
 	if primary.calls != 1 {
@@ -182,7 +182,7 @@ func TestWorkhorseServiceFallsBackAfterPrimaryFailure(t *testing.T) {
 	}
 	req := &llm.Request{ThinkingLevel: llm.ThinkingLevelHigh, ReasoningEffort: "high"}
 
-	if _, err := service.Do(context.Background(), req); err != nil {
+	if _, err := service.Do(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
 	if workhorse.calls != 1 || conversation.calls != 1 {
@@ -208,7 +208,7 @@ func TestWorkhorseServiceDoesNotFallbackWhenContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err = service.Do(ctx, &llm.Request{})
@@ -232,7 +232,7 @@ func TestWorkhorseServiceDoesNotDuplicateConversationModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = service.Do(context.Background(), &llm.Request{})
+	_, err = service.Do(t.Context(), &llm.Request{})
 	if !errors.Is(err, modelErr) {
 		t.Fatalf("error = %v, want %v", err, modelErr)
 	}
@@ -255,7 +255,7 @@ func TestWorkhorseServiceReturnsFallbackError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = service.Do(context.Background(), &llm.Request{})
+	_, err = service.Do(t.Context(), &llm.Request{})
 	if !errors.Is(err, fallbackErr) {
 		t.Fatalf("error = %v, want %v", err, fallbackErr)
 	}
@@ -275,7 +275,7 @@ func TestWorkhorseServiceReturnsFallbackLookupError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = service.Do(context.Background(), &llm.Request{})
+	_, err = service.Do(t.Context(), &llm.Request{})
 	if err == nil {
 		t.Fatal("expected fallback lookup error")
 	}

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -649,9 +648,9 @@ func TestSystemPromptUsesCwdFromConversation(t *testing.T) {
 
 	// Get the system prompt from the database
 	var messages []generated.Message
-	err = h.db.Queries(context.Background(), func(q *generated.Queries) error {
+	err = h.db.Queries(t.Context(), func(q *generated.Queries) error {
 		var qerr error
-		messages, qerr = q.ListMessages(context.Background(), h.ConversationID())
+		messages, qerr = q.ListMessages(t.Context(), h.ConversationID())
 		return qerr
 	})
 	if err != nil {

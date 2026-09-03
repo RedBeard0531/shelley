@@ -56,7 +56,7 @@ func TestGeminiThinkingIntegration(t *testing.T) {
 			Tools: []*llm.Tool{bashTool},
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
 
 		resp, err := service.Do(ctx, req)
@@ -122,7 +122,7 @@ func TestGeminiThinkingIntegration(t *testing.T) {
 			},
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
 
 		resp, err := service.Do(ctx, req)
@@ -186,7 +186,7 @@ func TestGeminiThinkingIntegration(t *testing.T) {
 			Tools: []*llm.Tool{bashTool},
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
 
 		resp1, err := service.Do(ctx, req1)
@@ -225,7 +225,7 @@ func TestGeminiThinkingIntegration(t *testing.T) {
 			Tools: []*llm.Tool{bashTool},
 		}
 
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx2, cancel2 := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel2()
 
 		resp2, err := service.Do(ctx2, req2)
@@ -273,7 +273,7 @@ func TestGemini3ModelsIntegration(t *testing.T) {
 				},
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 
 			resp, err := service.Do(ctx, req)
@@ -326,7 +326,7 @@ func TestGeminiImageIntegration(t *testing.T) {
 		}},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	resp, err := service.Do(ctx, req)

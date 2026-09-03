@@ -101,7 +101,7 @@ func TestWebAuthnPageDoesNotCrash(t *testing.T) {
 	testURL := fmt.Sprintf("http://127.0.0.1:%d/webauthn-test.html", port)
 
 	// Create browser tools with a generous timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)
@@ -202,7 +202,7 @@ func TestWebAuthnDisabledFeatureFlag(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)

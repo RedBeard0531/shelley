@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -72,7 +71,7 @@ func TestHandleArchivedConversations(t *testing.T) {
 	h := NewTestHarness(t)
 
 	// Create a test conversation and archive it
-	ctx := context.Background()
+	ctx := t.Context()
 	slug := "test-conversation"
 	conv, err := h.db.CreateConversation(ctx, &slug, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -151,7 +150,7 @@ func TestHandleArchiveConversation(t *testing.T) {
 	h := NewTestHarness(t)
 
 	// Create a test conversation
-	ctx := context.Background()
+	ctx := t.Context()
 	slug := "test-conversation"
 	conv, err := h.db.CreateConversation(ctx, &slug, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -204,7 +203,7 @@ func TestHandleUnarchiveConversation(t *testing.T) {
 	h := NewTestHarness(t)
 
 	// Create a test conversation and archive it
-	ctx := context.Background()
+	ctx := t.Context()
 	slug := "test-conversation"
 	conv, err := h.db.CreateConversation(ctx, &slug, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -262,7 +261,7 @@ func TestHandleDeleteConversation(t *testing.T) {
 	h := NewTestHarness(t)
 
 	// Create a test conversation
-	ctx := context.Background()
+	ctx := t.Context()
 	slug := "test-conversation"
 	conv, err := h.db.CreateConversation(ctx, &slug, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
@@ -321,7 +320,7 @@ func TestHandleRenameConversation(t *testing.T) {
 	h := NewTestHarness(t)
 
 	// Create a test conversation
-	ctx := context.Background()
+	ctx := t.Context()
 	slug := "test-conversation"
 	conv, err := h.db.CreateConversation(ctx, &slug, true, nil, nil, db.ConversationOptions{})
 	if err != nil {

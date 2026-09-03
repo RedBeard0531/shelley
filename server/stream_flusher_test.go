@@ -24,16 +24,16 @@ func TestStreamFlusherAssignsMonotonicSeq(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
 
-	subCtx, subCancel := context.WithCancel(context.Background())
+	subCtx, subCancel := context.WithCancel(t.Context())
 	defer subCancel()
 	next := manager.subpub.Subscribe(subCtx, -1)
 
@@ -94,16 +94,16 @@ func TestStreamFlusherBatchesThinkingDeltas(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
 
-	subCtx, subCancel := context.WithCancel(context.Background())
+	subCtx, subCancel := context.WithCancel(t.Context())
 	defer subCancel()
 	next := manager.subpub.Subscribe(subCtx, -1)
 
@@ -176,16 +176,16 @@ func TestThinkingDeltaFloodDoesNotDisconnectSubscriber(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
 
-	subCtx, subCancel := context.WithCancel(context.Background())
+	subCtx, subCancel := context.WithCancel(t.Context())
 	defer subCancel()
 	// Subscribe and never drain: a stalled client.
 	_, status := manager.subpub.SubscribeWithStatus(subCtx, -1)
@@ -229,20 +229,20 @@ func TestUnifiedStreamSurvivesThinkingFlood(t *testing.T) {
 	// the handler block writing the initial list replay before it ever
 	// reaches its streamPub subscription — wedging the test upstream of the
 	// code under test.
-	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("failed to create conversation: %v", err)
 	}
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatalf("failed to get conversation manager: %v", err)
 	}
-	if err := server.conversationListStream.recompute(context.Background()); err != nil {
+	if err := server.conversationListStream.recompute(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	currentHash := server.conversationListStream.currentHash
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	w := newBlockingStreamWriter()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation_list_hash="+currentHash, nil).WithContext(ctx)

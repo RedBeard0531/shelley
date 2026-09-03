@@ -23,7 +23,7 @@ import (
 func TestStreamCompressionGzip(t *testing.T) {
 	t.Parallel()
 	srv, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, false, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, false, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conv: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestStreamCompressionGzip(t *testing.T) {
 func TestStreamCompressionZstd(t *testing.T) {
 	t.Parallel()
 	srv, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, false, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, false, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conv: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestStreamCompressionZstd(t *testing.T) {
 func TestStreamCompressionIdentity(t *testing.T) {
 	t.Parallel()
 	srv, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, false, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, false, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conv: %v", err)
 	}
@@ -192,7 +192,7 @@ func readSSELine(t *testing.T, r io.Reader, timeout time.Duration) (string, erro
 func TestStreamCompressionUnifiedEndpoint(t *testing.T) {
 	t.Parallel()
 	srv, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, false, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, false, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conv: %v", err)
 	}

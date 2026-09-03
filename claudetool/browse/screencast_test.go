@@ -16,7 +16,7 @@ func TestScreencastStartStop(t *testing.T) {
 		t.Skip("skipping browser test in short mode")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	tools := NewBrowseTools(ctx, 0)
@@ -123,7 +123,7 @@ func TestScreencastLimitsAreReasonable(t *testing.T) {
 }
 
 func TestScreencastStatusWhenInactive(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tools := NewBrowseTools(ctx, 0)
 	t.Cleanup(func() {
 		tools.Close()
@@ -138,7 +138,7 @@ func TestScreencastStatusWhenInactive(t *testing.T) {
 }
 
 func TestScreencastSchemaIncludes(t *testing.T) {
-	tools := NewBrowseTools(context.Background(), 0)
+	tools := NewBrowseTools(t.Context(), 0)
 	t.Cleanup(func() {
 		tools.Close()
 	})

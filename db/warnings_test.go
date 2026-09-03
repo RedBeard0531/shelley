@@ -13,7 +13,7 @@ func TestCreateWarningMessageCapsConsecutiveWarnings(t *testing.T) {
 	database, cleanup := NewTestDB(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	conv, err := database.CreateConversation(ctx, nil, true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -84,7 +84,7 @@ func TestCreateWarningMessageCountsCurrentGeneration(t *testing.T) {
 	database, cleanup := NewTestDB(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	conv, err := database.CreateConversation(ctx, nil, true, nil, nil, ConversationOptions{})
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -131,7 +131,7 @@ func TestWarningMigrationKeepsContextIndex(t *testing.T) {
 	database, cleanup := NewTestDB(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	var found bool
 	err := database.Pool().Rx(ctx, func(ctx context.Context, rx *Rx) error {
 		rows, err := rx.Query("PRAGMA index_list(messages)")

@@ -21,7 +21,7 @@ import (
 // messages and returns the conversation id.
 func seedConversation(t *testing.T, database *db.DB, n int) string {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	conv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
@@ -65,7 +65,7 @@ func newTestStreamServer(t *testing.T, database *db.DB) (*http.ServeMux, *Server
 // StreamResponse in order.
 func runStreamWithQuery(t *testing.T, srv *Server, convID, query string, maxFrames int) []StreamResponse {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	url := "/api/conversation/" + convID + "/stream"
 	if query != "" {

@@ -17,7 +17,7 @@ import (
 
 func runShell(t *testing.T, tool *ShellTool, input string, timeout time.Duration) (string, *ShellDisplayData, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
 	out := tool.Tool().Run(ctx, json.RawMessage(input))
 	var disp *ShellDisplayData
@@ -38,7 +38,7 @@ func newTestShell(t *testing.T) *ShellTool {
 	td := t.TempDir()
 	return &ShellTool{
 		WorkingDir:    NewMutableWorkingDir("/"),
-		BackgroundCtx: context.Background(),
+		BackgroundCtx: t.Context(),
 		DefaultYield:  2 * time.Second,
 		MaxYield:      10 * time.Second,
 		TempDir:       td,
@@ -188,7 +188,7 @@ func TestShellContextCancelKills(t *testing.T) {
 	// Cancel once the command has visibly started: the progress tail reports
 	// its first line of output, which proves the process is running when the
 	// cancel lands.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var cancelOnce sync.Once
 	ctx = WithToolProgress(ctx, func(p llm.ToolProgress) {
@@ -247,7 +247,7 @@ func TestShellProgressLoop(t *testing.T) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	ctx = WithToolProgress(ctx, progress)
 	ctx = WithToolUseID(ctx, "tool-use-123")

@@ -62,7 +62,7 @@ func (s *heldLLMService) Do(ctx context.Context, request *llm.Request) (*llm.Res
 
 func (s *heldLLMService) waitCall(t *testing.T, text string) *heldLLMCall {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	for {
 		s.mu.Lock()
@@ -128,7 +128,7 @@ func postBtw(t *testing.T, server *Server, parentID, question string, queue bool
 
 func releaseAndWaitIdle(t *testing.T, server *Server, conversationID string, call *heldLLMCall) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	next := server.streamPub.Subscribe(ctx, 0)
 	call.Release()
@@ -151,7 +151,7 @@ func newBtwTest(t *testing.T) (*Server, *db.DB, *heldLLMService, *generated.Conv
 	server.llmManager = &testLLMManager{service: held}
 	t.Cleanup(func() { stopActiveConversationLoops(server) })
 	parent, err := database.CreateConversation(
-		context.Background(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{},
+		t.Context(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func btwSystemData(t *testing.T, database *db.DB, conversationID string, generat
 
 func requireBtwStreamOpen(t *testing.T, server *Server, conversationID string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	recorder := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/conversation/"+conversationID+"/stream", nil).WithContext(ctx)
@@ -238,7 +238,7 @@ func TestBtwSlashHookRouting(t *testing.T) {
 		w := postBtwChat(t, server, parent.ConversationID,
 			ChatRequest{Message: " \t/btw ignored", Model: "predictable"})
 		requireBtwStatus(t, w, http.StatusAccepted)
-		if readers, err := database.ListBtwReaders(context.Background(), parent.ConversationID); err != nil || len(readers) != 0 {
+		if readers, err := database.ListBtwReaders(t.Context(), parent.ConversationID); err != nil || len(readers) != 0 {
 			t.Fatalf("built-in ran despite hook: %#v, %v", readers, err)
 		}
 		rows := listMessages(t, database, parent.ConversationID)
@@ -251,7 +251,7 @@ func TestBtwSlashHookRouting(t *testing.T) {
 		writeSlashHook(t, "btw", "#!/bin/sh\ncat >/dev/null\n")
 		requireBtwStatus(t, postBtwChat(t, server, parent.ConversationID,
 			ChatRequest{Message: "/btw echo: must not run", Model: "predictable"}), http.StatusAccepted)
-		if readers, err := database.ListBtwReaders(context.Background(), parent.ConversationID); err != nil || len(readers) != 0 {
+		if readers, err := database.ListBtwReaders(t.Context(), parent.ConversationID); err != nil || len(readers) != 0 {
 			t.Fatalf("empty hook created built-in reader: %#v, %v", readers, err)
 		}
 		if rows := listMessages(t, database, parent.ConversationID); len(rows) != 0 {
@@ -293,7 +293,7 @@ func TestBtwRejectsDraftParent(t *testing.T) {
 	server, database, _, _ := newBtwTest(t)
 	model := "predictable"
 	draft, err := database.CreateDraftConversation(
-		context.Background(), nil, &model, db.ConversationOptions{}, "/btw echo: draft",
+		t.Context(), nil, &model, db.ConversationOptions{}, "/btw echo: draft",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -304,13 +304,13 @@ func TestBtwRejectsDraftParent(t *testing.T) {
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "draft conversations") {
 		t.Fatalf("draft /btw status=%d body=%s", w.Code, w.Body.String())
 	}
-	if readers, err := database.ListBtwReaders(context.Background(), draft.ConversationID); err != nil || len(readers) != 0 {
+	if readers, err := database.ListBtwReaders(t.Context(), draft.ConversationID); err != nil || len(readers) != 0 {
 		t.Fatalf("draft /btw created readers: %#v, %v", readers, err)
 	}
 	if rows := listMessages(t, database, draft.ConversationID); len(rows) != 0 {
 		t.Fatalf("draft /btw wrote parent rows: %#v", rows)
 	}
-	reloaded, err := database.GetConversationByID(context.Background(), draft.ConversationID)
+	reloaded, err := database.GetConversationByID(t.Context(), draft.ConversationID)
 	if err != nil || !reloaded.IsDraft {
 		t.Fatalf("draft parent was promoted: %#v, %v", reloaded, err)
 	}
@@ -327,7 +327,7 @@ func TestBtwClearSurvivesEvictionAndRemainsUsable(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("clear status=%d body=%s", w.Code, w.Body.String())
 	}
-	row, err := database.GetConversationByID(context.Background(), reader.ConversationID)
+	row, err := database.GetConversationByID(t.Context(), reader.ConversationID)
 	if err != nil || row.CurrentGeneration != 2 {
 		t.Fatalf("clear generation row=%#v err=%v", row, err)
 	}
@@ -388,8 +388,8 @@ func TestWedgedBtwReaderRecoversAfterServerReload(t *testing.T) {
 	releaseAndWaitIdle(t, server, reader.ConversationID, held.waitCall(t, "echo: before reload"))
 	initialPrompt := btwSystemData(t, database, reader.ConversationID, 1)
 
-	if _, err := db.WithTxRes(database, context.Background(), func(q *generated.Queries) (generated.Conversation, error) {
-		return q.IncrementConversationGeneration(context.Background(), reader.ConversationID)
+	if _, err := db.WithTxRes(database, t.Context(), func(q *generated.Queries) (generated.Conversation, error) {
+		return q.IncrementConversationGeneration(t.Context(), reader.ConversationID)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestWedgedBtwReaderRecoversAfterServerReload(t *testing.T) {
 
 func TestBtwCreationUsesServerPointerAndDetachedContext(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	secret, err := database.CreateMessage(ctx, db.CreateMessageParams{
 		ConversationID: parent.ConversationID,
 		Type:           db.MessageTypeUser,
@@ -472,7 +472,7 @@ func TestBtwBypassesQueueAndSiblingManagersAreIndependent(t *testing.T) {
 	held.waitCall(t, "echo: first")
 	held.waitCall(t, "echo: second")
 
-	parentRow, err := database.GetConversationByID(context.Background(), parent.ConversationID)
+	parentRow, err := database.GetConversationByID(t.Context(), parent.ConversationID)
 	if err != nil || parentRow.QueuedMessages != "[]" {
 		t.Fatalf("/btw entered parent queue: %#v, %v", parentRow, err)
 	}
@@ -526,14 +526,14 @@ func TestBtwRejectsNestedReaders(t *testing.T) {
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "/btw is unavailable in child conversations") {
 		t.Fatalf("nested /btw status=%d body=%s", w.Code, w.Body.String())
 	}
-	if children, err := database.GetSubagents(context.Background(), reader.ConversationID); err != nil || len(children) != 0 {
+	if children, err := database.GetSubagents(t.Context(), reader.ConversationID); err != nil || len(children) != 0 {
 		t.Fatalf("nested /btw created children: %#v, %v", children, err)
 	}
-	lineage, err := database.CreateConversation(context.Background(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
+	lineage, err := database.CreateConversation(t.Context(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.UpdateConversationParent(context.Background(), lineage.ConversationID, parent.ConversationID); err != nil {
+	if _, err := database.UpdateConversationParent(t.Context(), lineage.ConversationID, parent.ConversationID); err != nil {
 		t.Fatal(err)
 	}
 	detached := postBtw(t, server, lineage.ConversationID, "echo: lineage", false)
@@ -595,7 +595,7 @@ func TestBtwSummaryIsOrdinaryMarkedChildTurn(t *testing.T) {
 		t.Fatalf("summary receipt message=%q want %q", messageID, users[1].MessageID)
 	}
 
-	otherParent, err := database.CreateConversation(context.Background(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
+	otherParent, err := database.CreateConversation(t.Context(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +609,7 @@ func TestBtwSummaryIsOrdinaryMarkedChildTurn(t *testing.T) {
 func TestBtwRunsConversationHooksExactlyOnce(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
 	cwd := t.TempDir()
-	if err := database.UpdateConversationCwd(context.Background(), parent.ConversationID, cwd); err != nil {
+	if err := database.UpdateConversationCwd(t.Context(), parent.ConversationID, cwd); err != nil {
 		t.Fatal(err)
 	}
 	newCount := filepath.Join(t.TempDir(), "new-count")
@@ -640,7 +640,7 @@ func TestBtwRunsConversationHooksExactlyOnce(t *testing.T) {
 
 func TestConversationDeletionWithUserInitiatedChildKeepsGenericForeignKeyFailure(t *testing.T) {
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	parent, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -671,7 +671,7 @@ func TestConversationDeletionWithUserInitiatedChildKeepsGenericForeignKeyFailure
 
 func TestBtwParentDeletionWithUserInitiatedLineageRetainsGenericFailure(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if w := postBtwChat(t, server, parent.ConversationID, ChatRequest{Message: "echo: parent", Model: "predictable"}); w.Code != http.StatusAccepted {
 		t.Fatalf("parent status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -712,7 +712,7 @@ func TestBtwParentDeletionWithUserInitiatedLineageRetainsGenericFailure(t *testi
 
 func TestBtwParentDeletionPreflightPreventsPartialReaderDeletion(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	reader := postBtw(t, server, parent.ConversationID, "echo: reader", false)
 	held.waitCall(t, "echo: reader")
 	if _, err := database.CreateSubagentConversation(ctx, "ordinary-child", parent.ConversationID, nil); err != nil {
@@ -748,13 +748,13 @@ func TestBtwLeavesOrdinaryChatBehaviorUnchanged(t *testing.T) {
 	}
 
 	child, err := database.CreateSubagentConversation(
-		context.Background(), "ordinary-child", parent.ConversationID, nil,
+		t.Context(), "ordinary-child", parent.ConversationID, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	status, err := NewSubagentRunner(server).RunSubagent(
-		context.Background(), child.ConversationID, "echo: ordinary child",
+		t.Context(), child.ConversationID, "echo: ordinary child",
 		false, time.Second, "predictable", "",
 	)
 	if err != nil || !strings.Contains(status, "started processing") {
@@ -788,7 +788,7 @@ func TestBtwSummaryReceiptSurvivesConcurrentFollowup(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
 	reader := postBtw(t, server, parent.ConversationID, "echo: discuss", false)
 	releaseAndWaitIdle(t, server, reader.ConversationID, held.waitCall(t, "echo: discuss"))
-	manager, err := server.getOrCreateConversationManager(context.Background(), reader.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), reader.ConversationID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -807,7 +807,7 @@ func TestBtwSummaryReceiptSurvivesConcurrentFollowup(t *testing.T) {
 	go func() {
 		defer calls.Done()
 		<-start
-		_, followID, err = manager.AcceptUserMessageWithID(context.Background(), held, "predictable", llm.UserStringMessage("echo: followup"))
+		_, followID, err = manager.AcceptUserMessageWithID(t.Context(), held, "predictable", llm.UserStringMessage("echo: followup"))
 	}()
 	close(start)
 	calls.Wait()
@@ -851,7 +851,7 @@ func TestBtwDirectDeletionRacesManagerCreationWithoutResurrection(t *testing.T) 
 		go func() {
 			defer calls.Done()
 			<-start
-			_, _ = server.getOrCreateConversationManager(context.Background(), reader.ConversationID, "")
+			_, _ = server.getOrCreateConversationManager(t.Context(), reader.ConversationID, "")
 		}()
 	}
 	var deleted *httptest.ResponseRecorder
@@ -867,7 +867,7 @@ func TestBtwDirectDeletionRacesManagerCreationWithoutResurrection(t *testing.T) 
 	if deleted.Code != http.StatusOK {
 		t.Fatalf("direct delete status=%d body=%s", deleted.Code, deleted.Body.String())
 	}
-	if _, err := database.GetConversationByID(context.Background(), reader.ConversationID); err == nil {
+	if _, err := database.GetConversationByID(t.Context(), reader.ConversationID); err == nil {
 		t.Fatal("directly deleted reader survived")
 	}
 	server.mu.Lock()
@@ -877,7 +877,7 @@ func TestBtwDirectDeletionRacesManagerCreationWithoutResurrection(t *testing.T) 
 	if active != nil || !deleting {
 		t.Fatalf("reader resurrected: active=%p tombstone=%t", active, deleting)
 	}
-	if _, err := server.getOrCreateConversationManager(context.Background(), reader.ConversationID, ""); !errors.Is(err, errConversationDeleting) {
+	if _, err := server.getOrCreateConversationManager(t.Context(), reader.ConversationID, ""); !errors.Is(err, errConversationDeleting) {
 		t.Fatalf("post-delete manager lookup error=%v", err)
 	}
 }
@@ -887,19 +887,19 @@ func TestSubagentRunnerRejectsBtwReaderReuse(t *testing.T) {
 	reader := postBtw(t, server, parent.ConversationID, "echo: reader", false)
 	held.waitCall(t, "echo: reader")
 	before := len(listMessages(t, database, reader.ConversationID))
-	row, err := database.GetConversationByID(context.Background(), reader.ConversationID)
+	row, err := database.GetConversationByID(t.Context(), reader.ConversationID)
 	if err != nil || row.Slug == nil {
 		t.Fatalf("reader row=%#v err=%v", row, err)
 	}
 	reusedID, _, err := (&db.SubagentDBAdapter{DB: database}).GetOrCreateSubagentConversation(
-		context.Background(), *row.Slug, parent.ConversationID, "",
+		t.Context(), *row.Slug, parent.ConversationID, "",
 	)
 	if err != nil || reusedID != reader.ConversationID {
 		t.Fatalf("slug reuse id=%q want=%q err=%v", reusedID, reader.ConversationID, err)
 	}
 	runner := NewSubagentRunner(server)
 	for _, wait := range []bool{false, true} {
-		if _, err := runner.RunSubagent(context.Background(), reader.ConversationID, "delegated work", wait, time.Second, "predictable", ""); err == nil ||
+		if _, err := runner.RunSubagent(t.Context(), reader.ConversationID, "delegated work", wait, time.Second, "predictable", ""); err == nil ||
 			!strings.Contains(err.Error(), "cannot be used as delegated subagent work") {
 			t.Fatalf("wait=%t error=%v", wait, err)
 		}
@@ -919,11 +919,11 @@ func TestBtwSlashQueueSemantics(t *testing.T) {
 		})
 		requireBtwStatus(t, w, http.StatusAccepted)
 		held.waitCall(t, "echo: spaced")
-		row, err := database.GetConversationByID(context.Background(), parent.ConversationID)
+		row, err := database.GetConversationByID(t.Context(), parent.ConversationID)
 		if err != nil || row.QueuedMessages != "[]" {
 			t.Fatalf("queued /btw entered parent queue: %#v err=%v", row, err)
 		}
-		if readers, err := database.ListBtwReaders(context.Background(), parent.ConversationID); err != nil || len(readers) != 1 {
+		if readers, err := database.ListBtwReaders(t.Context(), parent.ConversationID); err != nil || len(readers) != 1 {
 			t.Fatalf("readers=%#v err=%v", readers, err)
 		}
 	})
@@ -939,7 +939,7 @@ func TestBtwSlashQueueSemantics(t *testing.T) {
 				t.Fatalf("message=%q status=%d body=%s", message, w.Code, w.Body.String())
 			}
 		}
-		row, err := database.GetConversationByID(context.Background(), parent.ConversationID)
+		row, err := database.GetConversationByID(t.Context(), parent.ConversationID)
 		if err != nil || row.QueuedMessages != "[]" {
 			t.Fatalf("bare /btw queued: %#v err=%v", row, err)
 		}
@@ -951,11 +951,11 @@ func TestBtwSlashQueueSemantics(t *testing.T) {
 
 func TestBtwReaderCannotBeForked(t *testing.T) {
 	server, database, _ := newTestServer(t)
-	parent, err := database.CreateConversation(context.Background(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
+	parent, err := database.CreateConversation(t.Context(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := database.CreateBtwReaderConversation(context.Background(), db.CreateBtwReaderConversationParams{
+	reader, err := database.CreateBtwReaderConversation(t.Context(), db.CreateBtwReaderConversationParams{
 		SlugBase:      "btw-no-fork",
 		ParentID:      parent.ConversationID,
 		Model:         strPtr("predictable"),

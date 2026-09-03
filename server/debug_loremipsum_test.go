@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +18,7 @@ import (
 func TestGenerateLoremConversation(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Use enough turns to trigger at least two compactions (compactEvery=40).
 	convID, err := server.generateLoremConversation(ctx, 100, "claude-opus-4-5")
@@ -149,7 +148,7 @@ func TestGenerateLoremConversation(t *testing.T) {
 func TestGenerateLoremConversationTimestampsAreChronological(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const turns = 4
 	convID, err := server.generateLoremConversation(ctx, turns, "claude-opus-4-5")
@@ -246,7 +245,7 @@ func TestGenerateLoremConversationTimestampsAreChronological(t *testing.T) {
 func TestGenerateLoremConversationPreviewIsReadable(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	convID, err := server.generateLoremConversation(ctx, 4, "claude-opus-4-5")
 	if err != nil {
@@ -284,7 +283,7 @@ func TestGenerateLoremConversationPreviewIsReadable(t *testing.T) {
 func TestHandleDebugLoremIpsum(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A bare GET must render the landing page and must NOT create anything.
 	req := httptest.NewRequest("GET", "/debug/loremipsum", nil)

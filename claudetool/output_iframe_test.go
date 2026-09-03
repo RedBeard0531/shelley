@@ -1,7 +1,6 @@
 package claudetool
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -181,7 +180,7 @@ func TestOutputIframeRun(t *testing.T) {
 				t.Fatalf("failed to marshal input: %v", err)
 			}
 
-			result := tool.Tool().Run(context.Background(), inputJSON)
+			result := tool.Tool().Run(t.Context(), inputJSON)
 
 			if tt.wantErr {
 				if result.Error == nil {
@@ -243,7 +242,7 @@ func TestOutputIframeLibraries(t *testing.T) {
 			"path":      "test.html",
 			"libraries": []string{"excalidraw"},
 		})
-		res := tool.Tool().Run(context.Background(), in)
+		res := tool.Tool().Run(t.Context(), in)
 		if res.Error != nil {
 			t.Fatalf("unexpected error: %v", res.Error)
 		}
@@ -266,7 +265,7 @@ func TestOutputIframeLibraries(t *testing.T) {
 			"path":      "test.html",
 			"libraries": []string{"not-a-real-lib"},
 		})
-		res := tool.Tool().Run(context.Background(), in)
+		res := tool.Tool().Run(t.Context(), in)
 		if res.Error == nil {
 			t.Errorf("expected error for unknown library, got none")
 		}
@@ -277,7 +276,7 @@ func TestOutputIframeLibraries(t *testing.T) {
 			"path":      "test.html",
 			"libraries": []string{"excalidraw", "excalidraw"},
 		})
-		res := tool.Tool().Run(context.Background(), in)
+		res := tool.Tool().Run(t.Context(), in)
 		if res.Error != nil {
 			t.Fatalf("unexpected error: %v", res.Error)
 		}

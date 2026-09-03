@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +38,7 @@ printf 'SHOUT: %s' "$SHELLEY_SLASH_ARGS" | tr a-z A-Z
 `)
 
 	server, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +56,9 @@ printf 'SHOUT: %s' "$SHELLEY_SLASH_ARGS" | tr a-z A-Z
 	var userMsg generated.Message
 	for i := 0; i < 50; i++ {
 		var msgs []generated.Message
-		err = database.Queries(context.Background(), func(q *generated.Queries) error {
+		err = database.Queries(t.Context(), func(q *generated.Queries) error {
 			var qerr error
-			msgs, qerr = q.ListMessages(context.Background(), conversationID)
+			msgs, qerr = q.ListMessages(t.Context(), conversationID)
 			return qerr
 		})
 		if err != nil {
@@ -94,7 +93,7 @@ func TestChatSlashCommandHookErrorReturns400(t *testing.T) {
 	writeSlashHook(t, "boom", "#!/bin/sh\necho boom 1>&2\nexit 2\n")
 
 	server, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +113,7 @@ func TestChatSlashCommandNoHookPassthrough(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	server, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

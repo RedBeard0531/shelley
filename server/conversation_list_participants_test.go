@@ -21,13 +21,13 @@ func TestConversationListParticipants(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conversation, err := database.CreateConversation(context.Background(), strPtr("participants"), true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), strPtr("participants"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	conversationID := conversation.ConversationID
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)
 	done := make(chan struct{})

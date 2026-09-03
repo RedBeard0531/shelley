@@ -39,7 +39,7 @@ func (s *btwCapturingService) lastRequest() *llm.Request {
 
 func TestBtwServiceFrozenPrefixIsStableAndRequestIsImmutable(t *testing.T) {
 	_, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	parent, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +231,7 @@ func TestConversationManagerNilDecoratorPreservesServiceAndRequest(t *testing.T)
 		System:   []llm.SystemContent{{Type: "text", Text: "unchanged"}},
 		Messages: []llm.Message{llm.UserStringMessage("ordinary")},
 	}
-	if _, err := service.Do(context.Background(), request); err != nil {
+	if _, err := service.Do(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
 	if inner.inputs[0] != request {

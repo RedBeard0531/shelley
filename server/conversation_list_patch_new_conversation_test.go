@@ -36,7 +36,7 @@ func TestConversationListPatchNewConversationEmitsFieldAdd(t *testing.T) {
 	t.Parallel()
 	server, _, _ := newTestServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2", nil).WithContext(ctx)

@@ -28,7 +28,7 @@ func TestExecTerminal_SimpleCommand(t *testing.T) {
 	// Convert http to ws URL
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/exec-ws?cmd=echo+hello"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -94,7 +94,7 @@ func TestExecTerminal_FailingCommand(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/exec-ws?cmd=exit+42"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -141,7 +141,7 @@ func TestExecTerminal_MissingCmd(t *testing.T) {
 	// Try without cmd parameter
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/exec-ws"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	_, resp, err := websocket.Dial(ctx, wsURL, nil)
@@ -165,7 +165,7 @@ func TestExecTerminal_WorkingDirectory(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/exec-ws?cmd=pwd&cwd=/tmp"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -213,7 +213,7 @@ func TestExecTerminal_Input(t *testing.T) {
 	// Use cat which echoes input
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/exec-ws?cmd=cat"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -281,7 +281,7 @@ func TestExecTerminal_LoginShell(t *testing.T) {
 	// Test that bash runs as a login shell by checking the login_shell option
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/exec-ws?cmd=shopt+login_shell+%7C+grep+-q+on+%26%26+echo+login"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -353,7 +353,7 @@ func TestExecTerminal_ControlCharacters(t *testing.T) {
 	// 200ms-per-read pattern poisoned the socket on the first premature
 	// timeout (every later Read then errored, yielding empty output). This
 	// loop instead blocks on Read until data arrives or the deadline fires.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -414,7 +414,7 @@ func TestExecTerminal_ShelleyEnvVars(t *testing.T) {
 	// Create a real conversation with a known slug so SHELLEY_CONVERSATION_SLUG
 	// gets populated via the DB lookup in handleExecWS.
 	slug := "demo-slug"
-	conv, err := h.db.CreateConversation(context.Background(), &slug, true, nil, nil, db.ConversationOptions{})
+	conv, err := h.db.CreateConversation(t.Context(), &slug, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestExecTerminal_ShelleyEnvVars(t *testing.T) {
 		"&conversation_id=" + url.QueryEscape(conv.ConversationID) +
 		"&model=predictable"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Force a known listenPort so SHELLEY_PORT/URL are populated even when

@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -99,7 +98,7 @@ var pngBytes = []byte{
 func setupFileServer(t *testing.T, cwd, msgText string) (*httptest.Server, string) {
 	t.Helper()
 	server, database, _ := newTestServer(t)
-	conv, err := database.CreateConversation(context.Background(), nil, true, &cwd, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, &cwd, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +106,7 @@ func setupFileServer(t *testing.T, cwd, msgText string) (*httptest.Server, strin
 		Role:    llm.MessageRoleAssistant,
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: msgText}},
 	}
-	created, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+	created, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
 		ConversationID: conv.ConversationID,
 		Type:           db.MessageTypeAgent,
 		LLMData:        msg,

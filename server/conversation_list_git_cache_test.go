@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"os/exec"
 	"testing"
 	"time"
@@ -49,14 +48,14 @@ func TestConversationListGitCacheSurvivesTxCommit(t *testing.T) {
 		state:     &gitstate.GitState{IsRepo: true, Worktree: "/repo"},
 		expiresAt: now.Add(time.Minute),
 	})
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := server.conversationListGitCache.get("/repo", now); !ok {
 		t.Fatalf("expected cache to survive Tx commit")
 	}
-	if err := database.SetConversationAgentWorking(context.Background(), conv.ConversationID, true); err != nil {
+	if err := database.SetConversationAgentWorking(t.Context(), conv.ConversationID, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := server.conversationListGitCache.get("/repo", now); !ok {
@@ -68,7 +67,7 @@ func TestConversationListWithStateUsesCachedGitInfo(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 	cwd := t.TempDir()
-	if _, err := database.CreateConversation(context.Background(), nil, true, &cwd, nil, db.ConversationOptions{}); err != nil {
+	if _, err := database.CreateConversation(t.Context(), nil, true, &cwd, nil, db.ConversationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -83,7 +82,7 @@ func TestConversationListWithStateUsesCachedGitInfo(t *testing.T) {
 		expiresAt: now.Add(time.Minute),
 	})
 
-	list, err := server.conversationListWithState(context.Background(), 5000, 0, "", false)
+	list, err := server.conversationListWithState(t.Context(), 5000, 0, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

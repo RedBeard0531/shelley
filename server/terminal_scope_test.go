@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -159,7 +158,7 @@ func TestHandleTerminalScopeHTTP(t *testing.T) {
 	}
 	server.terminals.SetSpawner(InProcessSpawner)
 
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
@@ -288,7 +287,7 @@ func TestDeleteConversationGlobalizesItsTerminals(t *testing.T) {
 	}
 	server.terminals.SetSpawner(InProcessSpawner)
 
-	conv, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}

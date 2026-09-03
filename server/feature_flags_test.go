@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +24,7 @@ var _ = featureflags.Register(featureflags.Flag{
 
 func TestFeatureFlagBool(t *testing.T) {
 	srv, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// No override: the registered default applies.
 	if got := srv.featureFlagBool(ctx, testFeatureFlagBool); got != false {
@@ -51,7 +50,7 @@ func TestFeatureFlagBool(t *testing.T) {
 
 func TestFeatureFlagsHandlers(t *testing.T) {
 	srv, database, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a stale row that's no longer registered: must be ignored on read.
 	if err := database.SetFeatureFlagOverride(ctx, "stale-unknown", `42`); err != nil {

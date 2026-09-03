@@ -60,7 +60,7 @@ func TestDB_Migrate(t *testing.T) {
 	}
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Run migrations first time
@@ -109,7 +109,7 @@ func TestDB_Migrate_TracksByName(t *testing.T) {
 	}
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	if err := db.Migrate(ctx); err != nil {
@@ -156,7 +156,7 @@ func TestDB_WithTx(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Test successful transaction
@@ -197,7 +197,7 @@ func TestDB_ForeignKeyConstraints(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Try to create a message with a non-existent conversation_id
@@ -239,7 +239,7 @@ func TestDB_WithTxRes(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Test WithTxRes with a simple function that returns a string
@@ -271,7 +271,7 @@ func TestNewTestDB_IsolatedCopies(t *testing.T) {
 	db2, cleanup2 := NewTestDB(t)
 	defer cleanup2()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	_, err := db1.CreateConversation(ctx, stringPtr("only-in-db1"), true, nil, nil, ConversationOptions{})
@@ -298,7 +298,7 @@ func TestMessagesTypeHasNoCheckConstraint(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	assertMessagesTableHasNoCheck(t, db, ctx)
@@ -312,7 +312,7 @@ func TestDropMessageTypeCheckMigrationPreservesSearch(t *testing.T) {
 	database := setupDBMigratedThrough(t, 1000)
 	defer database.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("migration-fts"), true, nil, nil, ConversationOptions{})
@@ -386,7 +386,7 @@ func setupDBMigratedThrough(t *testing.T, lastMigration int) *DB {
 		t.Fatalf("New: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	entries, err := schemaFS.ReadDir("schema")
@@ -522,7 +522,7 @@ func TestCheckpoint(t *testing.T) {
 	}
 	defer database.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -561,7 +561,7 @@ func TestCheckpoint(t *testing.T) {
 // caller) still stamps real insertion time.
 func TestCreateMessageWithExplicitCreatedAt(t *testing.T) {
 	database := setupTestDB(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("created-at"), true, nil, nil, ConversationOptions{})
@@ -608,7 +608,7 @@ func TestCreateMessageWithExplicitCreatedAt(t *testing.T) {
 // (one commit hook) regardless of message count.
 func TestCreateMessages(t *testing.T) {
 	database := setupTestDB(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("bulk"), true, nil, nil, ConversationOptions{})
@@ -690,7 +690,7 @@ func TestCreateMessages(t *testing.T) {
 // or the updated_at bump.
 func TestCreateMessageFoldsAgentWorkingAndTimestamp(t *testing.T) {
 	database := setupTestDB(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	conv, err := database.CreateConversation(ctx, stringPtr("fold"), true, nil, nil, ConversationOptions{})

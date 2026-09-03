@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"testing"
 
 	"shelley.exe.dev/db/generated"
@@ -82,7 +81,7 @@ func TestSlugifyModelID(t *testing.T) {
 func TestGenerateUniqueModelID(t *testing.T) {
 	t.Parallel()
 	srv, _, _ := newTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	endpoint := "https://api.openai.com/v1"
 	modelName := "gpt-4o"

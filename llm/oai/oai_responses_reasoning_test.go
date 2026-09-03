@@ -1,7 +1,6 @@
 package oai
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -176,7 +175,7 @@ func TestResponsesServiceCodexRequestContract(t *testing.T) {
 		ProviderName:  "openai",
 		ThinkingLevel: llm.ThinkingLevelMedium,
 	}
-	ctx := llmhttp.WithConversationID(context.Background(), "conversation-123")
+	ctx := llmhttp.WithConversationID(t.Context(), "conversation-123")
 	_, err := svc.Do(ctx, &llm.Request{
 		Messages: []llm.Message{{
 			Role:    llm.MessageRoleUser,
@@ -277,7 +276,7 @@ func TestResponsesServiceOpenAIRequestDefaultsAreProviderIsolated(t *testing.T) 
 		ModelURL:     server.URL,
 		ProviderName: "xai",
 	}
-	ctx := llmhttp.WithConversationID(context.Background(), "conversation-123")
+	ctx := llmhttp.WithConversationID(t.Context(), "conversation-123")
 	request := &llm.Request{
 		Messages: []llm.Message{{
 			Role: llm.MessageRoleAssistant,
@@ -343,7 +342,7 @@ func TestResponsesServiceXAIRequestsReasoningSummaries(t *testing.T) {
 		ProviderName:  "xai",
 		ThinkingLevel: llm.ThinkingLevelMedium,
 	}
-	_, err := svc.Do(context.Background(), &llm.Request{
+	_, err := svc.Do(t.Context(), &llm.Request{
 		Messages: []llm.Message{{
 			Role:    llm.MessageRoleUser,
 			Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}},
@@ -408,7 +407,7 @@ func TestResponsesServiceTextVerbosityFollowsModelMetadata(t *testing.T) {
 				ModelURL:     server.URL,
 				ProviderName: "openai",
 			}
-			if _, err := svc.Do(context.Background(), &llm.Request{
+			if _, err := svc.Do(t.Context(), &llm.Request{
 				Messages: []llm.Message{{
 					Role:    llm.MessageRoleUser,
 					Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hello"}},
@@ -579,7 +578,7 @@ func TestResponsesReasoningEffortClamps(t *testing.T) {
 			defer server.Close()
 
 			svc := &ResponsesService{APIKey: "k", Model: tt.model, ModelURL: server.URL}
-			_, err := svc.Do(context.Background(), &llm.Request{
+			_, err := svc.Do(t.Context(), &llm.Request{
 				Messages:        []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
 				ThinkingLevel:   tt.reqLevel,
 				ReasoningEffort: tt.reqEffort,

@@ -26,18 +26,18 @@ func TestConversationStreamFlushesEarlyHeartbeat(t *testing.T) {
 	t.Parallel()
 	server, database, _ := newTestServer(t)
 
-	conv, err := database.CreateConversation(context.Background(), strPtr("early-hb"), true, nil, nil, db.ConversationOptions{})
+	conv, err := database.CreateConversation(t.Context(), strPtr("early-hb"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Prime the conversation list snapshot and capture its hash so the stream
 	// has no list replay to emit — isolating the per-conversation first-flush.
-	if err := server.conversationListStream.recompute(context.Background()); err != nil {
+	if err := server.conversationListStream.recompute(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	currentHash := server.conversationListStream.currentHash
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(
@@ -88,12 +88,12 @@ func TestConversationStreamFlushesEarlyHeartbeat(t *testing.T) {
 func TestConversationListOnlyStreamFlushesEarlyHeartbeat(t *testing.T) {
 	t.Parallel()
 	server, _, _ := newTestServer(t)
-	if err := server.conversationListStream.recompute(context.Background()); err != nil {
+	if err := server.conversationListStream.recompute(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	currentHash := server.conversationListStream.currentHash
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	rec := newFlusherRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation_list_hash="+currentHash, nil).WithContext(ctx)
@@ -165,7 +165,7 @@ func TestStreamUpdatesQueueLogsWhenFull(t *testing.T) {
 	}
 	logs := newQueueLogWriter()
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	server := &Server{logger: logger}
 	updates := server.newStreamUpdatesQueue(ctx, "test-conversation")
@@ -250,12 +250,12 @@ func TestUnifiedStreamClosesWhenItsSubscriptionFallsBehind(t *testing.T) {
 	server, _, _ := newTestServer(t)
 	logs := newQueueLogWriter()
 	server.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	if err := server.conversationListStream.recompute(context.Background()); err != nil {
+	if err := server.conversationListStream.recompute(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	currentHash := server.conversationListStream.currentHash
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	w := newBlockingStreamWriter()
 	req := httptest.NewRequest(http.MethodGet, "/api/stream2?conversation_list_hash="+currentHash, nil).WithContext(ctx)
@@ -309,16 +309,16 @@ func TestLegacyStreamLogsAndStaysOpenWhenSubscriptionFallsBehind(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	logs := newQueueLogWriter()
 	server.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	conversation, err := database.CreateConversation(context.Background(), strPtr("legacy-stream-overflow"), true, nil, nil, db.ConversationOptions{})
+	conversation, err := database.CreateConversation(t.Context(), strPtr("legacy-stream-overflow"), true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := server.getOrCreateConversationManager(context.Background(), conversation.ConversationID, "")
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	w := newBlockingStreamWriter()
 	req := httptest.NewRequest(http.MethodGet, "/api/conversation/"+conversation.ConversationID+"/stream", nil).WithContext(ctx)
 	done := make(chan struct{})

@@ -17,7 +17,7 @@ func TestBashSlowOk(t *testing.T) {
 		input := json.RawMessage(`{"command":"echo 'slow test'","slow_ok":true}`)
 
 		bashTool := (&BashTool{WorkingDir: NewMutableWorkingDir("/")}).Tool()
-		toolOut := bashTool.Run(context.Background(), input)
+		toolOut := bashTool.Run(t.Context(), input)
 		if toolOut.Error != nil {
 			t.Fatalf("Unexpected error: %v", toolOut.Error)
 		}
@@ -38,7 +38,7 @@ func TestBashTool(t *testing.T) {
 	t.Run("Basic Command", func(t *testing.T) {
 		input := json.RawMessage(`{"command":"echo 'Hello, world!'"}`)
 
-		toolOut := tool.Run(context.Background(), input)
+		toolOut := tool.Run(t.Context(), input)
 		if toolOut.Error != nil {
 			t.Fatalf("Unexpected error: %v", toolOut.Error)
 		}
@@ -63,7 +63,7 @@ func TestBashTool(t *testing.T) {
 	t.Run("Command With Arguments", func(t *testing.T) {
 		input := json.RawMessage(`{"command":"echo -n foo && echo -n bar"}`)
 
-		toolOut := tool.Run(context.Background(), input)
+		toolOut := tool.Run(t.Context(), input)
 		if toolOut.Error != nil {
 			t.Fatalf("Unexpected error: %v", toolOut.Error)
 		}
@@ -89,7 +89,7 @@ func TestBashTool(t *testing.T) {
 			t.Fatalf("Failed to marshal input: %v", err)
 		}
 
-		toolOut := tool.Run(context.Background(), inputJSON)
+		toolOut := tool.Run(t.Context(), inputJSON)
 		if toolOut.Error != nil {
 			t.Fatalf("Unexpected error: %v", toolOut.Error)
 		}
@@ -116,7 +116,7 @@ func TestBashTool(t *testing.T) {
 
 		input := json.RawMessage(`{"command":"sleep 0.5 && echo 'Should not see this'"}`)
 
-		toolOut := tool.Run(context.Background(), input)
+		toolOut := tool.Run(t.Context(), input)
 		if toolOut.Error == nil {
 			t.Errorf("Expected timeout error, got none")
 		} else if !strings.Contains(toolOut.Error.Error(), "timed out") {
@@ -128,7 +128,7 @@ func TestBashTool(t *testing.T) {
 	t.Run("Failed Command", func(t *testing.T) {
 		input := json.RawMessage(`{"command":"exit 1"}`)
 
-		toolOut := tool.Run(context.Background(), input)
+		toolOut := tool.Run(t.Context(), input)
 		if toolOut.Error == nil {
 			t.Errorf("Expected error for failed command, got none")
 		}
@@ -138,7 +138,7 @@ func TestBashTool(t *testing.T) {
 	t.Run("Invalid JSON Input", func(t *testing.T) {
 		input := json.RawMessage(`{"command":123}`) // Invalid JSON (command must be string)
 
-		toolOut := tool.Run(context.Background(), input)
+		toolOut := tool.Run(t.Context(), input)
 		if toolOut.Error == nil {
 			t.Errorf("Expected error for invalid input, got none")
 		}
@@ -214,7 +214,7 @@ func TestBashChainedCdHint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal input: %v", err)
 			}
-			out := tool.Run(context.Background(), input)
+			out := tool.Run(t.Context(), input)
 			if out.Error != nil {
 				t.Fatalf("run bash tool: %v", out.Error)
 			}
@@ -235,7 +235,7 @@ func TestExecuteBashInDirUsesSnapshot(t *testing.T) {
 	snapshot := bashTool.getWorkingDir()
 	bashTool.WorkingDir.Set(t.TempDir())
 
-	output, err := bashTool.executeBashInDir(context.Background(), bashInput{Command: "pwd"}, 5*time.Second, snapshot)
+	output, err := bashTool.executeBashInDir(t.Context(), bashInput{Command: "pwd"}, 5*time.Second, snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestExecuteBashInDirUsesSnapshot(t *testing.T) {
 }
 
 func TestExecuteBash(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	bashTool := &BashTool{WorkingDir: NewMutableWorkingDir("/")}
 
 	// Test successful command
@@ -583,7 +583,7 @@ func TestIsNoTrailerSet(t *testing.T) {
 }
 
 func TestShellHasCommand(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// bash is always available since we run tests via bash
 	if !shellHasCommand(ctx, "bash") {

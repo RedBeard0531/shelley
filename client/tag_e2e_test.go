@@ -1,7 +1,6 @@
 package client
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +43,7 @@ func newRealServer(t *testing.T) (*db.DB, *clientConfig, *http.Client, string) {
 }
 
 func TestTagRoundTripAgainstRealServer(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cc, httpClient, baseURL := newRealServer(t)
 
 	conv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})

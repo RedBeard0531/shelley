@@ -1,12 +1,11 @@
 package claudetool
 
 import (
-	"context"
 	"testing"
 )
 
 func TestWithWorkingDir(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	wd := "/test/working/dir"
 
 	newCtx := WithWorkingDir(ctx, wd)
@@ -16,7 +15,7 @@ func TestWithWorkingDir(t *testing.T) {
 }
 
 func TestWorkingDir(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	wd := "/test/working/dir"
 
 	// Test with working dir set
@@ -35,7 +34,7 @@ func TestWorkingDir(t *testing.T) {
 }
 
 func TestWithSessionID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	sessionID := "test-session-id"
 
 	newCtx := WithSessionID(ctx, sessionID)
@@ -45,7 +44,7 @@ func TestWithSessionID(t *testing.T) {
 }
 
 func TestSessionID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	sessionID := "test-session-id"
 
 	// Test with session ID set
