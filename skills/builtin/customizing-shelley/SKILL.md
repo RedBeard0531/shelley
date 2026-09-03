@@ -1,6 +1,6 @@
 ---
 name: customizing-shelley
-description: Use when the user wants to customize the Shelley they are running (code, UI, tools, or behavior beyond what hooks allow), or to rebase/upgrade a customized build.
+description: Use when the user wants to customize the Shelley they are running (code, UI, tools, or behavior beyond what hooks allow), or to rebase/upgrade a customized build. Also use whenever any work happens in ~/.config/shelley/shelley-customization
 ---
 
 Shelley is open source: https://github.com/boldsoftware/shelley. You can check it out, modify it, build it, and run it — including replacing the very binary serving this conversation.
