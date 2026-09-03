@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/db"
@@ -18,7 +19,12 @@ import (
 // processing (thinking/tool execution) are properly queued and eventually processed.
 func TestMessageQueuedDuringThinking(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, testMessageQueuedDuringThinking)
+}
+
+func testMessageQueuedDuringThinking(t *testing.T) {
 	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
 
 	// Create conversation
 	conversation, err := database.CreateConversation(context.Background(), nil, true, nil, nil, db.ConversationOptions{})
@@ -43,8 +49,10 @@ func TestMessageQueuedDuringThinking(t *testing.T) {
 		t.Fatalf("expected status 202 for first message, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Wait for the LLM to start processing (but still be in the delay)
-	time.Sleep(200 * time.Millisecond)
+	// Let the loop reach the LLM call. Inside the bubble that call is parked
+	// on the fake clock, so the first turn is in flight and stays there until
+	// something sleeps.
+	synctest.Wait()
 
 	// Now send a SECOND message while the first is still processing
 	// This is the bug: this message should be immediately recorded and visible,
@@ -64,10 +72,10 @@ func TestMessageQueuedDuringThinking(t *testing.T) {
 		t.Fatalf("expected status 202 for second message, got %d: %s", w2.Code, w2.Body.String())
 	}
 
-	// The second message should be recorded in the database IMMEDIATELY
-	// (or at least very soon), not waiting for the first message to finish
-	// Wait a short time for the message to be recorded
-	time.Sleep(100 * time.Millisecond)
+	// The second message must be recorded without waiting for the first
+	// turn to finish. Wait only for the server's goroutines to settle; the
+	// fake clock has not moved, so the first turn is still in its delay.
+	synctest.Wait()
 
 	var messages []generated.Message
 	err = database.Queries(context.Background(), func(q *generated.Queries) error {
@@ -169,8 +177,7 @@ func TestContextPreservedAfterCancel(t *testing.T) {
 		t.Fatalf("expected status 202, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Wait for first message to complete
-	time.Sleep(300 * time.Millisecond)
+	waitForIdle(t, server, conversationID)
 
 	// Now start a slow operation and cancel it
 	slowReq := ChatRequest{
@@ -188,8 +195,8 @@ func TestContextPreservedAfterCancel(t *testing.T) {
 		t.Fatalf("expected status 202, got %d: %s", w2.Code, w2.Body.String())
 	}
 
-	// Wait for tool to start
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the turn to reach the bash tool call before cancelling.
+	waitForToolUseRecorded(t, database, conversationID)
 
 	// Cancel the conversation
 	cancelReq := httptest.NewRequest("POST", "/api/conversation/"+conversationID+"/cancel", nil)
@@ -200,8 +207,7 @@ func TestContextPreservedAfterCancel(t *testing.T) {
 		t.Fatalf("expected cancel status 200, got %d: %s", cancelW.Code, cancelW.Body.String())
 	}
 
-	// Wait for cancellation to complete
-	time.Sleep(200 * time.Millisecond)
+	waitForIdle(t, server, conversationID)
 
 	// Clear the predictable service request history so we can inspect the next request
 	predictableService.ClearRequests()
@@ -222,14 +228,9 @@ func TestContextPreservedAfterCancel(t *testing.T) {
 		t.Fatalf("expected status 202 for resume, got %d: %s", w3.Code, w3.Body.String())
 	}
 
-	// Wait for the request to be processed
-	time.Sleep(300 * time.Millisecond)
-
 	// Check that the LLM request included the conversation history
+	waitFor(t, 5*time.Second, func() bool { return predictableService.GetLastRequest() != nil })
 	lastReq := predictableService.GetLastRequest()
-	if lastReq == nil {
-		t.Fatal("BUG: no LLM request was made after resume")
-	}
 
 	// The request should include ALL previous messages:
 	// 1. Initial context message (user)
@@ -276,4 +277,31 @@ func TestContextPreservedAfterCancel(t *testing.T) {
 	if !foundInitialContext {
 		t.Error("BUG: initial context message was not preserved after cancellation")
 	}
+}
+
+// waitForToolUseRecorded waits until the conversation has recorded an assistant
+// message containing a tool_use block.
+func waitForToolUseRecorded(t *testing.T, database *db.DB, conversationID string) {
+	t.Helper()
+	waitFor(t, 10*time.Second, func() bool {
+		messages, err := database.ListMessages(context.Background(), conversationID)
+		if err != nil {
+			return false
+		}
+		for _, msg := range messages {
+			if msg.Type != string(db.MessageTypeAgent) || msg.LlmData == nil {
+				continue
+			}
+			var llmMsg llm.Message
+			if err := json.Unmarshal([]byte(*msg.LlmData), &llmMsg); err != nil {
+				continue
+			}
+			for _, content := range llmMsg.Content {
+				if content.Type == llm.ContentTypeToolUse {
+					return true
+				}
+			}
+		}
+		return false
+	})
 }

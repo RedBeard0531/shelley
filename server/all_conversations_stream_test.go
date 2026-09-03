@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/db"
@@ -287,62 +288,64 @@ func TestUnifiedStreamReceivesCrossConversationLiveEvents(t *testing.T) {
 // per-conversation subpub. Regression guard for the refactor.
 func TestLegacyConversationStreamIsolatedFromOtherConversations(t *testing.T) {
 	t.Parallel()
-	srv, database, _ := newTestServer(t)
+	synctest.Test(t, func(t *testing.T) {
+		srv, database, _ := newTestServer(t)
 
-	convA := seedConversation(t, database, 1)
-	convB := seedConversation(t, database, 0)
-	if _, err := srv.getOrCreateConversationManager(context.Background(), convB, ""); err != nil {
-		t.Fatalf("activate B: %v", err)
-	}
+		convA := seedConversation(t, database, 1)
+		convB := seedConversation(t, database, 0)
+		if _, err := srv.getOrCreateConversationManager(context.Background(), convB, ""); err != nil {
+			t.Fatalf("activate B: %v", err)
+		}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/api/conversation/"+convA+"/stream", nil).WithContext(ctx)
-	w := newResponseRecorderWithClose()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		srv.handleStreamConversation(w, req, convA)
-	}()
-	defer func() {
-		w.Close()
-		cancel()
-		<-done
-	}()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		req := httptest.NewRequest(http.MethodGet, "/api/conversation/"+convA+"/stream", nil).WithContext(ctx)
+		w := newResponseRecorderWithClose()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			srv.handleStreamConversation(w, req, convA)
+		}()
+		defer func() {
+			w.Close()
+			cancel()
+			<-done
+		}()
 
-	// Wait for snapshot_complete before producing the cross-conversation event.
-	deadline := time.Now().Add(5 * time.Second)
-	var ready bool
-	for time.Now().Before(deadline) {
-		for _, f := range decodeSSE(w.Snapshot()) {
-			if f.SnapshotComplete {
-				ready = true
+		// Wait for snapshot_complete before producing the cross-conversation event.
+		deadline := time.Now().Add(5 * time.Second)
+		var ready bool
+		for time.Now().Before(deadline) {
+			for _, f := range decodeSSE(w.Snapshot()) {
+				if f.SnapshotComplete {
+					ready = true
+					break
+				}
+			}
+			if ready {
 				break
 			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		if ready {
-			break
+		if !ready {
+			t.Fatalf("never saw snapshot_complete on legacy endpoint; body=%s", w.Snapshot())
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !ready {
-		t.Fatalf("never saw snapshot_complete on legacy endpoint; body=%s", w.Snapshot())
-	}
 
-	createLiveMessage(t, srv, database, convB, "should-not-leak")
+		createLiveMessage(t, srv, database, convB, "should-not-leak")
 
-	// Give plenty of time for any (incorrect) leak to materialize.
-	time.Sleep(300 * time.Millisecond)
+		// Let any (incorrect) leak materialize.
+		synctest.Wait()
 
-	for _, f := range decodeSSE(w.Snapshot()) {
-		if len(f.Messages) == 0 {
-			continue
+		for _, f := range decodeSSE(w.Snapshot()) {
+			if len(f.Messages) == 0 {
+				continue
+			}
+			if f.ConversationID == convB {
+				t.Errorf("legacy /api/conversation/%s/stream leaked a message tagged with B=%s: %+v", convA, convB, f)
+			}
+			if hasMessageText(f, "should-not-leak") {
+				t.Errorf("legacy endpoint received conversation B message body: %+v", f)
+			}
 		}
-		if f.ConversationID == convB {
-			t.Errorf("legacy /api/conversation/%s/stream leaked a message tagged with B=%s: %+v", convA, convB, f)
-		}
-		if hasMessageText(f, "should-not-leak") {
-			t.Errorf("legacy endpoint received conversation B message body: %+v", f)
-		}
-	}
+	})
 }

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/db"
@@ -67,6 +68,10 @@ func jsonString(s string) string {
 // removed.
 func TestQueuedMessageImmutableFlow(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, testQueuedMessageImmutableFlow)
+}
+
+func testQueuedMessageImmutableFlow(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 
@@ -76,9 +81,10 @@ func TestQueuedMessageImmutableFlow(t *testing.T) {
 	}
 	convID := conversation.ConversationID
 
-	// Start a slow turn so the next message queues.
+	// Start a slow turn so the next message queues. Once the bubble settles,
+	// the turn is parked in the LLM's delay and stays there until time moves.
 	sendChat(t, server, convID, "delay: 2", false)
-	time.Sleep(200 * time.Millisecond)
+	synctest.Wait()
 
 	// Queue a message while busy.
 	body := sendChat(t, server, convID, "echo: queued while busy", true)
@@ -87,7 +93,7 @@ func TestQueuedMessageImmutableFlow(t *testing.T) {
 	}
 
 	// The queued message must be in the array and NOT a messages row.
-	time.Sleep(100 * time.Millisecond)
+	synctest.Wait()
 	q := queuedMessages(t, database, convID)
 	if len(q) != 1 {
 		t.Fatalf("expected 1 queued array entry, got %d", len(q))
@@ -118,6 +124,10 @@ func TestQueuedMessageImmutableFlow(t *testing.T) {
 // the conversation's queued_messages array.
 func TestCancelQueuedClearsArray(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, testCancelQueuedClearsArray)
+}
+
+func testCancelQueuedClearsArray(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 
@@ -128,10 +138,10 @@ func TestCancelQueuedClearsArray(t *testing.T) {
 	convID := conversation.ConversationID
 
 	sendChat(t, server, convID, "delay: 3", false)
-	time.Sleep(200 * time.Millisecond)
+	synctest.Wait()
 	sendChat(t, server, convID, "echo: first queued", true)
 	sendChat(t, server, convID, "echo: second queued", true)
-	time.Sleep(100 * time.Millisecond)
+	synctest.Wait()
 
 	q := queuedMessages(t, database, convID)
 	if len(q) != 2 {
@@ -145,7 +155,7 @@ func TestCancelQueuedClearsArray(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("per-message cancel: got %d", w.Code)
 	}
-	time.Sleep(50 * time.Millisecond)
+	synctest.Wait()
 	if got := queuedMessages(t, database, convID); len(got) != 1 || got[0].ID != q[1].ID {
 		t.Fatalf("after per-message cancel, queued = %+v, want [second]", got)
 	}
@@ -157,7 +167,7 @@ func TestCancelQueuedClearsArray(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("whole-queue cancel: got %d", w.Code)
 	}
-	time.Sleep(50 * time.Millisecond)
+	synctest.Wait()
 	if got := queuedMessages(t, database, convID); len(got) != 0 {
 		t.Fatalf("after whole-queue cancel, queued = %+v, want empty", got)
 	}
@@ -171,6 +181,10 @@ func TestCancelQueuedClearsArray(t *testing.T) {
 // processBatch guarantees the array entry is gone the instant the row exists.
 func TestQueuedMessageNoDoubleFeedOnRestart(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, testQueuedMessageNoDoubleFeedOnRestart)
+}
+
+func testQueuedMessageNoDoubleFeedOnRestart(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 	ctx := context.Background()
@@ -229,8 +243,9 @@ func TestQueuedMessageNoDoubleFeedOnRestart(t *testing.T) {
 	}
 
 	// A SECOND drain must be a no-op (nothing left in array or memory).
+	// Wait for everything it could have kicked off to run to completion.
 	mgr.drainPendingMessages(server)
-	time.Sleep(100 * time.Millisecond)
+	synctest.Wait()
 	msgs, _ = database.ListMessages(ctx, convID)
 	count = 0
 	for _, m := range msgs {
@@ -299,6 +314,10 @@ func TestCancelQueuedNoActiveManager(t *testing.T) {
 // are empty/diverged (CRITICAL 3).
 func TestCancelConversationClearsQueueUnconditionally(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, testCancelConversationClearsQueueUnconditionally)
+}
+
+func testCancelConversationClearsQueueUnconditionally(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 	ctx := context.Background()
@@ -311,7 +330,7 @@ func TestCancelConversationClearsQueueUnconditionally(t *testing.T) {
 
 	// Start a real turn so there's a loop to cancel.
 	sendChat(t, server, convID, "delay: 30", false)
-	time.Sleep(200 * time.Millisecond)
+	synctest.Wait()
 
 	mgr, err := server.getOrCreateConversationManager(ctx, convID, "")
 	if err != nil {

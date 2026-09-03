@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/db"
@@ -435,31 +436,34 @@ func toolResultText(c llm.Content) string {
 // the async onDone notification: the waiter delivers the response via the
 // tool's return value, so a synthetic pair would duplicate it.
 func testSubagentDone_SuppressedWhileWaiterActive(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Synchronous response.")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "Synchronous response.")
+		defer stopActiveConversationLoops(f.server)
 
-	f.subagentMgr.registerSubagentWaiter()
+		f.subagentMgr.registerSubagentWaiter()
 
-	before := len(f.parentMessages())
-	f.fireOnDone() // subagent finishes while the waiter holds its slot
+		before := len(f.parentMessages())
+		f.fireOnDone() // subagent finishes while the waiter holds its slot
 
-	// Give any (erroneous) async notification a chance to land.
-	time.Sleep(150 * time.Millisecond)
-	if got := len(f.parentMessages()); got != before {
-		t.Fatalf("expected no new parent messages while a synchronous waiter is active, got %d new", got-before)
-	}
-	if hasSyntheticDonePair(t, f.parentMessages()) {
-		t.Fatalf("expected no synthetic pair while a synchronous waiter is active")
-	}
+		// Let any (erroneous) async notification land.
+		synctest.Wait()
+		if got := len(f.parentMessages()); got != before {
+			t.Fatalf("expected no new parent messages while a synchronous waiter is active, got %d new", got-before)
+		}
+		if hasSyntheticDonePair(t, f.parentMessages()) {
+			t.Fatalf("expected no synthetic pair while a synchronous waiter is active")
+		}
 
-	// The waiter delivers the result itself, so finishing reports no owed
-	// async notification.
-	if owed := f.subagentMgr.finishSubagentWait(true); owed {
-		t.Fatalf("finishSubagentWait(delivered=true) reported notifyOwed=true; want false")
-	}
-	time.Sleep(50 * time.Millisecond)
-	if hasSyntheticDonePair(t, f.parentMessages()) {
-		t.Fatalf("expected no synthetic pair after the waiter delivered the result")
-	}
+		// The waiter delivers the result itself, so finishing reports no owed
+		// async notification.
+		if owed := f.subagentMgr.finishSubagentWait(true); owed {
+			t.Fatalf("finishSubagentWait(delivered=true) reported notifyOwed=true; want false")
+		}
+		synctest.Wait()
+		if hasSyntheticDonePair(t, f.parentMessages()) {
+			t.Fatalf("expected no synthetic pair after the waiter delivered the result")
+		}
+	})
 }
 
 // Regression for the original duplicate-completion bug: the parent records a
@@ -470,40 +474,43 @@ func testSubagentDone_SuppressedWhileWaiterActive(t *testing.T) {
 // wait=true tool return. The waiter-slot mechanism is keyed by the manager
 // (conversation ID), so the mismatch is irrelevant and suppression holds.
 func testSubagentDone_SuppressedDespiteSlugRename(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Synchronous response.")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "Synchronous response.")
+		defer stopActiveConversationLoops(f.server)
 
-	// Record a parent tool_use whose requested slug differs from the
-	// subagent's actual (renamed) slug. This is exactly what the buggy
-	// history-parsing suppression keyed off.
-	requestedSlug := f.subSlug + "-DIFFERENT-REQUESTED"
-	pendingInput, _ := json.Marshal(map[string]any{"slug": requestedSlug, "prompt": "go", "wait": true})
-	if err := f.server.recordMessage(context.Background(), f.parentID, llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        "toolu_renamed_pending",
-			ToolName:  "subagent",
-			ToolInput: pendingInput,
-		}},
-	}, llm.Usage{}, nil); err != nil {
-		t.Fatalf("record pending tool_use: %v", err)
-	}
+		// Record a parent tool_use whose requested slug differs from the
+		// subagent's actual (renamed) slug. This is exactly what the buggy
+		// history-parsing suppression keyed off.
+		requestedSlug := f.subSlug + "-DIFFERENT-REQUESTED"
+		pendingInput, _ := json.Marshal(map[string]any{"slug": requestedSlug, "prompt": "go", "wait": true})
+		if err := f.server.recordMessage(context.Background(), f.parentID, llm.Message{
+			Role: llm.MessageRoleAssistant,
+			Content: []llm.Content{{
+				Type:      llm.ContentTypeToolUse,
+				ID:        "toolu_renamed_pending",
+				ToolName:  "subagent",
+				ToolInput: pendingInput,
+			}},
+		}, llm.Usage{}, nil); err != nil {
+			t.Fatalf("record pending tool_use: %v", err)
+		}
 
-	// A real wait=true call would hold a slot; simulate that.
-	f.subagentMgr.registerSubagentWaiter()
+		// A real wait=true call would hold a slot; simulate that.
+		f.subagentMgr.registerSubagentWaiter()
 
-	before := len(f.parentMessages())
-	f.fireOnDone()
-	time.Sleep(150 * time.Millisecond)
-	if got := len(f.parentMessages()); got != before {
-		t.Fatalf("expected no new parent messages despite slug rename, got %d new", got-before)
-	}
-	if hasSyntheticDonePair(t, f.parentMessages()) {
-		t.Fatalf("expected no synthetic pair despite slug rename")
-	}
-	if owed := f.subagentMgr.finishSubagentWait(true); owed {
-		t.Fatalf("finishSubagentWait(delivered=true) reported notifyOwed=true; want false")
-	}
+		before := len(f.parentMessages())
+		f.fireOnDone()
+		synctest.Wait()
+		if got := len(f.parentMessages()); got != before {
+			t.Fatalf("expected no new parent messages despite slug rename, got %d new", got-before)
+		}
+		if hasSyntheticDonePair(t, f.parentMessages()) {
+			t.Fatalf("expected no synthetic pair despite slug rename")
+		}
+		if owed := f.subagentMgr.finishSubagentWait(true); owed {
+			t.Fatalf("finishSubagentWait(delivered=true) reported notifyOwed=true; want false")
+		}
+	})
 }
 
 // If the subagent finishes while a waiter holds its slot (onDone suppressed),
@@ -573,33 +580,36 @@ func testSubagentDone_WaiterTimeoutBeforeFinishNotifiesOnce(t *testing.T) {
 // later finishes, a duplicate). With no waiter slot held during cancel, the
 // only thing keeping onDone quiet is the cancelling guard.
 func testSubagentDone_CancellationDoesNotNotifyParent(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Should never reach the parent.")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "Should never reach the parent.")
+		defer stopActiveConversationLoops(f.server)
 
-	// Bring the subagent's loop up so CancelConversation has something to tear
-	// down (it returns early when loop==nil).
-	if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-		t.Fatalf("ensureLoop subagent: %v", err)
-	}
-	f.subagentMgr.SetAgentWorking(true)
+		// Bring the subagent's loop up so CancelConversation has something to tear
+		// down (it returns early when loop==nil).
+		if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
+			t.Fatalf("ensureLoop subagent: %v", err)
+		}
+		f.subagentMgr.SetAgentWorking(true)
 
-	before := len(f.parentMessages())
-	if err := f.subagentMgr.CancelConversation(context.Background()); err != nil {
-		t.Fatalf("CancelConversation: %v", err)
-	}
+		before := len(f.parentMessages())
+		if err := f.subagentMgr.CancelConversation(context.Background()); err != nil {
+			t.Fatalf("CancelConversation: %v", err)
+		}
 
-	// Give any (erroneous) async notification a chance to land on the parent.
-	time.Sleep(200 * time.Millisecond)
-	if n := countSyntheticDonePairs(t, f.parentMessages()); n != 0 {
-		t.Fatalf("cancellation fired %d subagent-done notification(s) to the parent; want 0\nmessages:\n%s", n, dumpMessages(t, f.parentMessages()))
-	}
-	if got := len(f.parentMessages()); got != before {
-		t.Fatalf("cancellation added %d parent message(s); want 0", got-before)
-	}
+		// Let any (erroneous) async notification land on the parent.
+		synctest.Wait()
+		if n := countSyntheticDonePairs(t, f.parentMessages()); n != 0 {
+			t.Fatalf("cancellation fired %d subagent-done notification(s) to the parent; want 0\nmessages:\n%s", n, dumpMessages(t, f.parentMessages()))
+		}
+		if got := len(f.parentMessages()); got != before {
+			t.Fatalf("cancellation added %d parent message(s); want 0", got-before)
+		}
 
-	// The subagent itself must be idle after cancel.
-	if f.subagentMgr.IsAgentWorking() {
-		t.Fatalf("subagent still working after CancelConversation")
-	}
+		// The subagent itself must be idle after cancel.
+		if f.subagentMgr.IsAgentWorking() {
+			t.Fatalf("subagent still working after CancelConversation")
+		}
+	})
 }
 
 // countSyntheticDonePairs returns how many synthetic subagent-done tool_use/
@@ -972,43 +982,46 @@ func testSubagentDone_InjectionSkippedWhileDistilling(t *testing.T) {
 // is stale — the same supersession policy enqueueBatch already applies when a
 // newer notification for the same subagent arrives. It must be dropped.
 func testSubagentDone_StaleQueuedNotificationDroppedAfterSyncDelivery(t *testing.T) {
-	f := newSubagentDoneFixture(t, "first-turn response")
-	ctx := context.Background()
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "first-turn response")
+		defer stopActiveConversationLoops(f.server)
+		ctx := context.Background()
 
-	// Parent is mid-turn: enqueued subagent-done batches wait in
-	// pendingBatches rather than draining immediately.
-	f.parentMgr.SetAgentWorking(true)
+		// Parent is mid-turn: enqueued subagent-done batches wait in
+		// pendingBatches rather than draining immediately.
+		f.parentMgr.SetAgentWorking(true)
 
-	// Subagent finishes while the parent is busy -> queued notification.
-	f.notifySubagentDone(f.subagentID)
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
+		// Subagent finishes while the parent is busy -> queued notification.
+		f.notifySubagentDone(f.subagentID)
+		waitFor(t, 5*time.Second, func() bool {
+			return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
+		})
+
+		// Parent (still mid-turn) polls the subagent with wait=true and gets the
+		// response synchronously via the tool result.
+		runner := NewSubagentRunner(f.server)
+		res, err := runner.RunSubagent(ctx, f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
+		if err != nil {
+			t.Fatalf("RunSubagent(wait=true): %v", err)
+		}
+		if !strings.Contains(res, "foo") {
+			t.Fatalf("expected synchronous response 'foo', got %q", res)
+		}
+
+		// The queued notification is now stale — the parent already has the
+		// subagent's answer — and must have been dropped.
+		if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
+			t.Fatalf("expected stale queued subagent-done batch to be dropped after synchronous delivery, still have %d", n)
+		}
+
+		// Parent's turn ends. Draining must not splice a synthetic done pair.
+		f.parentMgr.SetAgentWorking(false)
+		go f.parentMgr.drainPendingMessages(f.server)
+		synctest.Wait() // let any erroneous pair land
+		if n := countSyntheticDonePairs(t, f.parentMessages()); n != 0 {
+			t.Fatalf("expected no synthetic done pairs on parent after synchronous delivery, got %d", n)
+		}
 	})
-
-	// Parent (still mid-turn) polls the subagent with wait=true and gets the
-	// response synchronously via the tool result.
-	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(ctx, f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
-	if err != nil {
-		t.Fatalf("RunSubagent(wait=true): %v", err)
-	}
-	if !strings.Contains(res, "foo") {
-		t.Fatalf("expected synchronous response 'foo', got %q", res)
-	}
-
-	// The queued notification is now stale — the parent already has the
-	// subagent's answer — and must have been dropped.
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected stale queued subagent-done batch to be dropped after synchronous delivery, still have %d", n)
-	}
-
-	// Parent's turn ends. Draining must not splice a synthetic done pair.
-	f.parentMgr.SetAgentWorking(false)
-	go f.parentMgr.drainPendingMessages(f.server)
-	time.Sleep(150 * time.Millisecond) // let any erroneous pair land
-	if n := countSyntheticDonePairs(t, f.parentMessages()); n != 0 {
-		t.Fatalf("expected no synthetic done pairs on parent after synchronous delivery, got %d", n)
-	}
 }
 
 // testSubagentDone_StaleQueuedNotificationDroppedOnWaitFalseSend covers the
@@ -1059,41 +1072,44 @@ func testSubagentDone_StaleQueuedNotificationDroppedOnWaitFalseSend(t *testing.T
 // accepted it supersedes the queued notification, which must be dropped
 // before waitForResponse delivers (or times out on) the new turn.
 func testSubagentDone_StaleQueuedNotificationDroppedOnWaitTrueReprompt(t *testing.T) {
-	f := newSubagentDoneFixture(t, "previous-turn response")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "previous-turn response")
+		defer stopActiveConversationLoops(f.server)
 
-	// Parent is mid-turn.
-	f.parentMgr.SetAgentWorking(true)
+		// Parent is mid-turn.
+		f.parentMgr.SetAgentWorking(true)
 
-	// Subagent finished its previous turn while the parent was busy.
-	f.notifySubagentDone(f.subagentID)
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
+		// Subagent finished its previous turn while the parent was busy.
+		f.notifySubagentDone(f.subagentID)
+		waitFor(t, 5*time.Second, func() bool {
+			return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
+		})
+
+		// The subagent is busy with another (simulated) turn that finishes
+		// shortly; the parent re-prompts with wait=true.
+		if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
+			t.Fatalf("ensureLoop subagent: %v", err)
+		}
+		f.subagentMgr.SetAgentWorking(true)
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			f.subagentMgr.SetAgentWorking(false)
+		}()
+
+		runner := NewSubagentRunner(f.server)
+		res, err := runner.RunSubagent(context.Background(), f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
+		if err != nil {
+			t.Fatalf("RunSubagent(wait=true): %v", err)
+		}
+		if !strings.Contains(res, "foo") {
+			t.Fatalf("expected the follow-up response 'foo', got %q", res)
+		}
+
+		// The stale previous-turn notification must be gone.
+		if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
+			t.Fatalf("expected stale queued subagent-done batch to be dropped on wait=true re-prompt, still have %d", n)
+		}
 	})
-
-	// The subagent is busy with another (simulated) turn that finishes
-	// shortly; the parent re-prompts with wait=true.
-	if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-		t.Fatalf("ensureLoop subagent: %v", err)
-	}
-	f.subagentMgr.SetAgentWorking(true)
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		f.subagentMgr.SetAgentWorking(false)
-	}()
-
-	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(context.Background(), f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
-	if err != nil {
-		t.Fatalf("RunSubagent(wait=true): %v", err)
-	}
-	if !strings.Contains(res, "foo") {
-		t.Fatalf("expected the follow-up response 'foo', got %q", res)
-	}
-
-	// The stale previous-turn notification must be gone.
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected stale queued subagent-done batch to be dropped on wait=true re-prompt, still have %d", n)
-	}
 }
 
 // testSubagentDone_RepromptThenTimeoutStillDropsStale pins the wait=true
@@ -1385,45 +1401,45 @@ func testSubagentDone_DelayedNotifierSkipsWhileNewTurnRunning(t *testing.T) {
 // parent's turn ends it drains a single "subagent finished" pair instead of a
 // pile of stale echoes of already-superseded turns.
 func testSubagentDone_StaleNotificationCoalesced(t *testing.T) {
-	f := newSubagentDoneFixture(t, "first-turn response")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "first-turn response")
+		defer stopActiveConversationLoops(f.server)
 
-	// Parent is mid-turn: its loop is busy, so enqueued subagent-done batches
-	// wait in pendingBatches rather than draining immediately.
-	f.parentMgr.SetAgentWorking(true)
+		// Parent is mid-turn: its loop is busy, so enqueued subagent-done batches
+		// wait in pendingBatches rather than draining immediately.
+		f.parentMgr.SetAgentWorking(true)
 
-	// Subagent finishes its first turn while the parent is busy -> one queued
-	// notification.
-	f.notifySubagentDone(f.subagentID)
+		// Subagent finishes its first turn while the parent is busy -> one queued
+		// notification.
+		f.notifySubagentDone(f.subagentID)
 
-	// The parent re-prompted the subagent (not modeled here) and it finishes a
-	// SECOND turn, still while the parent is busy -> a second notification for
-	// the SAME subagent conversation. This is the stale echo we must coalesce.
-	f.notifySubagentDone(f.subagentID)
+		// The parent re-prompted the subagent (not modeled here) and it finishes a
+		// SECOND turn, still while the parent is busy -> a second notification for
+		// the SAME subagent conversation. This is the stale echo we must coalesce.
+		f.notifySubagentDone(f.subagentID)
 
-	// Give the async enqueue goroutines time to land both batches.
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) >= 1
+		// Let anything the notifications kicked off settle.
+		synctest.Wait()
+
+		// Exactly one subagent-done batch for this subagent should be queued: the
+		// second (newest) notification supersedes the first.
+		if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 1 {
+			t.Fatalf("expected exactly 1 queued subagent-done batch for the subagent, got %d", n)
+		}
+
+		// Drain: parent finishes its turn. Exactly one synthetic pair should land.
+		f.parentMgr.SetAgentWorking(false)
+		go f.parentMgr.drainPendingMessages(f.server)
+
+		waitFor(t, 5*time.Second, func() bool {
+			return countSyntheticDonePairs(t, f.parentMessages()) >= 1
+		})
+		// Let any erroneous second pair land.
+		synctest.Wait()
+		if n := countSyntheticDonePairs(t, f.parentMessages()); n != 1 {
+			t.Fatalf("expected exactly one synthetic done pair after draining coalesced notifications, got %d", n)
+		}
 	})
-	time.Sleep(100 * time.Millisecond)
-
-	// Exactly one subagent-done batch for this subagent should be queued: the
-	// second (newest) notification supersedes the first.
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 1 {
-		t.Fatalf("expected exactly 1 queued subagent-done batch for the subagent, got %d", n)
-	}
-
-	// Drain: parent finishes its turn. Exactly one synthetic pair should land.
-	f.parentMgr.SetAgentWorking(false)
-	go f.parentMgr.drainPendingMessages(f.server)
-
-	waitFor(t, 5*time.Second, func() bool {
-		return countSyntheticDonePairs(t, f.parentMessages()) >= 1
-	})
-	// Let any erroneous second pair land.
-	time.Sleep(150 * time.Millisecond)
-	if n := countSyntheticDonePairs(t, f.parentMessages()); n != 1 {
-		t.Fatalf("expected exactly one synthetic done pair after draining coalesced notifications, got %d", n)
-	}
 }
 
 // countPendingSubagentDone counts queued subagent-done batches in the parent's

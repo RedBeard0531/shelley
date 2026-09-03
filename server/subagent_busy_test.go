@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/db"
@@ -121,38 +122,41 @@ func testSubagentBusy_WaitFalseQueues(t *testing.T) {
 // (without cancelling it) and then send the follow-up, returning the
 // follow-up's response.
 func testSubagentBusy_WaitTrueWaitsForIdle(t *testing.T) {
-	f := newSubagentDoneFixture(t, "irrelevant")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "irrelevant")
+		defer stopActiveConversationLoops(f.server)
 
-	if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-		t.Fatalf("ensureLoop subagent: %v", err)
-	}
-	// Simulate an in-flight turn that finishes shortly.
-	f.subagentMgr.SetAgentWorking(true)
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		f.subagentMgr.SetAgentWorking(false)
-	}()
+		if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
+			t.Fatalf("ensureLoop subagent: %v", err)
+		}
+		// Simulate an in-flight turn that finishes shortly.
+		f.subagentMgr.SetAgentWorking(true)
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			f.subagentMgr.SetAgentWorking(false)
+		}()
 
-	parentBefore := countSyntheticDonePairs(t, f.parentMessages())
+		parentBefore := countSyntheticDonePairs(t, f.parentMessages())
 
-	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(context.Background(), f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
-	if err != nil {
-		t.Fatalf("RunSubagent(wait=true): %v", err)
-	}
-	if hasCancelledMessage(t, f) {
-		t.Fatalf("subagent turn was cancelled; expected it to finish on its own")
-	}
-	// The follow-up ("echo: foo") drives the predictable model to reply "foo".
-	if !strings.Contains(res, "foo") {
-		t.Fatalf("expected the follow-up response 'foo', got %q", res)
-	}
-	// The in-flight turn's finish happened while our waiter slot was held, so
-	// it must NOT have produced a spurious async completion on the parent; we
-	// delivered synchronously instead.
-	if n := countSyntheticDonePairs(t, f.parentMessages()); n != parentBefore {
-		t.Fatalf("expected no new synthetic done pairs on parent, got %d (was %d)", n, parentBefore)
-	}
+		runner := NewSubagentRunner(f.server)
+		res, err := runner.RunSubagent(context.Background(), f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
+		if err != nil {
+			t.Fatalf("RunSubagent(wait=true): %v", err)
+		}
+		if hasCancelledMessage(t, f) {
+			t.Fatalf("subagent turn was cancelled; expected it to finish on its own")
+		}
+		// The follow-up ("echo: foo") drives the predictable model to reply "foo".
+		if !strings.Contains(res, "foo") {
+			t.Fatalf("expected the follow-up response 'foo', got %q", res)
+		}
+		// The in-flight turn's finish happened while our waiter slot was held, so
+		// it must NOT have produced a spurious async completion on the parent; we
+		// delivered synchronously instead.
+		if n := countSyntheticDonePairs(t, f.parentMessages()); n != parentBefore {
+			t.Fatalf("expected no new synthetic done pairs on parent, got %d (was %d)", n, parentBefore)
+		}
+	})
 }
 
 // If the deadline passes while the subagent's current turn is still running,
@@ -193,47 +197,50 @@ func testSubagentBusy_WaitTrueDeadline(t *testing.T) {
 // to the follow-up and fire a premature notification. Exactly one async
 // completion fires, and only once the follow-up actually finishes.
 func testSubagentBusy_InFlightFinishThenFollowupTimeout(t *testing.T) {
-	f := newSubagentDoneFixture(t, "irrelevant")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "irrelevant")
+		defer stopActiveConversationLoops(f.server)
 
-	if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-		t.Fatalf("ensureLoop subagent: %v", err)
-	}
+		if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
+			t.Fatalf("ensureLoop subagent: %v", err)
+		}
 
-	// In-flight turn finishes shortly (this is the finish we wait out; it
-	// records a suppressed-finish because our waiter slot is held).
-	f.subagentMgr.SetAgentWorking(true)
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		f.subagentMgr.SetAgentWorking(false)
-	}()
+		// In-flight turn finishes shortly (this is the finish we wait out; it
+		// records a suppressed-finish because our waiter slot is held).
+		f.subagentMgr.SetAgentWorking(true)
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			f.subagentMgr.SetAgentWorking(false)
+		}()
 
-	// Make the follow-up turn slow so OUR wait times out before it finishes.
-	f.llmSvc.SetResponseDelay(2 * time.Second)
+		// Make the follow-up turn slow so OUR wait times out before it finishes.
+		f.llmSvc.SetResponseDelay(2 * time.Second)
 
-	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(context.Background(), f.subagentID, "echo: foo", true, 700*time.Millisecond, "predictable", "")
-	if err != nil {
-		t.Fatalf("RunSubagent(wait=true): %v", err)
-	}
-	if !strings.Contains(res, "still working") {
-		t.Fatalf("expected a progress summary (follow-up timed out), got %q", res)
-	}
+		runner := NewSubagentRunner(f.server)
+		res, err := runner.RunSubagent(context.Background(), f.subagentID, "echo: foo", true, 700*time.Millisecond, "predictable", "")
+		if err != nil {
+			t.Fatalf("RunSubagent(wait=true): %v", err)
+		}
+		if !strings.Contains(res, "still working") {
+			t.Fatalf("expected a progress summary (follow-up timed out), got %q", res)
+		}
 
-	// The earlier in-flight finish (which we waited out) must NOT count as an
-	// undelivered finish of our follow-up turn. Over the whole lifecycle the
-	// count must converge to exactly ONE async completion — fired when the
-	// follow-up actually finishes — and never exceed it. Without
-	// consumeSuppressedFinish, the timeout's endWait fires one notification
-	// (mis-attributing the stale suppressed finish) AND the follow-up's real
-	// finish fires a second, yielding two.
-	waitFor(t, 6*time.Second, func() bool {
-		return countSyntheticDonePairs(t, f.parentMessages()) == 1
-	})
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if n := countSyntheticDonePairs(t, f.parentMessages()); n > 1 {
+		// The earlier in-flight finish (which we waited out) must NOT count as an
+		// undelivered finish of our follow-up turn. Over the whole lifecycle the
+		// count must converge to exactly ONE async completion — fired when the
+		// follow-up actually finishes — and never exceed it. Without
+		// consumeSuppressedFinish, the timeout's endWait fires one notification
+		// (mis-attributing the stale suppressed finish) AND the follow-up's real
+		// finish fires a second, yielding two.
+		waitFor(t, 6*time.Second, func() bool {
+			return countSyntheticDonePairs(t, f.parentMessages()) == 1
+		})
+		// Run the clock well past every pending timer, then confirm nothing
+		// else fired a second pair.
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		if n := countSyntheticDonePairs(t, f.parentMessages()); n != 1 {
 			t.Fatalf("expected exactly one synthetic done pair, got %d", n)
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	})
 }

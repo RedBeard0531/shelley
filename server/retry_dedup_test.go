@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/claudetool"
@@ -54,6 +55,10 @@ func (g *gatingTestLLM) SupportsImages() bool    { return g.inner.SupportsImages
 // bottom error message is rejected (MAJOR 6) — without mutating the error row.
 func TestRetryDoubleClickDeduped(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, testRetryDoubleClickDeduped)
+}
+
+func testRetryDoubleClickDeduped(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
 	ps := predictable.NewService()
@@ -117,7 +122,8 @@ func TestRetryDoubleClickDeduped(t *testing.T) {
 		t.Fatalf("second retry: want errRetryNotApplicable, got %v", err)
 	}
 
-	// Release the gate so the loop finishes cleanly.
+	// Release the gate and let the retried turn run to completion before
+	// the deferred loop teardown.
 	close(gate)
-	time.Sleep(100 * time.Millisecond)
+	synctest.Wait()
 }
