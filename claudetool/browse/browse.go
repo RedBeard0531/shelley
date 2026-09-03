@@ -692,7 +692,9 @@ func (b *BrowseTools) CombinedTool() *llm.Tool {
   Parameters: width (integer, required), height (integer, required), timeout (string, optional)
 
 - action: "screenshot"
-  Take a screenshot of the page or a specific element.
+  Take a screenshot of the page or a specific element. Prefer passing a
+  selector that scopes the shot to the element of interest (e.g. its #id);
+  capture the whole page only when the full page is actually needed.
   Parameters: selector (string, optional), timeout (string, optional)
 
 - action: "console_logs"
