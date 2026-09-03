@@ -1,3 +1,6 @@
+If you are running in ~/.config/shelley/shelley-customization/ you MUST load the customize-shelly skill before doing anything else.
+
+
 1. Never add sleeps to tests.
 2. Brevity, brevity, brevity! Do not do weird defaults; have only one way of doing things; refactor relentlessly as necessary.
 3. If something doesn't work, propagate the error or exit or crash. Do not have "fallbacks".
