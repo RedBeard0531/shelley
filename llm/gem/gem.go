@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	DefaultModel    = "gemini-2.5-pro"
+	DefaultModel    = "gemini-3.8-flash"
 	GeminiAPIKeyEnv = "GEMINI_API_KEY"
 )
 
