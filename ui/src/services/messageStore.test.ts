@@ -15,7 +15,7 @@ import { MessageStore } from "./messageStore";
 import type { ConversationCacheRecord } from "./messageStore";
 import type { Conversation, Message, StreamResponse } from "../types";
 import { CacheKeyHolder, type CacheKeyFetcher, type CacheKeyMaterial } from "./cryptoKey";
-import { cacheDiagStats } from "./cacheDiag";
+import { cacheDiagReset, cacheDiagStats } from "./cacheDiag";
 
 // Node 20 lacks a global `crypto.subtle`; expose webcrypto so messageStore's
 // AES-GCM helpers work in tests.
@@ -241,6 +241,31 @@ async function main(): Promise<void> {
       hyd!.messages[0].sequence_id === 1 && hyd!.messages[2].sequence_id === 3,
       "hydrated sorted asc",
     );
+  });
+
+  await run("concurrent hydrate calls share one IndexedDB read", async () => {
+    const { factory, dbName, keyId, rawKey } = freshFactory();
+    const id = "c-concurrent-hydrate";
+    const s = storeFor({ factory, dbName, keyId, rawKey });
+    s.applyFullHistory(id, {
+      conversation_id: id,
+      messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
+      context_window_size: 42,
+      max_sequence_id: 3,
+    });
+    await s.settle();
+    await s.close();
+
+    cacheDiagReset();
+    const reloaded = storeFor({ factory, dbName, keyId, rawKey });
+    const [first, second] = await Promise.all([reloaded.hydrate(id), reloaded.hydrate(id)]);
+    assert(first !== null && second !== null, "both callers hydrated");
+    assert(first === second, "concurrent callers share the hydrated record");
+    assert(
+      cacheDiagStats()["hydrate.loaded"] === 1,
+      `expected one disk hydrate, got ${JSON.stringify(cacheDiagStats())}`,
+    );
+    await reloaded.close();
   });
 
   await run("monotonic head: older seq does not lower max_sequence_id_local", async () => {

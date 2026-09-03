@@ -446,6 +446,8 @@ export class MessageStore {
    * focus skip the disk read and full-REST-reload instead.
    */
   private hydrated = new Set<string>();
+  /** One disk read/decrypt per conversation, even if several load triggers race. */
+  private hydrations = new Map<string, Promise<ConversationCacheRecord | null>>();
   private listenersById = new Map<string, Set<Listener>>();
   private transientListenersById = new Map<string, Set<Listener>>();
   private allListeners = new Set<Listener>();
@@ -901,11 +903,18 @@ export class MessageStore {
    * through cacheDiag so "the cache silently stopped working" is visible in
    * the console instead of only as extra network traffic.
    */
-  async hydrate(id: string): Promise<ConversationCacheRecord | null> {
+  hydrate(id: string): Promise<ConversationCacheRecord | null> {
     if (this.hydrated.has(id)) {
-      return this.hot.get(id) ?? null;
+      return Promise.resolve(this.hot.get(id) ?? null);
     }
-    return this._hydrate(id);
+    const pending = this.hydrations.get(id);
+    if (pending) return pending;
+
+    const hydration = this._hydrate(id).finally(() => {
+      if (this.hydrations.get(id) === hydration) this.hydrations.delete(id);
+    });
+    this.hydrations.set(id, hydration);
+    return hydration;
   }
 
   private async _hydrate(id: string): Promise<ConversationCacheRecord | null> {
