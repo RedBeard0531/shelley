@@ -37,6 +37,7 @@ export const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: st
   ],
   gemini: [
     { name: "Gemini 3.1 Pro", model_name: "gemini-3.1-pro-preview" },
+    { name: "Gemini 3.8 Flash", model_name: "gemini-3.8-flash" },
     { name: "Gemini 3.6 Flash", model_name: "gemini-3.6-flash" },
     { name: "Gemini 3 Flash", model_name: "gemini-3-flash-preview" },
   ],

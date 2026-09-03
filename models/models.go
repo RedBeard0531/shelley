@@ -274,6 +274,12 @@ func All() []Model {
 			Build: gemSvc("gemini-3.1-pro-preview"),
 		},
 		{
+			ID: "gemini-3.8-flash", Provider: ProviderGemini,
+			Description: "Gemini 3.8 Flash", APIModelName: "gemini-3.8-flash",
+			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,
+			Build: gemSvc("gemini-3.8-flash"),
+		},
+		{
 			ID: "grok-4.5", Provider: ProviderXAI,
 			Description: "Grok 4.5", APIModelName: oai.Grok45.ModelName,
 			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultXAIBaseURL,
@@ -368,18 +374,6 @@ func All() []Model {
 			Description: "GPT-5.3 Codex", APIModelName: oai.GPT53Codex.ModelName,
 			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
 			Build: oaiResponsesSvc(oai.GPT53Codex),
-		},
-		{
-			ID: "gemini-3.6-flash", Provider: ProviderGemini,
-			Description: "Gemini 3.6 Flash", APIModelName: "gemini-3.6-flash",
-			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,
-			Build: gemSvc("gemini-3.6-flash"),
-		},
-		{
-			ID: "gemini-3-flash", Provider: ProviderGemini,
-			Description: "Gemini 3 Flash", APIModelName: "gemini-3-flash-preview",
-			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,
-			Build: gemSvc("gemini-3-flash-preview"),
 		},
 		{
 			ID: "deepseek-v4-flash-0731-fireworks", Provider: ProviderFireworks,

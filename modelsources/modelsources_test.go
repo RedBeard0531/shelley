@@ -66,7 +66,7 @@ func TestEnvSourceLabels(t *testing.T) {
 	}{
 		{"claude-opus-4.6", "$ANTHROPIC_API_KEY"},
 		{"gpt-5.5", "$OPENAI_API_KEY"},
-		{"gemini-3-flash", "$GEMINI_API_KEY"},
+		{"gemini-3.8-flash", "$GEMINI_API_KEY"},
 		{"deepseek-v4-flash-0731-fireworks", "$FIREWORKS_API_KEY"},
 	} {
 		b := findBuilt(bs, tt.id)
@@ -89,8 +89,8 @@ func TestGatewaySourceLabels(t *testing.T) {
 	if b := findBuilt(bs, "claude-opus-4.6"); b == nil || b.Source != "exe.dev gateway" {
 		t.Errorf("claude-opus-4.6 with plain gateway: %+v", b)
 	}
-	if b := findBuilt(bs, "gemini-3-flash"); b != nil {
-		t.Errorf("gemini-3-flash should not be built by gateway, got %+v", b)
+	if b := findBuilt(bs, "gemini-3.8-flash"); b != nil {
+		t.Errorf("gemini-3.8-flash should not be built by gateway, got %+v", b)
 	}
 	if b := findBuilt(bs, "grok-4.5"); b == nil || b.Source != "exe.dev gateway" {
 		t.Errorf("grok-4.5 with plain gateway: %+v", b)
@@ -157,7 +157,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"kimi-k2p6",
 		"deepseek-v4-pro",
 		"deepseek-v4-flash-0731",
-		"gemini-3-flash",
+		"gemini-3.8-flash",
 	} {
 		if b := findBuilt(bs, id); b != nil {
 			t.Errorf("%q should NOT be built, got %+v", id, b)
@@ -956,7 +956,7 @@ func TestBuiltBaseURLResolution(t *testing.T) {
 		{"claude-opus-4.6", "https://api.anthropic.com"},
 		{"gpt-5.5", "https://api.openai.com"},
 		{"deepseek-v4-flash-0731-fireworks", "https://api.fireworks.ai/inference"},
-		{"gemini-3-flash", "https://generativelanguage.googleapis.com"},
+		{"gemini-3.8-flash", "https://generativelanguage.googleapis.com"},
 	} {
 		b := findBuilt(bs, tt.id)
 		if b == nil {
@@ -994,7 +994,7 @@ func TestBuiltAPITypePopulated(t *testing.T) {
 		{"claude-opus-4.6", models.APITypeAnthropicMessages},
 		{"gpt-5.5", models.APITypeOpenAIResponses},
 		{"deepseek-v4-flash-0731-fireworks", models.APITypeOpenAIChat},
-		{"gemini-3-flash", models.APITypeGemini},
+		{"gemini-3.8-flash", models.APITypeGemini},
 		{"predictable", models.APITypeBuiltIn},
 	} {
 		b := findBuilt(bs, tt.id)
