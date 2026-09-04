@@ -197,9 +197,13 @@ func RenderVideo(outPath, name, prompt string, steps []StepResult, pass bool) er
 // titleChain returns the filtergraph chain (operating on the color input) that
 // draws the header, the Go test name, the prompt, and a PASS/FAIL footer. name
 // may be empty, in which case the name line is omitted.
+//
+// The prompt is auto-fitted: long descriptions get a smaller font (and a
+// correspondingly wider wrap) so the whole thing always fits inside a fixed
+// middle band, and it is vertically centered within that band so it never
+// collides with the name above or the footer below.
 func titleChain(font, work, name, prompt string, pass bool, nSteps int) string {
 	hdr := writeTextFile(work, "title-hdr", "LAZYCUE")
-	body := writeTextFile(work, "title-body", wrapText(prompt, 26))
 	statusText := fmt.Sprintf("PASS · %d steps", nSteps)
 	statusColor := "0x3fb950"
 	if !pass {
@@ -208,22 +212,59 @@ func titleChain(font, work, name, prompt string, pass bool, nSteps int) string {
 	}
 	foot := writeTextFile(work, "title-foot", statusText)
 
+	// The prompt band: everything between the name row and the footer.
+	const bandTop, bandBottom = 210, 1150
+	promptSize, promptWrap, promptSpacing := fitPromptText(prompt, bandBottom-bandTop)
+	body := writeTextFile(work, "title-body", wrapText(prompt, promptWrap))
+
 	chain := []string{
-		drawtext(font, hdr, "0x8b949e", 26, 6, "(w-text_w)/2", "70", ""),
+		drawtext(font, hdr, "0x8b949e", 26, 6, "(w-text_w)/2", "55", ""),
 	}
 	// The Go test name (e.g. TestNewPageSmoke) goes right under the header, in
 	// the accent color used for code elsewhere, so each clip is self-identifying.
 	if name != "" {
-		nameFile := writeTextFile(work, "title-name", wrapText(name, 24))
-		chain = append(chain, drawtext(font, nameFile, "0xd2a8ff", 34, 8, "(w-text_w)/2", "120", ""))
+		nameFile := writeTextFile(work, "title-name", wrapText(name, 22))
+		chain = append(chain, drawtext(font, nameFile, "0xd2a8ff", 30, 6, "(w-text_w)/2", "100", ""))
 	}
+	// Center the body vertically within [bandTop, bandBottom].
+	bodyY := fmt.Sprintf("%d+(%d-text_h)/2", bandTop, bandBottom-bandTop)
 	chain = append(
 		chain,
-		drawtext(font, body, "white", 38, 14, "(w-text_w)/2", "(h-text_h)/2", ""),
-		drawtext(font, foot, statusColor, 34, 6, "(w-text_w)/2", "h-text_h-90", ""),
+		drawtext(font, body, "white", promptSize, promptSpacing, "(w-text_w)/2", bodyY, ""),
+		drawtext(font, foot, statusColor, 34, 6, "(w-text_w)/2", "h-text_h-70", ""),
 		staticFrameTail(titleSeconds),
 	)
 	return strings.Join(chain, ",")
+}
+
+// fitPromptText picks a font size, wrap width, and line spacing for the title
+// card's prompt so the wrapped text fits within availH pixels of vertical
+// space on the videoCanvasW-wide canvas. Longer prompts shrink until they fit
+// (down to a floor); short prompts stay large.
+func fitPromptText(prompt string, availH int) (size, wrap, spacing int) {
+	// Usable text width leaves a margin on each side of the canvas.
+	const usableW = videoCanvasW - 80
+	spacing = 12
+	for size = 40; size > 16; size -= 2 {
+		// DejaVu Sans advances at roughly 0.52em per character; derive the
+		// wrap width that keeps a line inside usableW at this font size.
+		wrap = int(float64(usableW) / (0.52 * float64(size)))
+		if wrap < 12 {
+			wrap = 12
+		}
+		lines := strings.Count(wrapText(prompt, wrap), "\n") + 1
+		lineH := float64(size)*1.2 + float64(spacing)
+		if float64(lines)*lineH <= float64(availH) {
+			return size, wrap, spacing
+		}
+	}
+	// Floor: smallest font, tighter spacing, widest wrap.
+	spacing = 8
+	wrap = int(float64(usableW) / (0.52 * float64(size)))
+	if wrap < 12 {
+		wrap = 12
+	}
+	return size, wrap, spacing
 }
 
 // stepChain returns the filtergraph chain (operating on screenshot input i)
