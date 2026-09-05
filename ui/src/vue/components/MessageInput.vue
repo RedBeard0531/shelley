@@ -230,33 +230,12 @@
               type="submit"
               :disabled="!canSubmit"
               class="send-split-main"
-              :aria-label="
-                autoQueue
-                  ? 'Queue message'
-                  : preferCompactAndSend
-                    ? 'Compact and send'
-                    : t('sendMessage')
-              "
+              :aria-label="autoQueue ? 'Queue message' : t('sendMessage')"
               data-testid="send-button"
             >
               <div v-if="isDisabled || submitting" class="flex items-center justify-center">
                 <div class="spinner spinner-small message-send-spinner-white"></div>
               </div>
-              <svg
-                v-else-if="preferCompactAndSend"
-                class="compact-send-icon"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-              >
-                <polyline points="4 14 10 14 10 20" />
-                <polyline points="20 10 14 10 14 4" />
-                <line x1="14" y1="10" x2="21" y2="3" />
-                <line x1="3" y1="21" x2="10" y2="14" />
-              </svg>
               <svg v-else fill="currentColor" viewBox="0 0 24 24" width="18" height="18">
                 <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z" />
               </svg>
@@ -275,18 +254,6 @@
               </svg>
             </button>
             <div v-if="showQueueMenu && (canQueue || autoQueue || canCompact)" class="queue-menu">
-              <button
-                v-if="preferCompactAndSend"
-                type="button"
-                class="queue-menu-item"
-                data-testid="send-option"
-                @click="handleSelectSend"
-              >
-                <svg fill="currentColor" viewBox="0 0 24 24" width="16" height="16">
-                  <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z" />
-                </svg>
-                Send
-              </button>
               <button
                 v-if="canQueue || autoQueue"
                 type="button"
@@ -320,7 +287,7 @@
               <!-- Compact the conversation, then queue this message to run once
                    compaction finishes. -->
               <button
-                v-if="canCompact && !preferCompactAndSend"
+                v-if="canCompact"
                 type="button"
                 class="queue-menu-item"
                 data-testid="compact-and-send-option"
@@ -368,9 +335,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "../composables/i18n";
-import type { Locale } from "../../i18n/types";
 import { pickPlaceholderHint } from "../../utils/placeholderHints";
-import type { ContextUsageLevel } from "../../utils/contextUsage";
 import { SLASH_COMMANDS, slashCommandsForConversation } from "../../utils/slashCommands";
 import {
   composerDispatch,
@@ -409,8 +374,6 @@ interface SpeechRecognitionAlternative {
 interface SpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
-  /** Chrome 151+: engine infers punctuation from prosody. Ignored where unsupported. */
-  unspokenPunctuation?: boolean;
   lang: string;
   onresult: ((event: SpeechRecognitionEvent) => void) | null;
   onerror: ((event: Event & { error: string }) => void) | null;
@@ -454,8 +417,6 @@ const props = withDefaults(
     canQueue?: boolean;
     /** Auto-queue instead of sending (e.g. when distilling) */
     autoQueue?: boolean;
-    /** Context usage level; "" means plain Send. */
-    compactSendLevel?: ContextUsageLevel;
     disabled?: boolean;
     autoFocus?: boolean;
     injectedText?: string;
@@ -494,7 +455,6 @@ const props = withDefaults(
     showQueueOption: false,
     canQueue: false,
     autoQueue: false,
-    compactSendLevel: "",
     disabled: false,
     autoFocus: false,
     initialRows: 1,
@@ -510,13 +470,12 @@ const emit = defineEmits<{
   (e: "draft-cleared"): void;
 }>();
 
-const { t, locale } = useI18n();
+const { t } = useI18n();
 
 const hasQueueHandler = computed(() => props.onQueue !== undefined);
 // The "Compact and send" option is available whenever a compaction handler is
 // wired and we're not already mid-compaction (autoQueue signals distilling).
 const canCompact = computed(() => props.onCompact !== undefined && !props.autoQueue);
-const sendSelectedLevel = ref<ContextUsageLevel>("");
 
 const message = ref(props.draftSeed?.value ?? "");
 // setMessage mirrors the React controlled-value path: surfaces every change via
@@ -560,54 +519,29 @@ const slashMenuRef = ref<HTMLDivElement | null>(null);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 let recognition: SpeechRecognition | null = null;
-// Text present before the current recognition session started; the message is rebuilt
-// from it plus the session's full results list on every event.
+// Track the base text (before speech recognition started)
 let baseText = "";
-// Android Chrome ignores `continuous` (the session ends at the first pause) and reports
-// every result as the whole cumulative transcript of the session rather than a new
-// segment, so only the last result is meaningful there. Because Android ends the
-// session at every pause, an ended session is restarted while listening.
-//
-// On every platform the mic turns off once no result (Android also emits empty ones)
-// has arrived for SPEECH_SILENCE_MS; the API has no silence timeout of its own.
-const androidSpeech = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
-const SPEECH_SILENCE_MS = 2000;
-let speechSilenceTimer: ReturnType<typeof setTimeout> | undefined;
-
-function armSpeechSilenceTimer() {
-  clearTimeout(speechSilenceTimer);
-  speechSilenceTimer = setTimeout(stopListening, SPEECH_SILENCE_MS);
-}
-
-// Chrome's engine returns raw words with no punctuation; honour common spoken commands.
-const SPOKEN_PUNCTUATION: [RegExp, string][] = [
-  [/\s*\b(?:full stop|period)\b/gi, "."],
-  [/\s*\bcomma\b/gi, ","],
-  [/\s*\bquestion mark\b/gi, "?"],
-  [/\s*\bexclamation (?:mark|point)\b/gi, "!"],
-  [/\s*\bnew line\b\s*/gi, "\n"],
-];
-
-function punctuateSpoken(text: string): string {
-  const punctuated = SPOKEN_PUNCTUATION.reduce((s, [re, rep]) => s.replace(re, rep), text)
-    // Some engines emit inferred punctuation as its own token ("word .").
-    .replace(/\s+([.,!?])/g, "$1");
-  // Capitalize the first word and the first word after sentence-ending punctuation.
-  return punctuated.replace(/(^|[.!?]\s+|\n)(\p{Ll})/gu, (_, pre, ch) => pre + ch.toUpperCase());
-}
-
-// falling back to the browser language.
-const SPEECH_LANG: Record<Locale, string | undefined> = {
-  en: undefined,
-  upgoer5: undefined,
-  ja: "ja-JP",
-  fr: "fr-FR",
-  ru: "ru-RU",
-  es: "es-ES",
-  "zh-CN": "zh-CN",
-  "zh-TW": "zh-TW",
-  vi: "vi-VN",
-};
+// Desktop-mode accumulator: finals kept across events (the results list
+// resets when the desktop recognizer restarts in continuous mode).
+let finalAccum = "";
+// Whether the user has asked to stop dictating (vs. the recognizer ending a
+// session on its own, which we auto-restart from).
+let userStopped = true;
+// Cumulative mode (Android): raw transcript text from already-ended sessions
+// and from the live session, kept separately so restarts chain correctly.
+let sealedDictation = "";
+let lastSessionText = "";
+// Latched on the first multi-result event of a dictation: Android Chrome
+// delivers prefix-chained all-final results (cumulative); desktop Chrome
+// delivers disjoint per-phrase results. Latching avoids re-deciding per
+// event, where a desktop phrase that happens to extend the previous phrase
+// would be misread as Android-style cumulative and drop the earlier phrase.
+let cumulativeMode: boolean | null = null;
+// Whether any non-final (interim) result has been seen this dictation.
+// Android's recognizer delivers every result as final; desktop Chrome
+// virtually always delivers an interim before finalizing a phrase. Seeing
+// any interim is therefore strong evidence we're NOT in cumulative mode.
+let everSeenInterim = false;
 
 const speechRecognitionAvailable =
   typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -631,12 +565,12 @@ function handleResize() {
 }
 
 function stopListening() {
-  clearTimeout(speechSilenceTimer);
-  isListening.value = false;
+  userStopped = true;
   if (recognition) {
     recognition.stop();
     recognition = null;
   }
+  isListening.value = false;
 }
 
 function startListening() {
@@ -645,36 +579,96 @@ function startListening() {
   const rec = new SpeechRecognitionClass();
   rec.continuous = true;
   rec.interimResults = true;
-  rec.unspokenPunctuation = true;
-  rec.lang = SPEECH_LANG[locale.value] ?? navigator.language ?? "en-US";
+  rec.lang = navigator.language || "en-US";
 
   // Capture current message as base text
   baseText = message.value;
+  finalAccum = "";
+  sealedDictation = "";
+  lastSessionText = "";
+  cumulativeMode = null;
+  everSeenInterim = false;
+  userStopped = false;
 
   rec.onresult = (event: SpeechRecognitionEvent) => {
-    armSpeechSilenceTimer();
-    const results = Array.from(event.results, (r) => r[0].transcript);
-    const spoken = punctuateSpoken(androidSpeech ? (results.at(-1) ?? "") : results.join(""));
+    const parts: string[] = [];
+    let sawInterim = false;
+    for (let i = 0; i < event.results.length; i++) {
+      parts.push(event.results[i][0].transcript);
+      if (!event.results[i].isFinal) sawInterim = true;
+    }
+    if (sawInterim) everSeenInterim = true;
+    // Chrome on Android restates the full utterance in every new result: each
+    // result is a prefix-extension of the next (all final), so the last
+    // result is the whole transcript so far. Desktop Chrome instead delivers
+    // one result per phrase (disjoint segments to concatenate).
+    if (cumulativeMode === null && parts.length > 1) {
+      let chained = true;
+      for (let i = 1; i < parts.length; i++) {
+        if (!parts[i].startsWith(parts[i - 1])) {
+          chained = false;
+          break;
+        }
+      }
+      const allFinal = Array.from(event.results).every((r) => r.isFinal);
+      cumulativeMode = chained && allFinal && !everSeenInterim;
+    }
+    let transcript: string;
+    if (cumulativeMode) {
+      const cur = parts[parts.length - 1];
+      lastSessionText = cur;
+      transcript = sealedDictation ? sealedDictation + " " + cur : cur;
+      finalAccum = transcript;
+    } else {
+      // Desktop: process only updated results (resultIndex onward) and keep
+      // finals across events, since the list resets when the recognizer
+      // restarts in continuous mode.
+      let finalTranscript = "";
+      let interimTranscript = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += t;
+        } else {
+          interimTranscript += t;
+        }
+      }
+      if (finalTranscript) finalAccum += finalTranscript;
+      transcript = finalAccum + interimTranscript;
+    }
     const base = baseText;
     const needsSpace = base.length > 0 && !/\s$/.test(base);
     const spacer = needsSpace ? " " : "";
-    setMessage(base + spacer + spoken);
+    setMessage(base + spacer + transcript);
   };
   rec.onerror = (event) => {
-    if (event.error !== "no-speech") console.error("Speech recognition error:", event.error);
+    // "no-speech" is just a pause (onend restarts); "aborted" is our own stop.
+    if (event.error === "no-speech" || event.error === "aborted") return;
+    console.error("Speech recognition error:", event.error);
     stopListening();
   };
   rec.onend = () => {
-    recognition = null;
-    if (!androidSpeech || !isListening.value) {
+    if (userStopped) {
+      recognition = null;
       isListening.value = false;
       return;
     }
-    startListening();
+    // Chrome ends the session after every pause and exposes no silence-timeout
+    // setting. Seal the finished session's text and restart so the mic stays
+    // live until the user taps stop. Keep `recognition` pointing at the live
+    // recognizer so stopListening and unmount cleanup can still reach it.
+    // Seal the full accumulated dictation (finalAccum), not just this
+    // session's text, so earlier sessions chain instead of being dropped.
+    sealedDictation = finalAccum;
+    try {
+      rec.start();
+    } catch {
+      recognition = null;
+      isListening.value = false;
+    }
   };
   recognition = rec;
   rec.start();
-  armSpeechSilenceTimer();
   isListening.value = true;
 }
 
@@ -873,15 +867,6 @@ const canSubmit = computed(
 );
 const isDraggingOver = computed(() => dragCounter.value > 0);
 const isShellMode = computed(() => message.value.trimStart().startsWith("!"));
-const isCommand = computed(() => /^[!/]/.test(message.value.trimStart()));
-const preferCompactAndSend = computed(
-  () =>
-    canCompact.value &&
-    hasQueueHandler.value &&
-    !isCommand.value &&
-    props.compactSendLevel !== "" &&
-    sendSelectedLevel.value !== props.compactSendLevel,
-);
 const slashQuery = computed(() => {
   const match = message.value.match(/^\/[a-zA-Z0-9_-]*$/);
   return match ? match[0].slice(1).toLowerCase() : null;
@@ -1069,18 +1054,11 @@ watch(composerSession, () => {
   submissionGeneration++;
   submitting.value = false;
 });
-watch([composerSession, () => props.compactSendLevel], () => {
-  sendSelectedLevel.value = "";
-});
 
 async function handleSubmit(e: Event) {
   e.preventDefault();
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
     if (isListening.value) stopListening();
-    if (preferCompactAndSend.value) {
-      await handleCompactAndSend();
-      return;
-    }
 
     // Auto-queue when distilling or when explicitly requested.
     const intent: ComposerSubmissionIntent = props.autoQueue ? "auto-queue" : "send";
@@ -1141,11 +1119,6 @@ async function handleQueueMessage() {
       guardComposerClear(origin, composerOrigin, () => setMessage(messageToQueue));
     }
   }
-}
-
-async function handleSelectSend() {
-  sendSelectedLevel.value = props.compactSendLevel;
-  await handleSendNow();
 }
 
 /** Compact the conversation, then queue the composed message so it runs once
@@ -1324,8 +1297,13 @@ onUnmounted(() => {
   }
   document.removeEventListener("mousedown", onQueueMenuOutside);
   document.removeEventListener("mousedown", onSlashMenuOutside);
-  isListening.value = false;
-  if (recognition) recognition.abort();
+  if (recognition) {
+    // Mark stopped first: a bare abort() would fire onend with userStopped
+    // false and auto-restart into an unstoppable mic loop on a dead component.
+    userStopped = true;
+    recognition.abort();
+    recognition = null;
+  }
   attachments.value.forEach((a) => {
     if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
   });
