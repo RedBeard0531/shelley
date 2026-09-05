@@ -7,97 +7,101 @@ package stt
 #include <stdlib.h>
 #include <dlfcn.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
-// Mirror of the public sherpa-onnx C ABI structs (c-api.h). The layout must
-// match the official header; these names are local so the real header is not
-// required at build time.
+// Mirrors of the public whisper.cpp ABI (include/whisper.h at tag b4938,
+// libwhisper 1.9.x). Layout must match that header; names are local so the
+// real header is not required at build time. Function-pointer fields are
+// declared as void* (identical size/alignment); they are never dereferenced
+// - we only set the scalar fields we care about, in C.
 
-typedef struct sox_online_transducer_cfg {
-	const char *encoder;
-	const char *decoder;
-	const char *joiner;
-} sox_online_transducer_cfg;
+typedef int32_t whisper_token;
 
-typedef struct sox_online_paraformer_cfg {
-	const char *encoder;
-	const char *decoder;
-} sox_online_paraformer_cfg;
+typedef struct sox_vad_params {
+	float threshold;
+	int32_t min_speech_duration_ms;
+	int32_t min_silence_duration_ms;
+	float max_speech_duration_s;
+	int32_t speech_pad_ms;
+	float samples_overlap;
+} sox_vad_params;
 
-typedef struct sox_online_zipformer2_ctc_cfg {
-	const char *model;
-} sox_online_zipformer2_ctc_cfg;
+typedef struct sox_full_params {
+	int32_t strategy;
 
-typedef struct sox_online_nemo_ctc_cfg {
-	const char *model;
-} sox_online_nemo_ctc_cfg;
+	int32_t n_threads;
+	int32_t n_max_text_ctx;
+	int32_t offset_ms;
+	int32_t duration_ms;
 
-typedef struct sox_online_tone_ctc_cfg {
-	const char *model;
-} sox_online_tone_ctc_cfg;
+	bool translate;
+	bool no_context;
+	bool no_timestamps;
+	bool single_segment;
+	bool print_special;
+	bool print_progress;
+	bool print_realtime;
+	bool print_timestamps;
 
-typedef struct sox_online_model_cfg {
-	sox_online_transducer_cfg transducer;
-	sox_online_paraformer_cfg paraformer;
-	sox_online_zipformer2_ctc_cfg zipformer2_ctc;
-	const char *tokens;
-	int32_t num_threads;
-	const char *provider;
-	int32_t debug;
-	const char *model_type;
-	const char *modeling_unit;
-	const char *bpe_vocab;
-	const char *tokens_buf;
-	int32_t tokens_buf_size;
-	sox_online_nemo_ctc_cfg nemo_ctc;
-	sox_online_tone_ctc_cfg t_one_ctc;
-} sox_online_model_cfg;
+	bool token_timestamps;
+	float thold_pt;
+	float thold_ptsum;
+	int32_t max_len;
+	bool split_on_word;
+	int32_t max_tokens;
 
-typedef struct sox_feat_cfg {
-	int32_t sample_rate;
-	int32_t feature_dim;
-} sox_feat_cfg;
+	bool debug_mode;
+	int32_t audio_ctx;
 
-typedef struct sox_ctc_fst_cfg {
-	const char *graph;
-	int32_t max_active;
-} sox_ctc_fst_cfg;
+	bool tdrz_enable;
 
-typedef struct sox_hr_cfg {
-	const char *dict_dir;
-	const char *lexicon;
-	const char *rule_fsts;
-} sox_hr_cfg;
+	const char *suppress_regex;
 
-typedef struct sox_online_rec_cfg {
-	sox_feat_cfg feat_config;
-	sox_online_model_cfg model_config;
-	const char *decoding_method;
-	int32_t max_active_paths;
-	int32_t enable_endpoint;
-	float rule1_min_trailing_silence;
-	float rule2_min_trailing_silence;
-	float rule3_min_utterance_length;
-	const char *hotwords_file;
-	float hotwords_score;
-	sox_ctc_fst_cfg ctc_fst_decoder_config;
-	const char *rule_fsts;
-	const char *rule_fars;
-	float blank_penalty;
-	const char *hotwords_buf;
-	int32_t hotwords_buf_size;
-	sox_hr_cfg hr;
-} sox_online_rec_cfg;
+	const char *initial_prompt;
+	bool carry_initial_prompt;
+	const whisper_token *prompt_tokens;
+	int32_t prompt_n_tokens;
 
-typedef struct sox_online_rec_result {
-	const char *text;
-	const char *tokens;
-	const char *const *tokens_arr;
-	float *timestamps;
-	int32_t count;
-	const char *json;
-} sox_online_rec_result;
+	const char *language;
+	bool detect_language;
+
+	bool suppress_blank;
+	bool suppress_nst;
+
+	float temperature;
+	float max_initial_ts;
+	float length_penalty;
+
+	float temperature_inc;
+	float entropy_thold;
+	float logprob_thold;
+	float no_speech_thold;
+
+	struct { int32_t best_of; } greedy;
+	struct { int32_t beam_size; float patience; } beam_search;
+
+	void *new_segment_callback;
+	void *new_segment_callback_user_data;
+	void *progress_callback;
+	void *progress_callback_user_data;
+	void *encoder_begin_callback;
+	void *encoder_begin_callback_user_data;
+	void *abort_callback;
+	void *abort_callback_user_data;
+	void *logits_filter_callback;
+	void *logits_filter_callback_user_data;
+	void *grammar_rules;
+	size_t n_grammar_rules;
+	size_t i_start_rule;
+	float grammar_penalty;
+
+	bool vad;
+	const char *vad_model_path;
+	sox_vad_params vad_params;
+} sox_full_params;
 
 // All dlsym'd function pointers are resolved and invoked ONLY from C: a bare
 // dlsym pointer is not callable from Go (different calling convention), so
@@ -108,76 +112,76 @@ static void *sox_sym(const void *lib, const char *name) {
 	return dlsym((void *)lib, name);
 }
 
-static void *sox_create_recognizer(const void *lib, const sox_online_rec_cfg *cfg) {
-	static void *(*fn)(const sox_online_rec_cfg *);
-	if (!fn) fn = (void *(*)(const sox_online_rec_cfg *))sox_sym(lib, "SherpaOnnxCreateOnlineRecognizer");
-	return fn(cfg);
+static void *sox_init_from_file(const void *lib, const char *path) {
+	static void *(*fn)(const char *);
+	if (!fn) fn = (void *(*)(const char *))sox_sym(lib, "whisper_init_from_file");
+	return fn(path);
 }
 
-static void sox_destroy_recognizer(const void *lib, void *r) {
+static void sox_free(const void *lib, void *ctx) {
 	static void (*fn)(void *);
-	if (!fn) fn = (void (*)(void *))sox_sym(lib, "SherpaOnnxDestroyOnlineRecognizer");
-	fn(r);
+	if (!fn) fn = (void (*)(void *))sox_sym(lib, "whisper_free");
+	fn(ctx);
 }
 
-static void *sox_create_stream(const void *lib, void *r) {
-	static void *(*fn)(void *);
-	if (!fn) fn = (void *(*)(void *))sox_sym(lib, "SherpaOnnxCreateOnlineStream");
-	return fn(r);
+// Returns a fully-initialized whisper_full params with the fields we need
+// pre-set (clean text output, English, no timestamps, our own VAD off).
+static sox_full_params sox_default_params(const void *lib, int32_t n_threads) {
+	static sox_full_params (*fn)(int32_t);
+	if (!fn) fn = (sox_full_params (*)(int32_t))sox_sym(lib, "whisper_full_default_params");
+	sox_full_params p = fn(0); // 0 = WHISPER_SAMPLING_GREEDY
+	p.n_threads = n_threads;
+	p.no_timestamps = true;
+	p.single_segment = false;
+	p.print_special = false;
+	p.print_progress = false;
+	p.print_realtime = false;
+	p.print_timestamps = false;
+	p.language = "en";
+	p.vad = false;
+	return p;
 }
 
-static void sox_destroy_stream(const void *lib, void *s) {
-	static void (*fn)(void *);
-	if (!fn) fn = (void (*)(void *))sox_sym(lib, "SherpaOnnxDestroyOnlineStream");
-	fn(s);
+static int sox_full(const void *lib, void *ctx, sox_full_params params, const float *samples, int32_t n_samples, int32_t n_processors) {
+	static int (*fn)(void *, sox_full_params, const float *, int32_t, int32_t);
+	if (!fn) fn = (int (*)(void *, sox_full_params, const float *, int32_t, int32_t))sox_sym(lib, "whisper_full_parallel");
+	return fn(ctx, params, samples, n_samples, n_processors);
 }
 
-static void sox_accept_waveform(const void *lib, const void *s, int32_t rate, const float *samples, int32_t n) {
-	static void (*fn)(const void *, int32_t, const float *, int32_t);
-	if (!fn) fn = (void (*)(const void *, int32_t, const float *, int32_t))sox_sym(lib, "SherpaOnnxOnlineStreamAcceptWaveform");
-	fn(s, rate, samples, n);
+static int32_t sox_n_segments(const void *lib, void *ctx) {
+	static int32_t (*fn)(void *);
+	if (!fn) fn = (int32_t (*)(void *))sox_sym(lib, "whisper_full_n_segments");
+	return fn(ctx);
 }
 
-static int32_t sox_is_ready(const void *lib, const void *r, const void *s) {
-	static int32_t (*fn)(const void *, const void *);
-	if (!fn) fn = (int32_t (*)(const void *, const void *))sox_sym(lib, "SherpaOnnxIsOnlineStreamReady");
-	return fn(r, s);
+static const char *sox_segment_text(const void *lib, void *ctx, int32_t i) {
+	static const char *(*fn)(void *, int32_t);
+	if (!fn) fn = (const char *(*)(void *, int32_t))sox_sym(lib, "whisper_full_get_segment_text");
+	return fn(ctx, i);
 }
 
-static void sox_decode(const void *lib, const void *r, const void *s) {
-	static void (*fn)(const void *, const void *);
-	if (!fn) fn = (void (*)(const void *, const void *))sox_sym(lib, "SherpaOnnxDecodeOnlineStream");
-	fn(r, s);
+// Silence whisper's own logging (it prints model metadata + progress to
+// stderr on every call otherwise).
+typedef void (*sox_log_cb)(int level, const char *text, void *user_data);
+static void sox_null_log(int level, const char *text, void *user_data) {
+	(void)level; (void)text; (void)user_data;
+}
+static void sox_silence_logs(const void *lib) {
+	static void (*fn)(sox_log_cb);
+	if (!fn) {
+		fn = (void (*)(sox_log_cb))sox_sym(lib, "whisper_log_set");
+		if (!fn) return; // older libs without logger control: leave default
+	}
+	fn(sox_null_log);
 }
 
-static const sox_online_rec_result *sox_get_result(const void *lib, const void *r, const void *s) {
-	static const sox_online_rec_result *(*fn)(const void *, const void *);
-	if (!fn) fn = (const sox_online_rec_result *(*)(const void *, const void *))sox_sym(lib, "SherpaOnnxGetOnlineStreamResult");
-	return fn(r, s);
-}
-
-static void sox_destroy_result(const void *lib, const sox_online_rec_result *x) {
-	static void (*fn)(const sox_online_rec_result *);
-	if (!fn) fn = (void (*)(const sox_online_rec_result *))sox_sym(lib, "SherpaOnnxDestroyOnlineRecognizerResult");
-	fn(x);
-}
-
-static int32_t sox_is_endpoint(const void *lib, const void *r, const void *s) {
-	static int32_t (*fn)(const void *, const void *);
-	if (!fn) fn = (int32_t (*)(const void *, const void *))sox_sym(lib, "SherpaOnnxOnlineStreamIsEndpoint");
-	return fn(r, s);
-}
-
-static void sox_reset(const void *lib, const void *r, const void *s) {
-	static void (*fn)(const void *, const void *);
-	if (!fn) fn = (void (*)(const void *, const void *))sox_sym(lib, "SherpaOnnxOnlineStreamReset");
-	fn(r, s);
-}
-
-static const char *sox_get_version(const void *lib) {
-	static const char *(*fn)(void);
-	if (!fn) fn = (const char *(*)(void))sox_sym(lib, "SherpaOnnxGetVersionStr");
-	return fn ? fn() : NULL;
+// ggml discovers CPU backends by scanning [lib]ggml-cpu-*.so next to the
+// *executable*, which for the Shelley binary is not where the models live.
+// Ask it to scan our library directory explicitly before whisper_init runs.
+static void sox_load_backends(const char *dir) {
+	static void (*fn)(const char *);
+	if (!fn) fn = (void (*)(const char *))dlsym(RTLD_DEFAULT, "ggml_backend_load_all_from_path");
+	if (fn) fn(dir);
 }
 
 // Eagerly verify every required symbol exists at dlopen time so a bad
@@ -190,17 +194,12 @@ static int sox_check_symbols(const void *lib, char *err, size_t errsz) {
 			return -1;                                                    \
 		}                                                                     \
 	} while (0)
-	CHECK("SherpaOnnxCreateOnlineRecognizer");
-	CHECK("SherpaOnnxDestroyOnlineRecognizer");
-	CHECK("SherpaOnnxCreateOnlineStream");
-	CHECK("SherpaOnnxDestroyOnlineStream");
-	CHECK("SherpaOnnxOnlineStreamAcceptWaveform");
-	CHECK("SherpaOnnxIsOnlineStreamReady");
-	CHECK("SherpaOnnxDecodeOnlineStream");
-	CHECK("SherpaOnnxGetOnlineStreamResult");
-	CHECK("SherpaOnnxDestroyOnlineRecognizerResult");
-	CHECK("SherpaOnnxOnlineStreamIsEndpoint");
-	CHECK("SherpaOnnxOnlineStreamReset");
+	CHECK("whisper_init_from_file");
+	CHECK("whisper_free");
+	CHECK("whisper_full_default_params");
+	CHECK("whisper_full_parallel");
+	CHECK("whisper_full_n_segments");
+	CHECK("whisper_full_get_segment_text");
 #undef CHECK
 	return 0;
 }
@@ -211,48 +210,73 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"unsafe"
 )
 
-// library holds the dlopen'd sherpa-onnx library. Handles are opaque: all
-// object types are unsafe.Pointer. All calls go through the C wrappers, so
-// no function pointer is ever invoked from Go.
+// library holds the dlopen'd whisper.cpp shared library. All calls go
+// through the C wrappers, so no function pointer is ever invoked from Go.
 type library struct {
 	handle unsafe.Pointer
 }
 
-// openLibrary loads libsherpa-onnx-c-api.so, preloading its onnxruntime
-// dependency from the same directory when one is supplied (dlopen resolves
-// DT_NEEDED deps through the loader search paths, so a side-by-side
-// libonnxruntime.so only resolves if it is also on the search path).
+// openLibrary loads libwhisper.so and preloads its ggml dependencies from
+// the same directory. The library may live either in --stt-lib-dir or
+// /usr/local/lib.
 func openLibrary(libDir string) (*library, error) {
-	if libDir != "" {
-		ort := filepath.Join(libDir, "libonnxruntime.so")
-		if _, err := os.Stat(ort); err == nil {
-			cname := C.CString(ort)
-			C.dlopen(cname, C.RTLD_NOW|C.RTLD_GLOBAL)
-			C.free(unsafe.Pointer(cname))
-		}
-	}
-
-	candidates := []string{}
-	if libDir != "" {
-		candidates = append(candidates, filepath.Join(libDir, "libsherpa-onnx-c-api.so"))
-	}
+	dirs := []string{libDir}
 	if libDir != "/usr/local/lib" {
-		candidates = append(candidates, "/usr/local/lib/libsherpa-onnx-c-api.so")
+		dirs = append(dirs, "/usr/local/lib")
 	}
-	candidates = append(candidates, "libsherpa-onnx-c-api.so")
 
 	var lastErr error
-	for _, cand := range candidates {
-		lib, err := openLibPath(cand)
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		preloadBaseDeps(dir)
+		scanDir := filteredBackendDir(dir)
+		cpath := C.CString(scanDir)
+		C.sox_load_backends(cpath) // ggml backend registry scan
+		C.free(unsafe.Pointer(cpath))
+		lib, err := openLibPath(filepath.Join(dir, "libwhisper.so"))
 		if err == nil {
 			return lib, nil
 		}
 		lastErr = err
 	}
-	return nil, fmt.Errorf("load sherpa-onnx (%v): %w", candidates[0], lastErr)
+	return nil, fmt.Errorf("load whisper.cpp: %w", lastErr)
+}
+
+// filteredBackendDir builds a temp dir (symlinks) containing only the
+// libggml-cpu-<variant>.so files this CPU can actually run, then returns its
+// path. ggml's own scan of the raw lib dir would pick the highest-scoring
+// variant (e.g. zen4) without checking its ISA requirements are met.
+func filteredBackendDir(libDir string) string {
+	dir, err := os.MkdirTemp("", "ggml-backends-")
+	if err != nil {
+		return libDir
+	}
+	enabled := permittedVariants(cpuFlags())
+	for _, name := range enabled {
+		src := filepath.Join(libDir, "libggml-cpu-"+name+".so")
+		if _, err := os.Lstat(src); err != nil {
+			continue
+		}
+		_ = os.Symlink(src, filepath.Join(dir, "libggml-cpu-"+name+".so"))
+	}
+	return dir
+}
+
+// preloadBaseDeps loads libggml.so and libggml-base.so with RTLD_GLOBAL so
+// libwhisper.so's DT_NEEDED deps resolve and ggml's backend registry is
+// reachable for the explicit load_all_from_path above.
+func preloadBaseDeps(dir string) {
+	for _, dep := range []string{"libggml.so", "libggml-base.so"} {
+		cpath := C.CString(filepath.Join(dir, dep))
+		C.dlopen(cpath, C.RTLD_NOW|C.RTLD_GLOBAL)
+		C.free(unsafe.Pointer(cpath))
+	}
 }
 
 func openLibPath(path string) (*library, error) {
@@ -265,92 +289,48 @@ func openLibPath(path string) (*library, error) {
 	errbuf := make([]byte, 256)
 	if rc := C.sox_check_symbols(handle, (*C.char)(unsafe.Pointer(&errbuf[0])), C.size_t(len(errbuf))); rc != 0 {
 		C.dlclose(handle)
-		return nil, fmt.Errorf("sherpa-onnx: %s", C.GoString((*C.char)(unsafe.Pointer(&errbuf[0]))))
+		return nil, fmt.Errorf("whisper: %s", C.GoString((*C.char)(unsafe.Pointer(&errbuf[0]))))
 	}
 	return &library{handle: unsafe.Pointer(handle)}, nil
 }
 
-func (l *library) newRecognizer(mf ModelFiles, threads int, endpointSilence float32) (unsafe.Pointer, error) {
-	cfg := &C.sox_online_rec_cfg{}
-	cfg.feat_config.sample_rate = C.int32_t(SampleRate)
-	cfg.feat_config.feature_dim = 80
-
-	setStr := func(dst **C.char, s string) {
-		if s != "" {
-			*dst = C.CString(s)
-		}
+func (l *library) initFromFile(path string) (unsafe.Pointer, error) {
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+	ctx := C.sox_init_from_file(l.handle, cpath)
+	if ctx == nil {
+		return nil, fmt.Errorf("whisper_init_from_file failed for %s (corrupt or unsupported model?)", path)
 	}
-	setStr(&cfg.model_config.transducer.encoder, mf.Encoder)
-	setStr(&cfg.model_config.transducer.decoder, mf.Decoder)
-	setStr(&cfg.model_config.transducer.joiner, mf.Joiner)
-	setStr(&cfg.model_config.tokens, mf.Tokens)
-	setStr(&cfg.model_config.provider, "cpu")
-	cfg.model_config.num_threads = C.int32_t(threads)
-	cfg.model_config.model_type = C.CString("zipformer2")
-
-	setStr(&cfg.decoding_method, "greedy_search")
-	cfg.enable_endpoint = 1
-	cfg.rule1_min_trailing_silence = 2.4
-	cfg.rule2_min_trailing_silence = C.float(endpointSilence)
-	cfg.rule3_min_utterance_length = 20.0
-
-	rec := C.sox_create_recognizer(l.handle, cfg)
-	// The C strings are copied by CreateOnlineRecognizer; free ours regardless.
-	C.free(unsafe.Pointer(cfg.model_config.transducer.encoder))
-	C.free(unsafe.Pointer(cfg.model_config.transducer.decoder))
-	C.free(unsafe.Pointer(cfg.model_config.transducer.joiner))
-	C.free(unsafe.Pointer(cfg.model_config.tokens))
-	C.free(unsafe.Pointer(cfg.model_config.provider))
-	C.free(unsafe.Pointer(cfg.model_config.model_type))
-	C.free(unsafe.Pointer(cfg.decoding_method))
-	if rec == nil {
-		return nil, fmt.Errorf("SherpaOnnxCreateOnlineRecognizer failed (invalid model files?)")
-	}
-	return rec, nil
+	C.sox_silence_logs(l.handle)
+	return ctx, nil
 }
 
-func (l *library) destroyRecognizer(rec unsafe.Pointer) { C.sox_destroy_recognizer(l.handle, rec) }
-
-func (l *library) newStream(rec unsafe.Pointer) unsafe.Pointer {
-	return C.sox_create_stream(l.handle, rec)
-}
-
-func (l *library) destroyStream(stream unsafe.Pointer) { C.sox_destroy_stream(l.handle, stream) }
-
-// acceptWaveform feeds float samples into the stream.
-func (l *library) acceptWaveform(stream unsafe.Pointer, samples []float32) {
-	C.sox_accept_waveform(l.handle, stream, C.int32_t(SampleRate), (*C.float)(unsafe.Pointer(&samples[0])), C.int32_t(len(samples)))
-}
-
-func (l *library) isReady(rec, stream unsafe.Pointer) bool {
-	return C.sox_is_ready(l.handle, rec, stream) == 1
-}
-
-func (l *library) decode(rec, stream unsafe.Pointer) { C.sox_decode(l.handle, rec, stream) }
-
-func (l *library) isEndpoint(rec, stream unsafe.Pointer) bool {
-	return C.sox_is_endpoint(l.handle, rec, stream) == 1
-}
-
-func (l *library) reset(rec, stream unsafe.Pointer) { C.sox_reset(l.handle, rec, stream) }
-
-// resultText snapshots and frees the current result, returning its text.
-func (l *library) resultText(rec, stream unsafe.Pointer) string {
-	r := C.sox_get_result(l.handle, rec, stream)
-	if r == nil {
-		return ""
-	}
-	defer C.sox_destroy_result(l.handle, r)
-	return C.GoString(r.text)
-}
-
-func (l *library) versionStr() string {
-	return C.GoString(C.sox_get_version(l.handle))
-}
+func (l *library) destroy(ctx unsafe.Pointer) { C.sox_free(l.handle, ctx) }
 
 func (l *library) close() {
 	if l.handle != nil {
 		C.dlclose(l.handle)
 		l.handle = nil
 	}
+}
+
+func (l *library) transcribe(ctx unsafe.Pointer, samples []float32, nThreads, nProcessors int) (string, error) {
+	params := C.sox_default_params(l.handle, C.int32_t(nThreads))
+	rc := C.sox_full(l.handle, ctx, params, (*C.float)(unsafe.Pointer(&samples[0])), C.int32_t(len(samples)), C.int32_t(nProcessors))
+	if rc != 0 {
+		return "", fmt.Errorf("whisper_full_parallel failed: %d", rc)
+	}
+	n := int(C.sox_n_segments(l.handle, ctx))
+	out := make([]byte, 0, 256)
+	for i := 0; i < n; i++ {
+		seg := C.GoString(C.sox_segment_text(l.handle, ctx, C.int32_t(i)))
+		if seg == "" {
+			continue
+		}
+		if len(out) > 0 {
+			out = append(out, ' ')
+		}
+		out = append(out, seg...)
+	}
+	return strings.TrimSpace(string(out)), nil
 }

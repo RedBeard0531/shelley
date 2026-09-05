@@ -9,7 +9,5 @@ import "fmt"
 type library struct{}
 
 func openLibrary(libDir string) (*library, error) {
-	return nil, fmt.Errorf("sherpa-onnx transcription requires cgo and Linux; this build does not support it")
+	return nil, fmt.Errorf("whisper transcription requires cgo and Linux; this build does not support it")
 }
-
-func (l *library) versionStr() string { return "" }

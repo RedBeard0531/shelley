@@ -184,8 +184,8 @@ func runServe(global GlobalConfig, args []string) {
 	requireHeader := fs.String("require-header", "", "Require this header on all API requests (e.g., X-Exedev-Userid)")
 	socketPath := fs.String("socket", client.DefaultSocketPath(), "Path to Unix socket for local CLI client access (set to 'none' to disable)")
 	banner := fs.String("banner", "", "If set, shows this text in a banner at the top of the UI (useful for marking demo instances)")
-	sttModelDir := fs.String("stt-model-dir", "", "Directory of a sherpa-onnx streaming model (encoder/decoder/joiner onnx + tokens.txt). Enables the mic button via server-side transcription, which works in every browser including Firefox. Overrides SHELLEY_STT_MODEL_DIR when set.")
-	sttLibDir := fs.String("stt-lib-dir", "", "Directory containing libsherpa-onnx-c-api.so and libonnxruntime.so. Empty means use the system library search path. Overrides SHELLEY_STT_LIB_DIR when set.")
+	sttModelDir := fs.String("stt-model-dir", "", "Directory containing a whisper.cpp model (ggml-*.bin). Enables the mic button via server-side transcription — works in every browser including Firefox, with proper case and punctuation. Overrides SHELLEY_STT_MODEL_DIR when set.")
+	sttLibDir := fs.String("stt-lib-dir", "", "Directory containing libwhisper.so and its libggml* dependencies. Empty means use the system library search path. Overrides SHELLEY_STT_LIB_DIR when set.")
 	fs.Parse(args)
 
 	logger := setupLogging(global.Debug)
@@ -217,7 +217,7 @@ func runServe(global GlobalConfig, args []string) {
 	svr.SetModelRefresher(llmConfig.RefreshBuiltModels)
 	svr.Banner = *banner
 
-	// Optional server-side streaming speech-to-text (sherpa-onnx). When a
+	// Optional server-side streaming speech-to-text (whisper.cpp). When a
 	// model dir is configured and loads, the mic button appears in every
 	// browser (no Web Speech API dependency). If it fails to load, log the
 	// reason loudly; the /api/stt endpoint reports it too.
@@ -230,12 +230,12 @@ func runServe(global GlobalConfig, args []string) {
 		if libDir == "" {
 			libDir = os.Getenv("SHELLEY_STT_LIB_DIR")
 		}
-		engine, err := stt.Open(modelDir, stt.Options{NumThreads: 2, LibDir: libDir})
+		engine, err := stt.Open(modelDir, stt.Options{NumThreads: 4, Processors: 2, LibDir: libDir})
 		if err != nil {
-			logger.Error("Voice transcription disabled: could not load sherpa-onnx model", "model_dir", modelDir, "error", err)
+			logger.Error("Voice transcription disabled: could not load whisper model", "model_dir", modelDir, "error", err)
 		} else {
 			svr.SetTranscriber(engine)
-			logger.Info("Voice transcription enabled", "model_dir", modelDir, "sherpa_onnx", engine.Version())
+			logger.Info("Voice transcription enabled", "model_dir", modelDir)
 		}
 	}
 

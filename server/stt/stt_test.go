@@ -32,60 +32,36 @@ func TestPCMToFloat32(t *testing.T) {
 	}
 }
 
-func TestFindModelFiles(t *testing.T) {
+func TestFindModel(t *testing.T) {
 	dir := t.TempDir()
-	write := func(name string) {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Nothing there yet.
-	if _, err := FindModelFiles(dir); err == nil {
+	if _, err := FindModel(dir); err == nil {
 		t.Fatal("expected error for empty dir")
 	}
-	write("encoder-epoch-99-avg-1-chunk-16-left-128.onnx")
-	write("decoder-epoch-99-avg-1-chunk-16-left-128.onnx")
-	write("joiner-epoch-99-avg-1-chunk-16-left-128.onnx")
-	write("tokens.txt")
-	mf, err := FindModelFiles(dir)
+	if err := os.WriteFile(filepath.Join(dir, "ggml-base.en-q5_1.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mf, err := FindModel(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantSuffixes := []struct{ kind, suffix string }{
-		{mf.Encoder, "encoder-epoch-99-avg-1-chunk-16-left-128.onnx"},
-		{mf.Decoder, "decoder-epoch-99-avg-1-chunk-16-left-128.onnx"},
-		{mf.Joiner, "joiner-epoch-99-avg-1-chunk-16-left-128.onnx"},
-		{mf.Tokens, "tokens.txt"},
+	if filepath.Base(mf.Model) != "ggml-base.en-q5_1.bin" {
+		t.Errorf("resolved %q, want ggml-base.en-q5_1.bin", mf.Model)
 	}
-	for _, w := range wantSuffixes {
-		if filepath.Base(w.kind) != w.suffix {
-			t.Errorf("resolved %q, want suffix %q", w.kind, w.suffix)
-		}
+	// Non-ggml files are ignored.
+	if err := os.WriteFile(filepath.Join(dir, "tokens.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	// int8 variants should be preferred over fp32.
-	write("encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx")
-	write("joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx")
-	mf, err = FindModelFiles(dir)
+	mf, err = FindModel(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(mf.Encoder) != "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx" {
-		t.Errorf("encoder = %q, want int8 variant", mf.Encoder)
-	}
-	if filepath.Base(mf.Joiner) != "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx" {
-		t.Errorf("joiner = %q, want int8 variant", mf.Joiner)
-	}
-	// Missing joiner should error with a useful message.
-	os.Remove(filepath.Join(dir, "joiner-epoch-99-avg-1-chunk-16-left-128.onnx"))
-	os.Remove(filepath.Join(dir, "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx"))
-	_, err = FindModelFiles(dir)
-	if err == nil {
-		t.Fatal("expected error when joiner is missing")
+	if filepath.Base(mf.Model) != "ggml-base.en-q5_1.bin" {
+		t.Errorf("resolved %q, want the single ggml model", mf.Model)
 	}
 }
 
-func TestFindModelFilesMissingDirsError(t *testing.T) {
-	if _, err := FindModelFiles(filepath.Join(t.TempDir(), "nope")); err == nil {
+func TestFindModelMissingDirsError(t *testing.T) {
+	if _, err := FindModel(filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Fatal("expected error for nonexistent dir")
 	}
 }
