@@ -1,5 +1,7 @@
 <!-- Vue port of components/MessageInput.tsx. The composer: textarea,
-     send/queue split button, attach, drag/paste upload, voice (SpeechRecognition).
+     send/queue split button, attach, drag/paste upload, voice (server-side
+     sherpa-onnx transcription streamed over websocket — works in every
+     browser, including Firefox, unlike the Web Speech API).
      PRESERVES EXACTLY the e2e contract (file-upload.spec, queue-messages.spec,
      smoke, conversation): data-testid message-input, send-button,
      send-options-button, queue-option, queued-badge, cancel-queued,
@@ -203,7 +205,7 @@
           </svg>
         </button>
         <button
-          v-if="speechRecognitionAvailable"
+          v-if="sttAvailable"
           type="button"
           :disabled="isDisabled"
           :class="`message-voice-btn ${isListening ? 'listening' : ''}`"
@@ -349,44 +351,7 @@ import {
   supportedThinkingLevels,
   type ReasoningModelCapabilities,
 } from "./thinkingLevel";
-
-// Web Speech API types
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
-}
-interface SpeechRecognitionResultList {
-  length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-}
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: Event & { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
-}
-declare global {
-  interface Window {
-    SpeechRecognition: new () => SpeechRecognition;
-    webkitSpeechRecognition: new () => SpeechRecognition;
-  }
-}
+import { getSTTInfo, startTranscription } from "../../services/stt";
 
 interface Attachment {
   id: string;
@@ -517,13 +482,32 @@ const queueMenuRef = ref<HTMLDivElement | null>(null);
 const slashMenuRef = ref<HTMLDivElement | null>(null);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
-let recognition: SpeechRecognition | null = null;
-// Track the base text (before speech recognition started) and finalized speech text
-let baseText = "";
-let finalizedText = "";
 
-const speechRecognitionAvailable =
-  typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+// Whether the server has streaming transcription enabled. The mic button is
+// hidden until the server says so — a button that can't work is worse than
+// none, and this no longer depends on the browser shipping the Web Speech
+// API (Firefox never has). Refreshed lazily once per page load.
+const sttAvailable = ref(false);
+getSTTInfo().then((info) => {
+  sttAvailable.value = info.available;
+  if (!info.available && info.reason) console.warn("Voice transcription:", info.reason);
+});
+
+// Handle for the active transcription session; null when idle.
+let stopTranscription: (() => void) | null = null;
+// Track the base text (before dictation started)
+let baseText = "";
+// Committed (finalized) utterances plus the live partial of the current
+// utterance. Partials replace the tail; finals append and clear the partial,
+// so a finalized sentence is never duplicated.
+let committedText = "";
+let partialText = "";
+
+function renderDictation() {
+  const tail = [committedText, partialText].filter(Boolean).join(" ");
+  const needsSpace = baseText.length > 0 && !/\s$/.test(baseText);
+  setMessage(baseText + (needsSpace ? " " : "") + tail);
+}
 
 // Pick a placeholder hint per mount; re-pick when the platform flips.
 const hint = ref(pickPlaceholderHint(isSmallScreen.value));
@@ -544,52 +528,50 @@ function handleResize() {
 }
 
 function stopListening() {
-  if (recognition) {
-    recognition.stop();
-    recognition = null;
+  if (!stopTranscription) {
+    isListening.value = false;
+    return;
   }
+  const stop = stopTranscription;
+  stopTranscription = null;
+  // The server flushes the dangling utterance as a final and closes the
+  // websocket; the onFinal callback renders it before we drop the session.
+  stop();
   isListening.value = false;
 }
 
 function startListening() {
-  if (!speechRecognitionAvailable) return;
-  const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const rec = new SpeechRecognitionClass();
-  rec.continuous = true;
-  rec.interimResults = true;
-  rec.lang = navigator.language || "en-US";
+  if (!sttAvailable.value || isListening.value || stopTranscription) return;
 
-  // Capture current message as base text
+  // Capture what's already in the composer as the base the dictation
+  // appends to, e.g. a partial sentence you wanted to finish by voice.
   baseText = message.value;
-  finalizedText = "";
+  committedText = "";
+  partialText = "";
 
-  rec.onresult = (event: SpeechRecognitionEvent) => {
-    let finalTranscript = "";
-    let interimTranscript = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        finalTranscript += transcript;
-      } else {
-        interimTranscript += transcript;
-      }
-    }
-    if (finalTranscript) finalizedText += finalTranscript;
-    const base = baseText;
-    const needsSpace = base.length > 0 && !/\s$/.test(base);
-    const spacer = needsSpace ? " " : "";
-    setMessage(base + spacer + finalizedText + interimTranscript);
-  };
-  rec.onerror = (event) => {
-    console.error("Speech recognition error:", event.error);
-    stopListening();
-  };
-  rec.onend = () => {
+  try {
+    stopTranscription = startTranscription({
+      onPartial: (text) => {
+        partialText = text;
+        renderDictation();
+      },
+      onFinal: (text) => {
+        partialText = "";
+        committedText = committedText ? committedText + " " + text : text;
+        renderDictation();
+      },
+      onError: (msg) => {
+        console.error("Voice input error:", msg);
+        stopTranscription = null;
+        isListening.value = false;
+      },
+    });
+  } catch (err) {
+    console.error("Voice input failed to start:", err);
+    stopTranscription = null;
     isListening.value = false;
-    recognition = null;
-  };
-  recognition = rec;
-  rec.start();
+    return;
+  }
   isListening.value = true;
 }
 
@@ -1221,7 +1203,10 @@ onUnmounted(() => {
   }
   document.removeEventListener("mousedown", onQueueMenuOutside);
   document.removeEventListener("mousedown", onSlashMenuOutside);
-  if (recognition) recognition.abort();
+  if (stopTranscription) {
+    stopTranscription();
+    stopTranscription = null;
+  }
   attachments.value.forEach((a) => {
     if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
   });
