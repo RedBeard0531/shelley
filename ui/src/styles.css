@@ -3474,9 +3474,9 @@ diffs-container {
 /* Attach file button */
 .message-attach-btn {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  margin-bottom: 0.25rem;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 0.125rem;
   padding: 0;
   background: transparent;
   color: var(--text-secondary);
@@ -3513,9 +3513,9 @@ diffs-container {
 /* Recording button */
 .message-voice-btn {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  margin-bottom: 0.25rem;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 0.125rem;
   padding: 0;
   background: transparent;
   color: var(--text-secondary);
