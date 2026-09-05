@@ -58,7 +58,6 @@
     class="status-bar-active"
   >
     <template v-if="agentWorking">
-      <AnimatedWorkingStatus data-testid="agent-thinking" />
       <button
         :disabled="cancelling"
         class="status-stop-button"
@@ -71,6 +70,7 @@
         </svg>
         <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
       </button>
+      <AnimatedWorkingStatus data-testid="agent-thinking" />
     </template>
     <div
       v-else-if="interrupted"

@@ -87,7 +87,7 @@ test("TOC shares the compact status row across desktop and mobile", async ({ pag
         } else {
           expect(geometry.status).not.toBeNull();
           expect(geometry.status!.bottom - geometry.status!.top).toBeLessThan(24);
-          expect(geometry.status!.right).toBeLessThanOrEqual(geometry.stop.left);
+          expect(geometry.stop.right).toBeLessThanOrEqual(geometry.status!.left);
           expect(["Agent working...", "working...", "..."]).toContain(geometry.text);
         }
       }).toPass({ timeout: 5000 });
