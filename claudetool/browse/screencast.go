@@ -3,12 +3,14 @@ package browse
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -177,6 +179,11 @@ func (b *BrowseTools) screencastStart(format string, quality, maxWidth, maxHeigh
 	// Start ffmpeg: read frames from stdin, output MP4.
 	// -framerate 4: assume ~4fps from Chrome screencast (adjustable via every_nth_frame)
 	// -f mjpeg or image2pipe: tell ffmpeg the input format
+	// -vf crop=trunc(iw/2)*2:trunc(ih/2)*2: trim to even dimensions (at most a
+	//   1px centered crop, no rescaling) — libx264 with yuv420p cannot encode
+	//   odd sizes, which would otherwise kill ffmpeg on the first frame and
+	//   yield a 0-byte MP4. Covers odd viewports, fractional device scale
+	//   factors, downscale rounding, zoom, and mid-recording resizes.
 	// -c:v libx264 -pix_fmt yuv420p: widely compatible H.264 MP4
 	ffmpegCmd := exec.Command(
 		"ffmpeg",
@@ -184,6 +191,7 @@ func (b *BrowseTools) screencastStart(format string, quality, maxWidth, maxHeigh
 		"-f", inputFormat,
 		"-framerate", "4",
 		"-i", "pipe:0",
+		"-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
 		"-c:v", "libx264",
 		"-pix_fmt", "yuv420p",
 		"-preset", "fast",
@@ -246,13 +254,17 @@ func (b *BrowseTools) screencastStart(format string, quality, maxWidth, maxHeigh
 	return sessionID, nil
 }
 
-// screencastStopInternal stops the screencast. Safe to call from any goroutine.
-func (b *BrowseTools) screencastStopInternal() {
+// screencastStopInternal stops the screencast and verifies the recording.
+// Safe to call from any goroutine. recErr is non-nil if ffmpeg failed or the
+// output file is missing/empty/unplayable, so callers can surface encoder
+// failures instead of silently reporting success. note carries a non-fatal
+// caveat about the recording (empty when there is nothing to flag).
+func (b *BrowseTools) screencastStopInternal() (recErr error, note string) {
 	sc := &b.screencast
 	sc.mu.Lock()
 	if !sc.active {
 		sc.mu.Unlock()
-		return
+		return nil, ""
 	}
 	sc.active = false
 	if sc.stopTimer != nil {
@@ -263,6 +275,7 @@ func (b *BrowseTools) screencastStopInternal() {
 	stopped := sc.stopped
 	ffmpegIn := sc.ffmpegIn
 	ffmpegCmd := sc.ffmpegCmd
+	outputPath := sc.outputPath
 	sc.stopCh = nil
 	sc.ffmpegIn = nil
 	sc.mu.Unlock()
@@ -279,33 +292,140 @@ func (b *BrowseTools) screencastStopInternal() {
 	if ffmpegIn != nil {
 		ffmpegIn.Close()
 	}
+	var stderr string
+	var waitErr error
 	if ffmpegCmd != nil {
-		if err := ffmpegCmd.Wait(); err != nil {
-			stderr := ""
-			if lb, ok := ffmpegCmd.Stderr.(*limitedBuffer); ok {
-				stderr = lb.String()
-			}
-			log.Printf("screencast: ffmpeg exited with error: %v; stderr: %s", err, stderr)
+		waitErr = ffmpegCmd.Wait()
+		if lb, ok := ffmpegCmd.Stderr.(*limitedBuffer); ok {
+			stderr = lb.String()
+		}
+		if waitErr != nil {
+			log.Printf("screencast: ffmpeg exited with error: %v; stderr: %s", waitErr, stderr)
 		}
 	}
+
+	// Verify the output file actually exists and has content — a failed
+	// encoder leaves a 0-byte (or missing) file. A non-empty file is probed
+	// with ffprobe before declaring failure, because ffmpeg can exit
+	// non-zero (e.g. on SIGTERM) while still finalizing a complete, playable
+	// MP4.
+	if outputPath != "" {
+		info, statErr := os.Stat(outputPath)
+		switch {
+		case statErr != nil:
+			recErr = fmt.Errorf("output file %s was not created (%v)", outputPath, statErr)
+		case info.Size() == 0:
+			recErr = fmt.Errorf("output file %s is empty", outputPath)
+		case waitErr != nil:
+			if probeErr := verifyPlayable(outputPath); probeErr != nil {
+				recErr = fmt.Errorf("ffmpeg exited with error (%v) and the output MP4 did not verify as playable (%v)", waitErr, probeErr)
+			} else {
+				note = fmt.Sprintf("ffmpeg exited with an error (%v), but the output MP4 was verified playable", waitErr)
+			}
+		}
+	}
+	if recErr != nil {
+		// Surface the most diagnostic part of ffmpeg's stderr (the last lines
+		// carry the actual failure reason) to the caller.
+		if tail := stderrTail(stderr, 600); tail != "" {
+			recErr = fmt.Errorf("%w\nffmpeg stderr (tail): %s", recErr, tail)
+		}
+	}
+	return recErr, note
+}
+
+// verifyPlayable reports whether the MP4 at path contains a decodable video
+// stream, using ffprobe. It fails (fail closed) if ffprobe is unavailable.
+func verifyPlayable(path string) error {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		return fmt.Errorf("ffprobe not available: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=codec_name", "-of", "csv=p=0", path).Output()
+	if err != nil {
+		// Include ffprobe's own diagnostic text (e.g. "moov atom not found")
+		// when available.
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return err
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return fmt.Errorf("no video stream found")
+	}
+	return nil
+}
+
+// stderrTail returns the last maxRunes runes of ffmpeg's stderr, with the
+// version/configuration banner (which carries no diagnostic value) stripped
+// and carriage returns from progress updates normalized.
+func stderrTail(s string, maxRunes int) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	var kept []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || isBannerLine(line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	joined := strings.Join(kept, " | ")
+	r := []rune(joined)
+	if len(r) > maxRunes {
+		r = r[len(r)-maxRunes:]
+	}
+	return string(r)
+}
+
+func isBannerLine(line string) bool {
+	for _, prefix := range []string{
+		"ffmpeg version", "built with", "configuration:",
+		"libavutil", "libavcodec", "libavformat", "libavdevice",
+		"libavfilter", "libswscale", "libswresample", "libpostproc",
+	} {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// screencastSummary describes a completed (or failed) screencast recording.
+type screencastSummary struct {
+	SessionID  string
+	OutputPath string
+	FrameCount int
+	Duration   time.Duration
+	// RecErr is non-nil if the ffmpeg encoder failed or produced no usable
+	// output.
+	RecErr error
+	// Note carries a non-fatal caveat about the recording (empty when there
+	// is nothing to flag).
+	Note string
 }
 
 // screencastStop stops the screencast and returns summary info.
-func (b *BrowseTools) screencastStop() (sessionID, outputPath string, frameCount int, duration time.Duration, err error) {
+func (b *BrowseTools) screencastStop() (screencastSummary, error) {
 	sc := &b.screencast
 	sc.mu.Lock()
 	if !sc.active {
 		sc.mu.Unlock()
-		return "", "", 0, 0, fmt.Errorf("no active screencast — call screencast_start first")
+		return screencastSummary{}, fmt.Errorf("no active screencast — call screencast_start first")
 	}
-	sessionID = sc.sessionID
-	outputPath = sc.outputPath
-	frameCount = sc.frameCount
-	duration = time.Since(sc.startTime)
+	sum := screencastSummary{
+		SessionID:  sc.sessionID,
+		OutputPath: sc.outputPath,
+		FrameCount: sc.frameCount,
+		Duration:   time.Since(sc.startTime),
+	}
 	sc.mu.Unlock()
 
-	b.screencastStopInternal()
-	return sessionID, outputPath, frameCount, duration, nil
+	sum.RecErr, sum.Note = b.screencastStopInternal()
+	return sum, nil
 }
 
 // screencastStatus returns the current status of the screencast.
@@ -319,20 +439,23 @@ func (b *BrowseTools) screencastStatus() (active bool, sessionID string, frameCo
 	return true, sc.sessionID, sc.frameCount, time.Since(sc.startTime)
 }
 
-// limitedBuffer is a bytes.Buffer that stops accepting writes after max bytes.
+// limitedBuffer is a byte buffer that keeps only the last max bytes written.
+// ffmpeg writes its fatal error message at the very end of stderr (after
+// thousands of progress updates), so keeping the head would discard exactly
+// the useful part.
 type limitedBuffer struct {
 	buf []byte
 	max int
 }
 
 func (lb *limitedBuffer) Write(p []byte) (int, error) {
-	remaining := lb.max - len(lb.buf)
-	if remaining > 0 {
-		n := len(p)
-		if n > remaining {
-			n = remaining
-		}
-		lb.buf = append(lb.buf, p[:n]...)
+	if len(p) >= lb.max {
+		lb.buf = append(lb.buf[:0], p[len(p)-lb.max:]...)
+		return len(p), nil
+	}
+	lb.buf = append(lb.buf, p...)
+	if overflow := len(lb.buf) - lb.max; overflow > 0 {
+		lb.buf = lb.buf[overflow:]
 	}
 	// Always report full length consumed so ffmpeg doesn't get write errors.
 	return len(p), nil
