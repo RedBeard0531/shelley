@@ -948,24 +948,37 @@ func (b *BrowseTools) runCombined(ctx context.Context, input combinedInput) llm.
 			filepath.Join(ScreencastDir, sessionID+".mp4"), sessionID, ScreencastMaxDuration, ScreencastMaxFrames,
 		))}
 	case "screencast_stop":
-		sessionID, outputPath, frameCount, duration, err := b.screencastStop()
+		sum, err := b.screencastStop()
 		if err != nil {
 			return llm.ErrorToolOut(err)
 		}
+		duration := sum.Duration.Round(time.Millisecond)
+		if sum.RecErr != nil {
+			msg := fmt.Sprintf("screencast recording failed (session %s, MP4 at %s, %d frames captured over %v)",
+				sum.SessionID, sum.OutputPath, sum.FrameCount, duration)
+			if sum.FrameCount == 0 {
+				msg += " — no frames were received; the page may not have repainted during the recording"
+			}
+			return llm.ErrorToolOut(fmt.Errorf("%s: %w", msg, sum.RecErr))
+		}
 		display := map[string]any{
 			"type":        "screencast",
-			"session_id":  sessionID,
-			"url":         "/api/read?path=" + url.QueryEscape(outputPath),
-			"path":        outputPath,
-			"frame_count": frameCount,
-			"duration":    duration.Round(time.Millisecond).String(),
+			"session_id":  sum.SessionID,
+			"url":         "/api/read?path=" + url.QueryEscape(sum.OutputPath),
+			"path":        sum.OutputPath,
+			"frame_count": sum.FrameCount,
+			"duration":    duration.String(),
+		}
+		text := fmt.Sprintf(
+			"Screencast stopped (session %s). %d frames captured over %v.\nMP4 saved to: %s",
+			sum.SessionID, sum.FrameCount, duration, sum.OutputPath,
+		)
+		if sum.Note != "" {
+			text += "\nNote: " + sum.Note
 		}
 		return llm.ToolOut{
-			LLMContent: llm.TextContent(fmt.Sprintf(
-				"Screencast stopped (session %s). %d frames captured over %v.\nMP4 saved to: %s",
-				sessionID, frameCount, duration.Round(time.Millisecond), outputPath,
-			)),
-			Display: display,
+			LLMContent: llm.TextContent(text),
+			Display:    display,
 		}
 	case "screencast_status":
 		active, sessionID, frameCount, elapsed := b.screencastStatus()
