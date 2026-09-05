@@ -28,6 +28,7 @@ import (
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/server/notifications"
+	"shelley.exe.dev/server/stt"
 	"shelley.exe.dev/subpub"
 	"shelley.exe.dev/ui"
 )
@@ -402,6 +403,11 @@ type Server struct {
 	// independent DBs don't share state.
 	cacheMasterSecretMu    sync.Mutex
 	cacheMasterSecretCache []byte
+
+	// transcriber is the optional server-side streaming speech-to-text
+	// engine (sherpa-onnx). Set via SetTranscriber when --stt-model-dir is
+	// configured; nil means the mic button is hidden.
+	transcriber stt.Transcriber
 }
 
 // NewServer creates a new server instance
@@ -467,6 +473,13 @@ func (s *Server) SetModelRefresher(refresh func(context.Context) ([]models.Built
 	s.refreshBuiltModels = refresh
 }
 
+// SetTranscriber enables server-side streaming voice transcription (see
+// --stt-model-dir). When never called (or called with nil), the UI hides the
+// mic button.
+func (s *Server) SetTranscriber(t stt.Transcriber) {
+	s.transcriber = t
+}
+
 // RegisterNotificationChannel adds a backend notification channel to the dispatcher.
 func (s *Server) RegisterNotificationChannel(ch notifications.Channel) {
 	s.notifDispatcher.Register(ch)
@@ -510,6 +523,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/write-file", http.HandlerFunc(s.handleWriteFile))                                             // Small response
 	mux.Handle("/api/read-file", compressionHandler(http.HandlerFunc(s.handleReadFile)))                           // Reads arbitrary text files as JSON
 	mux.Handle("/api/user-agents-md", http.HandlerFunc(s.handleUserAgentsMd))                                      // Small response
+	mux.HandleFunc("GET /api/stt", s.handleSTTInfo)                                                                // Streaming STT availability
+	mux.HandleFunc("/api/stt/ws", s.handleSTTWS)                                                                   // Streaming STT websocket (audio → text)
 	mux.HandleFunc("/api/exec-ws", s.handleExecWS)                                                                 // Websocket for shell commands
 	mux.HandleFunc("GET /api/terminals", s.handleTerminalsList)                                                    // List persistent terminal sessions
 	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalDelete)

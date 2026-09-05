@@ -21,6 +21,7 @@ import (
 	"shelley.exe.dev/modelsources"
 	"shelley.exe.dev/server"
 	_ "shelley.exe.dev/server/notifications/channels" // register channel types
+	"shelley.exe.dev/server/stt"
 	"shelley.exe.dev/skills"
 	"shelley.exe.dev/templates"
 	"shelley.exe.dev/version"
@@ -183,6 +184,8 @@ func runServe(global GlobalConfig, args []string) {
 	requireHeader := fs.String("require-header", "", "Require this header on all API requests (e.g., X-Exedev-Userid)")
 	socketPath := fs.String("socket", client.DefaultSocketPath(), "Path to Unix socket for local CLI client access (set to 'none' to disable)")
 	banner := fs.String("banner", "", "If set, shows this text in a banner at the top of the UI (useful for marking demo instances)")
+	sttModelDir := fs.String("stt-model-dir", "", "Directory of a sherpa-onnx streaming model (encoder/decoder/joiner onnx + tokens.txt). Enables the mic button via server-side transcription, which works in every browser including Firefox. Overrides SHELLEY_STT_MODEL_DIR when set.")
+	sttLibDir := fs.String("stt-lib-dir", "", "Directory containing libsherpa-onnx-c-api.so and libonnxruntime.so. Empty means use the system library search path. Overrides SHELLEY_STT_LIB_DIR when set.")
 	fs.Parse(args)
 
 	logger := setupLogging(global.Debug)
@@ -213,6 +216,28 @@ func runServe(global GlobalConfig, args []string) {
 	svr := server.NewServer(database, llmManager, toolSetConfig, logger, global.PredictableOnly, llmConfig.DefaultModel, *requireHeader)
 	svr.SetModelRefresher(llmConfig.RefreshBuiltModels)
 	svr.Banner = *banner
+
+	// Optional server-side streaming speech-to-text (sherpa-onnx). When a
+	// model dir is configured and loads, the mic button appears in every
+	// browser (no Web Speech API dependency). If it fails to load, log the
+	// reason loudly; the /api/stt endpoint reports it too.
+	modelDir := *sttModelDir
+	if modelDir == "" {
+		modelDir = os.Getenv("SHELLEY_STT_MODEL_DIR")
+	}
+	if modelDir != "" {
+		libDir := *sttLibDir
+		if libDir == "" {
+			libDir = os.Getenv("SHELLEY_STT_LIB_DIR")
+		}
+		engine, err := stt.Open(modelDir, stt.Options{NumThreads: 2, LibDir: libDir})
+		if err != nil {
+			logger.Error("Voice transcription disabled: could not load sherpa-onnx model", "model_dir", modelDir, "error", err)
+		} else {
+			svr.SetTranscriber(engine)
+			logger.Info("Voice transcription enabled", "model_dir", modelDir, "sherpa_onnx", engine.Version())
+		}
+	}
 
 	// Load notification channels from DB.
 	svr.ReloadNotificationChannels()
