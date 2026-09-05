@@ -58,7 +58,8 @@
     class="status-bar-active"
   >
     <template v-if="working">
-      <AnimatedWorkingStatus data-testid="agent-thinking" />
+      <!-- Stop sits left of the working text (mobile: out of thumb reach of
+           the readout that follows it). -->
       <button
         v-if="agentWorking"
         :disabled="cancelling"
@@ -73,6 +74,7 @@
         <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
       </button>
       <span v-else class="working-indicator" title="Background work running" aria-hidden="true" />
+      <AnimatedWorkingStatus data-testid="agent-thinking" />
     </template>
     <div
       v-else-if="interrupted"
