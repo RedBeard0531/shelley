@@ -71,7 +71,7 @@ test("TOC shares the model row and working text yields to controls", async ({ pa
         ).toBeLessThan(2);
         expect(geometry.toc.right).toBeLessThanOrEqual(width);
         expect(geometry.status.bottom - geometry.status.top).toBeLessThan(24);
-        expect(geometry.status.right).toBeLessThanOrEqual(geometry.stop.left);
+        expect(geometry.stop.right).toBeLessThanOrEqual(geometry.status.left);
         expect(geometry.row.overflow).toBe(false);
         expect(geometry.tokens.overflow).toBe(false);
         expect(["Agent working...", "working...", "..."]).toContain(geometry.text);

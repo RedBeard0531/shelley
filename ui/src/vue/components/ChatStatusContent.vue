@@ -44,7 +44,6 @@
     class="status-bar-active"
     data-testid="agent-thinking"
   >
-    <AnimatedWorkingStatus />
     <button
       :disabled="cancelling"
       class="status-stop-button"
@@ -57,6 +56,7 @@
       </svg>
       <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
     </button>
+    <AnimatedWorkingStatus />
     <StatusReadout
       v-bind="readoutProps"
       :cwd="cwd"
