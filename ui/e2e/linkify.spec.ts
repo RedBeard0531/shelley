@@ -4,6 +4,15 @@ import { test, expect } from "@playwright/test";
 // With markdown enabled (default), agent messages render via Marked which
 // auto-links URLs. With markdown disabled, linkifyText adds .text-link spans.
 
+// The test server is shared across the whole shard, so the "/new" page's cwd
+// falls back to the most recent conversation's cwd. Specs that seed synthetic
+// /debug/loremipsum conversations leave that pointing at a directory which does
+// not exist on the runner, and sending then fails validation before any message
+// renders. Pin a real cwd so this spec is order-independent.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("shelley_selected_cwd", "/tmp"));
+});
+
 test("URLs in agent responses are linked (markdown mode)", async ({ page }) => {
   await page.goto('/new');
   await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
