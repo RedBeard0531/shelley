@@ -243,7 +243,7 @@
           :messages="visibleMessages"
           :container-ref="messagesContainerRef"
           :near-bottom="!showScrollToBottom"
-          :conversation-slug="currentConversation?.slug"
+          :conversation-id="conversationId"
           @scroll-bottom="scrollToBottom"
           @scroll-away="markUserScrolledUp"
         />
@@ -281,6 +281,33 @@
       @auto-focus-consumed="terminalAutoFocusId = null"
       @active-terminal-exited="focusMessageInputIfUnfocused"
     />
+
+    <!-- Low disk space notice: server-wide, shown once per episode until dismissed. -->
+    <div
+      v-if="diskSpaceStatus?.active && !diskSpaceStatus.dismissed"
+      class="disk-space-notice"
+      :class="{ 'disk-space-notice-critical': diskSpaceStatus.critical }"
+      :role="diskSpaceStatus.critical ? 'alert' : 'status'"
+      data-testid="disk-space-notice"
+    >
+      <span class="disk-space-notice-icon" aria-hidden="true">!</span>
+      <span class="disk-space-notice-text">
+        <strong>{{ t(diskSpaceStatus.critical ? "diskSpaceCritical" : "diskSpaceLow") }}</strong>
+        <span class="disk-space-notice-detail"
+          >{{ formatDiskBytes(diskSpaceStatus.available_bytes) }}
+          {{ t("diskSpaceRemaining") }}</span
+        >
+      </span>
+      <button
+        type="button"
+        class="btn-icon disk-space-notice-dismiss"
+        :aria-label="t('dismiss')"
+        data-testid="disk-space-notice-dismiss"
+        @click="dismissDiskSpaceNotice"
+      >
+        ×
+      </button>
+    </div>
 
     <!-- Status bar -->
     <div :class="statusBarClass">
@@ -349,8 +376,9 @@
         focusMessageInputIfUnfocused();
       "
       @open-diff="
-        (commit, cwd) => {
+        (commit, cwd, file) => {
           diffViewerInitialCommit = commit;
+          diffViewerInitialFile = file;
           diffViewerCwd = cwd;
           showDiffViewer = true;
         }
@@ -373,6 +401,7 @@
       :cwd="(diffViewerCwd || currentConversation?.cwd || selectedCwd) as string"
       :is-open="showDiffViewer"
       :initial-commit="diffViewerInitialCommit"
+      :initial-file="diffViewerInitialFile"
       @close="onDiffViewerClose"
       @comment-text-change="(text) => (diffCommentText = text)"
       @cwd-change="(cwd) => (diffViewerCwd = cwd)"
@@ -403,6 +432,7 @@ import {
   type ToolProgress,
   type Usage,
   type LLMContent,
+  type DiskSpaceStatus,
   isDistillStatusMessage,
   distillStatus,
   parseQueuedMessages,
@@ -511,6 +541,8 @@ const props = withDefaults(
     conversationId: string | null;
     streamStatus?: "connected" | "reconnecting" | "disconnected";
     reconnectNonce?: number;
+    diskSpaceStatus?: DiskSpaceStatus | null;
+    onDiskSpaceStatus?: (status: DiskSpaceStatus) => void;
     onOpenDrawer: () => void;
     onNewConversation: () => void;
     onSelectConversation?: (conversation: Conversation) => void;
@@ -633,6 +665,21 @@ const loadingProgress = ref<{
 } | null>(null);
 const sending = ref(false);
 const error = ref<string | null>(null);
+
+function formatDiskBytes(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  return `${Math.round(bytes / 1e6)} MB`;
+}
+
+async function dismissDiskSpaceNotice() {
+  const status = props.diskSpaceStatus;
+  if (!status) return;
+  try {
+    props.onDiskSpaceStatus?.(await api.dismissDiskSpaceNotice(status.episode_id));
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
 const models = ref<
   Array<{
     id: string;
@@ -856,6 +903,7 @@ const showGitGraph = ref(false);
 const showAgentsMdEditor = ref(false);
 const diffViewerInitialCommit = ref<string | undefined>(undefined);
 const diffViewerCwd = ref<string | undefined>(undefined);
+const diffViewerInitialFile = ref<string | undefined>(undefined);
 const diffCommentText = ref("");
 // The image being annotated, if any (module state so any image in the message
 // tree can open the view without prop drilling).
@@ -2043,6 +2091,7 @@ const CLAMP_MISREAD_UNDO_WINDOW_MS = 250;
 let followExplicitSelectionToBottom = false;
 let suppressExplicitSelectionClamp = false;
 let scrollPointerActive = false;
+let touchScrolling = false;
 let bottomPinFrame: number | null = null;
 let bottomPinActive = false;
 
@@ -2074,9 +2123,11 @@ function handleBottomPinWheel(e: WheelEvent) {
 }
 
 function handleBottomPinTouch() {
-  lastScrollGestureAt = performance.now();
-  scrollPointerActive = true;
-  stopBottomPin();
+  touchScrolling = true;
+  handleScrollPointerDown();
+  // Start from the actual offset, not a rounded/clamped auto-follow target.
+  const container = messagesContainerRef.value;
+  if (container) lastObservedScrollTop = container.scrollTop;
 }
 
 function handleScrollPointerDown() {
@@ -2089,9 +2140,28 @@ function handleScrollPointerUp() {
   scrollPointerActive = false;
 }
 
+// Native touch panning fires pointercancel before the gesture's scroll events.
+// Keep touch state until touchend/touchcancel, not just until pointercancel.
+function userScrollGestureActive() {
+  return touchScrolling || scrollPointerActive;
+}
+
+function handleScrollTouchEnd() {
+  if (!touchScrolling) return;
+  // Account for a final movement even if its scroll event is still queued.
+  handleScroll();
+  touchScrolling = false;
+  scrollPointerActive = false;
+  if (!userScrolled && !loadingFlag && !catchingUp && pendingScroll === undefined) {
+    scrollToBottom();
+  }
+}
+
 function scrollToBottom() {
   const container = messagesContainerRef.value;
   if (!container) return;
+  // Returning to bottom supersedes even a touch whose end event was lost.
+  touchScrolling = false;
   stopBottomPin();
   userScrolled = false;
   showScrollToBottom.value = false;
@@ -3230,6 +3300,7 @@ function onTerminalCloseHandler(id: string) {
 function onDiffViewerClose() {
   showDiffViewer.value = false;
   diffViewerInitialCommit.value = undefined;
+  diffViewerInitialFile.value = undefined;
   diffViewerCwd.value = undefined;
   if (!showGitGraph.value) focusMessageInputIfUnfocused();
 }
@@ -3843,7 +3914,8 @@ watch(
         }
         return;
       }
-      if (!userScrolled && !wasCatchingUp) scrollToBottom();
+      // A streaming update must not re-pin before the touch's scroll event.
+      if (!userScrolled && !wasCatchingUp && !touchScrolling) scrollToBottom();
     });
   },
   { flush: "post" },
@@ -3885,7 +3957,7 @@ function handleScroll() {
   }
   const switchingConversation = pendingScroll !== undefined;
   const guardedLayoutShift =
-    upwardDelta > 0 && suppressExplicitSelectionClamp && !scrollPointerActive;
+    upwardDelta > 0 && suppressExplicitSelectionClamp && !userScrollGestureActive();
   if (switchingConversation || guardedLayoutShift) {
     // Replacing one transcript with another clamps the shared scroll container
     // before the pending destination is applied. Likewise, lazy renderers can
@@ -3895,7 +3967,12 @@ function handleScroll() {
     if (guardedLayoutShift) scrollToBottom();
     return;
   }
-  if (bottomPinActive && upwardDelta >= BOTTOM_PIN_SCROLL_RELEASE_DELTA) {
+  // Even a small upward touch movement releases a pin re-armed mid-gesture.
+  if (
+    bottomPinActive &&
+    upwardDelta > 0 &&
+    (upwardDelta >= BOTTOM_PIN_SCROLL_RELEASE_DELTA || touchScrolling)
+  ) {
     stopBottomPin();
   }
   // An upward delta this large, after clamp accounting, is unambiguously a
@@ -3908,7 +3985,7 @@ function handleScroll() {
   // while sentinelAtBottom is still stale-true and yanks the reader back down
   // (measured: scrollTop 0 -> 1607). The wheel/touch handlers only cover this
   // while the bottom pin is active, so they are not a substitute.
-  const definitelyGesture = scrollPointerActive || upwardDelta > BOTTOM_SENTINEL_MARGIN_PX;
+  const definitelyGesture = userScrollGestureActive() || upwardDelta > BOTTOM_SENTINEL_MARGIN_PX;
   if (!bottomPinActive && upwardDelta > 0 && (!sentinelAtBottom || definitelyGesture)) {
     // Below the gesture threshold, only act when the bottom sentinel has
     // actually left the near-bottom zone. While it still intersects we are
@@ -3954,8 +4031,8 @@ function setupScrollObservers() {
   container.addEventListener("scroll", handleScroll);
   container.addEventListener("wheel", handleBottomPinWheel, { passive: true });
   container.addEventListener("touchstart", handleBottomPinTouch, { passive: true });
-  container.addEventListener("touchend", handleScrollPointerUp, { passive: true });
-  container.addEventListener("touchcancel", handleScrollPointerUp, { passive: true });
+  container.addEventListener("touchend", handleScrollTouchEnd, { passive: true });
+  container.addEventListener("touchcancel", handleScrollTouchEnd, { passive: true });
   container.addEventListener("pointerdown", handleScrollPointerDown, { passive: true });
   window.addEventListener("pointerup", handleScrollPointerUp, { passive: true });
   window.addEventListener("pointercancel", handleScrollPointerUp, { passive: true });
@@ -3966,13 +4043,17 @@ function setupScrollObservers() {
       atBottom = nearBottom;
       showScrollToBottom.value = !nearBottom;
       if (nearBottom) {
+        // Manual return resumes follow even when touchend was lost or delayed.
+        touchScrolling = false;
         userScrolled = false;
         suppressExplicitSelectionClamp = false;
         stopBottomPin();
         if (!loadingFlag && followExplicitSelectionToBottom) {
           saveScroll(container.scrollTop);
         }
-      } else if (!bottomPinActive) {
+      } else if (!bottomPinActive && !touchScrolling) {
+        // Growth can move the sentinel while follow is paused. Only handleScroll
+        // may disarm an active touch; neither infer scroll-up nor re-pin here.
         if (!userScrolled && followExplicitSelectionToBottom) {
           // An explicitly selected conversation may grow after its first
           // bottom paint as lazy renderers hydrate. Keep the selection at its
@@ -4083,7 +4164,8 @@ function setupScrollObservers() {
     // Keep following pinned to the bottom as content streams in. User scroll-up
     // detection lives solely in handleScroll (with clamp discounting); inferring
     // it from resize events is what misfired on layout clamps.
-    if (!userScrolled && !catchingUp) {
+    // List growth must not move the viewport before the touch can disarm follow.
+    if (!userScrolled && !catchingUp && !touchScrolling) {
       // Avoid reading scrollTop after this write. In WebKit that read resolves
       // the clamped offset by synchronously laying out content-visibility
       // chunks. The observer already gives us both dimensions for free, and
@@ -4310,10 +4392,12 @@ onMounted(() => {
   if (commit) {
     const cwdParam = params.get("cwd") || undefined;
     diffViewerInitialCommit.value = commit;
+    diffViewerInitialFile.value = params.get("file") || undefined;
     diffViewerCwd.value = cwdParam;
     showDiffViewer.value = true;
     params.delete("diff");
     params.delete("cwd");
+    params.delete("file");
     const qs = params.toString();
     window.history.replaceState(
       {},
@@ -4339,8 +4423,8 @@ onUnmounted(() => {
   container?.removeEventListener("scroll", handleScroll);
   container?.removeEventListener("wheel", handleBottomPinWheel);
   container?.removeEventListener("touchstart", handleBottomPinTouch);
-  container?.removeEventListener("touchend", handleScrollPointerUp);
-  container?.removeEventListener("touchcancel", handleScrollPointerUp);
+  container?.removeEventListener("touchend", handleScrollTouchEnd);
+  container?.removeEventListener("touchcancel", handleScrollTouchEnd);
   container?.removeEventListener("pointerdown", handleScrollPointerDown);
   window.removeEventListener("pointerup", handleScrollPointerUp);
   window.removeEventListener("pointercancel", handleScrollPointerUp);
