@@ -193,7 +193,7 @@ func reflectionIntegrationState(ctx context.Context, env exeenv.Environment) ref
 	if err != nil {
 		return reflectionUnknown
 	}
-	resp, err := exeReflectionHTTPClient.Do(req)
+	resp, err := reflectionHTTPClient().Do(req)
 	if err != nil {
 		return reflectionUnknown
 	}
@@ -231,7 +231,7 @@ func llmIntegrationFallbackState(ctx context.Context, env exeenv.Environment) re
 	if err != nil {
 		return reflectionUnknown
 	}
-	resp, err := exeReflectionHTTPClient.Do(req)
+	resp, err := reflectionHTTPClient().Do(req)
 	if err != nil {
 		return reflectionUnknown
 	}

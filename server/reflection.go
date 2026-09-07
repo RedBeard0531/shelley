@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +16,26 @@ import (
 )
 
 // exeReflectionHTTPClient is used to query reflection integration endpoints.
-var exeReflectionHTTPClient = http.DefaultClient
+// It is read from background goroutines (an end-of-turn publish can probe the
+// notify integration) while tests swap in fake transports, so access goes
+// through an atomic pointer rather than a bare variable.
+var exeReflectionHTTPClient atomic.Pointer[http.Client]
+
+func init() {
+	exeReflectionHTTPClient.Store(http.DefaultClient)
+}
+
+// reflectionHTTPClient returns the client used for reflection integration
+// requests.
+func reflectionHTTPClient() *http.Client {
+	return exeReflectionHTTPClient.Load()
+}
+
+// setReflectionHTTPClient installs c and returns the client it replaced, so
+// tests can restore the previous value in a cleanup.
+func setReflectionHTTPClient(c *http.Client) *http.Client {
+	return exeReflectionHTTPClient.Swap(c)
+}
 
 // exeReflectionEmojiHTTPClient is separate so tests that mock integration
 // discovery do not also receive root-document requests during page rendering.
@@ -121,7 +141,7 @@ func exeDevHasNotifyIntegration() bool {
 	// override exeReflectionHTTPClient with a fake transport (see
 	// exe_notify_test.go); those are unaffected because the client is no longer
 	// the default.
-	if testing.Testing() && exeReflectionHTTPClient == http.DefaultClient {
+	if testing.Testing() && reflectionHTTPClient() == http.DefaultClient {
 		return false
 	}
 	env, err := exeenv.Current()
@@ -138,7 +158,7 @@ func exeDevHasNotifyIntegrationIn(env exeenv.Environment) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := exeReflectionHTTPClient.Do(req)
+	resp, err := reflectionHTTPClient().Do(req)
 	if err != nil {
 		return false
 	}

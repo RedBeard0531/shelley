@@ -38,9 +38,9 @@ func withReflection(t *testing.T, integrationsJSON string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := exeReflectionHTTPClient
-	t.Cleanup(func() { exeReflectionHTTPClient = old })
-	exeReflectionHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	old := reflectionHTTPClient()
+	t.Cleanup(func() { setReflectionHTTPClient(old) })
+	setReflectionHTTPClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.String() != env.ReflectionURL()+"/integrations" {
 			t.Fatalf("unexpected reflection URL %s", req.URL)
 		}
@@ -49,7 +49,7 @@ func withReflection(t *testing.T, integrationsJSON string) {
 			Body:       io.NopCloser(strings.NewReader(integrationsJSON)),
 			Header:     make(http.Header),
 		}, nil
-	})}
+	})})
 }
 
 func TestExeNotifyEnabledWhenIntegrationPresent(t *testing.T) {
@@ -111,9 +111,9 @@ func hookURLs(hooks []db.ConversationHook) []string {
 // the real network unless a test has explicitly injected a fake client. With
 // the default client under a test binary the probe short-circuits to false.
 func TestReflectionProbeSkippedWithoutInjectedClient(t *testing.T) {
-	old := exeReflectionHTTPClient
-	t.Cleanup(func() { exeReflectionHTTPClient = old })
-	exeReflectionHTTPClient = http.DefaultClient
+	old := reflectionHTTPClient()
+	t.Cleanup(func() { setReflectionHTTPClient(old) })
+	setReflectionHTTPClient(http.DefaultClient)
 	if exeDevHasNotifyIntegration() {
 		t.Fatal("reflection probe must be disabled (no real network) when the" +
 			" default client is used inside a test binary")
@@ -133,9 +133,9 @@ func TestExeDevHasNotifyIntegrationUsesEnvironmentReflectionURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			old := exeReflectionHTTPClient
-			t.Cleanup(func() { exeReflectionHTTPClient = old })
-			exeReflectionHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			old := reflectionHTTPClient()
+			t.Cleanup(func() { setReflectionHTTPClient(old) })
+			setReflectionHTTPClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if req.URL.String() != tt.wantURL {
 					t.Fatalf("unexpected reflection URL %s", req.URL)
 				}
@@ -144,7 +144,7 @@ func TestExeDevHasNotifyIntegrationUsesEnvironmentReflectionURL(t *testing.T) {
 					Body:       io.NopCloser(strings.NewReader(`{"integrations":[{"name":"notify","type":"notify"}]}`)),
 					Header:     make(http.Header),
 				}, nil
-			})}
+			})})
 
 			env, err := exeenv.New(tt.scheme, tt.boxHost)
 			if err != nil {
