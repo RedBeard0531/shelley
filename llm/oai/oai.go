@@ -1271,21 +1271,6 @@ func (s *Service) MaxImageBytes() int {
 }
 
 func modelReasoningCapabilities(endpoint string, model Model) (modelsdev.ReasoningCapabilities, bool) {
-	// TODO: Remove this override once the embedded models.dev snapshot includes Astra's reasoning efforts.
-	if model.ModelName == GPT6Astra.ModelName {
-		caps, found := modelsdev.LookupReasoningCapabilities(cmp.Or(endpoint, model.URL), GPT56Sol.ModelName)
-		if !found {
-			return modelsdev.ReasoningCapabilities{}, false
-		}
-		levels := make([]llm.ThinkingLevel, 0, len(caps.Levels))
-		for _, level := range caps.Levels {
-			if level != llm.ThinkingLevelOff {
-				levels = append(levels, level)
-			}
-		}
-		caps.Levels = levels
-		return caps, true
-	}
 	return modelsdev.LookupReasoningCapabilities(cmp.Or(endpoint, model.URL), model.ModelName)
 }
 
