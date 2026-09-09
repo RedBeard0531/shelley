@@ -369,9 +369,13 @@ SELECT
   CAST(COALESCE(SUM(m.usage_data ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
   CAST(COALESCE(SUM(m.usage_data ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
   CAST(COALESCE(SUM(m.usage_data ->> 'cost_usd'), 0) AS REAL) AS cost_usd
-FROM messages m
-JOIN descendants d ON m.conversation_id = d.conversation_id
-WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
+-- CROSS JOIN keeps the small descendants set outermost. A regular JOIN lets
+-- SQLite start from every agent message, which makes this query scan the full
+-- messages table even when the conversation has no subagents.
+FROM descendants d
+CROSS JOIN messages m INDEXED BY idx_messages_conv_type_seq
+WHERE m.conversation_id = d.conversation_id
+  AND m.type = 'agent' AND m.usage_data IS NOT NULL
 GROUP BY m.model_name, m.llm_api_url;
 
 -- name: GetSubagentOtherUsage :many
@@ -394,10 +398,13 @@ SELECT
   CAST(COALESCE(SUM(je.value ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
   CAST(COALESCE(SUM(je.value ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
   CAST(COALESCE(SUM(je.value ->> 'cost_usd'), 0) AS REAL) AS cost_usd
-FROM messages m
-JOIN descendants d ON m.conversation_id = d.conversation_id,
-  json_each(m.other_usage_data) je
-WHERE m.other_usage_data IS NOT NULL
+-- Keep descendants outermost here too, before expanding each matching
+-- message's JSON. See GetSubagentUsage above.
+FROM descendants d
+CROSS JOIN messages m INDEXED BY idx_messages_conversation_id
+CROSS JOIN json_each(m.other_usage_data) je
+WHERE m.conversation_id = d.conversation_id
+  AND m.other_usage_data IS NOT NULL
 -- Group by the JSON expressions, not the aliases: bare model_name/llm_api_url
 -- would resolve to the messages table's own columns (NULL here).
 GROUP BY je.value ->> 'model', je.value ->> 'url';

@@ -382,10 +382,11 @@ SELECT
   CAST(COALESCE(SUM(je.value ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
   CAST(COALESCE(SUM(je.value ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
   CAST(COALESCE(SUM(je.value ->> 'cost_usd'), 0) AS REAL) AS cost_usd
-FROM messages m
-JOIN descendants d ON m.conversation_id = d.conversation_id,
-  json_each(m.other_usage_data) je
-WHERE m.other_usage_data IS NOT NULL
+FROM descendants d
+CROSS JOIN messages m INDEXED BY idx_messages_conversation_id
+CROSS JOIN json_each(m.other_usage_data) je
+WHERE m.conversation_id = d.conversation_id
+  AND m.other_usage_data IS NOT NULL
 GROUP BY je.value ->> 'model', je.value ->> 'url'
 `
 
@@ -404,6 +405,8 @@ type GetSubagentOtherUsageRow struct {
 // descendant conversations (subagents, recursively), grouped by model.
 // Folded into handleSubagentUsage's totals alongside GetSubagentUsage; the
 // parent's own indirect usage rides on its own messages instead.
+// Keep descendants outermost here too, before expanding each matching
+// message's JSON. See GetSubagentUsage above.
 // Group by the JSON expressions, not the aliases: bare model_name/llm_api_url
 // would resolve to the messages table's own columns (NULL here).
 func (q *Queries) GetSubagentOtherUsage(ctx context.Context, parentConversationID *string) ([]GetSubagentOtherUsageRow, error) {
@@ -454,9 +457,10 @@ SELECT
   CAST(COALESCE(SUM(m.usage_data ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
   CAST(COALESCE(SUM(m.usage_data ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
   CAST(COALESCE(SUM(m.usage_data ->> 'cost_usd'), 0) AS REAL) AS cost_usd
-FROM messages m
-JOIN descendants d ON m.conversation_id = d.conversation_id
-WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
+FROM descendants d
+CROSS JOIN messages m INDEXED BY idx_messages_conv_type_seq
+WHERE m.conversation_id = d.conversation_id
+  AND m.type = 'agent' AND m.usage_data IS NOT NULL
 GROUP BY m.model_name, m.llm_api_url
 `
 
@@ -474,6 +478,9 @@ type GetSubagentUsageRow struct {
 // Aggregate LLM usage across all descendant conversations (subagents,
 // recursively), grouped by model. Powers the "plus $X for subagents" line
 // in the token-cost graph; the parent's own usage is not included.
+// CROSS JOIN keeps the small descendants set outermost. A regular JOIN lets
+// SQLite start from every agent message, which makes this query scan the full
+// messages table even when the conversation has no subagents.
 func (q *Queries) GetSubagentUsage(ctx context.Context, parentConversationID *string) ([]GetSubagentUsageRow, error) {
 	rows, err := q.db.QueryContext(ctx, getSubagentUsage, parentConversationID)
 	if err != nil {
