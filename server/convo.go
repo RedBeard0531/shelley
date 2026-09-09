@@ -197,6 +197,11 @@ type ConversationManager struct {
 	// would interleave each other's batches into the loop and history).
 	draining bool
 
+	// modelSettingsMu serializes model/reasoning changes with manual resume.
+	// Both operations rebuild the loop, and model changes persist before that
+	// rebuild, so sharing this lock prevents resume from selecting the old model
+	// while a concurrent /model request is between those two steps.
+	modelSettingsMu sync.Mutex
 	// retryMu serializes RetryLastLLMRequest so concurrent retry POSTs don't
 	// produce duplicate LLM calls or double-broadcast user_data updates.
 	retryMu sync.Mutex
@@ -1147,28 +1152,149 @@ func (cm *ConversationManager) ContinueAfterRefusal(ctx context.Context, ch Mode
 	return nil
 }
 
-// ResumeInterruptedTurn re-fires the LLM request for a turn that was cut short
-// by the process exiting (the upgrade-with-restart path; see
-// db.ConsumeResumeAfterUpgrade and Server.resumeInterruptedConversations). No
-// user message is added and no history row is mutated: the persisted messages
-// are the request, and loop.insertMissingToolResults patches any dangling
-// tool_use block in memory while building it.
-//
-// Shares retryMu with the retry/continue affordances so a resume can't race a
-// user-triggered retry of the same conversation.
+// ResumeInterruptedTurn re-fires the persisted request for a newly created BTW
+// reader. The caller has just chosen and stored its model, so there is no
+// pre-existing model-setting request to reconcile.
 func (cm *ConversationManager) ResumeInterruptedTurn(ctx context.Context, service llm.Service, modelID string) error {
 	if service == nil {
 		return fmt.Errorf("llm service is required")
 	}
+	return cm.resumeInterruptedTurn(ctx, interruptedResumeTrusted, nil, func() (llm.Service, string, error) {
+		return service, modelID, nil
+	}, nil)
+}
 
+var errInterruptedTurnNotApplicable = errors.New("conversation has no interrupted turn to resume")
+
+type interruptedResumeValidation uint8
+
+const (
+	interruptedResumeTrusted interruptedResumeValidation = iota
+	interruptedResumeWorking
+	interruptedResumeMarked
+)
+
+func (cm *ConversationManager) currentModelResolver(defaultModelID string, serviceForModel func(string) (llm.Service, error)) func() (llm.Service, string, error) {
+	return func() (llm.Service, string, error) {
+		modelID := cm.GetModel()
+		if modelID == "" {
+			modelID = defaultModelID
+		}
+		service, err := serviceForModel(modelID)
+		return service, modelID, err
+	}
+}
+
+// ResumeInterruptedTurnAfterUpgrade claims the durable startup version under
+// model/lifecycle serialization. A fresh user turn changes that version before
+// this worker can claim it; a concurrent model switch either happens afterward
+// and cancels this turn, or happens first and makes the claim a no-op. The
+// warning is recorded immediately before Retry.
+func (cm *ConversationManager) ResumeInterruptedTurnAfterUpgrade(ctx context.Context, resume db.UpgradeResume, defaultModelID string, serviceForModel func(string) (llm.Service, error), warning string) error {
+	if resume.ConversationID != cm.conversationID {
+		return fmt.Errorf("upgrade resume token is for conversation %s, not %s", resume.ConversationID, cm.conversationID)
+	}
+	if serviceForModel == nil {
+		return fmt.Errorf("llm service resolver is required")
+	}
+	return cm.resumeInterruptedTurn(ctx, interruptedResumeWorking, &resume, cm.currentModelResolver(defaultModelID, serviceForModel), func() error {
+		return cm.recordWarning(ctx, warning)
+	})
+}
+
+// ContinueInterruptedTurn is the user-triggered counterpart. It validates
+// under the loop lifecycle lock that the conversation is idle, top-level, and
+// still carries an unresolved startup interruption bit, making repeated clicks
+// and races with a normal send harmless. Model selection also happens under
+// modelSettingsMu, after Hydrate, so a concurrent /model request either finishes
+// first or cancels this resumed turn afterward; it cannot leave the DB and loop
+// on different models.
+func (cm *ConversationManager) ContinueInterruptedTurn(ctx context.Context, defaultModelID string, serviceForModel func(string) (llm.Service, error)) error {
+	if serviceForModel == nil {
+		return fmt.Errorf("llm service resolver is required")
+	}
+	return cm.resumeInterruptedTurn(ctx, interruptedResumeMarked, nil, cm.currentModelResolver(defaultModelID, serviceForModel), nil)
+}
+
+// resumeInterruptedTurn adds no user message and mutates no history row: the
+// persisted messages are the request, and loop.insertMissingToolResults patches
+// any dangling tool_use block in memory while building it. retryMu serializes
+// this against retry/continue affordances.
+func (cm *ConversationManager) resumeInterruptedTurn(ctx context.Context, validation interruptedResumeValidation, upgradeResume *db.UpgradeResume, resolveService func() (llm.Service, string, error), beforeResume func() error) (returnErr error) {
+	if validation == interruptedResumeWorking && upgradeResume == nil {
+		return fmt.Errorf("upgrade resume token is required")
+	}
 	cm.retryMu.Lock()
 	defer cm.retryMu.Unlock()
+	cm.modelSettingsMu.Lock()
+	defer cm.modelSettingsMu.Unlock()
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
 	cm.waitForLoopTeardownLocked()
+	if validation == interruptedResumeWorking {
+		resume := *upgradeResume
+		defer func() {
+			if returnErr == nil || errors.Is(returnErr, errInterruptedTurnNotApplicable) {
+				return
+			}
+			if err := cm.recoverFailedUpgradeResume(ctx, resume); err != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("failed to preserve interrupted turn for manual recovery: %w", err))
+			}
+		}()
+	}
+
+	var resumedErrorMessageID string
+	switch validation {
+	case interruptedResumeWorking:
+		latest, err := cm.db.GetLatestActionableMessage(ctx, cm.conversationID)
+		if err != nil {
+			return fmt.Errorf("failed to load latest message before upgrade resume: %w", err)
+		}
+		if latest.Type == string(db.MessageTypeError) {
+			cm.mu.Lock()
+			alreadyRetried := cm.lastRetriedErrorMessageID == latest.MessageID
+			cm.mu.Unlock()
+			if alreadyRetried {
+				return errInterruptedTurnNotApplicable
+			}
+			resumedErrorMessageID = latest.MessageID
+		}
+		claimed, err := cm.db.ClaimUpgradeInterruptedTurn(ctx, *upgradeResume)
+		if err != nil {
+			return fmt.Errorf("failed to claim upgrade-interrupted turn: %w", err)
+		}
+		if !claimed {
+			if err := cm.syncPersistedAgentWorking(ctx); err != nil {
+				return fmt.Errorf("failed to synchronize rejected upgrade resume: %w", err)
+			}
+			return errInterruptedTurnNotApplicable
+		}
+	case interruptedResumeMarked:
+		conversation, err := cm.db.GetConversationByID(ctx, cm.conversationID)
+		if err != nil {
+			return fmt.Errorf("failed to load conversation before resuming: %w", err)
+		}
+		if conversation.AgentWorking || conversation.ParentConversationID != nil || !conversation.TurnInterrupted {
+			return errInterruptedTurnNotApplicable
+		}
+		latest, err := cm.db.GetLatestActionableMessage(ctx, cm.conversationID)
+		if err != nil {
+			return fmt.Errorf("failed to load latest message before resuming: %w", err)
+		}
+		if latest.Type == string(db.MessageTypeError) {
+			resumedErrorMessageID = latest.MessageID
+		}
+	}
 
 	if err := cm.Hydrate(ctx); err != nil {
 		return fmt.Errorf("failed to hydrate before resuming: %w", err)
+	}
+	service, modelID, err := resolveService()
+	if err != nil {
+		return fmt.Errorf("failed to resolve model %q before resuming: %w", modelID, err)
+	}
+	if service == nil {
+		return fmt.Errorf("llm service is required")
 	}
 	if err := cm.ensureLoopLocked(service, modelID); err != nil {
 		return fmt.Errorf("failed to build loop before resuming: %w", err)
@@ -1182,8 +1308,42 @@ func (cm *ConversationManager) ResumeInterruptedTurn(ctx context.Context, servic
 		return fmt.Errorf("conversation loop not initialized")
 	}
 
+	if validation == interruptedResumeWorking {
+		finished, err := cm.db.FinishUpgradeInterruptedTurn(ctx, cm.conversationID)
+		if err != nil {
+			return fmt.Errorf("failed to finish upgrade-interrupted turn claim: %w", err)
+		}
+		if !finished {
+			if err := cm.syncPersistedAgentWorking(ctx); err != nil {
+				return fmt.Errorf("failed to synchronize lost upgrade resume claim: %w", err)
+			}
+			return errInterruptedTurnNotApplicable
+		}
+	}
+	if beforeResume != nil {
+		if err := beforeResume(); err != nil {
+			return fmt.Errorf("failed to prepare interrupted turn resume: %w", err)
+		}
+	}
+	if validation == interruptedResumeMarked {
+		claimed, err := cm.db.ClaimInterruptedTurn(ctx, cm.conversationID)
+		if err != nil {
+			return fmt.Errorf("failed to claim interrupted turn: %w", err)
+		}
+		if !claimed {
+			return errInterruptedTurnNotApplicable
+		}
+		cm.syncAgentWorking(true)
+	} else if validation == interruptedResumeTrusted {
+		cm.SetAgentWorking(true)
+	}
+	if resumedErrorMessageID != "" {
+		cm.mu.Lock()
+		cm.lastRetriedErrorMessageID = resumedErrorMessageID
+		cm.mu.Unlock()
+	}
+
 	logger.Info("resuming interrupted turn", "model", modelID)
-	cm.SetAgentWorking(true)
 	loopInstance.Retry()
 	return nil
 }
@@ -1281,6 +1441,54 @@ func (cm *ConversationManager) resolveTranscriptionBatchLocked(queuedID string, 
 	batch.Messages = []llm.Message{message}
 	batch.ModelID = modelID
 	batch.UserEmail = userEmail
+}
+
+// syncPersistedAgentWorking repairs a manager whose startup hydration raced a
+// cancellation or fresh turn before its automatic-resume claim. The transition
+// is bookkeeping, not completion, so suppress subagent done callbacks.
+func (cm *ConversationManager) syncPersistedAgentWorking(ctx context.Context) error {
+	conversation, err := cm.db.GetConversationByID(ctx, cm.conversationID)
+	if err != nil {
+		return err
+	}
+	cm.mu.Lock()
+	wasCancelling := cm.cancelling
+	cm.cancelling = true
+	cm.mu.Unlock()
+	cm.syncAgentWorking(conversation.AgentWorking)
+	cm.mu.Lock()
+	cm.cancelling = wasCancelling
+	cm.mu.Unlock()
+	return nil
+}
+
+// recoverFailedUpgradeResume runs under retryMu, modelSettingsMu, and
+// loopLifecycleMu. It converts the stale working row to the same durable manual
+// recovery state as an ordinary restart and removes any loop built but not
+// started before setup failed.
+func (cm *ConversationManager) recoverFailedUpgradeResume(ctx context.Context, resume db.UpgradeResume) error {
+	marked, err := cm.db.MarkUpgradeResumeInterrupted(ctx, resume)
+	if err != nil {
+		return err
+	}
+	if !marked {
+		return cm.syncPersistedAgentWorking(ctx)
+	}
+
+	cm.mu.Lock()
+	wasCancelling := cm.cancelling
+	cm.cancelling = true
+	loopInstance := cm.loop
+	cm.mu.Unlock()
+	cm.syncAgentWorking(false)
+	cm.mu.Lock()
+	cm.cancelling = wasCancelling
+	cm.mu.Unlock()
+
+	if loopInstance != nil {
+		cm.discardUnstartedLoopLocked(loopInstance)
+	}
+	return nil
 }
 
 // QueueMessage appends a user message to the conversation's queued_messages
@@ -2688,19 +2896,33 @@ func (cm *ConversationManager) cancelConversation(ctx context.Context, clearQueu
 	cancel := cm.loopCancel
 	toolSet := cm.toolSet
 	if loopInstance == nil {
+		wasCancelling := cm.cancelling
 		if clearQueued {
 			cm.pendingBatches = nil
 			cm.hydrated = false
 			cm.hasConversationEvents = false
 		}
 		cm.mu.Unlock()
-		cm.loopLifecycleMu.Unlock()
+
+		persistCtx := context.WithoutCancel(ctx)
+		if err := cm.db.ClearConversationRuntimeState(persistCtx, cm.conversationID); err != nil {
+			cm.loopLifecycleMu.Unlock()
+			return fmt.Errorf("failed to clear idle conversation state: %w", err)
+		}
+		cm.mu.Lock()
+		cm.cancelling = true
+		cm.mu.Unlock()
+		cm.syncAgentWorking(false)
+		cm.mu.Lock()
+		cm.cancelling = wasCancelling
+		cm.mu.Unlock()
 		if clearQueued {
-			persistCtx := context.WithoutCancel(ctx)
 			if _, err := cm.db.ClearQueuedMessages(persistCtx, cm.conversationID); err != nil {
+				cm.loopLifecycleMu.Unlock()
 				return fmt.Errorf("failed to clear queued messages: %w", err)
 			}
 		}
+		cm.loopLifecycleMu.Unlock()
 		cm.logger.Info("No active loop to cancel", "clear_queued", clearQueued)
 		return nil
 	}
@@ -2867,6 +3089,9 @@ func (cm *ConversationManager) GetThinkingLevel() string {
 // level are baked into the loop at build time, so any change requires a loop
 // rebuild.
 func (cm *ConversationManager) ApplyModelSettings(ctx context.Context, ch ModelSettingsChange) error {
+	cm.modelSettingsMu.Lock()
+	defer cm.modelSettingsMu.Unlock()
+
 	// Persist the reasoning level into the conversation options and mirror it
 	// in memory. The loop reset below marks the manager unhydrated, so the next
 	// turn re-reads options from the DB anyway; the in-memory update keeps state

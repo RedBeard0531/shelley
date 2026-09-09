@@ -67,6 +67,33 @@
     />
   </div>
 
+  <!-- Interrupted turn awaiting confirmation -->
+  <div
+    v-else-if="interrupted && conversationId"
+    class="status-bar-active"
+    data-testid="conversation-interrupted"
+  >
+    <div class="status-interrupted-group">
+      <span class="status-message">Conversation Interrupted</span>
+      <button
+        type="button"
+        class="status-button status-interrupted-button"
+        :disabled="resumingInterrupted"
+        data-testid="resume-interrupted-button"
+        v-tooltip.top="'Retries the interrupted turn. An unfinished tool may run again.'"
+        @click="onResumeInterrupted"
+      >
+        {{ resumingInterrupted ? "Continuing…" : "Continue" }}
+      </button>
+    </div>
+    <StatusReadout
+      v-bind="readoutProps"
+      :cwd="cwd"
+      :conversation-id="conversationId"
+      :agent-working="agentWorking"
+    />
+  </div>
+
   <!-- New conversation or draft -->
   <div
     v-else-if="!conversationId || currentConversation?.is_draft"
@@ -212,6 +239,8 @@ const props = defineProps<{
   streamStatus: "connected" | "reconnecting" | "disconnected";
   error: string | null;
   agentWorking: boolean;
+  interrupted: boolean;
+  resumingInterrupted: boolean;
   cancelling: boolean;
   selectedCwd: string;
   contextWindowSize: number;
@@ -233,6 +262,7 @@ const props = defineProps<{
   onUnarchive: () => void;
   onClearError: () => void;
   onCancel: () => void;
+  onResumeInterrupted: () => void;
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration: () => Promise<void> | void;
   onSelectModel: (model: string) => void;

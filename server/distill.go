@@ -119,7 +119,7 @@ func steeringSection(instructions string) string {
 	return "\n\n## User Guidance\n\nThe user provided the following guidance on what to preserve or emphasize in this distillation. Follow it closely:\n\n" + instructions
 }
 
-func (s *Server) runDistillNewGeneration(ctx context.Context, conversationID, sourceSlug, modelID, instructions string, sourceGeneration int64, messages []generated.Message) {
+func (s *Server) runDistillNewGeneration(ctx context.Context, conversationID, sourceSlug, modelID, instructions string, sourceGeneration int64, sourceTurnInterrupted bool, messages []generated.Message) {
 	defer func() {
 		s.mu.Lock()
 		manager, ok := s.activeConversations[conversationID]
@@ -130,7 +130,7 @@ func (s *Server) runDistillNewGeneration(ctx context.Context, conversationID, so
 		}
 	}()
 
-	s.performPiDistillation(ctx, conversationID, sourceSlug, modelID, instructions, sourceGeneration, messages)
+	s.performPiDistillation(ctx, conversationID, sourceSlug, modelID, instructions, sourceGeneration, sourceTurnInterrupted, messages)
 	// The new generation's messages carry no usage data yet, so the UI's
 	// context-usage bar would keep showing the pre-distillation size until the
 	// next agent turn. Broadcast an estimate of the new generation's context
@@ -255,6 +255,7 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 	// Capture the generation we are distilling FROM, before incrementing.
 	// The pi strategy needs it to select the right messages to copy/summarize.
 	sourceGeneration := sourceConv.CurrentGeneration
+	sourceTurnInterrupted := sourceConv.TurnInterrupted
 	messages, err := s.db.ListMessages(ctx, req.SourceConversationID)
 	if err != nil {
 		s.logger.Error("Failed to get messages", "conversationID", req.SourceConversationID, "error", err)
@@ -344,7 +345,7 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 		s.logger.Error("Failed to create status message", "conversationID", req.SourceConversationID, "error", err)
 		// WithoutCancel: a client disconnect mid-setup must not strand the
 		// conversation on the just-created empty generation.
-		s.rollbackCompactionFailure(context.WithoutCancel(ctx), s.logger, req.SourceConversationID, "Compaction failed during setup", sourceGeneration)
+		s.rollbackCompactionFailure(context.WithoutCancel(ctx), s.logger, req.SourceConversationID, "Compaction failed during setup", sourceGeneration, sourceTurnInterrupted)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -354,7 +355,7 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 		s.logger.Error("Failed to hydrate new generation", "conversationID", req.SourceConversationID, "error", err)
 		// WithoutCancel: a client disconnect mid-setup must not strand the
 		// conversation on the just-created empty generation.
-		s.rollbackCompactionFailure(context.WithoutCancel(ctx), s.logger, req.SourceConversationID, "Compaction failed during setup", sourceGeneration)
+		s.rollbackCompactionFailure(context.WithoutCancel(ctx), s.logger, req.SourceConversationID, "Compaction failed during setup", sourceGeneration, sourceTurnInterrupted)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -375,7 +376,7 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 
 	ctxNoCancel := context.WithoutCancel(ctx)
 	go func() {
-		s.runDistillNewGeneration(ctxNoCancel, req.SourceConversationID, sourceSlug, modelID, req.Instructions, sourceGeneration, messages)
+		s.runDistillNewGeneration(ctxNoCancel, req.SourceConversationID, sourceSlug, modelID, req.Instructions, sourceGeneration, sourceTurnInterrupted, messages)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")

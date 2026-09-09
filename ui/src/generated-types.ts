@@ -20,6 +20,7 @@ export interface Conversation {
   is_draft: boolean;
   draft: string;
   queued_messages: string;
+  turn_interrupted: boolean;
 }
 
 export interface Usage {
@@ -108,6 +109,7 @@ export interface ConversationWithStateForTS {
   is_draft: boolean;
   draft: string;
   queued_messages: string;
+  turn_interrupted: boolean;
   working: boolean;
   git_repo_root?: string;
   git_worktree_root?: string;

@@ -1903,9 +1903,10 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 
 	// agent_working is runtime-only state. Decide what to do with the values the
 	// previous process left behind BEFORE serving: an ordinary restart or crash
-	// clears them, while an upgrade-with-restart hands back the conversations
-	// that were mid-turn so we can resume them once the server is up.
-	resumeIDs, err := s.db.ConsumeResumeAfterUpgrade(context.Background())
+	// records durable interruption bits and clears them, while an
+	// upgrade-with-restart hands back the conversations that were mid-turn so we
+	// can resume them once the server is up.
+	resumeTurns, err := s.db.ConsumeResumeAfterUpgrade(context.Background())
 	if err != nil {
 		s.logger.Error("Failed to recover agent_working state", "error", err)
 		return err
@@ -1998,7 +1999,7 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 
 	// Resume conversations interrupted by an upgrade restart now that the
 	// listeners (and therefore ports, streams and the subagent runner) are live.
-	go s.resumeInterruptedConversations(context.Background(), resumeIDs)
+	go s.resumeInterruptedConversations(context.Background(), resumeTurns)
 
 	// Recover durable queued transcription workers independently of browser
 	// connections and request lifetimes.

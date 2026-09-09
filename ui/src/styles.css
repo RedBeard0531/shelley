@@ -4181,8 +4181,13 @@ select:disabled {
   color: white;
 }
 
-.status-button-primary:hover {
+.status-button-primary:hover:not(:disabled) {
   background: var(--primary-dark);
+}
+
+.status-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .status-button-cancel {
@@ -5580,6 +5585,37 @@ svg {
   min-width: 0;
 }
 
+.status-interrupted-group {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 0.625rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status-interrupted-group .status-message {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-interrupted-button {
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  transition: background-color 0.15s ease;
+}
+
+.status-interrupted-button:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
 .status-working-group {
   display: flex;
   align-items: center;
@@ -5841,9 +5877,9 @@ svg {
   }
 
   /* Hide standalone status bar on mobile — content is shown inline in controls row.
-     Exception: keep visible for archived conversations (no MessageInput rendered)
-     and new conversations (status slot is not used). */
-  .status-bar:not(.status-bar-archived):not(.status-bar-new) {
+     Exceptions: archived conversations have no MessageInput, new conversations
+     do not use the slot, and interrupted turns need the full-width prompt. */
+  .status-bar:not(.status-bar-archived):not(.status-bar-new):not(.status-bar-interrupted) {
     display: none;
   }
 

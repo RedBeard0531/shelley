@@ -125,6 +125,7 @@ type conversationWithStateForTS struct {
 	IsDraft              bool                         `json:"is_draft"`
 	Draft                string                       `json:"draft"`
 	QueuedMessages       string                       `json:"queued_messages"`
+	TurnInterrupted      bool                         `json:"turn_interrupted"`
 	Working              bool                         `json:"working"`
 	GitRepoRoot          string                       `json:"git_repo_root,omitempty"`
 	GitWorktreeRoot      string                       `json:"git_worktree_root,omitempty"`

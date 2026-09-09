@@ -1,8 +1,12 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -41,6 +45,22 @@ func seedInterruptedConversation(t *testing.T, database *db.DB, parentID *string
 		t.Fatalf("SetConversationAgentWorking: %v", err)
 	}
 	return conv.ConversationID
+}
+
+func reserveUpgradeResume(t *testing.T, database *db.DB, conversationID string) db.UpgradeResume {
+	t.Helper()
+	ctx := t.Context()
+	if err := database.SetSetting(ctx, db.ResumeAfterUpgradeSettingKey, "1"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	resumes, err := database.ConsumeResumeAfterUpgrade(ctx)
+	if err != nil {
+		t.Fatalf("ConsumeResumeAfterUpgrade: %v", err)
+	}
+	if len(resumes) != 1 || resumes[0].ConversationID != conversationID {
+		t.Fatalf("resumes = %v, want token for %s", resumes, conversationID)
+	}
+	return resumes[0]
 }
 
 // startTestServer starts the real server lifecycle (StartWithListeners) on an
@@ -125,14 +145,375 @@ func TestResumeAfterUpgradeRestart(t *testing.T) {
 	}
 }
 
-// TestResumeAfterUpgradeSkips covers the resume filter: conversations that are
-// not working, subagent conversations, and conversations whose turn already
-// finished are left alone (and their agent_working flag cleared).
+func TestUpgradeResumeRechecksWorkingAfterConcurrentModelSwitch(t *testing.T) {
+	t.Parallel()
+	srv, database, predictableService := newTestServer(t)
+	convID := seedInterruptedConversation(t, database, nil)
+	resume := reserveUpgradeResume(t, database, convID)
+	manager, err := srv.getOrCreateConversationManager(context.Background(), convID, "")
+	if err != nil {
+		t.Fatalf("get conversation manager: %v", err)
+	}
+
+	// Hold the same lock used by /model so the resume request has already been
+	// launched but cannot validate stale state until the simulated switch has
+	// persisted its model and cancellation.
+	manager.modelSettingsMu.Lock()
+	result := make(chan error, 1)
+	resolverCalled := false
+	go func() {
+		result <- manager.ResumeInterruptedTurnAfterUpgrade(
+			context.Background(),
+			resume,
+			"predictable",
+			func(string) (llm.Service, error) {
+				resolverCalled = true
+				return predictableService, nil
+			},
+			resumeWarningText,
+		)
+	}()
+	if err := database.ForceUpdateConversationModel(context.Background(), convID, "model-after-switch"); err != nil {
+		manager.modelSettingsMu.Unlock()
+		t.Fatalf("ForceUpdateConversationModel: %v", err)
+	}
+	if err := database.SetConversationAgentWorking(context.Background(), convID, false); err != nil {
+		manager.modelSettingsMu.Unlock()
+		t.Fatalf("SetConversationAgentWorking: %v", err)
+	}
+	manager.syncAgentWorking(false)
+	manager.ResetLoop()
+	manager.modelSettingsMu.Unlock()
+
+	if err := <-result; !errors.Is(err, errInterruptedTurnNotApplicable) {
+		t.Fatalf("resume error = %v, want not applicable", err)
+	}
+	if resolverCalled {
+		t.Fatal("resume selected a service after the model switch cancelled the turn")
+	}
+	if got := countByType(listMessages(t, database, convID), db.MessageTypeWarning); got != 0 {
+		t.Fatalf("resume warning count = %d, want 0 for skipped turn", got)
+	}
+}
+
+func TestUpgradeResumeDoesNotClaimFreshTurn(t *testing.T) {
+	t.Parallel()
+	srv, database, predictableService := newTestServer(t)
+	convID := seedInterruptedConversation(t, database, nil)
+	resume := reserveUpgradeResume(t, database, convID)
+	manager, err := srv.getOrCreateConversationManager(context.Background(), convID, "")
+	if err != nil {
+		t.Fatalf("get conversation manager: %v", err)
+	}
+
+	if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: convID,
+		Type:           db.MessageTypeUser,
+		LLMData:        llm.UserStringMessage("fresh turn"),
+		MarkAgentStart: true,
+	}); err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	manager.syncAgentWorking(true)
+
+	resolverCalled := false
+	err = manager.ResumeInterruptedTurnAfterUpgrade(
+		context.Background(),
+		resume,
+		"predictable",
+		func(string) (llm.Service, error) {
+			resolverCalled = true
+			return predictableService, nil
+		},
+		resumeWarningText,
+	)
+	if !errors.Is(err, errInterruptedTurnNotApplicable) {
+		t.Fatalf("resume error = %v, want not applicable", err)
+	}
+	if resolverCalled {
+		t.Fatal("upgrade resume selected a service after a fresh turn started")
+	}
+	if got := countByType(listMessages(t, database, convID), db.MessageTypeWarning); got != 0 {
+		t.Fatalf("resume warning count = %d, want 0 for fresh turn", got)
+	}
+	conversation, err := database.GetConversationByID(t.Context(), convID)
+	if err != nil {
+		t.Fatalf("GetConversationByID: %v", err)
+	}
+	if !conversation.AgentWorking || conversation.TurnInterrupted {
+		t.Fatalf("fresh turn state working=%v interrupted=%v, want true/false", conversation.AgentWorking, conversation.TurnInterrupted)
+	}
+}
+
+func TestUpgradeResumeDoesNotDuplicateRetry(t *testing.T) {
+	t.Parallel()
+	srv, database, predictableService := newTestServer(t)
+	convID := seedInterruptedConversation(t, database, nil)
+	manager, err := srv.getOrCreateConversationManager(context.Background(), convID, "")
+	if err != nil {
+		t.Fatalf("get conversation manager: %v", err)
+	}
+	errorMessage, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: convID,
+		Type:           db.MessageTypeError,
+		LLMData: llm.Message{
+			Role:      llm.MessageRoleAssistant,
+			Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "retry me"}},
+			EndOfTurn: true,
+		},
+		UserData: map[string]any{"retryable": true},
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	resume := reserveUpgradeResume(t, database, convID)
+	manager.mu.Lock()
+	manager.lastRetriedErrorMessageID = errorMessage.MessageID
+	manager.mu.Unlock()
+
+	resolverCalled := false
+	err = manager.ResumeInterruptedTurnAfterUpgrade(
+		context.Background(),
+		resume,
+		"predictable",
+		func(string) (llm.Service, error) {
+			resolverCalled = true
+			return predictableService, nil
+		},
+		resumeWarningText,
+	)
+	if !errors.Is(err, errInterruptedTurnNotApplicable) {
+		t.Fatalf("resume error = %v, want not applicable", err)
+	}
+	if resolverCalled {
+		t.Fatal("upgrade resume selected a service after Retry already started")
+	}
+	conversation, err := database.GetConversationByID(t.Context(), convID)
+	if err != nil {
+		t.Fatalf("GetConversationByID: %v", err)
+	}
+	if !conversation.AgentWorking || conversation.TurnInterrupted {
+		t.Fatalf("retried turn state working=%v interrupted=%v, want true/false", conversation.AgentWorking, conversation.TurnInterrupted)
+	}
+}
+
+func TestUpgradeResumeStampsRetriedError(t *testing.T) {
+	t.Parallel()
+	srv, database, predictableService := newTestServer(t)
+	convID := seedInterruptedConversation(t, database, nil)
+	manager, err := srv.getOrCreateConversationManager(context.Background(), convID, "")
+	if err != nil {
+		t.Fatalf("get conversation manager: %v", err)
+	}
+	errorMessage, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: convID,
+		Type:           db.MessageTypeError,
+		LLMData: llm.Message{
+			Role:      llm.MessageRoleAssistant,
+			Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "retry me"}},
+			EndOfTurn: true,
+		},
+		UserData: map[string]any{"retryable": true},
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	resume := reserveUpgradeResume(t, database, convID)
+
+	if err := manager.ResumeInterruptedTurnAfterUpgrade(
+		context.Background(),
+		resume,
+		"predictable",
+		func(string) (llm.Service, error) { return predictableService, nil },
+		resumeWarningText,
+	); err != nil {
+		t.Fatalf("ResumeInterruptedTurnAfterUpgrade: %v", err)
+	}
+	manager.mu.Lock()
+	got := manager.lastRetriedErrorMessageID
+	manager.mu.Unlock()
+	if got != errorMessage.MessageID {
+		t.Fatalf("last retried error = %q, want %q", got, errorMessage.MessageID)
+	}
+}
+
+func TestCancelPendingUpgradeResumeWithManager(t *testing.T) {
+	t.Parallel()
+	srv, database, predictableService := newTestServer(t)
+	convID := seedInterruptedConversation(t, database, nil)
+	resume := reserveUpgradeResume(t, database, convID)
+	manager, err := srv.getOrCreateConversationManager(t.Context(), convID, "")
+	if err != nil {
+		t.Fatalf("get conversation manager: %v", err)
+	}
+	if err := manager.CancelConversation(t.Context()); err != nil {
+		t.Fatalf("CancelConversation: %v", err)
+	}
+
+	resolverCalled := false
+	err = manager.ResumeInterruptedTurnAfterUpgrade(
+		t.Context(),
+		resume,
+		"predictable",
+		func(string) (llm.Service, error) {
+			resolverCalled = true
+			return predictableService, nil
+		},
+		resumeWarningText,
+	)
+	if !errors.Is(err, errInterruptedTurnNotApplicable) {
+		t.Fatalf("resume error = %v, want not applicable", err)
+	}
+	if resolverCalled {
+		t.Fatal("cancelled upgrade resume selected a service")
+	}
+	conversation, err := database.GetConversationByID(t.Context(), convID)
+	if err != nil {
+		t.Fatalf("GetConversationByID: %v", err)
+	}
+	if conversation.AgentWorking || conversation.TurnInterrupted {
+		t.Fatalf("cancelled state working=%v interrupted=%v, want false/false", conversation.AgentWorking, conversation.TurnInterrupted)
+	}
+}
+
+func TestCancelPendingUpgradeResumeWithoutManager(t *testing.T) {
+	t.Parallel()
+	srv, database, _ := newTestServer(t)
+	convID := seedInterruptedConversation(t, database, nil)
+	resume := reserveUpgradeResume(t, database, convID)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/conversation/"+convID+"/cancel", nil)
+	srv.handleCancelConversation(w, r, convID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	conversation, err := database.GetConversationByID(t.Context(), convID)
+	if err != nil {
+		t.Fatalf("GetConversationByID: %v", err)
+	}
+	if conversation.AgentWorking || conversation.TurnInterrupted {
+		t.Fatalf("cancelled state working=%v interrupted=%v, want false/false", conversation.AgentWorking, conversation.TurnInterrupted)
+	}
+	if err := srv.resumeConversation(t.Context(), resume); err != nil {
+		t.Fatalf("late resume worker: %v", err)
+	}
+	if got := countByType(listMessages(t, database, convID), db.MessageTypeWarning); got != 0 {
+		t.Fatalf("resume warning count = %d, want 0 after cancellation", got)
+	}
+}
+
+func TestManagerCreationFailureBecomesManualInterruption(t *testing.T) {
+	t.Parallel()
+	srv, database, _ := newTestServer(t)
+	convID := seedInterruptedConversation(t, database, nil)
+	resume := reserveUpgradeResume(t, database, convID)
+	srv.mu.Lock()
+	srv.deletingConversations[convID] = true
+	srv.mu.Unlock()
+
+	if err := srv.resumeConversation(t.Context(), resume); err == nil {
+		t.Fatal("resume succeeded while manager creation was blocked")
+	}
+	conversation, err := database.GetConversationByID(t.Context(), convID)
+	if err != nil {
+		t.Fatalf("GetConversationByID: %v", err)
+	}
+	if conversation.AgentWorking || !conversation.TurnInterrupted {
+		t.Fatalf("failed manager state working=%v interrupted=%v, want false/true", conversation.AgentWorking, conversation.TurnInterrupted)
+	}
+}
+
+func TestPreclaimFailureBecomesManualInterruption(t *testing.T) {
+	t.Parallel()
+	srv, database, predictableService := newTestServer(t)
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := database.SetConversationAgentWorking(t.Context(), conversation.ConversationID, true); err != nil {
+		t.Fatalf("SetConversationAgentWorking: %v", err)
+	}
+	resume := reserveUpgradeResume(t, database, conversation.ConversationID)
+	manager := NewConversationManager(
+		conversation.ConversationID,
+		database,
+		srv.logger,
+		srv.toolSetConfig,
+		nil,
+		nil,
+		nil,
+		nil,
+		srv.streamPub,
+	)
+	manager.mu.Lock()
+	manager.hydrated = true
+	manager.agentWorking = true
+	manager.mu.Unlock()
+
+	err = manager.ResumeInterruptedTurnAfterUpgrade(
+		t.Context(),
+		resume,
+		"predictable",
+		func(string) (llm.Service, error) { return predictableService, nil },
+		resumeWarningText,
+	)
+	if err == nil {
+		t.Fatal("resume unexpectedly succeeded without an actionable message")
+	}
+	got, err := database.GetConversationByID(t.Context(), conversation.ConversationID)
+	if err != nil {
+		t.Fatalf("GetConversationByID: %v", err)
+	}
+	if got.AgentWorking || !got.TurnInterrupted {
+		t.Fatalf("preclaim failure state working=%v interrupted=%v, want false/true", got.AgentWorking, got.TurnInterrupted)
+	}
+}
+
+func TestFailedUpgradeResumeBecomesManualInterruption(t *testing.T) {
+	t.Parallel()
+	srv, database, _ := newTestServer(t)
+	convID := seedInterruptedConversation(t, database, nil)
+	resume := reserveUpgradeResume(t, database, convID)
+	manager, err := srv.getOrCreateConversationManager(context.Background(), convID, "")
+	if err != nil {
+		t.Fatalf("get conversation manager: %v", err)
+	}
+
+	err = manager.ResumeInterruptedTurnAfterUpgrade(
+		context.Background(),
+		resume,
+		"predictable",
+		func(string) (llm.Service, error) { return nil, errors.New("service unavailable") },
+		resumeWarningText,
+	)
+	if err == nil {
+		t.Fatal("upgrade resume succeeded when service resolution failed")
+	}
+	conversation, err := database.GetConversationByID(context.Background(), convID)
+	if err != nil {
+		t.Fatalf("GetConversationByID: %v", err)
+	}
+	if conversation.AgentWorking || !conversation.TurnInterrupted {
+		t.Fatalf("failed resume state working=%v interrupted=%v, want false/true", conversation.AgentWorking, conversation.TurnInterrupted)
+	}
+	if got := countByType(listMessages(t, database, convID), db.MessageTypeWarning); got != 0 {
+		t.Fatalf("resume warning count = %d, want 0 when setup failed", got)
+	}
+	if manager.IsAgentWorking() {
+		t.Fatal("manager working should be false after failed resume")
+	}
+}
+
+// TestResumeAfterUpgradeSkips covers startup classification: conversations that
+// are not working, managed children, and conversations whose turn already
+// finished are not reserved for automatic resume and have stale working state
+// cleared before listeners open.
 func TestResumeAfterUpgradeSkips(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
-		// seed returns the conversation id to attempt to resume.
+		// seed returns the conversation id that must not be reserved.
 		seed func(t *testing.T, database *db.DB) string
 	}{
 		{
@@ -153,7 +534,7 @@ func TestResumeAfterUpgradeSkips(t *testing.T) {
 			},
 		},
 		{
-			name: "turn already finished",
+			name: "turn already finished with trailing bookkeeping",
 			seed: func(t *testing.T, database *db.DB) string {
 				id := seedInterruptedConversation(t, database, nil)
 				if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
@@ -167,6 +548,14 @@ func TestResumeAfterUpgradeSkips(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("CreateMessage: %v", err)
 				}
+				if _, err := database.CreateMessage(context.Background(), db.CreateMessageParams{
+					ConversationID: id,
+					Type:           db.MessageTypeUser,
+					LLMData:        llm.UserStringMessage("changed cwd"),
+					UserData:       map[string]any{"cwd_change": true, "to": "/tmp"},
+				}); err != nil {
+					t.Fatalf("create cwd-change message: %v", err)
+				}
 				return id
 			},
 		},
@@ -174,23 +563,32 @@ func TestResumeAfterUpgradeSkips(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			srv, database, _ := newTestServer(t)
+			_, database, _ := newTestServer(t)
 			convID := tt.seed(t, database)
 			before := listMessages(t, database, convID)
+			if err := database.SetSetting(t.Context(), db.ResumeAfterUpgradeSettingKey, "1"); err != nil {
+				t.Fatalf("SetSetting: %v", err)
+			}
 
-			if err := srv.resumeConversation(t.Context(), convID); err != nil {
-				t.Fatalf("resumeConversation: %v", err)
+			resumes, err := database.ConsumeResumeAfterUpgrade(t.Context())
+			if err != nil {
+				t.Fatalf("ConsumeResumeAfterUpgrade: %v", err)
+			}
+			for _, resume := range resumes {
+				if resume.ConversationID == convID {
+					t.Fatalf("skipped conversation %s was reserved for resume: %v", convID, resumes)
+				}
 			}
 
 			if got := len(listMessages(t, database, convID)); got != len(before) {
-				t.Errorf("message count = %d, want unchanged %d (conversation must not be resumed)", got, len(before))
+				t.Errorf("message count = %d, want unchanged %d", got, len(before))
 			}
 			conv, err := database.GetConversationByID(t.Context(), convID)
 			if err != nil {
 				t.Fatalf("GetConversationByID: %v", err)
 			}
-			if conv.AgentWorking {
-				t.Error("agent_working should be cleared for a skipped conversation")
+			if conv.AgentWorking || conv.TurnInterrupted {
+				t.Errorf("skipped state working=%v interrupted=%v, want false/false", conv.AgentWorking, conv.TurnInterrupted)
 			}
 		})
 	}

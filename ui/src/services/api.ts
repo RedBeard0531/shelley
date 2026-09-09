@@ -404,6 +404,23 @@ class ApiService {
     return response.json();
   }
 
+  async resumeConversation(conversationId: string): Promise<"resuming" | "not_applicable"> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/resume`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      let detail = "";
+      try {
+        detail = (await response.text()).trim();
+      } catch {
+        // ignore
+      }
+      throw new Error(detail || `Failed to resume conversation: ${response.statusText}`);
+    }
+    const body = (await response.json()) as { status?: string };
+    return body.status === "resuming" ? "resuming" : "not_applicable";
+  }
+
   async retryConversation(conversationId: string): Promise<void> {
     const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/retry`, {
       method: "POST",

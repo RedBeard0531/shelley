@@ -1297,8 +1297,8 @@ func (db *DB) SetConversationAgentWorking(ctx context.Context, conversationID st
 }
 
 // ResetAllAgentWorking clears agent_working = TRUE for every conversation.
-// Called once during server startup to recover from a previous process that
-// exited mid-loop and left stale TRUE values in the table.
+// Ordinary startup calls it in the same transaction that records durable
+// interruption state for top-level conversations left mid-turn.
 func (db *DB) ResetAllAgentWorking(ctx context.Context) error {
 	return db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
 		q := generated.New(tx.Conn())
@@ -1306,44 +1306,259 @@ func (db *DB) ResetAllAgentWorking(ctx context.Context) error {
 	})
 }
 
-// ResumeAfterUpgradeSettingKey marks that the current process is exiting to
+// ClaimInterruptedTurn atomically changes an interrupted, idle, top-level
+// conversation into a working conversation. A false result means another
+// request already claimed it or it is no longer eligible.
+func (db *DB) ClaimInterruptedTurn(ctx context.Context, conversationID string) (bool, error) {
+	var claimed bool
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		rows, err := generated.New(tx.Conn()).ClaimInterruptedTurn(ctx, conversationID)
+		claimed = rows == 1
+		return err
+	})
+	return claimed, err
+}
+
+// UpgradeResume is a one-process claim token for a turn that was working when
+// an upgrade restart began. Its generation and latest user-message sequence
+// change whenever newer durable user work supersedes that turn.
+type UpgradeResume struct {
+	ConversationID    string
+	CurrentGeneration int64
+	MaxUserSequenceID int64
+}
+
+// ClaimUpgradeInterruptedTurn atomically validates that a startup resume token
+// still names the current stale working turn. A fresh turn changes its durable
+// version before a late worker can claim it.
+func (db *DB) ClaimUpgradeInterruptedTurn(ctx context.Context, resume UpgradeResume) (bool, error) {
+	var claimed bool
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		rows, err := generated.New(tx.Conn()).ClaimUpgradeInterruptedTurn(ctx, generated.ClaimUpgradeInterruptedTurnParams{
+			ConversationID:    resume.ConversationID,
+			CurrentGeneration: resume.CurrentGeneration,
+			MaxUserSequenceID: resume.MaxUserSequenceID,
+		})
+		claimed = rows == 1
+		return err
+	})
+	return claimed, err
+}
+
+// FinishUpgradeInterruptedTurn clears the hidden claim immediately before the
+// automatic retry. A false result means the claimed state changed unexpectedly.
+func (db *DB) FinishUpgradeInterruptedTurn(ctx context.Context, conversationID string) (bool, error) {
+	var finished bool
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		rows, err := generated.New(tx.Conn()).FinishUpgradeInterruptedTurn(ctx, conversationID)
+		finished = rows == 1
+		return err
+	})
+	return finished, err
+}
+
+// MarkUpgradeResumeInterrupted converts a failed automatic resume into the
+// ordinary manual-recovery state only if its startup token still names the same
+// durable turn. A false result means newer work or cancellation won the race.
+func (db *DB) MarkUpgradeResumeInterrupted(ctx context.Context, resume UpgradeResume) (bool, error) {
+	var marked bool
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		rows, err := generated.New(tx.Conn()).MarkUpgradeResumeInterrupted(ctx, generated.MarkUpgradeResumeInterruptedParams{
+			ConversationID:    resume.ConversationID,
+			CurrentGeneration: resume.CurrentGeneration,
+			MaxUserSequenceID: resume.MaxUserSequenceID,
+		})
+		marked = rows == 1
+		return err
+	})
+	return marked, err
+}
+
+// ClearConversationRuntimeState cancels work that has no live loop, including
+// an automatic upgrade resume that has not claimed its token yet.
+func (db *DB) ClearConversationRuntimeState(ctx context.Context, conversationID string) error {
+	return db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		if err := q.SetConversationAgentWorking(ctx, generated.SetConversationAgentWorkingParams{
+			AgentWorking:   false,
+			ConversationID: conversationID,
+		}); err != nil {
+			return err
+		}
+		return q.SetConversationTurnInterrupted(ctx, generated.SetConversationTurnInterruptedParams{
+			TurnInterrupted: false,
+			ConversationID:  conversationID,
+		})
+	})
+}
+
 // install an upgraded or customized binary and that the next process should
 // resume the conversations that were mid-turn instead of clearing their
 // agent_working flags. Written by restart paths that promise continuation,
 // consumed exactly once by ConsumeResumeAfterUpgrade on the next startup.
 const ResumeAfterUpgradeSettingKey = "resume_after_upgrade_restart"
 
+func interruptionMetadataFlag(value any) bool {
+	return value == true || value == "true"
+}
+
+func isInterruptionBookkeeping(message generated.Message) bool {
+	if message.UserData == nil || *message.UserData == "" {
+		return false
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(*message.UserData), &data); err != nil {
+		return false
+	}
+	return data["distill_status"] != nil || interruptionMetadataFlag(data["distilled"]) || interruptionMetadataFlag(data["cwd_change"])
+}
+
+// LatestTurnEndedWithAgent reports whether the current generation's latest
+// real turn message is a completed agent response. UI-only and synthetic
+// bookkeeping rows are ignored. An EOT error deliberately returns false:
+// Retry adds no new message, so working=true may mean that retry was interrupted.
+func LatestTurnEndedWithAgent(messages []generated.Message, currentGeneration int64) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.Generation != currentGeneration || isInterruptionBookkeeping(message) {
+			continue
+		}
+		switch MessageType(message.Type) {
+		case MessageTypeAgent:
+			if message.LlmData == nil {
+				return false
+			}
+			var data struct {
+				EndOfTurn bool `json:"EndOfTurn"`
+			}
+			return json.Unmarshal([]byte(*message.LlmData), &data) == nil && data.EndOfTurn
+		case MessageTypeUser, MessageTypeTool, MessageTypeError:
+			// An EOT error may be followed by Retry(), which deliberately adds
+			// no new message. working=true + terminal error is therefore valid
+			// evidence of an interrupted retry and must still set the bit.
+			return false
+		}
+	}
+	return false
+}
+
 // ConsumeResumeAfterUpgrade decides, in a single transaction, what startup does
 // with the agent_working flags left behind by the previous process:
 //
-//   - No ResumeAfterUpgradeSettingKey row: an ordinary restart or a crash.
-//     Clear all stale agent_working flags (ResetAllAgentWorking) and return nil.
+//   - No ResumeAfterUpgradeSettingKey row: an ordinary restart or a crash. Set
+//     turn_interrupted on every eligible top-level conversation still marked
+//     working, then clear all stale agent_working flags.
 //   - Row present: the previous process exited to install an upgrade. Delete the
-//     row and return the conversation IDs still marked agent_working, leaving the
-//     flags alone so the caller can resume those turns.
+//     row, capture a durable version token for each eligible top-level stale
+//     turn while leaving agent_working true, and return those tokens. Ineligible
+//     stale rows are cleared before listeners open.
 //
-// The delete happens in the same transaction as the reset/read, so recovery is
-// one-shot with no crash window: once this commits, a crash mid-resume leaves
-// the next boot on the normal (reset) path.
-func (db *DB) ConsumeResumeAfterUpgrade(ctx context.Context) ([]string, error) {
-	var ids []string
+// The interrupted/working updates share this transaction, so a crash can
+// neither lose the interruption nor expose an interrupted conversation as
+// still working. The upgrade flag delete is likewise one-shot: once it commits,
+// a crash mid-resume leaves the next boot on the ordinary interruption path.
+func (db *DB) ConsumeResumeAfterUpgrade(ctx context.Context) ([]UpgradeResume, error) {
+	var resumes []UpgradeResume
 	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
 		q := generated.New(tx.Conn())
-		deleted, err := q.DeleteSetting(ctx, ResumeAfterUpgradeSettingKey)
+		upgradeResume, err := q.DeleteSetting(ctx, ResumeAfterUpgradeSettingKey)
 		if err != nil {
 			return err
 		}
-		if deleted == 0 {
-			ids = nil
-			return q.ResetAllAgentWorking(ctx)
+		workingIDs, err := q.ListAgentWorkingConversationIDs(ctx)
+		if err != nil {
+			return err
 		}
-		ids, err = q.ListAgentWorkingConversationIDs(ctx)
-		return err
+
+		if upgradeResume != 0 {
+			for _, conversationID := range workingIDs {
+				conversation, err := q.GetConversation(ctx, conversationID)
+				if err != nil {
+					return err
+				}
+				resumable := conversation.ParentConversationID == nil
+				var messages []generated.Message
+				if resumable {
+					messages, err = q.ListMessages(ctx, conversationID)
+					if err != nil {
+						return err
+					}
+					resumable = !LatestTurnEndedWithAgent(messages, conversation.CurrentGeneration)
+				}
+				if resumable {
+					// A prior upgrade process may have exited after claiming this
+					// turn but before Retry. Re-arm the hidden claim before listeners
+					// open so the new worker can claim the same durable version.
+					if err := q.SetConversationTurnInterrupted(ctx, generated.SetConversationTurnInterruptedParams{
+						TurnInterrupted: false,
+						ConversationID:  conversationID,
+					}); err != nil {
+						return err
+					}
+					var maxUserSequenceID int64
+					for _, message := range messages {
+						if message.Type == string(MessageTypeUser) {
+							maxUserSequenceID = message.SequenceID
+						}
+					}
+					resumes = append(resumes, UpgradeResume{
+						ConversationID:    conversationID,
+						CurrentGeneration: conversation.CurrentGeneration,
+						MaxUserSequenceID: maxUserSequenceID,
+					})
+					continue
+				}
+				if err := q.SetConversationAgentWorking(ctx, generated.SetConversationAgentWorkingParams{
+					AgentWorking:   false,
+					ConversationID: conversationID,
+				}); err != nil {
+					return err
+				}
+				if err := q.SetConversationTurnInterrupted(ctx, generated.SetConversationTurnInterruptedParams{
+					TurnInterrupted: false,
+					ConversationID:  conversationID,
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		for _, conversationID := range workingIDs {
+			conversation, err := q.GetConversation(ctx, conversationID)
+			if err != nil {
+				return err
+			}
+			// Managed children already project an idle unfinished turn as
+			// interrupted in the BTW UI. Their parent owns their lifecycle.
+			if conversation.ParentConversationID != nil {
+				continue
+			}
+			messages, err := q.ListMessages(ctx, conversationID)
+			if err != nil {
+				return err
+			}
+			// Current terminal agent writes clear agent_working atomically, so
+			// this can only be legacy stale state. Do not turn a completed turn
+			// into a resumable interruption. EOT errors are intentionally not
+			// skipped: Retry() adds no row, so they can precede a real in-flight
+			// retry left behind by the stopped process.
+			if LatestTurnEndedWithAgent(messages, conversation.CurrentGeneration) {
+				continue
+			}
+			if err := q.SetConversationTurnInterrupted(ctx, generated.SetConversationTurnInterruptedParams{
+				TurnInterrupted: true,
+				ConversationID:  conversationID,
+			}); err != nil {
+				return err
+			}
+		}
+		return q.ResetAllAgentWorking(ctx)
 	})
 	if err != nil {
 		return nil, err
 	}
-	return ids, nil
+	return resumes, nil
 }
 
 // UpdateConversationCwd updates the working directory for a conversation

@@ -2,8 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+
+	"shelley.exe.dev/db"
+	"shelley.exe.dev/llm"
 )
 
 // maxConcurrentResumes bounds how many interrupted turns we re-fire at once
@@ -20,97 +24,58 @@ const resumeWarningText = "Shelley restarted to install a new binary while this 
 // that db.ConsumeResumeAfterUpgrade reported as mid-turn when the process exited
 // to install an upgrade. Called once, after the server's listeners are up, so
 // resumed loops see a usable server (port, subagent runner, streams).
-func (s *Server) resumeInterruptedConversations(ctx context.Context, conversationIDs []string) {
-	if len(conversationIDs) == 0 {
+func (s *Server) resumeInterruptedConversations(ctx context.Context, resumes []db.UpgradeResume) {
+	if len(resumes) == 0 {
 		return
+	}
+	conversationIDs := make([]string, len(resumes))
+	for i, resume := range resumes {
+		conversationIDs[i] = resume.ConversationID
 	}
 	s.logger.Info("resuming conversations interrupted by upgrade restart", "conversation_ids", conversationIDs)
 
 	sem := make(chan struct{}, maxConcurrentResumes)
 	var wg sync.WaitGroup
-	for _, id := range conversationIDs {
+	for _, resume := range resumes {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := s.resumeConversation(ctx, id); err != nil {
-				s.logger.Error("Failed to resume conversation after upgrade restart", "conversationID", id, "error", err)
+			if err := s.resumeConversation(ctx, resume); err != nil {
+				s.logger.Error("Failed to resume conversation after upgrade restart", "conversationID", resume.ConversationID, "error", err)
 			}
 		}()
 	}
 	wg.Wait()
 }
 
-// resumeConversation resumes one interrupted conversation, or skips it if it
-// isn't safe to resume (see shouldResumeConversation).
-func (s *Server) resumeConversation(ctx context.Context, conversationID string) error {
-	resume, err := s.shouldResumeConversation(ctx, conversationID)
+// resumeConversation claims and resumes one startup-versioned turn. A fresh
+// user turn invalidates the token in its turn-start transaction, so a late
+// worker becomes a no-op without touching newer work.
+func (s *Server) resumeConversation(ctx context.Context, resume db.UpgradeResume) error {
+	manager, err := s.getOrCreateConversationManager(ctx, resume.ConversationID, "")
 	if err != nil {
-		return err
-	}
-	if !resume {
-		// Not resuming: the flag would otherwise stay TRUE forever, since the
-		// consume transaction deliberately left it alone.
-		if err := s.db.SetConversationAgentWorking(ctx, conversationID, false); err != nil {
-			return fmt.Errorf("clear agent_working: %w", err)
+		if _, recoverErr := s.db.MarkUpgradeResumeInterrupted(ctx, resume); recoverErr != nil {
+			return errors.Join(fmt.Errorf("get conversation manager: %w", err), fmt.Errorf("preserve interrupted turn: %w", recoverErr))
 		}
-		return nil
-	}
-
-	manager, err := s.getOrCreateConversationManager(ctx, conversationID, "")
-	if err != nil {
 		return fmt.Errorf("get conversation manager: %w", err)
 	}
 
-	modelID := manager.GetModel()
-	if modelID == "" {
-		modelID = s.effectiveDefaultModel(s.getModelList())
+	modelList := s.getModelList()
+	defaultModelID := s.effectiveDefaultModel(modelList)
+	serviceForModel := func(modelID string) (llm.Service, error) {
+		service, err := s.llmManager.GetService(modelID)
+		if err != nil {
+			return nil, fmt.Errorf("get llm service for %s: %w", modelID, err)
+		}
+		return service, nil
 	}
-	service, err := s.llmManager.GetService(modelID)
-	if err != nil {
-		return fmt.Errorf("get llm service for %s: %w", modelID, err)
+	if err := manager.ResumeInterruptedTurnAfterUpgrade(ctx, resume, defaultModelID, serviceForModel, resumeWarningText); err != nil {
+		if errors.Is(err, errInterruptedTurnNotApplicable) {
+			return nil
+		}
+		return err
 	}
-
-	// Record the warning before re-firing so it can't land in the middle of the
-	// resumed turn's output.
-	if err := manager.recordWarning(ctx, resumeWarningText); err != nil {
-		return fmt.Errorf("record resume warning: %w", err)
-	}
-
-	return manager.ResumeInterruptedTurn(ctx, service, modelID)
-}
-
-// shouldResumeConversation gates the resume on the conversation's persisted
-// state. We skip:
-//
-//   - Subagent conversations (parent_conversation_id set). The resumed parent
-//     re-creates its subagents; resuming a subagent directly does not
-//     re-register the parent's waiter (subagentWaitOwners), so the two runs
-//     would diverge with one of them orphaned.
-//   - Conversations whose latest actionable message is an assistant
-//     end-of-turn. The turn actually finished and only the agent_working=false
-//     write was lost; Retry() there would send a history ending in an assistant
-//     message.
-func (s *Server) shouldResumeConversation(ctx context.Context, conversationID string) (bool, error) {
-	conv, err := s.db.GetConversationByID(ctx, conversationID)
-	if err != nil {
-		return false, fmt.Errorf("load conversation: %w", err)
-	}
-	if !conv.AgentWorking {
-		return false, nil
-	}
-	if conv.ParentConversationID != nil {
-		s.logger.Info("Not resuming subagent conversation after upgrade restart", "conversationID", conversationID)
-		return false, nil
-	}
-	latest, err := s.db.GetLatestActionableMessage(ctx, conversationID)
-	if err != nil {
-		return false, fmt.Errorf("load latest message: %w", err)
-	}
-	if isAgentEndOfTurn(latest) {
-		s.logger.Info("Not resuming conversation whose turn already finished", "conversationID", conversationID)
-		return false, nil
-	}
-	return true, nil
+	return nil
 }

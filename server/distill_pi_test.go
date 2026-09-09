@@ -650,6 +650,14 @@ func TestPiDistillFailureRollsBackGeneration(t *testing.T) {
 		synctest.Wait()
 		convID := h.convID
 		ctx := t.Context()
+		if _, err := db.WithTxRes(h.db, ctx, func(q *generated.Queries) (struct{}, error) {
+			return struct{}{}, q.SetConversationTurnInterrupted(ctx, generated.SetConversationTurnInterruptedParams{
+				TurnInterrupted: true,
+				ConversationID:  convID,
+			})
+		}); err != nil {
+			t.Fatalf("SetConversationTurnInterrupted: %v", err)
+		}
 
 		before, err := h.db.GetConversationByID(ctx, convID)
 		if err != nil {
@@ -680,6 +688,9 @@ func TestPiDistillFailureRollsBackGeneration(t *testing.T) {
 		// pre-compaction value.
 		if after.CurrentGeneration != before.CurrentGeneration {
 			t.Fatalf("generation = %d, want rollback to %d", after.CurrentGeneration, before.CurrentGeneration)
+		}
+		if !after.TurnInterrupted {
+			t.Fatal("failed compaction cleared the resumable interruption")
 		}
 
 		msgs, err := h.db.ListMessages(ctx, convID)

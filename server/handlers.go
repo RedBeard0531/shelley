@@ -971,6 +971,9 @@ func (s *Server) conversationMux() *http.ServeMux {
 	mux.HandleFunc("POST /{id}/retry", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRetryConversation(w, r, r.PathValue("id"))
 	})
+	mux.HandleFunc("POST /{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+		s.handleResumeConversation(w, r, r.PathValue("id"))
+	})
 	mux.HandleFunc("GET /{id}/btw", func(w http.ResponseWriter, r *http.Request) {
 		s.handleListBtwReaders(w, r, r.PathValue("id"))
 	})
@@ -1702,6 +1705,33 @@ func (s *Server) handleCancelConversation(w http.ResponseWriter, r *http.Request
 	s.mu.Lock()
 	manager, exists := s.activeConversations[conversationID]
 	s.mu.Unlock()
+	if !exists {
+		conversation, err := s.db.GetConversationByID(ctx, conversationID)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Conversation not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			s.logger.Error("Failed to load conversation for cancellation", "conversationID", conversationID, "error", err)
+			http.Error(w, "Failed to cancel conversation", http.StatusInternalServerError)
+			return
+		}
+		if conversation.AgentWorking {
+			// Synchronize with startup's get-or-create so Stop either clears the
+			// pending token before it is claimed or cancels the loop after Retry.
+			manager, err = s.getOrCreateConversationManager(ctx, conversationID, r.Header.Get("X-ExeDev-Email"))
+			if err == nil {
+				exists = true
+			} else {
+				s.logger.Warn("Failed to load working conversation for cancellation", "conversationID", conversationID, "error", err)
+				if clearErr := s.db.ClearConversationRuntimeState(ctx, conversationID); clearErr != nil {
+					s.logger.Error("Failed to clear conversation runtime state", "conversationID", conversationID, "error", clearErr)
+					http.Error(w, "Failed to cancel conversation", http.StatusInternalServerError)
+					return
+				}
+			}
+		}
+	}
 
 	// Cancel detached transcription work and clear the durable queue, then
 	// cancel the parent loop and the remaining child tree. The subagent tree is
@@ -1735,6 +1765,48 @@ func (s *Server) handleCancelConversation(w http.ResponseWriter, r *http.Request
 	s.logger.Info("Conversation cancelled", "conversationID", conversationID)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
+}
+
+// handleResumeConversation handles POST /api/conversation/<id>/resume. It
+// re-fires a turn carrying the durable conversation bit written during ordinary
+// startup, without adding a synthetic user message. Upgrade restarts resume
+// automatically.
+func (s *Server) handleResumeConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	manager, err := s.getOrCreateConversationManager(ctx, conversationID, r.Header.Get("X-ExeDev-Email"))
+	if err != nil {
+		s.logger.Warn("Resume: failed to load conversation", "conversationID", conversationID, "error", err)
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+	modelList := s.getModelList()
+	defaultModelID := s.effectiveDefaultModel(modelList)
+	serviceForModel := func(modelID string) (llm.Service, error) {
+		service, err := s.llmManager.GetService(modelID)
+		if err != nil {
+			return nil, errors.New(unsupportedModelMessage(modelID, modelList))
+		}
+		return service, nil
+	}
+	if err := manager.ContinueInterruptedTurn(ctx, defaultModelID, serviceForModel); err != nil {
+		if errors.Is(err, errInterruptedTurnNotApplicable) {
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]string{"status": "not_applicable"})
+			return
+		}
+		s.logger.Warn("Resume rejected", "conversationID", conversationID, "error", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.logger.Info("Interrupted conversation resumed", "conversationID", conversationID)
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"status": "resuming"})
 }
 
 // handleRetryConversation handles POST /api/conversation/<id>/retry.

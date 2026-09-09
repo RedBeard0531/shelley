@@ -301,7 +301,9 @@ WHERE conversation_id = ?;
 
 -- name: IncrementConversationGeneration :one
 UPDATE conversations
-SET current_generation = current_generation + 1, updated_at = CURRENT_TIMESTAMP
+SET current_generation = current_generation + 1,
+    turn_interrupted = FALSE,
+    updated_at = CURRENT_TIMESTAMP
 WHERE conversation_id = ?
 RETURNING *;
 
@@ -310,8 +312,10 @@ RETURNING *;
 -- before summarization runs, so on failure we restore the previous value to
 -- keep the old (intact) generation active.
 UPDATE conversations
-SET current_generation = ?, updated_at = CURRENT_TIMESTAMP
-WHERE conversation_id = ?
+SET current_generation = sqlc.arg('current_generation'),
+    turn_interrupted = sqlc.arg('turn_interrupted'),
+    updated_at = CURRENT_TIMESTAMP
+WHERE conversation_id = sqlc.arg('conversation_id')
 RETURNING *;
 
 -- name: DeleteConversation :exec
@@ -456,13 +460,77 @@ WHERE conversation_id = ?
 RETURNING *;
 
 -- name: SetConversationAgentWorking :exec
--- Sets the agent_working flag. Deliberately does NOT bump updated_at:
--- working transitions happen at every loop start/finish and we don't want
--- them to reorder the conversation list. The patch stream picks the change
--- up via the standard Pool.OnCommit hook.
+-- Sets the agent_working flag. Starting any turn also resolves a prior
+-- interruption: the user either clicked Continue or deliberately sent new
+-- input instead. Deliberately does NOT bump updated_at; runtime state changes
+-- must not reorder the conversation list.
 UPDATE conversations
-SET agent_working = ?
-WHERE conversation_id = ?;
+SET agent_working = sqlc.arg('agent_working'),
+    turn_interrupted = CASE
+      WHEN sqlc.arg('agent_working') THEN FALSE
+      ELSE turn_interrupted
+    END
+WHERE conversation_id = sqlc.arg('conversation_id');
+
+-- name: SetConversationTurnInterrupted :exec
+-- Records durable user-facing restart state without adding transcript rows or
+-- reordering the conversation list.
+UPDATE conversations
+SET turn_interrupted = sqlc.arg('turn_interrupted')
+WHERE conversation_id = sqlc.arg('conversation_id');
+
+-- name: ClaimInterruptedTurn :execrows
+-- Atomically moves a manually resumed conversation from interrupted+idle to
+-- working. The guard makes duplicate clicks and cross-request races harmless.
+UPDATE conversations
+SET turn_interrupted = FALSE,
+    agent_working = TRUE
+WHERE conversation_id = sqlc.arg('conversation_id')
+  AND turn_interrupted = TRUE
+  AND agent_working = FALSE
+  AND parent_conversation_id IS NULL;
+
+-- name: ClaimUpgradeInterruptedTurn :execrows
+-- Atomically validates the durable turn version captured before listeners
+-- opened and marks that exact stale turn claimed. The marker is hidden while
+-- agent_working is true, survives another crash as a manual interruption, and
+-- prevents duplicate resume workers. New user work changes the message version.
+UPDATE conversations
+SET turn_interrupted = TRUE
+WHERE conversations.conversation_id = sqlc.arg('conversation_id')
+  AND conversations.agent_working = TRUE
+  AND conversations.turn_interrupted = FALSE
+  AND conversations.parent_conversation_id IS NULL
+  AND conversations.current_generation = sqlc.arg('current_generation')
+  AND (SELECT COALESCE(MAX(sequence_id), 0)
+       FROM messages
+       WHERE messages.conversation_id = conversations.conversation_id
+         AND messages.type = 'user') = sqlc.arg('max_user_sequence_id');
+
+-- name: FinishUpgradeInterruptedTurn :execrows
+-- Clears the hidden claim immediately before the automatic retry. Failures
+-- after this point restore the visible manual interruption state.
+UPDATE conversations
+SET turn_interrupted = FALSE
+WHERE conversation_id = sqlc.arg('conversation_id')
+  AND agent_working = TRUE
+  AND turn_interrupted = TRUE
+  AND parent_conversation_id IS NULL;
+
+-- name: MarkUpgradeResumeInterrupted :execrows
+-- Converts a failed automatic resume into the ordinary manual-recovery state,
+-- but only while the startup token still names the same durable turn.
+UPDATE conversations
+SET agent_working = FALSE,
+    turn_interrupted = TRUE
+WHERE conversations.conversation_id = sqlc.arg('conversation_id')
+  AND conversations.agent_working = TRUE
+  AND conversations.parent_conversation_id IS NULL
+  AND conversations.current_generation = sqlc.arg('current_generation')
+  AND (SELECT COALESCE(MAX(sequence_id), 0)
+       FROM messages
+       WHERE messages.conversation_id = conversations.conversation_id
+         AND messages.type = 'user') = sqlc.arg('max_user_sequence_id');
 
 -- name: ResetAllAgentWorking :exec
 -- Called on server startup to clear any stale TRUE values left over from a
