@@ -11,8 +11,10 @@ import (
 	"testing"
 )
 
-const convertedCitation = `{"type":"convert","private":"example.com Source title"}`
-const retainedCitation = `{"type":"retain","opaque":{"keep":true}}`
+const (
+	convertedCitation = `{"type":"convert","private":"example.com Source title"}`
+	retainedCitation  = `{"type":"retain","opaque":{"keep":true}}`
+)
 
 func fakeAdaptCitation(_ CitationContext, kind string, fields map[string]json.RawMessage) (string, bool, error) {
 	switch kind {

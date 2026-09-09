@@ -9,8 +9,10 @@ import (
 	"shelley.exe.dev/llm"
 )
 
-const openAICitation = `{"type":"url_citation","start_index":0,"end_index":6,"url":"https://example.com/source","title":"Source title"}`
-const anthropicWebCitation = `{"type":"web_search_result_location","url":"https://example.com/web","title":"Web title","cited_text":"Original cited passage","encrypted_index":"opaque-signed-index","extra":{"keep":true}}`
+const (
+	openAICitation       = `{"type":"url_citation","start_index":0,"end_index":6,"url":"https://example.com/source","title":"Source title"}`
+	anthropicWebCitation = `{"type":"web_search_result_location","url":"https://example.com/web","title":"Web title","cited_text":"Original cited passage","encrypted_index":"opaque-signed-index","extra":{"keep":true}}`
+)
 
 func citationRequest(raw string) *llm.Request {
 	return &llm.Request{Messages: []llm.Message{{Role: llm.MessageRoleAssistant, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "Answer", Citations: json.RawMessage(raw)}}}}}
