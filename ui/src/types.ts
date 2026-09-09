@@ -375,6 +375,22 @@ export function cwdChange(message: Message): { from: string; to: string } | null
   }
 }
 
+// The working directory the conversation had when this message was emitted
+// (stamped into user_data by the server at record time). File references in
+// the message resolve against it, so a later change_dir can't re-point older
+// references. Null for messages recorded before the stamp existed; callers
+// fall back to the conversation's current cwd.
+export function messageCwd(message: Message): string | null {
+  if (!message.user_data) return null;
+  try {
+    const userData =
+      typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
+    return typeof userData?.cwd === "string" && userData.cwd ? userData.cwd : null;
+  } catch {
+    return null;
+  }
+}
+
 // Helper to check if a message was copied verbatim into the current generation
 // by a compaction (distill_method=compact). The UI collapses these behind a
 // single "messages carried forward" band so the re-played tail isn't

@@ -299,7 +299,7 @@ func NewConversationManager(conversationID string, database *db.DB, baseLogger *
 	}
 	logger = logger.With("conversationID", conversationID)
 
-	return &ConversationManager{
+	cm := &ConversationManager{
 		conversationID:         conversationID,
 		db:                     database,
 		lastActivity:           time.Now(),
@@ -312,6 +312,15 @@ func NewConversationManager(conversationID string, database *db.DB, baseLogger *
 		streamPub:              streamPub,
 		onStateChange:          onStateChange,
 	}
+	// Stamp the conversation's current working directory onto every message
+	// recorded through this manager (loop turns and direct calls alike) so
+	// the UI can resolve file references in a message against the cwd of its
+	// time; later change_dir calls cannot re-point older references. Cwd()
+	// takes cm.mu, which no recordMessage caller holds.
+	cm.recordMessage = func(ctx context.Context, msg llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+		return recordMessage(contextWithEmissionCwd(ctx, cm.Cwd()), msg, usage, otherUsage)
+	}
+	return cm
 }
 
 // broadcastStream tags data with the conversation ID and fans it out to both

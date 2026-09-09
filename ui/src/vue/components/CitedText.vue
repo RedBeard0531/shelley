@@ -15,6 +15,7 @@
       :cache-owner="cacheOwner"
       :run-key="runKey"
       :rewrite-localhost-links="rewriteLocalhostLinks"
+      :cwd="cwd"
       commentable
     />
     <ol v-if="citations.length > 0" class="citation-sources">
@@ -49,5 +50,7 @@ defineProps<{
   cacheOwner?: object;
   runKey?: string;
   rewriteLocalhostLinks?: boolean;
+  // Emission-time cwd for file-reference resolution; see MarkdownContent.vue.
+  cwd?: string;
 }>();
 </script>

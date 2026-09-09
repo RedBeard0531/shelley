@@ -9,6 +9,11 @@ Git root: {{.GitInfo.Root}}
 Make commits with good messages before returning to the user.
 {{else}}Not in a git repository. For new projects, use git.
 {{end}}
+<file_references>
+Reference a file in a reply as inline code with an optional 1-based line or range: `./path/to/file.go:42`, `./path/to/file.go:42-87`, or a bare `./path/to/file.go` (line 1). Use paths relative to the working directory you have when you emit them (they resolve at emission time), or absolute or `~/`-rooted paths when a relative one would be ambiguous. A reference must contain a slash: prefix top-level files with `./` (e.g. `./AGENTS.md`). The UI renders these as clickable links that open the file at that line, selecting the range when given.
+
+When you want to show the user something in the codebase, emit the file reference for its location followed by a fenced code block containing the code. Annotate it with comments (callouts) and elide uninteresting parts with a `...` comment. Use line-numbered output when reading code you plan to reference (cat -n, nl -ba, grep -n, rg -n) so your line references are accurate.
+</file_references>
 {{if .IsExeDev}}
 <exe_dev>
 You are running on an exe.dev VM.

@@ -11,14 +11,14 @@
   <div
     ref="containerRef"
     class="markdown-content break-words"
-    @click="onImageActivate"
-    @keydown="onImageActivate"
+    @click="onActivate"
+    @keydown="onActivate"
     v-html="html"
   ></div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onBeforeUpdate, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onBeforeUpdate, ref, watch } from "vue";
 import { highlightCode, normalizeCodeLanguage } from "../../services/markdownHighlight";
 import { applyHighlightTokens } from "../../utils/codeHighlight";
 import { COMMENT_ICON } from "../../utils/icons";
@@ -29,6 +29,7 @@ import {
 } from "../../utils/markdownRender";
 import { perfWrap } from "../../utils/perf";
 import { handleImageCommentClick, openImageComment } from "../composables/imageComment";
+import { OpenFileEditorKey } from "../composables/fileEditor";
 import { whenNearViewport } from "../composables/nearViewport";
 
 const props = defineProps<{
@@ -53,6 +54,11 @@ const props = defineProps<{
   runKey?: string;
   // Rewrite VM-local links for user-clickable assistant content only.
   rewriteLocalhostLinks?: boolean;
+  // Working directory the message containing this markdown was emitted under
+  // (stamped by the server at record time). File references resolve against
+  // it rather than the conversation's current cwd; without it the opener
+  // falls back to the current cwd.
+  cwd?: string;
   // Live-streaming text (the chat streaming preview): the trailing fenced
   // block's fence may still be open, so its highlighting must wait for the
   // fence to close rather than tokenize half-written code on every token.
@@ -62,6 +68,11 @@ const props = defineProps<{
 }>();
 
 const containerRef = ref<HTMLDivElement | null>(null);
+
+// Host for file-reference clicks (message views are under App, which provides
+// the editor opener; the export page renders markdown with no host, so refs
+// there are plain dead links).
+const fileOpener = inject(OpenFileEditorKey, null);
 
 // Highlighting swaps a block's single text node for one span per token —
 // measured at 22% of all DOM elements in a large conversation when done
@@ -239,7 +250,37 @@ function badge(): HTMLElement {
   return el;
 }
 
-function onImageActivate(e: MouseEvent | KeyboardEvent) {
+// Activate a file reference (`path:line` anchor): open the editor at that
+// line, selecting the range when the reference carries one. A reference
+// without a line opens at line 1. Returns whether the event targeted a
+// reference.
+function onFileRefActivate(e: MouseEvent | KeyboardEvent): boolean {
+  const anchor = (e.target as HTMLElement | null)?.closest?.("a[data-file-path]");
+  if (!anchor) return false;
+  e.preventDefault();
+  if (fileOpener) {
+    const line = Number(anchor.getAttribute("data-line")) || 1;
+    const endLine = Number(anchor.getAttribute("data-end-line")) || undefined;
+    fileOpener(anchor.getAttribute("data-file-path") ?? "", {
+      line,
+      endLine,
+      baseDir: props.cwd || undefined,
+    });
+  }
+  return true;
+}
+
+function onActivate(e: MouseEvent | KeyboardEvent) {
+  if (e instanceof KeyboardEvent) {
+    // Keyboard activation of a focused reference: Enter natively synthesizes
+    // a click (handled by the MouseEvent path below), but Space does not
+    // activate links, and either key would otherwise also trigger the
+    // href="#" default jump. Handle both explicitly; preventDefault stops
+    // the default so no synthetic click follows.
+    if (!e.repeat && (e.key === "Enter" || e.key === " ") && onFileRefActivate(e)) return;
+  } else if (onFileRefActivate(e)) {
+    return;
+  }
   const img = e.target;
   if (!(img instanceof HTMLImageElement) || !isCommentable(img)) return;
   if (e instanceof KeyboardEvent) {

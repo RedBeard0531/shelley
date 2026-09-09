@@ -15,7 +15,7 @@ g.document = dom.window.document;
 const purify = DOMPurify(dom.window as any);
 Object.assign(DOMPurify, purify);
 
-const { renderMarkdownToSafeHTML } = await import("./markdownRender");
+const { renderMarkdownToSafeHTML, parseFileRef } = await import("./markdownRender");
 
 let passed = 0;
 let failed = 0;
@@ -270,6 +270,118 @@ assert(
     "closed fence inside a blockquote is not open",
   );
   assert(endsOpen("> ```js\n> x") === true, "unterminated fence inside a blockquote is open");
+}
+
+// ---- File references (`path:line` inline code -> clickable anchor) ----
+
+{
+  // parseFileRef: accepted shapes.
+  const single = parseFileRef("ui/src/App.vue:100");
+  assert(single?.path === "ui/src/App.vue" && single?.line === 100 && single?.endLine === 100,
+    "path:line parses");
+  const range = parseFileRef("ui/src/App.vue:100-140");
+  assert(range?.line === 100 && range?.endLine === 140, "path:start-end parses");
+  assert(parseFileRef("src/app.ts")?.path === "src/app.ts" && parseFileRef("src/app.ts")?.line === undefined,
+    "bare path parses without a line");
+  assert(parseFileRef("./.gitignore")?.path === "./.gitignore", "explicitly relative dotfile parses");
+  assert(parseFileRef("./Makefile:10")?.path === "./Makefile", "explicitly relative extensionless name parses");
+  assert(parseFileRef("cmd/server")?.path === "cmd/server", "directory-shaped path parses");
+  assert(parseFileRef("~/.config/shelley/AGENTS.md")?.path === "~/.config/shelley/AGENTS.md",
+    "home-relative path parses");
+  assert(parseFileRef("~/.config/shelley/AGENTS.md:12-20")?.endLine === 20,
+    "home-relative path with range parses");
+  assert(parseFileRef("~tim/x:2") === null, "~user path is not a reference");
+  assert(parseFileRef("a~b/c") === null, "mid-path tilde is not a reference");
+  assert(parseFileRef("src/app.ts:" + "9".repeat(400)) === null,
+    "overflow line number is not a reference");
+
+  // parseFileRef: rejections. The single shape rule is "path contains a
+  // slash" (the prompt says to write top-level files as ./name), which
+  // rejects every slash-less lookalike in one stroke.
+  assert(parseFileRef("npm run build") === null, "whitespace is not a reference");
+  assert(parseFileRef("golang") === null, "bare identifier is not a reference");
+  assert(parseFileRef("127.0.0.1:8080") === null, "IP:port is not a reference");
+  assert(parseFileRef("localhost:3000") === null, "host:port is not a reference");
+  assert(parseFileRef("example.com:8080") === null, "domain:port is not a reference");
+  assert(parseFileRef("v1.2.3") === null, "dotted version is not a reference");
+  assert(parseFileRef("12:30") === null, "time is not a reference");
+  assert(parseFileRef("data[10:20]") === null, "slice is not a reference");
+  assert(parseFileRef("Makefile") === null, "slash-less top-level name is not a reference");
+  assert(parseFileRef("AGENTS.md") === null, "slash-less top-level file is not a reference");
+  assert(parseFileRef("ui/src/") === null, "trailing slash (directory) is not a reference");
+  assert(parseFileRef("~") === null, "bare tilde is not a reference");
+  assert(parseFileRef("~/") === null, "bare tilde-slash is not a reference");
+  assert(parseFileRef("src/app.ts:0") === null, "non-positive line is not a reference");
+  assert(parseFileRef("src/app.ts:5-0") === null, "non-positive range end is not a reference");
+
+  // Rendering: refs become anchors with data attributes.
+  const singleHtml = renderMarkdownToSafeHTML("See `ui/src/App.vue:100` here.");
+  assert(singleHtml.includes('class="file-ref"'), "reference renders as a file-ref anchor");
+  assert(singleHtml.includes('data-file-path="ui/src/App.vue"'), "reference carries the path");
+  assert(singleHtml.includes('data-line="100"'), "reference carries the line");
+  assert(!singleHtml.includes("data-end-line"), "single-line reference has no end line");
+  assert(singleHtml.includes('ui/src/App.vue:100</a>'), "reference label is the original span text");
+  assert(!singleHtml.includes('target="_blank"'), "file references are not new-tab links");
+
+  const rangeHtml = renderMarkdownToSafeHTML("`ui/src/App.vue:100-140`");
+  assert(rangeHtml.includes('data-line="100"') && rangeHtml.includes('data-end-line="140"'),
+    "range reference carries both ends");
+
+  const bareHtml = renderMarkdownToSafeHTML("`src/app.ts`");
+  assert(bareHtml.includes('data-file-path="src/app.ts"') && !bareHtml.includes("data-line"),
+    "bare path is a reference without line attributes");
+
+  // Non-references keep the default code-span rendering (and links keep
+  // their new-tab behavior).
+  assert(renderMarkdownToSafeHTML("`npm run build`").includes("<code>npm run build</code>"),
+    "non-reference spans stay plain code");
+  assert(renderMarkdownToSafeHTML("`v1.2.3`").includes("<code>v1.2.3</code>"),
+    "dotted versions stay plain code");
+  const linkHtml = renderMarkdownToSafeHTML("[x](https://example.com)");
+  assert(linkHtml.includes('target="_blank"'), "ordinary links still open in new tabs");
+
+  // Forged anchors: raw HTML claiming the file-ref affordance is removed
+  // unless its attributes form a well-formed reference (the renderer emits
+  // nothing else, so any survivor must parse).
+  const forged = renderMarkdownToSafeHTML(
+    '<a href="#" data-file-path="localhost:3000" data-line="1">pwn</a>',
+  );
+  assert(!forged.includes("data-file-path"), "forged anchor with non-reference path is removed");
+  const forgedZero = renderMarkdownToSafeHTML(
+    '<a href="#" data-file-path="ui/src/App.vue" data-line="0">pwn</a>',
+  );
+  assert(!forgedZero.includes("data-file-path"), "forged anchor with zero line is removed");
+  const forgedPadded = renderMarkdownToSafeHTML(
+    '<a href="#" data-file-path="ui/src/App.vue" data-line="007">pwn</a>',
+  );
+  assert(!forgedPadded.includes("data-file-path"), "forged anchor with padded line is removed");
+  const forgedSuffix = renderMarkdownToSafeHTML(
+    '<a href="#" data-file-path="a/b:3" data-line="999" data-end-line="1">pwn</a>',
+  );
+  assert(!forgedSuffix.includes("data-file-path"),
+    "forged anchor whose path attr carries a :line suffix is removed");
+  const overflow = renderMarkdownToSafeHTML("`src/app.ts:" + "9".repeat(400) + "`");
+  assert(overflow.includes("<code>src/app.ts:"), "overflow line number stays plain code");
+  const forgedLine = renderMarkdownToSafeHTML(
+    '<a href="#" data-file-path="ui/src/App.vue" data-line="abc">pwn</a>',
+  );
+  assert(!forgedLine.includes("data-file-path"), "forged anchor with non-numeric line is removed");
+  const legit = renderMarkdownToSafeHTML(
+    '<a href="#" class="file-ref" data-file-path="ui/src/App.vue" data-line="5">ui/src/App.vue:5</a>',
+  );
+  assert(legit.includes('data-file-path="ui/src/App.vue"') && legit.includes('data-line="5"'),
+    "well-formed ref anchor survives sanitization");
+  const hrefHijack = renderMarkdownToSafeHTML(
+    '<a href="https://evil.com" target="_blank" data-file-path="ui/src/App.vue" data-line="5">ui/src/App.vue:5</a>',
+  );
+  assert(hrefHijack.includes('data-file-path="ui/src/App.vue"') && !hrefHijack.includes('evil.com')
+    && !hrefHijack.includes('target="_blank"') && hrefHijack.includes('href="#"'),
+    "contract-valid forged anchor gets a neutral href, no target");
+  const lyingLabel = renderMarkdownToSafeHTML(
+    '<a href="#" data-file-path="ui/src/App.vue" data-line="5">ui/src/App.vue:999</a>',
+  );
+  assert(!lyingLabel.includes("data-file-path"),
+    "anchor whose target disagrees with its displayed reference is removed");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

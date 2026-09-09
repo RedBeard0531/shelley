@@ -22,6 +22,23 @@ func TestSystemPromptRequiresPublicVMServiceLinks(t *testing.T) {
 	}
 }
 
+// TestSystemPromptDocumentsFileReferences verifies the prompt teaches the
+// clickable file-reference format and the reference-then-code-block pattern.
+func TestSystemPromptDocumentsFileReferences(t *testing.T) {
+	t.Parallel()
+	for _, want := range []string{
+		"`./path/to/file.go:42-87`",
+		"must contain a slash",
+		"fenced code block containing the code",
+		"elide uninteresting parts with a `...` comment",
+		"cat -n",
+	} {
+		if !strings.Contains(systemPromptTemplate, want) {
+			t.Errorf("system prompt must document file references; missing %q", want)
+		}
+	}
+}
+
 // TestSystemPromptIncludesCwdGuidanceFiles verifies that AGENTS.md from the working directory
 // is included in the generated system prompt.
 func TestSystemPromptIncludesCwdGuidanceFiles(t *testing.T) {

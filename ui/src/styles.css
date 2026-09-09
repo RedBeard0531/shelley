@@ -9532,6 +9532,25 @@ kbd {
   text-decoration: none;
 }
 
+/* File references (`path:line` inline code rendered as a link): a monospace
+   chip with a link affordance, so they read as code but invite a click.
+   Gated on the data attribute, not just the class, so forged class-only
+   anchors don't get the affordance. */
+.markdown-content a.file-ref[data-file-path] {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  background: var(--code-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  color: var(--link-color);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.markdown-content a.file-ref[data-file-path]:hover {
+  text-decoration: underline;
+}
+
 .markdown-content del {
   text-decoration: line-through;
   color: var(--text-secondary);

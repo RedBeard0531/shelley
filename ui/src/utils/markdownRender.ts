@@ -7,6 +7,72 @@ import { Marked, type Token } from "marked";
 import DOMPurify from "dompurify";
 import { rewriteLocalhostLink, type LocalhostLinkOptions } from "./linkify";
 
+// A file reference: an inline-code span holding a file path with an optional
+// 1-based line or line range (`src/app.ts`, `src/app.ts:42`, `src/app.ts:42-87`).
+// The UI renders these as clickable links that open the file in the editor at
+// that line, selecting the range when given (line defaults to 1).
+export interface FileRef {
+  path: string;
+  line?: number;
+  endLine?: number;
+}
+
+// Path characters exclude whitespace and markup characters, so commands
+// (`npm run build`), slices (`data[10:20]`), and quoted log lines never match.
+const FILE_REF_RE = /^([A-Za-z0-9._~/-]+)(?::(\d{1,9})(?:-(\d{1,9}))?)?$/;
+
+// parseFileRef decides whether an inline-code span is a file reference.
+// Purely syntactic (the renderer has no filesystem access): the span must be
+// a path (restricted character set) with an optional 1-based line/range
+// suffix, and the path must contain a slash — the system prompt directs the
+// model to write top-level files with a `./` prefix. That single shape rule
+// keeps host:port (`localhost:3000`), IP:port (`127.0.0.1:8080`), times
+// (`12:30`), and dotted versions (`v1.2.3`) from ever matching. Home-relative
+// `~/...` paths are references (the server's file endpoints expand them);
+// a trailing slash (a directory) or a non-positive line is not a reference.
+export function parseFileRef(text: string): FileRef | null {
+  const m = FILE_REF_RE.exec(text);
+  if (!m) return null;
+  const path = m[1];
+  if (!path.includes("/") || path.endsWith("/")) return null;
+  // Tilde is only legal in the leading `~/` form: `~user/x` (another user's
+  // home), mid-path tildes (`a~b/c`), and bare `~` are not references the
+  // endpoints can serve.
+  if (path.includes("~") && !path.startsWith("~/")) return null;
+  const hasLine = m[2] !== undefined;
+  if (!hasLine) return { path };
+  let line = parseInt(m[2], 10);
+  let endLine = m[3] !== undefined ? parseInt(m[3], 10) : line;
+  if (endLine < line) [line, endLine] = [endLine, line];
+  if (line < 1) return null;
+  return { path, line, endLine };
+}
+
+function escapeAttr(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// fileRefAnchor renders a parsed FileRef as an anchor labeled with the
+// original span text (path:line). The click is handled by MarkdownContent's
+// delegated listener (via useOpenFileEditor); the href exists so the link is
+// keyboard-activatable.
+function fileRefAnchor(ref: FileRef, label: string): string {
+  const attrs = [
+    'href="#"',
+    'class="file-ref"',
+    `data-file-path="${escapeAttr(ref.path)}"`,
+  ];
+  if (ref.line !== undefined) attrs.push(`data-line="${ref.line}"`);
+  if (ref.endLine !== undefined && ref.endLine !== ref.line) {
+    attrs.push(`data-end-line="${ref.endLine}"`);
+  }
+  return `<a ${attrs.join(" ")}>${escapeAttr(label)}</a>`;
+}
+
 // Maximum size (in characters of the data: URI) we are willing to inline.
 // Keeps the DOM and persisted payloads from ballooning when a model emits a
 // huge base64 image directly in its markdown.
@@ -73,6 +139,15 @@ function buildMarked(messageId?: string, localhostLinks?: LocalhostLinkOptions):
         }
       }
     },
+    renderer: {
+      // File references (`path:line` inline code) render as clickable
+      // anchors; anything else falls through to the default <code> rendering
+      // (marked's object-renderer contract: return false for the default).
+      codespan(token) {
+        const ref = parseFileRef(token.text);
+        return ref ? fileRefAnchor(ref, token.text) : false;
+      },
+    },
   });
   return instance;
 }
@@ -80,8 +155,44 @@ function buildMarked(messageId?: string, localhostLinks?: LocalhostLinkOptions):
 // Make all links open in new tabs, and restrict <input> to checkboxes only.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
+    // File references open the in-app editor via MarkdownContent's delegated
+    // click handler; they must not be turned into new-tab links.
+    if (!node.hasAttribute("data-file-path")) {
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener noreferrer");
+    } else {
+      // Our renderer only emits file-ref anchors that are exactly
+      // parseFileRef(label)'s canonical output: the label is the original
+      // `path:line` span text, data-file-path is the parsed path (no :line
+      // suffix), and the line attrs match the parsed values exactly
+      // (data-line present iff the label has a line, data-end-line iff a
+      // true range; 1-based, unpadded). Raw HTML in message markdown — or
+      // in web pages rendered through this same pipeline — could otherwise
+      // forge the affordance or make the target disagree with the displayed
+      // reference; remove anything that isn't that exact contract.
+      const label = node.textContent ?? "";
+      const ref = parseFileRef(label);
+      const path = node.getAttribute("data-file-path") ?? "";
+      const line = node.getAttribute("data-line") ?? "";
+      const endLine = node.getAttribute("data-end-line") ?? "";
+      const expectEnd =
+        ref?.endLine !== undefined && ref.endLine !== ref.line ? String(ref.endLine) : "";
+      const valid =
+        ref !== null &&
+        path === ref.path &&
+        line === String(ref.line ?? "") &&
+        endLine === expectEnd;
+      if (!valid) {
+        node.remove();
+        return;
+      }
+      // Neutralize href/target a forged-but-contract-valid anchor might
+      // carry: refs open the in-app editor and never navigate (middle-click
+      // bypasses the click handler, so the href itself must be inert).
+      node.setAttribute("href", "#");
+      node.removeAttribute("target");
+      node.removeAttribute("rel");
+    }
   }
   // Only allow checkbox inputs (for GFM task lists); remove all others.
   if (node.tagName === "INPUT" && node.getAttribute("type") !== "checkbox") {
@@ -105,6 +216,10 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
 });
 
 const SANITIZE_OPTS = {
+  // The file-reference feature relies on data-* attributes surviving
+  // sanitization (DOMPurify's default); pinned explicitly so a future
+  // default change can't silently disable it.
+  ALLOW_DATA_ATTR: true,
   ALLOWED_TAGS: [
     "p",
     "br",

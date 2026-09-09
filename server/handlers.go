@@ -164,7 +164,7 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 
 	// Security: only allow writing within certain directories
 	// For now, require the path to be within a git repository
-	clean := filepath.Clean(req.Path)
+	clean := filepath.Clean(expandTilde(req.Path))
 	if !filepath.IsAbs(clean) {
 		http.Error(w, "absolute path required", http.StatusBadRequest)
 		return
@@ -194,6 +194,20 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 // memory. The web editor is for source/config files, not large blobs.
 const maxEditableFileBytes = 16 << 20 // 16 MiB
 
+// expandTilde resolves a leading ~ to the user's home directory, so the web
+// editor can open home-relative paths from file references (`~/.config/...`
+// in a reply). Only bare ~ and ~/... expand; ~user does not.
+func expandTilde(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, strings.TrimPrefix(p, "~"))
+}
+
 // handleReadFile returns the text content of an arbitrary file as JSON
 // {path, content}. The editor modal loads files through this (rather than
 // /api/read, which is restricted to image/upload dirs) so it can open any
@@ -204,7 +218,7 @@ func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	p := r.URL.Query().Get("path")
+	p := expandTilde(r.URL.Query().Get("path"))
 	if p == "" {
 		http.Error(w, "path required", http.StatusBadRequest)
 		return

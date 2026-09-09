@@ -1118,7 +1118,7 @@ func ExtractDisplayData(message llm.Message) interface{} {
 // applying the same message-type detection, display-data extraction, error
 // user_data stamping, and end-of-turn agent-done folding that recordMessage
 // uses. Shared by recordMessage and recordMessages.
-func (s *Server) buildCreateMessageParams(conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage, userData ...interface{}) (db.CreateMessageParams, error) {
+func (s *Server) buildCreateMessageParams(ctx context.Context, conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage, userData ...interface{}) (db.CreateMessageParams, error) {
 	// Log message based on role
 	if message.Role == llm.MessageRoleUser {
 		s.logger.Info("User message", "conversation_id", conversationID, "content_items", len(message.Content))
@@ -1154,6 +1154,18 @@ func (s *Server) buildCreateMessageParams(conversationID string, message llm.Mes
 		}
 		ud = udMap
 	}
+	// Stamp the working directory the conversation had when this agent message
+	// was emitted, so the UI can resolve file references in it against the cwd
+	// of its time rather than the conversation's current one (which later
+	// change_dir calls move). The loop wrapper carries the live toolset cwd in
+	// the context; only assistant messages can carry model-authored references.
+	if cwd := emissionCwdFromContext(ctx); cwd != "" && message.Role == llm.MessageRoleAssistant {
+		if udMap, ok := ud.(map[string]any); ok {
+			udMap["cwd"] = cwd
+		} else if ud == nil {
+			ud = map[string]any{"cwd": cwd}
+		}
+	}
 	// End-of-turn agent and error messages mean the agent has finished. Fold
 	// the agent_working=false flip into the message-INSERT Tx so a single
 	// OnCommit hook emits one list-patch carrying both, instead of two
@@ -1181,7 +1193,7 @@ func (s *Server) buildCreateMessageParams(conversationID string, message llm.Mes
 }
 
 func (s *Server) recordMessage(ctx context.Context, conversationID string, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage, userData ...interface{}) error {
-	params, err := s.buildCreateMessageParams(conversationID, message, usage, otherUsage, userData...)
+	params, err := s.buildCreateMessageParams(ctx, conversationID, message, usage, otherUsage, userData...)
 	if err != nil {
 		return err
 	}
@@ -1237,7 +1249,7 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 // background context, so it can't be read from the request here); it is
 // stamped onto the new row. Empty when the queuing request carried no header.
 func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID, queuedID string, message llm.Message, userEmail string) error {
-	params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil)
+	params, err := s.buildCreateMessageParams(ctx, conversationID, message, llm.Usage{}, nil)
 	if err != nil {
 		return err
 	}
@@ -1291,6 +1303,22 @@ func turnUserDataFromContext(ctx context.Context) any {
 	return ctx.Value(turnUserDataContextKey{})
 }
 
+// emissionCwdContextKey carries the conversation's working directory at the
+// time a message was emitted. The loop wrapper stamps it on every recorded
+// message; buildCreateMessageParams folds it into the agent message's
+// user_data so the UI can resolve file references in that message against the
+// cwd it was written under, immune to later change_dir calls.
+type emissionCwdContextKey struct{}
+
+func contextWithEmissionCwd(ctx context.Context, cwd string) context.Context {
+	return context.WithValue(ctx, emissionCwdContextKey{}, cwd)
+}
+
+func emissionCwdFromContext(ctx context.Context) string {
+	cwd, _ := ctx.Value(emissionCwdContextKey{}).(string)
+	return cwd
+}
+
 // recordTurnStartMessage records the user message that starts an agent turn,
 // folding the agent_working=true flip and the updated_at bump into the same Tx
 // as the message INSERT. This replaces a separate SetAgentWorking(true) commit
@@ -1303,7 +1331,7 @@ func (s *Server) recordTurnStartMessage(ctx context.Context, conversationID stri
 	if turn := turnUserDataFromContext(ctx); turn != nil {
 		userData = append(userData, turn)
 	}
-	params, err := s.buildCreateMessageParams(conversationID, message, usage, otherUsage, userData...)
+	params, err := s.buildCreateMessageParams(ctx, conversationID, message, usage, otherUsage, userData...)
 	if err != nil {
 		return nil, err
 	}
@@ -1336,13 +1364,16 @@ func (s *Server) recordTurnStartMessage(ctx context.Context, conversationID stri
 // single SSE notification carrying all of them. This is the bulk counterpart to
 // recordMessage; compaction uses it to copy a whole tail of messages forward
 // without paying a full-list recompute per message.
+// recordMessages persists several messages in one Tx. Intentionally no
+// emission-cwd stamping: the batch path carries only user and subagent-done
+// messages, never assistant text with file references.
 func (s *Server) recordMessages(ctx context.Context, conversationID string, msgs []recordMessageInput) error {
 	if len(msgs) == 0 {
 		return nil
 	}
 	paramsList := make([]db.CreateMessageParams, 0, len(msgs))
 	for _, m := range msgs {
-		params, err := s.buildCreateMessageParams(conversationID, m.message, m.usage, m.otherUsage, m.userData...)
+		params, err := s.buildCreateMessageParams(ctx, conversationID, m.message, m.usage, m.otherUsage, m.userData...)
 		if err != nil {
 			return err
 		}

@@ -137,6 +137,11 @@ const props = withDefaults(
      *  makes the editor read-only; submitted comments are emitted as
      *  "comment" with a quoted block for the message input. */
     commentable?: boolean;
+    /** 1-based line to reveal and place the cursor on (file references in
+     *  messages). Absent for plain opens, which start at the top. */
+    line?: number;
+    /** Last line of the selection; only set for line-range references. */
+    endLine?: number;
   }>(),
   {},
 );
@@ -390,10 +395,40 @@ watch(
   { immediate: true, flush: "post" },
 );
 
+// Reveal `line`, selecting through `endLine` when set (file references in
+// messages). Plain opens have no line and are left alone. Clamped to the
+// document in case the file changed under a stale reference. Runs whenever
+// the editor appears or the line props change (clicking a second reference
+// while the modal is already open).
+function revealLineRange() {
+  const ed = editor.value;
+  const model = ed?.getModel();
+  if (!ed || !model || !monacoMod || props.line === undefined) return;
+  const lastLine = model.getLineCount();
+  const start = Math.min(Math.max(1, props.line), lastLine);
+  const end = Math.min(Math.max(props.endLine ?? start, start), lastLine);
+  const range = new monacoMod.Range(start, 1, end, model.getLineMaxColumn(end));
+  ed.setSelection(range);
+  ed.revealRangeInCenter(range);
+}
+
+watch(
+  () => [editor.value, props.line, props.endLine] as const,
+  () => {
+    if (props.isOpen) revealLineRange();
+  },
+  { flush: "post" },
+);
+
 function disposeEditor() {
   if (saveTimeout) {
+    // Flush a pending debounced save synchronously: dispose runs when the
+    // modal unmounts — including the :key remount when a file reference opens
+    // a different file while the modal is open — and dropping the timer would
+    // lose keystrokes from the last second. Same flush as vim quit.
     clearTimeout(saveTimeout);
     saveTimeout = null;
+    if (editor.value) saveContent(editor.value.getValue());
   }
   commentsCleanup?.();
   commentsCleanup = null;

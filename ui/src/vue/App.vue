@@ -197,8 +197,11 @@
 
       <EditableFileModal
         v-if="editorFilePath"
+        :key="editorFilePath"
         :is-open="!!editorFilePath"
         :path="editorFilePath"
+        :line="editorLine"
+        :end-line="editorEndLine"
         :title="`Edit ${tildifyPath(editorFilePath)}`"
         :load-url="`/api/read-file?path=${encodeURIComponent(editorFilePath)}`"
         commentable
@@ -249,7 +252,7 @@ import { initialDrawerCollapsed, saveDrawerCollapsedPreference } from "../utils/
 import { perfCount } from "../utils/perf";
 import { useI18n } from "./composables/i18n";
 import { ConversationsListKey, CurrentConversationIdKey } from "./composables/subagentLive";
-import { provideOpenFileEditor } from "./composables/fileEditor";
+import { provideOpenFileEditor, type OpenFileOptions } from "./composables/fileEditor";
 import { useFeatureFlag } from "./composables/featureFlags";
 import { useMobileDrawerSwipe } from "./composables/mobileDrawerSwipe";
 import PerfHud from "./components/PerfHud.vue";
@@ -696,19 +699,30 @@ function openFileFinder() {
 }
 
 // Finder selected a file: close it and open the generic editor on that path.
-function openFileInEditor(absPath: string) {
+function openFileInEditor(absPath: string, opts?: OpenFileOptions) {
   fileFinderOpen.value = false;
   editorFilePath.value = absPath;
+  editorLine.value = opts?.line;
+  editorEndLine.value = opts?.endLine;
 }
 
 // Open any file in the editor modal, from anywhere in the tree (patch tool
-// cards, etc.). A successful patch records an absolute path, but a failed one
-// carries only the path the agent passed, which may be relative; resolve those
-// against the same directory the file finder searches (the conversation's cwd,
-// else the last-used one). /api/read-file requires a clean absolute path.
-provideOpenFileEditor((path: string) => {
-  const abs = resolveAbsPath(path, finderDir.value);
-  if (abs) openFileInEditor(abs);
+// cards, file references in markdown). A successful patch records an absolute
+// path, but a failed one carries only the path the agent passed, which may be
+// relative; resolve those against the same directory the file finder searches
+// (the conversation's cwd, else the last-used one). /api/read-file requires a
+// clean absolute path.
+const editorLine = ref<number | undefined>(undefined);
+const editorEndLine = ref<number | undefined>(undefined);
+provideOpenFileEditor((path: string, opts?: OpenFileOptions) => {
+  // Home-relative paths (~/.config/...) stay in tilde form: the server's
+  // file endpoints expand them (the browser doesn't know $HOME).
+  if (path.startsWith("~")) {
+    openFileInEditor(path, opts);
+    return;
+  }
+  const abs = resolveAbsPath(path, opts?.baseDir || finderDir.value);
+  if (abs) openFileInEditor(abs, opts);
 });
 
 // A comment submitted from the file editor's comment mode: hand it to
