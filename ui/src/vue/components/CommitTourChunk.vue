@@ -67,6 +67,7 @@ import {
   type TourDiffSide,
 } from "../composables/tourComments";
 import { useNearViewport } from "../composables/nearViewport";
+import { analyzeTourPatch } from "./commitTourPatch";
 import MarkdownContent from "./MarkdownContent.vue";
 import ToolChevron from "./tools/ToolChevron.vue";
 
@@ -82,7 +83,6 @@ const emit = defineEmits<{
 }>();
 
 const DIFF_THEMES: ThemesType = { dark: "github-dark", light: "github-light" };
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 const MAX_CLICK_MOVEMENT_SQUARED = 25;
 const expanded = ref(!props.entry.trivial);
 const diffHostEl = ref<HTMLElement | null>(null);
@@ -96,158 +96,23 @@ watch(
   },
 );
 
-interface MarkerPath {
-  present: boolean;
-  path: string | null;
-}
-
-// unquoteGitPath decodes git's C-style quoted paths ("caf\303\251" etc.).
-function unquoteGitPath(path: string): string {
-  if (!path.startsWith('"') || !path.endsWith('"')) return path;
-  const inner = path.slice(1, -1);
-  const encoder = new TextEncoder();
-  const bytes: number[] = [];
-  let i = 0;
-  while (i < inner.length) {
-    const backslash = inner.indexOf("\\", i);
-    if (backslash === -1) {
-      bytes.push(...encoder.encode(inner.slice(i)));
-      break;
-    }
-    // Encode the literal span whole so surrogate pairs stay intact
-    // (raw non-ASCII appears when core.quotePath=false).
-    if (backslash > i) bytes.push(...encoder.encode(inner.slice(i, backslash)));
-    const next = inner[backslash + 1];
-    if (next >= "0" && next <= "7") {
-      bytes.push(parseInt(inner.slice(backslash + 1, backslash + 4), 8));
-      i = backslash + 4;
-    } else {
-      const escapes: Record<string, number> = {
-        a: 7,
-        b: 8,
-        t: 9,
-        n: 10,
-        v: 11,
-        f: 12,
-        r: 13,
-        '"': 34,
-        "\\": 92,
-      };
-      const code = escapes[next];
-      if (code === undefined) bytes.push(...encoder.encode(next));
-      else bytes.push(code);
-      i = backslash + 2;
-    }
-  }
-  return new TextDecoder().decode(new Uint8Array(bytes));
-}
-
-function markerPath(patch: string, marker: "--- " | "+++ "): MarkerPath {
-  let line: string | undefined;
-  for (const candidate of patch.split("\n")) {
-    if (HUNK_HEADER.test(candidate)) break;
-    if (candidate.startsWith(marker)) line = candidate;
-  }
-  if (!line) return { present: false, path: null };
-
-  let path = unquoteGitPath(line.slice(marker.length).trim());
-  if (path === "/dev/null") return { present: true, path: null };
-  if (path.startsWith("a/") || path.startsWith("b/")) path = path.slice(2);
-  return { present: true, path };
-}
-
-// hunklessPath extracts a path for fragments without ---/+++ markers
-// (binary, rename-only, mode-only) from "rename to" or "diff --git" lines.
-function hunklessPath(patch: string): string | null {
-  for (const line of patch.split("\n")) {
-    if (line.startsWith("rename to ")) return unquoteGitPath(line.slice("rename to ".length));
-  }
-  // Quoted form: diff --git "a/X" "b/X" (quotes cover the prefix too).
-  const quoted = /^diff --git "a\/(.*)" "b\/(.*)"$/m.exec(patch);
-  if (quoted) return unquoteGitPath(`"${quoted[2]}"`);
-  // Without a rename the two sides are the same path, so the text after
-  // "diff --git a/" has the shape "X b/X" — recover X even if it contains " b/".
-  const git = /^diff --git a\/(.*) b\/(.*)$/m.exec(patch);
-  if (!git) return null;
-  if (git[1] === git[2]) return git[1];
-  const s = `${git[1]} b/${git[2]}`;
-  const x = s.slice(0, (s.length - 3) / 2);
-  return s === `${x} b/${x}` ? x : git[2];
-}
-
-const paths = computed(() => {
-  const oldMarker = markerPath(props.entry.patch, "--- ");
-  const newMarker = markerPath(props.entry.patch, "+++ ");
-  return {
-    old: oldMarker.path,
-    new: newMarker.path,
-    newFile: oldMarker.present && oldMarker.path === null,
-    deletedFile: newMarker.present && newMarker.path === null,
-    label: newMarker.path || oldMarker.path || hunklessPath(props.entry.patch) || "File change",
-  };
-});
-const fileLabel = computed(() => paths.value.label);
-
-interface HunkRange {
-  line: string;
-  oldStart: number;
-  oldCount: number;
-  newStart: number;
-  newCount: number;
-}
-
-const hunkRanges = computed<HunkRange[]>(() => {
-  const ranges: HunkRange[] = [];
-  for (const line of props.entry.patch.split("\n")) {
-    const match = HUNK_HEADER.exec(line);
-    if (!match) continue;
-    ranges.push({
-      line,
-      oldStart: Number(match[1]),
-      oldCount: match[2] === undefined ? 1 : Number(match[2]),
-      newStart: Number(match[3]),
-      newCount: match[4] === undefined ? 1 : Number(match[4]),
-    });
-  }
-  return ranges;
-});
-
-const displayRange = computed<[number, number] | null>(() => {
-  const ranges = hunkRanges.value;
-  if (ranges.length === 0) return null;
-  const useOldSide = ranges.every((range) => range.newCount === 0);
-  const first = ranges[0];
-  const last = ranges[ranges.length - 1];
-  const start = useOldSide ? first.oldStart : first.newStart;
-  const lastStart = useOldSide ? last.oldStart : last.newStart;
-  const lastCount = useOldSide ? last.oldCount : last.newCount;
-  return [start, lastStart + Math.max(lastCount, 1) - 1];
-});
-
-const chunkLabel = computed(() => {
-  const range = displayRange.value;
-  return range ? `${fileLabel.value} · lines ${range[0]}–${range[1]}` : fileLabel.value;
-});
-const chunkStats = computed(() => {
-  let additions = 0;
-  let deletions = 0;
-  let inHunk = false;
-  for (const line of props.entry.patch.split("\n")) {
-    if (HUNK_HEADER.test(line)) {
-      inHunk = true;
-      continue;
-    }
-    if (!inHunk) continue;
-    if (line.startsWith("+")) additions++;
-    else if (line.startsWith("-")) deletions++;
-  }
-  return { additions, deletions };
-});
-
-const isHunk = computed(() => hunkRanges.value.length > 0);
-const isBinary = computed(() =>
-  /^(?:GIT binary patch|Binary files .* differ)$/m.test(props.entry.patch),
-);
+const patchInfo = computed(() => analyzeTourPatch(props.entry.patch));
+const paths = computed(() => ({
+  old: patchInfo.value.oldPath,
+  new: patchInfo.value.newPath,
+  newFile: patchInfo.value.newFile,
+  deletedFile: patchInfo.value.deletedFile,
+  label: patchInfo.value.fileLabel,
+}));
+const fileLabel = computed(() => patchInfo.value.fileLabel);
+const hunkRanges = computed(() => patchInfo.value.hunkRanges);
+const chunkLabel = computed(() => patchInfo.value.label);
+const chunkStats = computed(() => ({
+  additions: patchInfo.value.additions,
+  deletions: patchInfo.value.deletions,
+}));
+const isHunk = computed(() => patchInfo.value.isHunk);
+const isBinary = computed(() => patchInfo.value.isBinary);
 
 const fileDiff = computed<FileDiffMetadata | null>(() => {
   if (!expanded.value || !nearViewport.value || !isHunk.value) return null;

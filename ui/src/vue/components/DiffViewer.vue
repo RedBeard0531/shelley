@@ -284,7 +284,11 @@
                   <button
                     type="button"
                     :class="commitItemClass(d, idx)"
-                    :title="d.id === 'working' ? 'Working changes' : `${d.message}\n${d.id}`"
+                    :title="
+                      d.id === 'working'
+                        ? workingChangesStatus(d).description
+                        : `${d.message}\n${d.id}`
+                    "
                     role="option"
                     :aria-selected="selectedDiff === d.id"
                     @click="onCommitListClick(d)"
@@ -293,6 +297,11 @@
                       <span class="diff-viewer-commit-list-subject">{{
                         d.id === "working" ? "Working Changes" : d.message
                       }}</span>
+                      <span
+                        v-if="d.id === 'working'"
+                        :class="['working-changes-status', d.filesCount === 0 ? 'clean' : 'dirty']"
+                        >{{ workingChangesStatus(d).label }}</span
+                      >
                       <span v-if="d.hasTour" class="commit-picker-tour-badge">tour</span>
                     </div>
                     <div
@@ -315,24 +324,58 @@
             </div>
           </div>
           <div class="diff-viewer-sidebar-section diff-viewer-sidebar-files">
-            <div class="diff-viewer-sidebar-label">
-              <span>Commit Messages and Files</span>
-              <span v-if="fileIndexIndicator" class="diff-viewer-file-index">{{
-                fileIndexIndicator
-              }}</span>
-            </div>
-            <div class="diff-viewer-sidebar-files-scroll">
-              <div class="diff-viewer-file-list" aria-label="Files">
-                <div v-if="files.length === 0" class="diff-viewer-file-list-empty">No files</div>
-                <div v-else class="diff-viewer-file-tree-wrap">
-                  <DiffFileTree
-                    :entries="treeEntries"
-                    :selected-real-path="selectedFile"
-                    @select="selectSidebarFile"
-                  />
+            <template v-if="diffView === 'tour'">
+              <div class="diff-viewer-sidebar-label"><span>Table of Contents</span></div>
+              <div class="diff-viewer-sidebar-tour-scroll">
+                <div v-if="tourLoading" class="diff-viewer-file-list-empty">Loading tour...</div>
+                <div v-else-if="tourError" class="diff-viewer-file-list-empty">
+                  Tour unavailable
+                </div>
+                <nav v-else-if="tourContents.length > 0" aria-label="Tour contents">
+                  <ol class="diff-viewer-tour-contents">
+                    <li
+                      v-for="item in tourContents"
+                      :key="item.anchor"
+                      :class="[
+                        'diff-viewer-tour-contents-item',
+                        item.kind,
+                        item.nested ? 'nested' : '',
+                      ]"
+                    >
+                      <button
+                        type="button"
+                        :data-tour-target="item.anchor"
+                        :title="item.label"
+                        @click="scrollToTourAnchor(item.anchor)"
+                      >
+                        {{ item.label }}
+                      </button>
+                    </li>
+                  </ol>
+                </nav>
+                <div v-else class="diff-viewer-file-list-empty">No tour sections</div>
+              </div>
+            </template>
+            <template v-else>
+              <div class="diff-viewer-sidebar-label">
+                <span>Commit Messages and Files</span>
+                <span v-if="fileIndexIndicator" class="diff-viewer-file-index">{{
+                  fileIndexIndicator
+                }}</span>
+              </div>
+              <div class="diff-viewer-sidebar-files-scroll">
+                <div class="diff-viewer-file-list" aria-label="Files">
+                  <div v-if="files.length === 0" class="diff-viewer-file-list-empty">No files</div>
+                  <div v-else class="diff-viewer-file-tree-wrap">
+                    <DiffFileTree
+                      :entries="treeEntries"
+                      :selected-real-path="selectedFile"
+                      @select="selectSidebarFile"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            </template>
           </div>
         </aside>
         <div ref="mainRef" class="diff-viewer-main">
@@ -344,6 +387,7 @@
             <div v-else-if="tourError" class="diff-viewer-tour-error">{{ tourError }}</div>
             <CommitTourView
               v-else-if="tourResponse"
+              ref="tourViewRef"
               :tour="tourResponse"
               :commit-message="selectedTourCommitMessage"
               @open-comment="openTourComment"
@@ -494,6 +538,8 @@ import RangeToggle from "./RangeToggle.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
 import DiffFileTree from "./DiffFileTree.vue";
 import { COMMIT_MESSAGES_DIR, treeRealPathOrder, type DiffFileTreeEntry } from "./diffFileTree";
+import { buildTourContents } from "./commitTourContents";
+import { defaultDiffSelection, workingChangesStatus } from "./diffViewerModel";
 import type { GitDiffInfo, GitFileInfo, GitFileDiff, GitCommitMessage } from "../../types";
 
 const props = defineProps<{
@@ -557,6 +603,7 @@ const selectedDiff = ref<string | null>(null);
 const selectedTo = ref<"working" | "self">("working");
 const diffView = ref<"tour" | "files">("files");
 const tourResponse = ref<GitTourResponse | null>(null);
+const tourViewRef = ref<{ scrollToAnchor: (anchor: string) => void } | null>(null);
 const tourLoading = ref(false);
 const tourError = ref<string | null>(null);
 const files = ref<GitFileInfo[]>([]);
@@ -581,9 +628,10 @@ const tourCommentTarget = ref<TourCommentTarget | null>(null);
 const tourCommentText = ref("");
 const tourCommentDialogOpens = ref(0);
 // Switching between Tour and Files closes any pending tour comment dialog.
-watch(diffView, () => {
+watch(diffView, (view) => {
   tourCommentTarget.value = null;
   tourCommentText.value = "";
+  if (view === "tour") showKeyboardHint.value = false;
 });
 const [vimEnabledRef, setVimEnabledFn] = useVimEnabled();
 const vimEnabled = vimEnabledRef;
@@ -773,8 +821,14 @@ watch(
 );
 
 // Show keyboard hint toast on first open (desktop only).
-watch([() => props.isOpen, isMobile, fileDiff], () => {
-  if (props.isOpen && !isMobile.value && !hasShownKeyboardHint && fileDiff.value) {
+watch([() => props.isOpen, isMobile, fileDiff, diffView], () => {
+  if (
+    props.isOpen &&
+    diffView.value === "files" &&
+    !isMobile.value &&
+    !hasShownKeyboardHint &&
+    fileDiff.value
+  ) {
     hasShownKeyboardHint = true;
     showKeyboardHint.value = true;
   }
@@ -1044,32 +1098,10 @@ async function loadDiffs() {
     diffs.value = response.diffs;
     gitRoot.value = response.gitRoot;
 
-    if (props.initialCommit) {
-      const matchingDiff = response.diffs.find(
-        (d) => d.id === props.initialCommit || d.id.startsWith(props.initialCommit!),
-      );
-      if (matchingDiff) {
-        selectedDiff.value = matchingDiff.id;
-        selectedTo.value = "self";
-        return;
-      }
-    }
-
-    if (response.diffs.length > 0) {
-      const working = response.diffs.find((d) => d.id === "working");
-      const commitsOnly = response.diffs.filter((d) => d.id !== "working");
-      const mbIdx = commitsOnly.findIndex((d) => d.isMergeBase);
-      let topOfBranch: GitDiffInfo | undefined;
-      if (mbIdx > 0) topOfBranch = commitsOnly[mbIdx - 1];
-      if (topOfBranch) {
-        selectedDiff.value = topOfBranch.id;
-        selectedTo.value = "working";
-      } else if (working && working.filesCount > 0) {
-        selectedDiff.value = "working";
-      } else if (commitsOnly.length > 0) {
-        selectedDiff.value = commitsOnly[0].id;
-        selectedTo.value = "self";
-      }
+    const selection = defaultDiffSelection(response.diffs, props.initialCommit);
+    if (selection) {
+      selectedDiff.value = selection.selectedDiff;
+      selectedTo.value = selection.selectedTo;
     }
   } catch (err) {
     const errStr = String(err);
@@ -1458,6 +1490,16 @@ const treeEntries = computed<DiffFileTreeEntry[]>(() => {
 
 const navOrder = computed(() => treeRealPathOrder(treeEntries.value));
 watch(navOrder, (v) => (navOrderRef.value = v), { immediate: true });
+
+const tourContents = computed(() =>
+  tourResponse.value
+    ? buildTourContents(tourResponse.value.tour, selectedTourCommitMessage.value !== null)
+    : [],
+);
+
+function scrollToTourAnchor(anchor: string) {
+  tourViewRef.value?.scrollToAnchor(anchor);
+}
 
 // Title for the sidebar layout's header.
 const currentTitleText = computed<string | null>(() => {

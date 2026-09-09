@@ -66,6 +66,7 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onUnmounted, ref, watch, type VNode } from "vue";
 import type { GitDiffInfo } from "../../types";
+import { workingChangesStatus } from "./diffViewerModel";
 import RangeToggle from "./RangeToggle.vue";
 
 const props = defineProps<{
@@ -104,7 +105,10 @@ function rangeSyntax(
   selectedTo: "working" | "self",
 ): string {
   if (!selectedDiff) return "Choose\u2026";
-  if (selectedDiff === "working") return "Working Changes";
+  if (selectedDiff === "working") {
+    const working = diffs.find((diff) => diff.id === "working");
+    return working ? `Working Changes (${workingChangesStatus(working).label})` : "Working Changes";
+  }
   const from = commitLabel(diffs, selectedDiff);
   if (selectedTo === "self") return `${from} (Single Commit)`;
   return `${from} \u2192 Now`;
@@ -256,6 +260,7 @@ const list = () => {
   const children: VNode[] = [];
   if (workingDiff.value) {
     const wd = workingDiff.value;
+    const status = workingChangesStatus(wd);
     const cls =
       "commit-picker-row commit-picker-row-working" +
       (props.selectedDiff === "working" ? " commit-picker-row-from" : "") +
@@ -271,12 +276,23 @@ const list = () => {
             props.selectedDiff === "working" ? "\u25cf" : workingInRange.value ? "\u2502" : "",
           ),
           h("div", { class: "commit-picker-row-text" }, [
-            h("div", { class: "commit-picker-row-subject" }, "Working Changes"),
+            h("div", { class: "commit-picker-row-subject" }, [
+              h("span", "Working Changes"),
+              h(
+                "span",
+                {
+                  class: `working-changes-status ${status.clean ? "clean" : "dirty"}`,
+                },
+                status.label,
+              ),
+            ]),
             h("div", { class: "commit-picker-row-meta" }, [
               h(
                 "span",
                 { class: "commit-picker-row-stats" },
-                `${wd.filesCount} files \u00b7 +${wd.additions}/-${wd.deletions}`,
+                status.clean
+                  ? status.description
+                  : `${status.description} \u00b7 +${wd.additions}/-${wd.deletions}`,
               ),
             ]),
           ]),

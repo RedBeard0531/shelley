@@ -28,34 +28,45 @@
         </button>
       </div>
 
-      <section v-if="commitMessage" class="commit-tour-commit-message">
-        <div class="commit-tour-commit-meta">
-          <code :title="commitMessage.hash">{{ commitMessage.hash.slice(0, 8) }}</code>
-          <span>{{ commitMessage.author }}</span>
-        </div>
-        <h2>{{ commitMessage.subject }}</h2>
-        <details v-if="commitMessage.body.trim()" open class="commit-tour-commit-body">
-          <summary>
-            <span class="commit-tour-commit-chevron" aria-hidden="true">›</span>
-            Full message
-          </summary>
-          <pre>{{ commitMessage.body }}</pre>
-        </details>
-      </section>
+      <div
+        v-if="commitMessage || tour.tour.title || tour.tour.intro"
+        :id="TOUR_OVERVIEW_ANCHOR"
+        :data-tour-anchor="TOUR_OVERVIEW_ANCHOR"
+        class="commit-tour-overview"
+      >
+        <section v-if="commitMessage" class="commit-tour-commit-message">
+          <div class="commit-tour-commit-meta">
+            <code :title="commitMessage.hash">{{ commitMessage.hash.slice(0, 8) }}</code>
+            <span>{{ commitMessage.author }}</span>
+          </div>
+          <h2>{{ commitMessage.subject }}</h2>
+          <details v-if="commitMessage.body.trim()" open class="commit-tour-commit-body">
+            <summary>
+              <span class="commit-tour-commit-chevron" aria-hidden="true">›</span>
+              Full message
+            </summary>
+            <pre>{{ commitMessage.body }}</pre>
+          </details>
+        </section>
 
-      <header v-if="tour.tour.title || tour.tour.intro" class="commit-tour-introduction">
-        <h1 v-if="tour.tour.title">{{ tour.tour.title }}</h1>
-        <MarkdownContent v-if="tour.tour.intro" :text="tour.tour.intro" />
-      </header>
+        <header v-if="tour.tour.title || tour.tour.intro" class="commit-tour-introduction">
+          <h1 v-if="tour.tour.title">{{ tour.tour.title }}</h1>
+          <MarkdownContent v-if="tour.tour.intro" :text="tour.tour.intro" />
+        </header>
+      </div>
 
       <template v-for="(entry, position) in tour.tour.chunks" :key="entryKey(entry, position)">
         <MarkdownContent
           v-if="isHeaderEntry(entry)"
+          :id="tourEntryAnchor(position)"
           class="commit-tour-section-heading"
+          :data-tour-anchor="tourEntryAnchor(position)"
           :text="entry.header"
         />
         <CommitTourChunk
           v-else
+          :id="tourEntryAnchor(position)"
+          :data-tour-anchor="tourEntryAnchor(position)"
           :entry="entry"
           :theme-type="themeType"
           :side-by-side="sideBySide"
@@ -94,6 +105,7 @@ import { useSideBySidePreference } from "../composables/diffViewPreference";
 import type { TourCommentTarget } from "../composables/tourComments";
 import CommitTourChunk from "./CommitTourChunk.vue";
 import MarkdownContent from "./MarkdownContent.vue";
+import { TOUR_OVERVIEW_ANCHOR, tourEntryAnchor } from "./commitTourContents";
 
 const props = defineProps<{
   tour: GitTourResponse;
@@ -177,6 +189,12 @@ function openSelectionComment() {
   selectionPrompt.value = null;
 }
 
+function scrollToAnchor(anchor: string) {
+  viewRef.value?.querySelector<HTMLElement>(`#${anchor}`)?.scrollIntoView({ block: "start" });
+}
+
+defineExpose({ scrollToAnchor });
+
 function handleResize() {
   isMobile.value = window.innerWidth < 768;
 }
@@ -241,6 +259,13 @@ onUnmounted(() => {
 .commit-tour-diff-toggle:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+.commit-tour-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  scroll-margin-top: 1rem;
 }
 
 .commit-tour-commit-message {
@@ -321,6 +346,12 @@ onUnmounted(() => {
   font-family: var(--font-mono, monospace);
   font-size: 0.75rem;
   line-height: 1.5;
+}
+
+.commit-tour-introduction,
+.commit-tour-section-heading,
+.commit-tour-chunk {
+  scroll-margin-top: 1rem;
 }
 
 .commit-tour-introduction,

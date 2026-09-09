@@ -1338,6 +1338,35 @@ func TestHandleGitDiffFiles_UntrackedFiles(t *testing.T) {
 		t.Errorf("expected kept.txt status modified, got %q", keptFile.Status)
 	}
 
+	// The working summary must describe the same set of files as the file list,
+	// including untracked files. The UI uses this count to decide whether the
+	// working tree is clean.
+	req = httptest.NewRequest("GET", fmt.Sprintf("/api/git/diffs?cwd=%s", tempDir), nil)
+	w = httptest.NewRecorder()
+	h.server.handleGitDiffs(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var summary struct {
+		Diffs []GitDiffInfo `json:"diffs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("failed to unmarshal summary: %v", err)
+	}
+	var working *GitDiffInfo
+	for i := range summary.Diffs {
+		if summary.Diffs[i].ID == "working" {
+			working = &summary.Diffs[i]
+			break
+		}
+	}
+	if working == nil {
+		t.Fatal("working summary missing")
+	}
+	if working.FilesCount != 3 || working.Additions != 4 || working.Deletions != 1 {
+		t.Errorf("working summary = %d files, +%d/-%d; want 3 files, +4/-1", working.FilesCount, working.Additions, working.Deletions)
+	}
+
 	// No duplicates.
 	if len(files) != 3 {
 		t.Errorf("expected exactly 3 files, got %d: %+v", len(files), files)
