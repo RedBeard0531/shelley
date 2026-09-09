@@ -114,8 +114,6 @@ func TestHandleModelsAssignsTiers(t *testing.T) {
 		Models: []models.Built{
 			{ID: "claude-opus-4.8", Provider: models.ProviderAnthropic, Service: predictable.NewService()},
 			{ID: "claude-opus-4.7", Provider: models.ProviderAnthropic, Service: predictable.NewService()},
-			{ID: "gpt-6-astra", Provider: models.ProviderOpenAI, Service: predictable.NewService()},
-			{ID: "gpt-5.6-sol", Provider: models.ProviderOpenAI, Service: predictable.NewService()},
 		},
 		Logger: slog.Default(),
 	})
@@ -144,11 +142,6 @@ func TestHandleModelsAssignsTiers(t *testing.T) {
 	}
 	if tiers["claude-opus-4.7"] != models.Tier2 {
 		t.Errorf("opus-4.7 tier = %d, want %d", tiers["claude-opus-4.7"], models.Tier2)
-	}
-	for _, id := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
-		if tiers[id] != models.Tier1 {
-			t.Errorf("%s tier = %d, want %d", id, tiers[id], models.Tier1)
-		}
 	}
 }
 

@@ -44,6 +44,7 @@ var shadowPairs = []shadowPair{
 	{Better: "claude-opus-4.6", Worse: "claude-opus-4.5"},
 	{Better: "claude-sonnet-5", Worse: "claude-sonnet-4.6"},
 	{Better: "claude-sonnet-5", Worse: "claude-sonnet-4.5"},
+	{Better: "gpt-6-astra", Worse: "gpt-5.6-sol"},
 	{Better: "gpt-5.6-sol", Worse: "gpt-5.5"},
 	{Better: "gpt-5.6-sol", Worse: "gpt-5.4"},
 	{Better: "gpt-5.6-terra", Worse: "gpt-5.4-mini"},
