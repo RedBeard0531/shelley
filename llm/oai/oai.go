@@ -756,7 +756,8 @@ func isDeepSeekBaseURL(baseURL string) bool {
 // max_tokens but not max_completion_tokens. This mirrors Pi's URL-based
 // compatibility detection without adding another custom-model setting.
 func usesLegacyMaxTokensField(baseURL string) bool {
-	return endpointHostMatches(baseURL,
+	return endpointHostMatches(
+		baseURL,
 		"chutes.ai",
 		"deepseek.com",
 		"moonshot.ai",
