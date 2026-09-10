@@ -8,15 +8,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"shelley.exe.dev/claudetool"
+	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm/predictable"
 )
 
 // newCacheKeyTestServer makes a Server wired with the requireHeader so that
 // userID extraction has something to look at.
 func newCacheKeyTestServer(t *testing.T, requireHeader string) *Server {
+	t.Helper()
+	svr, _ := newCacheKeyTestServerWithDB(t, requireHeader)
+	return svr
+}
+
+func newCacheKeyTestServerWithDB(t *testing.T, requireHeader string) (*Server, *db.DB) {
 	t.Helper()
 	database, cleanup := setupTestDB(t)
 	t.Cleanup(cleanup)
@@ -25,7 +33,7 @@ func newCacheKeyTestServer(t *testing.T, requireHeader string) *Server {
 		claudetool.ToolSetConfig{EnableBrowser: false},
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		true, "predictable", requireHeader)
-	return svr
+	return svr, database
 }
 
 func doCacheKey(t *testing.T, svr *Server, header, userID string, cookies ...*http.Cookie) (*http.Response, cacheKeyResponse) {
@@ -92,6 +100,22 @@ func TestCacheKey_IssuesCookieAndStableKey(t *testing.T) {
 	}
 	if body2.Key != body1.Key || body2.KeyID != body1.KeyID {
 		t.Errorf("keys diverged on second call")
+	}
+}
+
+func TestCacheKey_ExistingSessionIsReadOnly(t *testing.T) {
+	t.Parallel()
+	svr, database := newCacheKeyTestServerWithDB(t, "X-User")
+	var commits atomic.Int64
+	database.Pool().OnCommit(func() { commits.Add(1) })
+
+	resp, _ := doCacheKey(t, svr, "X-User", "alice")
+	cookie := findCookie(resp, cacheCookieName)
+	commits.Store(0)
+
+	doCacheKey(t, svr, "X-User", "alice", cookie)
+	if got := commits.Load(); got != 0 {
+		t.Errorf("established cache-key read committed %d writer transactions", got)
 	}
 }
 

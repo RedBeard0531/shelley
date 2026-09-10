@@ -93,6 +93,7 @@ type RotateMsg = { type: "rotated" };
 
 const DEFAULT_DB_NAME = "shelley-messages";
 const DB_VERSION = 4;
+const DIRTY_CONVERSATION_PREFIX = "dirty:";
 
 /**
  * How long to wait for indexedDB.open() before giving up on the cache for
@@ -139,6 +140,18 @@ const IDB_OPEN_COOLDOWN_MS = 30_000;
 const IDB_TX_TIMEOUT_MS = 3_000;
 
 /**
+ * How long a cache read may wait behind another tab's readwrite transaction.
+ *
+ * A one-row metadata lookup normally completes in a few milliseconds. If it
+ * is still queued after this bound, the origin-wide IDB writer is obstructing
+ * us and fetching the conversation is faster than waiting. This is deliberately
+ * much shorter than the startup transaction deadline: production Safari logs
+ * showed conversation switches pausing for exactly the old 3-second bound
+ * before a 36ms REST response could even start.
+ */
+const IDB_READ_TIMEOUT_MS = 250;
+
+/**
  * Rows per Promise.all batch for bulk crypto.subtle calls. Awaiting each row
  * individually serializes on the main-thread/crypto-thread round-trip:
  * measured on a 21k-message conversation, sequential decrypt took 610ms on
@@ -151,16 +164,23 @@ const CRYPTO_BATCH = 512;
  * Deadline options for a cache READ.
  *
  * Reads take shared locks, but still queue behind another tab's exclusive
- * writer, so they need the same bound as the startup transaction. A late
- * result is just discarded: hydrate has already returned, and the caller has
- * gone to the network.
+ * writer. Give them only a short chance to win; once that expires, hydrate
+ * returns a miss and the caller starts the faster network path. A late result
+ * is discarded because the caller has already moved on.
  */
 function readDeadlineOpts(store: string) {
   return {
     what: `indexedDB.read ${store}`,
     onLate: () => cacheDiag("info", "idb.read_late", { store }),
-    onLateError: (err: unknown) =>
-      cacheDiag("fail", "idb.read_late_error", { store, error: String(err) }),
+    onLateError: (err: unknown) => {
+      // hydrate aborts its own readonly transaction after the deadline so the
+      // abandoned bulk read does not wake later and duplicate the REST work.
+      // That expected AbortError is already represented by hydrate.idb_error.
+      if (typeof err === "object" && err !== null && "name" in err && err.name === "AbortError") {
+        return;
+      }
+      cacheDiag("fail", "idb.read_late_error", { store, error: String(err) });
+    },
   };
 }
 
@@ -244,9 +264,9 @@ interface ConvMetaPayload {
   context_window_size: number;
 }
 
-/** Singleton row in keys_meta. */
+/** Cache-key singleton plus per-conversation dirty markers in keys_meta. */
 interface KeyMetaRow {
-  id: "current";
+  id: string;
   key_id: string;
 }
 
@@ -419,6 +439,10 @@ export interface MessageStoreOptions {
   openCooldownMs?: number;
   /** Override IDB_TX_TIMEOUT_MS. Tests only. */
   txTimeoutMs?: number;
+  /** Override IDB_READ_TIMEOUT_MS. Tests only. */
+  readTimeoutMs?: number;
+  /** Override page visibility. Tests only. */
+  isPageVisible?: () => boolean;
 }
 
 export class MessageStore {
@@ -428,6 +452,10 @@ export class MessageStore {
   private readonly openTimeoutMs: number;
   private readonly openCooldownMs: number;
   private readonly txTimeoutMs: number;
+  private readonly readTimeoutMs: number;
+  private readonly isPageVisible: () => boolean;
+  /** Dirty markers this instance must repair with a full server snapshot. */
+  private dirtyRepairs = new Map<string, string>();
   private dbPromise: Promise<IDBPDatabase<ShelleyDB>> | null = null;
   /**
    * When indexedDB.open() last blew its deadline; 0 if it hasn't. Drives the
@@ -488,6 +516,13 @@ export class MessageStore {
     this.openTimeoutMs = opts.openTimeoutMs ?? IDB_OPEN_TIMEOUT_MS;
     this.openCooldownMs = opts.openCooldownMs ?? IDB_OPEN_COOLDOWN_MS;
     this.txTimeoutMs = opts.txTimeoutMs ?? IDB_TX_TIMEOUT_MS;
+    // Existing tests historically used txTimeoutMs for every transaction
+    // deadline; preserve that override while giving production reads their
+    // own much shorter bound.
+    this.readTimeoutMs = opts.readTimeoutMs ?? opts.txTimeoutMs ?? IDB_READ_TIMEOUT_MS;
+    this.isPageVisible =
+      opts.isPageVisible ??
+      (() => typeof document === "undefined" || document.visibilityState === "visible");
     if (typeof BroadcastChannel !== "undefined") {
       this.rotateChannel = new BroadcastChannel(ROTATE_CHANNEL);
       // Node implements BroadcastChannel via libuv and keeps the event
@@ -752,6 +787,49 @@ export class MessageStore {
     }
   }
 
+  private dirtyKey(id: string): string {
+    return `${DIRTY_CONVERSATION_PREFIX}${id}`;
+  }
+
+  private async markDirty(id: string): Promise<boolean> {
+    try {
+      const db = await this.db();
+      await db.put("keys_meta", {
+        id: this.dirtyKey(id),
+        key_id: `${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      });
+      return true;
+    } catch (err) {
+      cacheDiag("fail", "persist.dirty_marker_failed", {
+        conversation_id: id,
+        error: String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Hidden tabs keep their in-memory cache current but do not bulk-write it to
+   * IndexedDB. Safari can suspend a background tab in the middle of a large
+   * transaction while retaining its origin-wide object-store lock, freezing
+   * reads in the foreground tab. Before dropping a write, persist a tiny dirty
+   * marker in keys_meta. That transaction does not overlap the message/meta
+   * stores, and a later hydration treats the marker as a mandatory REST repair.
+   */
+  private async canPersist(id: string, operation: string): Promise<boolean> {
+    if (this.isPageVisible()) return true;
+    const marked = await this.markDirty(id);
+    cacheDiag("info", "persist.hidden_tab_skipped", {
+      conversation_id: id,
+      operation,
+      dirty_marker: marked,
+    });
+    // If the marker failed, preserve the old correctness behavior and attempt
+    // the real write. It will normally fail for the same underlying IDB error,
+    // but must not be silently reported as a safely-skipped persistence.
+    return !marked;
+  }
+
   /** Wait until all write-behind operations have completed. */
   async settle(): Promise<void> {
     while (this.inflight.size > 0) {
@@ -930,25 +1008,47 @@ export class MessageStore {
         return this.hot.get(id) ?? null;
       }
       const db = await this.db();
-      // Bounded: these are readonly (shared) locks, but a sibling tab holding
-      // an EXCLUSIVE lock on the same store still blocks them for as long as
-      // it likes — including forever, if that tab was suspended mid-write.
-      // Reading the cache must never outlast just fetching from the network.
-      const meta = await withDeadline(
-        db.get("conversation_meta", id),
-        this.txTimeoutMs,
-        readDeadlineOpts("conversation_meta"),
-      );
+      // Acquire the marker, metadata and message scopes together, but issue
+      // only the one-row marker request until we know the disk history is
+      // usable. Its deadline bounds lock acquisition; the later bulk getAll
+      // remains unbounded so a large healthy cache can finish copying.
+      const readTx = db.transaction(["keys_meta", "conversation_meta", "messages"], "readonly");
+      let dirty: KeyMetaRow | undefined;
+      try {
+        dirty = await withDeadline(
+          readTx.objectStore("keys_meta").get(this.dirtyKey(id)),
+          this.readTimeoutMs,
+          readDeadlineOpts("keys_meta"),
+        );
+      } catch (err) {
+        void readTx.done.catch(() => {});
+        try {
+          readTx.abort();
+        } catch {
+          // It completed between the deadline and abort.
+        }
+        throw err;
+      }
+      if (dirty) {
+        await readTx.done;
+        this.dirtyRepairs.set(id, dirty.key_id);
+        this.hydrated.add(id);
+        const hot = this.hot.get(id) ?? null;
+        if (hot) {
+          hot.hasFullHistory = false;
+          hot.needsRefresh = true;
+        }
+        cacheDiag("info", "hydrate.dirty_disk", { conversation_id: id });
+        return hot;
+      }
+      const metaRead = readTx.objectStore("conversation_meta").get(id);
+      const rowsRead = readTx.objectStore("messages").getAll(convRange(id));
+      const [meta, rows] = await Promise.all([metaRead, rowsRead, readTx.done]);
       if (meta) {
         const payload = await this.decryptMetaRow(material.key, meta);
         if (payload) {
           // getAll on the compound key range returns rows in ascending
           // (conv, seq) order — no JS sort needed.
-          const rows = await withDeadline(
-            db.getAll("messages", convRange(id)),
-            this.txTimeoutMs,
-            readDeadlineOpts("messages"),
-          );
           const decrypted: Message[] = [];
           for (let i = 0; i < rows.length; i += CRYPTO_BATCH) {
             const batch = await Promise.all(
@@ -1157,6 +1257,7 @@ export class MessageStore {
     convHint: Conversation | null,
     ctxHint: number,
   ): Promise<void> {
+    if (!(await this.canPersist(id, "upsert"))) return;
     const material = await this.getKey();
     if (!material) return;
     // Encrypt OUTSIDE the IDB tx — crypto.subtle returns promises and
@@ -1189,6 +1290,7 @@ export class MessageStore {
           : ctxHint,
     };
     const { iv, ct } = await wrapJSON(material.key, payload, this.metaAAD(id));
+    if (!(await this.canPersist(id, "upsert"))) return;
 
     // Now a single RW tx — no non-IDB awaits inside.
     const tx = db.transaction(["messages", "conversation_meta", "keys_meta"], "readwrite");
@@ -1409,7 +1511,8 @@ export class MessageStore {
     this.hydrated.add(id);
     this.notify(id);
 
-    this.queueWrite(id, () => this._persistFullHistory(id, rec)).catch((err) =>
+    const repairToken = this.dirtyRepairs.get(id);
+    this.queueWrite(id, () => this._persistFullHistory(id, rec, repairToken)).catch((err) =>
       cacheDiag(
         "fail",
         "persist.full_history_failed",
@@ -1419,7 +1522,12 @@ export class MessageStore {
     );
   }
 
-  private async _persistFullHistory(id: string, rec: ConversationCacheRecord): Promise<void> {
+  private async _persistFullHistory(
+    id: string,
+    rec: ConversationCacheRecord,
+    repairToken: string | undefined,
+  ): Promise<void> {
+    if (!(await this.canPersist(id, "full_history"))) return;
     const material = await this.getKey();
     if (!material) return;
     // Encrypt all message rows + the meta payload OUTSIDE the IDB tx.
@@ -1443,11 +1551,26 @@ export class MessageStore {
       context_window_size: rec.contextWindowSize,
     };
     const { iv, ct } = await wrapJSON(material.key, payload, this.metaAAD(id));
+    if (!(await this.canPersist(id, "full_history"))) return;
 
     const tx = db.transaction(["messages", "conversation_meta", "keys_meta"], "readwrite");
-    if (!(await this.verifyKeyInTx(tx.objectStore("keys_meta"), material.keyId))) {
+    const dirtyStore = tx.objectStore("keys_meta");
+    if (!(await this.verifyKeyInTx(dirtyStore, material.keyId))) {
       tx.abort();
       return;
+    }
+    if (repairToken) {
+      const currentDirty = await dirtyStore.get(this.dirtyKey(id));
+      if (!currentDirty || currentDirty.key_id !== repairToken) {
+        // A newer repair removed our token, or a newer hidden update replaced
+        // it. Do not let this older snapshot overwrite the repaired disk.
+        await tx.done;
+        this.hot.delete(id);
+        this.hydrated.delete(id);
+        this.dirtyRepairs.delete(id);
+        this.notify(id);
+        return;
+      }
     }
     const msgs = tx.objectStore("messages");
     const metaStore = tx.objectStore("conversation_meta");
@@ -1483,9 +1606,10 @@ export class MessageStore {
       ct,
     };
     await metaStore.put(row);
+    if (repairToken) await dirtyStore.delete(this.dirtyKey(id));
     await tx.done;
+    if (repairToken) this.dirtyRepairs.delete(id);
   }
-
   // ── setConversation ────────────────────────────────────────────────────────
 
   setConversation(id: string, conv: Conversation): void {
@@ -1589,6 +1713,7 @@ export class MessageStore {
       needs_refresh?: boolean;
     },
   ): Promise<void> {
+    if (!(await this.canPersist(id, "metadata"))) return;
     const material = await this.getKey();
     if (!material) return;
     const touchesPayload =
@@ -1624,6 +1749,7 @@ export class MessageStore {
     const emptyCipher = touchesPayload
       ? null
       : await wrapJSON(material.key, emptyPayload(), this.metaAAD(id));
+    if (!(await this.canPersist(id, "metadata"))) return;
 
     const tx = db.transaction(["conversation_meta", "keys_meta"], "readwrite");
     if (!(await this.verifyKeyInTx(tx.objectStore("keys_meta"), material.keyId))) {
@@ -1840,6 +1966,7 @@ export class MessageStore {
    * Returns the list of pruned conversation_ids.
    */
   async pruneStale(activeIds: Iterable<string>, olderThanMs: number): Promise<string[]> {
+    if (!this.isPageVisible()) return [];
     if (!this.factory) return [];
     const active = new Set(activeIds);
     const cutoff = Date.now() - olderThanMs;
@@ -1861,6 +1988,7 @@ export class MessageStore {
         // concurrent upsert (e.g. a live stream event landing during prune).
         await this.settle();
         const db = await this.db();
+        if (!this.isPageVisible()) break;
         const tx = db.transaction(["messages", "conversation_meta"], "readwrite");
         // Re-read the meta row INSIDE the prune tx and verify it's still
         // stale. If a stream event upserted it after our scan, skip.

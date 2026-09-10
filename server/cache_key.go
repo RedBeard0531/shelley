@@ -220,8 +220,6 @@ func (s *Server) handleCacheKey(w http.ResponseWriter, r *http.Request) {
 				// the prior user's IDB cache.
 				_ = s.db.DeleteCacheSession(ctx, hash)
 				token = ""
-			} else {
-				_ = s.db.TouchCacheSession(ctx, hash)
 			}
 		case errors.Is(err, errNoCacheSession):
 			// Cookie present but no row (server-side wipe). Re-record it.

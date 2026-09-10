@@ -36,17 +36,6 @@ func (q *Queries) GetCacheSession(ctx context.Context, tokenHash string) (CacheS
 	return i, err
 }
 
-const touchCacheSession = `-- name: TouchCacheSession :exec
-UPDATE cache_sessions
-SET last_seen_at = CURRENT_TIMESTAMP
-WHERE token_hash = ?
-`
-
-func (q *Queries) TouchCacheSession(ctx context.Context, tokenHash string) error {
-	_, err := q.db.ExecContext(ctx, touchCacheSession, tokenHash)
-	return err
-}
-
 const upsertCacheSession = `-- name: UpsertCacheSession :exec
 INSERT INTO cache_sessions (token_hash, user_id, created_at, last_seen_at)
 VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)

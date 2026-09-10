@@ -2361,14 +2361,6 @@ func (db *DB) UpsertCacheSession(ctx context.Context, tokenHash, userID string) 
 	})
 }
 
-// TouchCacheSession bumps last_seen_at. No error if the row is missing.
-func (db *DB) TouchCacheSession(ctx context.Context, tokenHash string) error {
-	return db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
-		q := generated.New(tx.Conn())
-		return q.TouchCacheSession(ctx, tokenHash)
-	})
-}
-
 // DeleteCacheSession removes the row, effectively logging that browser out
 // of the IDB cache.
 func (db *DB) DeleteCacheSession(ctx context.Context, tokenHash string) error {
