@@ -164,7 +164,7 @@ function openLineComment(side: TourDiffSide, lineNumber: number) {
   });
 }
 
-const diffOptions = computed<FileDiffOptions<undefined>>(() => ({
+const diffOptions = computed<FileDiffOptions<undefined, undefined>>(() => ({
   diffStyle:
     props.sideBySide && !paths.value.newFile && !paths.value.deletedFile ? "split" : "unified",
   theme: DIFF_THEMES,

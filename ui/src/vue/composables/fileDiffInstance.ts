@@ -28,7 +28,7 @@ import { getDiffsWorkerPool } from "../../services/diffsWorkerPool";
 
 export interface FileDiffInputs {
   fileDiff: FileDiffMetadata;
-  options: FileDiffOptions<undefined>;
+  options: FileDiffOptions<undefined, undefined>;
 }
 
 // useFileDiffInstance manages a FileDiff renderer bound to a host element.

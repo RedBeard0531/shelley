@@ -47,7 +47,7 @@ const fileDiff = computed<FileDiffMetadata | null>(() => {
   }
 });
 
-const diffOptions = computed<FileDiffOptions<undefined>>(() => ({
+const diffOptions = computed<FileDiffOptions<undefined, undefined>>(() => ({
   diffStyle: props.sideBySide ? "split" : "unified",
   theme: DIFF_THEMES,
   themeType: props.themeType,

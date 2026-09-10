@@ -390,7 +390,7 @@ const rawDiff = computed(() => {
 });
 
 // FileDiff render options derived from the current side-by-side + theme state.
-const diffOptions = computed<FileDiffOptions<undefined>>(() => ({
+const diffOptions = computed<FileDiffOptions<undefined, undefined>>(() => ({
   diffStyle: sideBySide.value ? "split" : "unified",
   theme: DIFF_THEMES,
   themeType: themeType.value,
