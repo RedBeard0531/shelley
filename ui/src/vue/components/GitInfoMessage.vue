@@ -5,8 +5,10 @@
 <template>
   <div
     v-if="commitHash"
+    ref="containerRef"
     class="message message-gitinfo msg-gitinfo-container"
     data-testid="message-gitinfo"
+    @mouseenter="refreshTour"
   >
     <span>
       <span v-if="worktree" class="msg-worktree">{{ worktree }}</span>
@@ -61,12 +63,35 @@
         {{ " " }}
         <a :href="diffHref" class="msg-diff-link" @click="onDiffLinkClick">diff</a>
       </template>
+      <template v-if="tourState === 'present' && canShowDiff">
+        {{ " " }}
+        <a
+          :href="diffHref"
+          class="msg-diff-link"
+          data-testid="gitinfo-tour-link"
+          v-tooltip.top="'Open guided commit tour'"
+          @click="onDiffLinkClick"
+          >tour</a
+        >
+      </template>
     </span>
   </div>
 </template>
 
+<script lang="ts">
+interface TourProbeCacheEntry {
+  promise: Promise<boolean>;
+  expiresAt: number;
+}
+
+const TOUR_PROBE_TTL_MS = 30_000;
+const TOUR_HOVER_RETRY_MS = 5_000;
+const tourProbeCache = new Map<string, TourProbeCacheEntry>();
+</script>
+
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { api } from "../../services/api";
 import type { Message as MessageType } from "../../types";
 
 const props = defineProps<{
@@ -75,6 +100,11 @@ const props = defineProps<{
 }>();
 
 const copied = ref(false);
+const containerRef = ref<HTMLElement | null>(null);
+type TourState = "unknown" | "present" | "absent";
+const tourState = ref<TourState>("unknown");
+let tourProbeSequence = 0;
+let lastForcedTourProbeAt = 0;
 
 const parsed = computed(() => {
   let commitHash: string | null = null;
@@ -131,6 +161,61 @@ function onDiffLinkClick(e: MouseEvent) {
   e.preventDefault();
   handleDiffClick();
 }
+
+async function probeTour(force = false) {
+  const hash = commitHash.value;
+  const cwd = worktree.value;
+  if (!hash || !cwd) return;
+
+  const key = `${cwd}\u0000${hash}`;
+  const now = Date.now();
+  let entry = force ? undefined : tourProbeCache.get(key);
+  if (entry && entry.expiresAt <= now) {
+    tourProbeCache.delete(key);
+    entry = undefined;
+  }
+  if (!entry) {
+    entry = {
+      promise: api.hasGitTour(cwd, hash),
+      expiresAt: now + TOUR_PROBE_TTL_MS,
+    };
+    tourProbeCache.set(key, entry);
+  }
+
+  const sequence = ++tourProbeSequence;
+  try {
+    const present = await entry.promise;
+    if (sequence === tourProbeSequence) {
+      tourState.value = present ? "present" : "absent";
+    }
+  } catch (error) {
+    if (tourProbeCache.get(key) === entry) tourProbeCache.delete(key);
+    console.error("Failed to check commit tour:", error);
+  }
+}
+
+function refreshTour() {
+  const now = Date.now();
+  const force = tourState.value === "absent" && now - lastForcedTourProbeAt >= TOUR_HOVER_RETRY_MS;
+  if (force) lastForcedTourProbeAt = now;
+  void probeTour(force);
+}
+
+let tourObserver: IntersectionObserver | null = null;
+onMounted(() => {
+  if (!containerRef.value || !("IntersectionObserver" in window)) {
+    void probeTour();
+    return;
+  }
+  tourObserver = new IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) return;
+    tourObserver?.disconnect();
+    tourObserver = null;
+    void probeTour();
+  });
+  tourObserver.observe(containerRef.value);
+});
+onBeforeUnmount(() => tourObserver?.disconnect());
 
 function handleCopyHash(e: MouseEvent) {
   e.preventDefault();

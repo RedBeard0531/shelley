@@ -180,19 +180,25 @@ func untrackedGitFiles(gitRoot string) []GitFileInfo {
 	return files
 }
 
-// gitLogDiffs lists up to limit commits from HEAD with per-commit diffstats
-// in a single git invocation. Merge commits report their first-parent
-// diffstat. mergeBase, if non-empty, marks the matching commit.
-func gitLogDiffs(gitRoot string, limit int, mergeBase string) []GitDiffInfo {
+// gitLogDiffs lists up to limit commits from startRef (or HEAD when empty)
+// with per-commit diffstats in a single git invocation. Merge commits report
+// their first-parent diffstat. mergeBase, if non-empty, marks the matching commit.
+func gitLogDiffs(gitRoot string, limit int, mergeBase, startRef string) []GitDiffInfo {
 	// %x01 starts each commit record so numstat lines can't be confused
 	// with headers. --topo-order guarantees descendants of the merge-base
 	// print before it, so the sidebar's slice down to the merge-base
 	// covers the whole stack. %D yields decorating refs (already trimmed)
 	// like "HEAD -> main, origin/main, tag: v1.2".
-	cmd := exec.Command("git", "log", "-n", strconv.Itoa(limit),
+	args := []string{
+		"log", "-n", strconv.Itoa(limit),
 		"--topo-order", "--numstat", "--diff-merges=first-parent",
 		"--no-show-signature", // log.showSignature=true would corrupt parsing
-		"--pretty=format:%x01%H%x00%s%x00%an%x00%at%x00%D")
+		"--pretty=format:%x01%H%x00%s%x00%an%x00%at%x00%D",
+	}
+	if startRef != "" {
+		args = append(args, startRef)
+	}
+	cmd := exec.Command("git", args...)
 	cmd.Dir = gitRoot
 	output, err := cmd.Output()
 	if err != nil {
@@ -256,6 +262,28 @@ func (s *Server) handleGitDiffs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	requestedCommit := ""
+	if ref := r.URL.Query().Get("commit"); ref != "" {
+		if len(ref) < 4 || len(ref) > 64 {
+			http.Error(w, "invalid commit", http.StatusBadRequest)
+			return
+		}
+		for _, c := range ref {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				http.Error(w, "invalid commit", http.StatusBadRequest)
+				return
+			}
+		}
+		cmd := exec.Command("git", "rev-parse", "--verify", ref+"^{commit}")
+		cmd.Dir = gitRoot
+		out, err := cmd.Output()
+		if err != nil {
+			http.Error(w, "invalid commit", http.StatusBadRequest)
+			return
+		}
+		requestedCommit = strings.TrimSpace(string(out))
+	}
+
 	var diffs []GitDiffInfo
 
 	// Working changes
@@ -307,7 +335,24 @@ func (s *Server) handleGitDiffs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	commits := gitLogDiffs(gitRoot, limit, mergeBase)
+	commits := gitLogDiffs(gitRoot, limit, mergeBase, "HEAD")
+	if requestedCommit != "" {
+		found := false
+		for _, commit := range commits {
+			if commit.ID == requestedCommit {
+				found = true
+				break
+			}
+		}
+		if !found {
+			requested := gitLogDiffs(gitRoot, 1, "", requestedCommit)
+			if len(requested) != 1 {
+				http.Error(w, "failed to read commit", http.StatusInternalServerError)
+				return
+			}
+			commits = append(requested, commits...)
+		}
+	}
 	// hasTour is decoration; a notes lookup failure must not break the diff list.
 	tours, _ := committour.ListNotes(gitRoot)
 	for i := range commits {
@@ -329,7 +374,7 @@ type GitTourResponse struct {
 
 // handleGitTour returns a commit's verified guided tour.
 func (s *Server) handleGitTour(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -386,6 +431,10 @@ func (s *Server) handleGitTour(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := committour.Verify(gitRoot, fullHash, tour); err != nil {
 		writeGitTourNotFound(w)
+		return
+	}
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "application/json")
 		return
 	}
 	// attach stores chunk references resolved, but a note written by other

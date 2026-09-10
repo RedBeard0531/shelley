@@ -351,6 +351,54 @@ func TestHandleGitDiffsHasTour(t *testing.T) {
 	}
 }
 
+func TestHandleGitDiffsIncludesRequestedCommit(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	dir := setupTestGitRepo(t)
+	testGit(t, dir, "reset", "--hard", "HEAD")
+	testGit(t, dir, "clean", "-fd")
+	originalBranch := strings.TrimSpace(testGitOutput(t, dir, "branch", "--show-current"))
+
+	testGit(t, dir, "switch", "-c", "side")
+	if err := os.WriteFile(filepath.Join(dir, "side.txt"), []byte("side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, dir, "add", "side.txt")
+	testGit(t, dir, "commit", "--no-verify", "-m", "Side commit")
+	sideCommit := strings.TrimSpace(testGitOutput(t, dir, "rev-parse", "HEAD"))
+	if err := committour.WriteNote(dir, sideCommit, []byte(`{"version":1,"chunks":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, dir, "switch", originalBranch)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/git/diffs?cwd=%s&commit=%s", dir, sideCommit[:8]), nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitDiffs(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleGitDiffs: %d: %s", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		Diffs []GitDiffInfo `json:"diffs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Diffs) < 2 || response.Diffs[1].ID != sideCommit {
+		t.Fatalf("requested commit not inserted after working changes: %+v", response.Diffs)
+	}
+	if !response.Diffs[1].HasTour {
+		t.Fatal("requested commit lost its tour decoration")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/git/diffs?cwd=%s&commit=not-a-hash", dir), nil)
+	w = httptest.NewRecorder()
+	h.server.handleGitDiffs(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid commit got %d, want 400", w.Code)
+	}
+}
+
 func TestHandleGitTour(t *testing.T) {
 	t.Parallel()
 	h := NewTestHarness(t)
@@ -370,6 +418,12 @@ func TestHandleGitTour(t *testing.T) {
 		h.server.handleGitTour(w, req)
 		return w
 	}
+	hasTour := func(ref string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodHead, fmt.Sprintf("/api/git/tour?cwd=%s&hash=%s", dir, ref), nil)
+		w := httptest.NewRecorder()
+		h.server.handleGitTour(w, req)
+		return w
+	}
 
 	t.Run("no note", func(t *testing.T) {
 		w := request(hash)
@@ -378,6 +432,9 @@ func TestHandleGitTour(t *testing.T) {
 		}
 		if w.Header().Get("Content-Type") != "application/json" {
 			t.Fatalf("content type = %q", w.Header().Get("Content-Type"))
+		}
+		if w := hasTour(hash); w.Code != http.StatusNotFound {
+			t.Fatalf("HEAD got %d, want 404", w.Code)
 		}
 	})
 
@@ -439,6 +496,13 @@ func TestHandleGitTour(t *testing.T) {
 		}
 		if _, ok := fields["chunks"]; ok {
 			t.Fatalf("response still contains chunks: %s", w.Body.String())
+		}
+		head := hasTour(hash[:8])
+		if head.Code != http.StatusOK || head.Body.Len() != 0 {
+			t.Fatalf("HEAD got %d %q, want 200 with empty body", head.Code, head.Body.String())
+		}
+		if head.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("HEAD content type = %q", head.Header().Get("Content-Type"))
 		}
 	})
 

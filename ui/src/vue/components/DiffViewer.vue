@@ -1094,7 +1094,7 @@ async function loadDiffs() {
   try {
     loading.value = true;
     error.value = null;
-    const response = await api.getGitDiffs(props.cwd);
+    const response = await api.getGitDiffs(props.cwd, props.initialCommit);
     diffs.value = response.diffs;
     gitRoot.value = response.gitRoot;
 

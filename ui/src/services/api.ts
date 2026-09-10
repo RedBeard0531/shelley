@@ -563,13 +563,28 @@ class ApiService {
   }
 
   // Git diff APIs
-  async getGitDiffs(cwd: string): Promise<{ diffs: GitDiffInfo[]; gitRoot: string }> {
-    const response = await fetch(`${this.baseUrl}/git/diffs?cwd=${encodeURIComponent(cwd)}`);
+  async getGitDiffs(
+    cwd: string,
+    commit?: string,
+  ): Promise<{ diffs: GitDiffInfo[]; gitRoot: string }> {
+    const params = new URLSearchParams({ cwd });
+    if (commit) params.set("commit", commit);
+    const response = await fetch(`${this.baseUrl}/git/diffs?${params}`);
     if (!response.ok) {
       const text = await response.text();
       throw new Error(text || response.statusText);
     }
     return response.json();
+  }
+
+  async hasGitTour(cwd: string, hash: string): Promise<boolean> {
+    const params = new URLSearchParams({ cwd, hash });
+    const response = await fetch(`${this.baseUrl}/git/tour?${params}`, { method: "HEAD" });
+    if (response.status === 404) return false;
+    if (!response.ok) {
+      throw await responseError(response, "Failed to check commit tour");
+    }
+    return true;
   }
 
   async getGitTour(cwd: string, hash: string): Promise<GitTourResponse> {
