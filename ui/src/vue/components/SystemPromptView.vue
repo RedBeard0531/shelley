@@ -12,8 +12,7 @@
         <span class="system-prompt-copy">
           <span class="system-prompt-label">System Prompt:</span>
           <span class="system-prompt-meta">
-            <span>{{ countLabel(tools.length, "tool") }}</span>
-            <span aria-hidden="true">,</span>
+            <span>{{ countLabel(tools.length, "tool") }},</span>
             <span>{{ countLabel(skills.length, "skill") }}</span>
           </span>
         </span>
