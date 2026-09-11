@@ -58,6 +58,11 @@ func TestWorkhorseModel(t *testing.T) {
 		Built{ID: "gemini-3.7-flash-lite", Provider: ProviderGemini, ReleaseDate: "2026-08-13"},
 		Built{ID: "deepseek-v4-flash", Provider: ProviderFireworks, ReleaseDate: "2026-04-24"},
 		Built{ID: "deepseek-v4-flash-0731-fireworks", Provider: ProviderFireworks, ReleaseDate: "2026-07-31"},
+		// Pro must not be picked as a workhorse: it is the expensive sibling, and
+		// the family match is "deepseek-v4" minus "pro" so the dot-versioned
+		// deepseek-v4.1-flash ID still matches.
+		Built{ID: "deepseek-v4-pro-fireworks", Provider: ProviderFireworks, ReleaseDate: "2026-08-13"},
+		Built{ID: "deepseek-v4.1-flash-fireworks", Provider: ProviderFireworks, ReleaseDate: "2026-09-10"},
 		Built{ID: "deepseek-v4-flash-0801-fireworks", Provider: ProviderFireworks, ReleaseDate: "2026-08-01"},
 		Built{ID: "nemotron-lightning-3p5", Provider: ProviderFireworks},
 	)
@@ -70,7 +75,7 @@ func TestWorkhorseModel(t *testing.T) {
 		{"claude-haiku-4-5", "claude-haiku-4-6"},
 		{"gpt-5.4-nano", "gpt-5.7-luna"},
 		{"gemini-3-flash", "gemini-3.6-flash"},
-		{"nemotron-lightning-3p5", "deepseek-v4-flash-0801-fireworks"},
+		{"nemotron-lightning-3p5", "deepseek-v4.1-flash-fireworks"},
 		{"unknown-custom-model", "unknown-custom-model"},
 		{"", ""},
 	} {

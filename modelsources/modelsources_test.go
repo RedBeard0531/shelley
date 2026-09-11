@@ -67,6 +67,9 @@ func TestEnvSourceLabels(t *testing.T) {
 		{"gpt-5.5", "$OPENAI_API_KEY"},
 		{"gemini-3.8-flash", "$GEMINI_API_KEY"},
 		{"deepseek-v4-flash-0731-fireworks", "$FIREWORKS_API_KEY"},
+		// Also pins that the embedded models.dev snapshot knows this model: the
+		// loop below requires a non-empty release date, which the UI sorts by.
+		{"deepseek-v4.1-flash-fireworks", "$FIREWORKS_API_KEY"},
 	} {
 		b := findBuilt(bs, tt.id)
 		if b == nil {
@@ -122,6 +125,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 			{ID: "fireworks/kimi-k2p6", Provider: "fireworks", NativeID: "accounts/fireworks/models/kimi-k2p6", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4-pro-0813", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-pro-0813", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4-flash-0731", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-flash-0731", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/deepseek-v4p1-flash", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4p1-flash", APIs: []string{"openai_chat"}},
 		},
 	}
 	bs := Build(models.All(), []Source{LLMIntegration(integ, ""), Predictable()}, &http.Client{}, nil)
@@ -140,6 +144,10 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"kimi-k2.6-fireworks",
 		"deepseek-v4-pro-fireworks",
 		"deepseek-v4-flash-0731-fireworks",
+		// The gateway advertises this as fireworks/deepseek-v4p1-flash; it must
+		// resolve to the catalog entry (reasoning, images, Shelley's ID) rather
+		// than being materialized as a bare unknown model.
+		"deepseek-v4.1-flash-fireworks",
 	} {
 		b := findBuilt(bs, id)
 		if b == nil {
@@ -172,6 +180,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"kimi-k2p6",
 		"deepseek-v4-pro",
 		"deepseek-v4-flash-0731",
+		"deepseek-v4p1-flash",
 		"gemini-3.8-flash",
 	} {
 		if b := findBuilt(bs, id); b != nil {

@@ -50,6 +50,9 @@ eq("glm-5.2-fireworks", "GLM 5.2");
 eq("glm-5p2", "GLM 5.2");
 eq("deepseek-v4-pro-fireworks", "DeepSeek V4 Pro");
 eq("deepseek-v4-flash-0731-fireworks", "DeepSeek V4 Flash 0731");
+// Dot-versioned family token: "v4.1" must survive as a version, not veto.
+eq("deepseek-v4.1-flash-fireworks", "DeepSeek V4.1 Flash");
+eq("deepseek-v4p1-flash", "DeepSeek V4.1 Flash");
 eq("grok-4.5", "Grok 4.5");
 eq("kimi-k3-fireworks", "Kimi K3");
 eq("kimi-k2.7-code-fireworks", "Kimi K2.7 Code");

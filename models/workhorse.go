@@ -22,7 +22,10 @@ var workhorseFamilies = map[Provider]workhorseFamily{
 		contains: "flash",
 		excludes: []string{"lite", "image", "tts", "live", "omni"},
 	},
-	ProviderFireworks: {contains: "deepseek-v4-flash"},
+	// DeepSeek's Flash line. Matched on "deepseek-v4" minus Pro rather than
+	// "deepseek-v4-flash" because the 4.1 release is "deepseek-v4.1-flash":
+	// the dot-versioned IDs do not share a literal "v4-flash" substring.
+	ProviderFireworks: {contains: "deepseek-v4", excludes: []string{"pro"}},
 }
 
 type workhorseService struct {
