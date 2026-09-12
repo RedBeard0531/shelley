@@ -51,6 +51,7 @@ var shadowPairs = []shadowPair{
 	{Better: "kimi-k2.7-code-fireworks", Worse: "kimi-k2.6-fireworks"},
 	{Better: "kimi-k3-fireworks", Worse: "kimi-k2.7-code-fireworks"},
 	{Better: "kimi-k3-fireworks", Worse: "kimi-k2.6-fireworks"},
+	{Better: "glm-5.3-fireworks", Worse: "glm-5.2-fireworks"},
 
 	// Arguable / cross-family supersessions. We still encode them so the
 	// default list stays lean; the reasoning is noted inline.
@@ -71,7 +72,8 @@ var shadowPairs = []shadowPair{
 	// much larger output limit, so it supersedes it outright. glm-5.2 shadows it
 	// for the same reason it shadows 0731.
 	{Better: "deepseek-v4.1-flash-fireworks", Worse: "deepseek-v4-flash-0731-fireworks"},
-	{Better: "glm-5.2-fireworks", Worse: "deepseek-v4.1-flash-fireworks"},
+	{Better: "glm-5.3-fireworks", Worse: "kimi-k2.7-code-fireworks"}, // different families; glm costs a bit more; kimi-k3 costs far more, so it doesn't shadow glm
+	{Better: "glm-5.3-fireworks", Worse: "deepseek-v4-flash-0731-fireworks"},
 	{Better: "gpt-5.6-luna", Worse: "claude-haiku-4.5"},
 	{Better: "gpt-5.6-luna", Worse: "gpt-5.3-codex"},
 }
