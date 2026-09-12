@@ -24,6 +24,7 @@ const FAMILIES: Record<string, string> = {
   gemini: "Gemini",
   llama: "Llama",
   mistral: "Mistral",
+  nemotron: "Nemotron",
 };
 
 // Known word tokens and their display forms.
@@ -47,6 +48,7 @@ const WORDS: Record<string, string> = {
   preview: "Preview",
   turbo: "Turbo",
   astra: "Astra",
+  lightning: "Lightning",
   sol: "Sol",
   terra: "Terra",
   luna: "Luna",

@@ -122,10 +122,13 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 			{ID: "openai/gpt-5.6-luna", Provider: "openai", NativeID: "gpt-5.6-luna", APIs: []string{"openai_chat", "openai_responses"}},
 			{ID: "openai/gpt-5.5", Provider: "openai", NativeID: "gpt-5.5", APIs: []string{"openai_responses"}},
 			{ID: "fireworks/glm-5p2", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p2", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/glm-5p3", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p3", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/glm-5p3-flash", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p3-flash", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/kimi-k2p6", Provider: "fireworks", NativeID: "accounts/fireworks/models/kimi-k2p6", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4-pro-0813", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-pro-0813", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4-flash-0731", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-flash-0731", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4p1-flash", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4p1-flash", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/nemotron-lightning-3p5-30b-a3b", Provider: "fireworks", NativeID: "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b", APIs: []string{"openai_chat"}},
 		},
 	}
 	bs := Build(models.All(), []Source{LLMIntegration(integ, ""), Predictable()}, &http.Client{}, nil)
@@ -141,6 +144,8 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"gpt-5.6-luna",
 		"gpt-5.5",
 		"glm-5.2-fireworks",
+		"glm-5.3-fireworks",
+		"glm-5.3-flash-fireworks",
 		"kimi-k2.6-fireworks",
 		"deepseek-v4-pro-fireworks",
 		"deepseek-v4-flash-0731-fireworks",
@@ -148,6 +153,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		// resolve to the catalog entry (reasoning, images, Shelley's ID) rather
 		// than being materialized as a bare unknown model.
 		"deepseek-v4.1-flash-fireworks",
+		"nemotron-lightning-3p5-fireworks",
 	} {
 		b := findBuilt(bs, id)
 		if b == nil {
@@ -177,10 +183,13 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"openai/gpt-5.5",
 		"claude-opus-4-7",
 		"glm-5p2",
+		"glm-5p3",
+		"glm-5p3-flash",
 		"kimi-k2p6",
 		"deepseek-v4-pro",
 		"deepseek-v4-flash-0731",
 		"deepseek-v4p1-flash",
+		"nemotron-lightning-3p5-30b-a3b",
 		"gemini-3.8-flash",
 	} {
 		if b := findBuilt(bs, id); b != nil {
