@@ -528,6 +528,9 @@ func (s *ResponsesService) toLLMUsageFromResponses(usage responsesUsage, headers
 		CacheReadInputTokens: cached,
 		OutputTokens:         out,
 	}
+	if usage.OutputTokensDetails != nil {
+		u.ReasoningTokens = uint64(usage.OutputTokensDetails.ReasoningTokens)
+	}
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
 }

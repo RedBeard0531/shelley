@@ -1619,3 +1619,29 @@ func TestParseResponsesSSETimestamps(t *testing.T) {
 		t.Fatalf("deltas = %+v", deltas)
 	}
 }
+
+func TestToLLMUsageFromResponsesReasoningTokens(t *testing.T) {
+	// Responses reports the reasoning subset of output tokens; models whose
+	// reasoning summaries are empty (opaque reasoning) report it all the same.
+	s := &ResponsesService{}
+	usage := s.toLLMUsageFromResponses(responsesUsage{
+		InputTokens:  37,
+		OutputTokens: 5477,
+		OutputTokensDetails: &responsesOutputTokensDetails{
+			ReasoningTokens: 5178,
+		},
+	}, nil)
+	if usage.ReasoningTokens != 5178 {
+		t.Errorf("ReasoningTokens = %d, expected 5178", usage.ReasoningTokens)
+	}
+	if usage.OutputTokens != 5477 {
+		t.Errorf("OutputTokens = %d, expected 5477", usage.OutputTokens)
+	}
+
+	// Without the details block the count stays zero so the UI can fall back to
+	// estimating from whatever thinking text came back.
+	bare := s.toLLMUsageFromResponses(responsesUsage{InputTokens: 1, OutputTokens: 2}, nil)
+	if bare.ReasoningTokens != 0 {
+		t.Errorf("ReasoningTokens = %d, expected 0", bare.ReasoningTokens)
+	}
+}
