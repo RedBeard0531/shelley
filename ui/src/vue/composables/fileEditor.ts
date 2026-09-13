@@ -7,9 +7,21 @@
 // instead of emitting through every intermediate component.
 import { inject, provide, type InjectionKey } from "vue";
 
+/** Options for opening a file at a specific location. */
+export interface OpenFileOptions {
+  /** 1-based line to reveal (and place the cursor on). */
+  line?: number;
+  /** Last line of the selection; only set for line-range references. */
+  endLine?: number;
+  /** Directory to resolve a relative path against (the emitting message's
+   *  cwd). Falls back to the conversation's current cwd when absent. */
+  baseDir?: string;
+}
+
 /** Opens `path` (absolute, or relative to the conversation's cwd) in the
- *  editor modal. A path that can't be resolved is ignored. */
-export type OpenFileEditor = (path: string) => void;
+ *  editor modal, optionally at a specific line/range. A path that can't be
+ *  resolved is ignored. */
+export type OpenFileEditor = (path: string, opts?: OpenFileOptions) => void;
 
 export const OpenFileEditorKey: InjectionKey<OpenFileEditor> = Symbol("open-file-editor");
 

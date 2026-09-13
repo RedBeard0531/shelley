@@ -15,6 +15,8 @@
       :cache-owner="cacheOwner"
       :run-key="runKey"
       :rewrite-localhost-links="rewriteLocalhostLinks"
+      :cwd="cwd"
+      :file-refs="fileRefs"
       commentable
     />
     <ol v-if="citations.length > 0" class="citation-sources">
@@ -49,5 +51,9 @@ defineProps<{
   cacheOwner?: object;
   runKey?: string;
   rewriteLocalhostLinks?: boolean;
+  // Emission-time cwd for file-reference resolution; see MarkdownContent.vue.
+  cwd?: string;
+  // This text is the agent's, so file references in it render as chips.
+  fileRefs?: boolean;
 }>();
 </script>
