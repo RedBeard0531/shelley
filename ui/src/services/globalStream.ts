@@ -46,6 +46,18 @@ const STALE_MS = 35000;
 // escalating backoff (1s→2s→5s→30s) like consecutive failures.
 const STABLE_CONNECTION_MS = 30000;
 
+async function probeAuthentication(): Promise<boolean> {
+  // exe.dev turns an unauthenticated request into a same-origin login
+  // redirect. Manual redirects surface to fetch as an opaque response, while
+  // an authenticated Shelley answers this cheap capability probe directly.
+  const response = await fetch("/api/upload/raw", {
+    cache: "no-store",
+    credentials: "same-origin",
+    redirect: "manual",
+  });
+  return response.type === "opaqueredirect" || response.status === 401;
+}
+
 export interface GlobalStreamOptions {
   getHash: () => string | null;
   onListPatch: (event: ConversationListPatchEvent) => void;
@@ -121,6 +133,7 @@ export function connectGlobalStream({
   // True while the EventSource is in the middle of being re-established
   // after a disconnect. Set on error, cleared on the next successful open.
   let isReconnecting = false;
+  let connectionAttempt = 0;
 
   const setStatus = (s: StreamStatus) => {
     if (s === lastStatus) return;
@@ -262,6 +275,7 @@ export function connectGlobalStream({
 
   const connect = () => {
     if (closed) return;
+    const attemptID = ++connectionAttempt;
     clearReconnect();
     eventSource?.close();
     // Treat the start of a connection attempt as a liveness checkpoint so a
@@ -326,6 +340,14 @@ export function connectGlobalStream({
       // disconnect, not on every retry.
       if (hasEverConnected) isReconnecting = true;
       setStatus(attempts > 3 ? "disconnected" : "reconnecting");
+      void probeAuthentication()
+        .then((required) => {
+          if (closed || attemptID !== connectionAttempt || !required) return;
+          closed = true;
+          clearReconnect();
+          window.location.reload();
+        })
+        .catch(() => {});
       const delay = attempts <= 1 ? 1000 : attempts === 2 ? 2000 : attempts === 3 ? 5000 : 30000;
       reconnectTimer = window.setTimeout(connect, delay);
     };

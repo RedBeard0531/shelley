@@ -114,18 +114,34 @@ const fakeDocument = new FakeEventTarget() as FakeEventTarget & {
   visibilityState: string;
 };
 fakeDocument.visibilityState = "visible";
+let reloadCalls = 0;
 const fakeWindow = new FakeEventTarget() as FakeEventTarget & {
   setTimeout: typeof fakeSetTimeout;
   clearTimeout: typeof fakeClearTimeout;
+  location: { reload: () => void };
 };
 fakeWindow.setTimeout = fakeSetTimeout;
 fakeWindow.clearTimeout = fakeClearTimeout;
+fakeWindow.location = { reload: () => (reloadCalls += 1) };
+
+let fetchResponseType: ResponseType = "basic";
+let fetchStatus = 200;
+let fetchCalls = 0;
+let fetchURL = "";
+let fetchRedirect: RequestRedirect | undefined;
+const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  fetchCalls += 1;
+  fetchURL = input.toString();
+  fetchRedirect = init?.redirect;
+  return { type: fetchResponseType, status: fetchStatus } as Response;
+};
 
 // Install globals before importing the module under test.
 const g = globalThis as unknown as Record<string, unknown>;
 g.EventSource = FakeEventSource;
 g.document = fakeDocument;
 g.window = fakeWindow;
+g.fetch = fakeFetch;
 const realDateNow = Date.now;
 Date.now = () => now;
 
@@ -138,6 +154,12 @@ function reset(): void {
   fakeDocument.visibilityState = "visible";
   fakeDocument.handlers.clear();
   fakeWindow.handlers.clear();
+  fetchResponseType = "basic";
+  fetchStatus = 200;
+  fetchCalls = 0;
+  fetchURL = "";
+  fetchRedirect = undefined;
+  reloadCalls = 0;
 }
 
 // ---- Module under test -----------------------------------------------------
@@ -313,6 +335,38 @@ await run("heartbeat watchdog reconnects a foreground zombie", () => {
   latest().emitOpen();
   assert(markAllStaleCalls === 1, "markAllStale fired after watchdog reconnect");
   assert(s.reconnects === 1, "onReconnect fired after watchdog reconnect");
+  s.handle.close();
+});
+
+await run("reloads when exe.dev requires authentication", async () => {
+  reset();
+  fetchResponseType = "opaqueredirect";
+  const s = newStream();
+  latest().emitOpen();
+
+  latest().emitError();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert(fetchCalls === 1, "probed the same-origin Shelley endpoint once");
+  assert(fetchURL === "/api/upload/raw", "used the cheap capability endpoint");
+  assert(fetchRedirect === "manual", "kept the login redirect observable");
+  assert(reloadCalls === 1, "reloaded into the exe.dev authentication flow");
+  assert(timers.length === 0, "cancelled the reconnect timer before reloading");
+  s.handle.close();
+});
+
+await run("reloads on an explicit authentication-required response", async () => {
+  reset();
+  fetchStatus = 401;
+  const s = newStream();
+  latest().emitOpen();
+
+  latest().emitError();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert(reloadCalls === 1, "reloaded after the 401 response");
   s.handle.close();
 });
 
