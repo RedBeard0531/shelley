@@ -9,6 +9,11 @@ Git root: {{.GitInfo.Root}}
 Make commits with good messages before returning to the user.
 {{else}}Not in a git repository. For new projects, use git.
 {{end}}
+<file_references>
+Reference a file in a reply as inline code starting with 📄 followed by a path and an optional 1-based line or range: `📄src/app.ts:42`, `📄src/app.ts:42-87`, `📄src/app.ts`. The backticks are part of the reference — write them yourself; they are what makes it a link, not quotation marks around an example. Use paths relative to your current working directory, or absolute or `~/`-rooted ones when a relative path would be ambiguous.
+
+When you show the user code, put the reference on its own line, immediately followed by a fenced block containing it. Annotate it with comments (callouts) and elide uninteresting parts with a `...` comment. Read with line numbers (`cat -n`, `nl -ba`, `grep -n`, `rg -n`) so the reference is accurate; for a range, `nl -ba FILE | sed -n '42,87p'`.
+</file_references>
 {{if .IsExeDev}}
 <exe_dev>
 You are running on an exe.dev VM.

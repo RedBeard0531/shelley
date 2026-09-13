@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { BtwTurn, Message } from "../types";
+import type { BtwTurn, Conversation, Message } from "../types";
 import {
   agent,
   childConversation,
@@ -208,6 +208,38 @@ assert.equal(
   JSON.stringify({ descriptor, conversation, purityInput, idleTransient }),
   before,
   "projection does not mutate inputs",
+);
+
+// A reader can be moved by the new-conversation hook, so the answer's own
+// emission cwd travels with the turn: file references in it resolve against
+// the directory the reader was in, not the parent conversation's.
+const movedReader = project([
+  user(1, "first"),
+  agent(2, "answer one", { userData: { cwd: "/child" } }),
+  user(3, "second"),
+  agent(4, "answer two"),
+]);
+assert.deepEqual(
+  movedReader.turns.map((turn) => turn.cwd),
+  ["/child", undefined],
+  "each turn carries the cwd its answer was emitted under",
+);
+
+// An answer that is still streaming has no stored message to stamp from, so the
+// reader's own directory stands in: resolving a reference in live text against
+// the parent conversation's directory would open the wrong file.
+const streamingReader = projectBtwReader(
+  descriptor,
+  {
+    conversation: { ...conversation, cwd: "/reader" } as Conversation,
+    messages: [user(1, "ask")],
+  },
+  { ...idleTransient, agentWorking: true, streamingText: "live" },
+);
+assert.equal(
+  streamingReader.turns[0]?.cwd,
+  "/reader",
+  "a streaming answer resolves against the reader's own cwd",
 );
 
 console.log("✓ BTW projector derives turns, tools, terminal states, retries, and streaming");
