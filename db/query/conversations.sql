@@ -498,3 +498,10 @@ UPDATE conversations
 SET tags = ?
 WHERE conversation_id = ?
 RETURNING *;
+
+-- name: ListConversationsWithQueuedTranscriptions :many
+-- Every conversation (archived or not) whose durable queue holds a
+-- transcription item. Used once at startup to recover detached workers.
+SELECT * FROM conversations
+WHERE queued_messages LIKE '%"kind":"transcription"%'
+ORDER BY created_at ASC;

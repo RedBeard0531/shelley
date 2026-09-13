@@ -458,6 +458,16 @@ class ApiService {
     }
   }
 
+  async sendQueuedMessageNow(conversationId: string, queuedId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${conversationId}/send-queued?queued_id=${encodeURIComponent(queuedId)}`,
+      { method: "POST" },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "Failed to send queued message now");
+    }
+  }
+
   // Cancel a single queued message by its QueuedMessage id.
   async cancelQueuedMessage(conversationId: string, queuedId: string): Promise<void> {
     const response = await fetch(
@@ -466,6 +476,17 @@ class ApiService {
     );
     if (!response.ok) {
       throw new Error(`Failed to cancel queued message: ${response.statusText}`);
+    }
+  }
+
+  // Retry a failed durable queued item in place.
+  async retryQueuedMessage(conversationId: string, queuedId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${conversationId}/retry-queued?queued_id=${encodeURIComponent(queuedId)}`,
+      { method: "POST" },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "Failed to retry queued message");
     }
   }
 

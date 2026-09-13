@@ -979,8 +979,14 @@ func (s *Server) conversationMux() *http.ServeMux {
 	mux.HandleFunc("GET /{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
 		s.handleGetSubagents(w, r, r.PathValue("id"))
 	})
+	mux.HandleFunc("POST /{id}/send-queued", func(w http.ResponseWriter, r *http.Request) {
+		s.handleSendQueuedNow(w, r, r.PathValue("id"))
+	})
 	mux.HandleFunc("POST /{id}/cancel-queued", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCancelQueued(w, r, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /{id}/retry-queued", func(w http.ResponseWriter, r *http.Request) {
+		s.handleRetryQueued(w, r, r.PathValue("id"))
 	})
 	mux.HandleFunc("PUT /{id}/draft", func(w http.ResponseWriter, r *http.Request) {
 		s.handleUpdateDraft(w, r, r.PathValue("id"))
@@ -1184,6 +1190,19 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// (QueueMessage) paths read it off this ctx.
 	ctx = contextWithUserEmail(ctx, userEmail)
 
+	// Built-in /transcription is durable queued user input backed by a hidden
+	// child. Reject bad commands before any side effect (draft promotion or
+	// manager creation); it is queued below once the parent exists.
+	transcriptionPath, transcriptionContext, isTranscription, err := validateTranscriptionCommand(req.Message)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if isTranscription && existing.Archived {
+		http.Error(w, "conversation is archived", http.StatusConflict)
+		return
+	}
+
 	// A built-in /btw is a detached child start, not a parent turn. Give an
 	// installed slash/btw hook first refusal, then create the child before
 	// acquiring or consulting the parent manager so Queue and parent work do
@@ -1341,6 +1360,13 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
+	// The command itself is control input: it is never persisted as an LLM
+	// message and is replaced by the finished transcript before queue drain.
+	if isTranscription {
+		s.queueTranscription(ctx, w, manager, transcriptionPath, transcriptionContext, modelID)
+		return
+	}
+
 	// Built-in /model command: switch the conversation to a different model
 	// mid-conversation. Handled entirely here — it never reaches the LLM.
 	if s.handleModelCommand(ctx, w, conversationID, modelID, manager, req.Message) {
@@ -1375,7 +1401,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// Decide whether this message will be queued or accepted immediately.
 	// The chat-message hook is told which path it will take so it can react
 	// accordingly.
-	willQueue := req.Queue || manager.IsDistilling()
+	willQueue := req.Queue || manager.IsDistilling() || manager.HasQueuedMessages()
 
 	// Run chat-message hook; the hook may rewrite the message text. Hook
 	// failures abort the request — the user's message is not delivered.
@@ -1419,6 +1445,16 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	}
 
 	firstMessage, err := manager.AcceptUserMessage(ctx, llmService, modelID, userMessage)
+	if errors.Is(err, errQueuedMessagesPending) {
+		if err := manager.QueueMessage(ctx, s, modelID, userMessage); err != nil {
+			s.logger.Error("Failed to queue user message after concurrent queue reservation", "conversationID", conversationID, "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+		return
+	}
 	if errors.Is(err, errConversationModelMismatch) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1430,24 +1466,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if firstMessage {
-		ctxNoCancel := context.WithoutCancel(ctx)
-		go func() {
-			slugCtx, cancel := context.WithTimeout(ctxNoCancel, 15*time.Second)
-			defer cancel()
-			_, marker, err := slug.GenerateSlug(slugCtx, s.llmManager, s.db, s.logger, conversationID, req.Message, modelID)
-			// Publish the usage marker before anything else. It owns a real
-			// sequence_id, so a client that never sees it observes a hole and
-			// throws away its cached history. Publish even when slug assignment
-			// failed: the row exists regardless.
-			if marker != nil {
-				s.notifySubscribersNewMessage(ctxNoCancel, conversationID, marker)
-			}
-			if err != nil {
-				s.logger.Warn("Failed to generate slug for conversation", "conversationID", conversationID, "error", err)
-			} else {
-				go s.notifySubscribers(ctxNoCancel, conversationID)
-			}
-		}()
+		s.generateSlugAsync(conversationID, req.Message, modelID)
 	}
 
 	w.WriteHeader(http.StatusAccepted)
@@ -1641,24 +1660,7 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if firstMessage && !hookSlugApplied {
-		ctxNoCancel := context.WithoutCancel(ctx)
-		go func() {
-			slugCtx, cancel := context.WithTimeout(ctxNoCancel, 15*time.Second)
-			defer cancel()
-			_, marker, err := slug.GenerateSlug(slugCtx, s.llmManager, s.db, s.logger, conversationID, req.Message, modelID)
-			// Publish the usage marker before anything else. It owns a real
-			// sequence_id, so a client that never sees it observes a hole and
-			// throws away its cached history. Publish even when slug assignment
-			// failed: the row exists regardless.
-			if marker != nil {
-				s.notifySubscribersNewMessage(ctxNoCancel, conversationID, marker)
-			}
-			if err != nil {
-				s.logger.Warn("Failed to generate slug for conversation", "conversationID", conversationID, "error", err)
-			} else {
-				go s.notifySubscribers(ctxNoCancel, conversationID)
-			}
-		}()
+		s.generateSlugAsync(conversationID, req.Message, modelID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1678,22 +1680,30 @@ func (s *Server) handleCancelConversation(w http.ResponseWriter, r *http.Request
 
 	ctx := r.Context()
 
-	// Get the conversation manager if it exists
 	s.mu.Lock()
 	manager, exists := s.activeConversations[conversationID]
 	s.mu.Unlock()
 
-	// Cancel the conversation itself first (so it stops issuing new subagent
-	// work), then propagate to any actively-working subagents beneath it. The
-	// subagent tree is cancelled even when the parent has no active loop:
-	// the parent may have gone idle (or been evicted) while its subagents
-	// keep working, and the user's cancel means "stop all of this work".
-	if exists {
-		if err := manager.CancelConversation(ctx); err != nil {
-			s.logger.Error("Failed to cancel conversation", "conversationID", conversationID, "error", err)
-			http.Error(w, "Failed to cancel conversation", http.StatusInternalServerError)
-			return
+	// Cancel detached transcription work and clear the durable queue, then
+	// cancel the parent loop and the remaining child tree. The subagent tree is
+	// cancelled even when the parent has no active loop: the parent may have
+	// gone idle (or been evicted) while its subagents keep working, and the
+	// user's cancel means "stop all of this work".
+	err := s.cancelQueuedTranscriptions(ctx, conversationID, "", func() error {
+		if exists {
+			return manager.CancelConversation(ctx)
 		}
+		_, err := s.db.ClearQueuedMessages(ctx, conversationID)
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		s.logger.Error("Failed to cancel conversation", "conversationID", conversationID, "error", err)
+		http.Error(w, "Failed to cancel conversation", http.StatusInternalServerError)
+		return
 	}
 	s.cancelSubagentTree(ctx, conversationID)
 
@@ -3736,47 +3746,83 @@ func (s *Server) handleSetSetting(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// handleSendQueuedNow interrupts the active turn and drains the durable queue
+// from its FIFO head. queued_id must name that head item (checked under the
+// loop lifecycle lock in SendQueuedNow) so a button on a stale or later ghost
+// cannot reorder user messages.
+func (s *Server) handleSendQueuedNow(w http.ResponseWriter, r *http.Request, conversationID string) {
+	queuedID := r.URL.Query().Get("queued_id")
+	if queuedID == "" {
+		http.Error(w, "queued_id is required", http.StatusBadRequest)
+		return
+	}
+	conversation, err := s.db.GetConversationByID(r.Context(), conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if conversation.Archived {
+		http.Error(w, "conversation is archived", http.StatusConflict)
+		return
+	}
+	manager, err := s.getOrCreateConversationManager(r.Context(), conversationID, r.Header.Get("X-ExeDev-Email"))
+	if err != nil {
+		s.logger.Error("Failed to initialize conversation for send now", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := manager.SendQueuedNow(r.Context(), s, queuedID); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // handleCancelQueued handles POST /conversation/<id>/cancel-queued
 // Cancels pending queued user messages for a conversation. With a ?queued_id=
 // query param it removes a single queued message by its QueuedMessage id;
 // without it, the whole queue is cleared.
 func (s *Server) handleCancelQueued(w http.ResponseWriter, r *http.Request, conversationID string) {
 	queuedID := r.URL.Query().Get("queued_id")
+	ctx := r.Context()
 
 	s.mu.Lock()
-	manager, ok := s.activeConversations[conversationID]
+	manager, active := s.activeConversations[conversationID]
 	s.mu.Unlock()
 
-	if ok {
-		if queuedID != "" {
-			manager.CancelQueuedMessage(r.Context(), s, queuedID)
-		} else {
-			manager.CancelQueuedMessages(r.Context(), s)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-		return
-	}
-
-	// No active manager (e.g. after a restart, before the conversation is
-	// opened) but the queued_messages array may still hold persisted entries.
-	// Clear/remove directly via the DB so the user can always drain the queue,
-	// then broadcast the updated conversation row to list subscribers (the DB
-	// write also bumps updated_at, firing the list-patch OnCommit hook).
-	ctx := r.Context()
+	// Without an active manager (e.g. after a restart, before the conversation
+	// is opened) the queued_messages array may still hold persisted entries, so
+	// remove them directly and broadcast the row ourselves.
 	var conv *generated.Conversation
-	var err error
-	if queuedID != "" {
-		conv, err = s.db.RemoveQueuedMessages(ctx, conversationID, queuedID)
-	} else {
-		conv, err = s.db.ClearQueuedMessages(ctx, conversationID)
-	}
-	if err != nil {
-		s.logger.Error("Failed to cancel queued messages (no manager)", "conversationID", conversationID, "error", err)
+	err := s.cancelQueuedTranscriptions(ctx, conversationID, queuedID, func() (err error) {
+		switch {
+		case active && queuedID != "":
+			conv, err = manager.CancelQueuedMessage(ctx, s, queuedID)
+		case active:
+			conv, err = manager.CancelQueuedMessages(ctx, s)
+		case queuedID != "":
+			conv, err = s.db.RemoveQueuedMessages(ctx, conversationID, queuedID)
+		default:
+			conv, err = s.db.ClearQueuedMessages(ctx, conversationID)
+		}
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "Conversation not found", http.StatusNotFound)
 		return
 	}
-	s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conv})
+	if err != nil {
+		s.logger.Error("Failed to cancel queued messages", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !active {
+		s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conv})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

@@ -17,8 +17,9 @@ present; a client that doesn't recognize a capability just doesn't use
 it, and an older server that doesn't ship the field is equivalent to
 advertising none.
 
-The set is currently empty; it exists as a forward slot so we can add
-capabilities later without reshaping the response.
+Capabilities advertise optional behavior. Current capabilities include
+`thinking-levels`, `drafts`, and `queued-transcriptions`; clients that do not
+recognize one ignore it.
 
 ## Stream architecture
 
@@ -92,7 +93,25 @@ Unless noted, results exclude **archived** conversations.
     - `?tail=<n>` — first frame contains only the last `n` messages.
   A `{"snapshot_complete": true}` frame follows the initial replay
   and precedes live updates.
-- `POST /api/conversation/<id>/chat` — send a user message.
+- `POST /api/conversation/<id>/chat` — send a user message. A message of
+  `/transcription <absolute uploaded-media path>` creates a durable specialized
+  queued message and returns `202 {"status":"queued"}`. The path must name a
+  regular file inside `/tmp/shelley-uploads`. A hidden low-reasoning child
+  performs the transcription independently of the HTTP request. While it is
+  working or failed, the item reserves its FIFO position; when ready, the
+  ordinary queue drainer creates the immutable parent user turn. Optional
+  context follows the path on subsequent lines of the command and is prepended
+  to the transcript, preserving text and ready attachments that were present
+  before recording. Video results include the original recording and generated
+  contact sheet paths in that turn.
+- `POST /api/conversation/<id>/send-queued?queued_id=<id>` — interrupt the
+  running turn and immediately drain the FIFO head. The supplied id must still
+  name that head item.
+- `POST /api/conversation/<id>/cancel-queued?queued_id=<id>` — cancel and remove
+  one queued item. Omitting `queued_id` cancels the entire queue. Cancelling a
+  working transcription also stops its hidden child.
+- `POST /api/conversation/<id>/retry-queued?queued_id=<id>` — retry a failed
+  queued transcription in place.
 - `POST /api/conversation/<id>/cancel` — interrupt the running loop.
 - `POST /api/conversation/<id>/archive` / `unarchive`.
 - `POST /api/conversation/<id>/hooks` — register an end-of-turn webhook.
@@ -202,6 +221,7 @@ fresh reset event.
 - `GET /api/upload/raw` — empty `200 OK` if the server supports the raw
   upload endpoint; clients use this as a capability probe (older servers
   return 404/405).
+
 - `GET /api/read?path=` — read a file (images served as `image/*`).
 - `POST /api/validate-cwd` — check whether a path is a valid working
   directory.

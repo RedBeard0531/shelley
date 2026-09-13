@@ -879,6 +879,54 @@ func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsPa
 	return items, nil
 }
 
+const listConversationsWithQueuedTranscriptions = `-- name: ListConversationsWithQueuedTranscriptions :many
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages FROM conversations
+WHERE queued_messages LIKE '%"kind":"transcription"%'
+ORDER BY created_at ASC
+`
+
+// Every conversation (archived or not) whose durable queue holds a
+// transcription item. Used once at startup to recover detached workers.
+func (q *Queries) ListConversationsWithQueuedTranscriptions(ctx context.Context) ([]Conversation, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationsWithQueuedTranscriptions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Conversation{}
+	for rows.Next() {
+		var i Conversation
+		if err := rows.Scan(
+			&i.ConversationID,
+			&i.Slug,
+			&i.UserInitiated,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Cwd,
+			&i.Archived,
+			&i.ParentConversationID,
+			&i.Model,
+			&i.ConversationOptions,
+			&i.CurrentGeneration,
+			&i.AgentWorking,
+			&i.Tags,
+			&i.IsDraft,
+			&i.Draft,
+			&i.QueuedMessages,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const promoteDraftConversation = `-- name: PromoteDraftConversation :one
 UPDATE conversations
 SET is_draft = FALSE, draft = '', updated_at = CURRENT_TIMESTAMP

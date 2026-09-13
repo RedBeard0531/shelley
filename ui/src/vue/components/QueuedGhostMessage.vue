@@ -21,8 +21,18 @@
           Queued
         </span>
         <button
+          v-if="onSendNow"
+          class="queued-message-badge-action queued-message-badge-send"
+          :disabled="sendNowPending"
+          data-testid="send-queued-now"
+          v-tooltip.top="'Interrupt the current response and send this now'"
+          @click.stop="onSendNow(queued.id)"
+        >
+          Send now
+        </button>
+        <button
           v-if="onCancel"
-          class="queued-message-badge-cancel"
+          class="queued-message-badge-action"
           data-testid="cancel-queued"
           v-tooltip.top="'Cancel queued message'"
           @click.stop="onCancel(queued.id)"
@@ -40,6 +50,8 @@ import { type QueuedMessage, queuedMessageText } from "../../types";
 
 const props = defineProps<{
   queued: QueuedMessage;
+  onSendNow?: (id: string) => void;
+  sendNowPending?: boolean;
   onCancel?: (id: string) => void;
 }>();
 

@@ -1020,9 +1020,143 @@ func TestQueuedMessages(t *testing.T) {
 	}
 }
 
-// TestCreateMessageRemoveQueuedIDAtomic verifies that CreateMessageParams.
-// RemoveQueuedID drops the matching queued entry in the SAME Tx as the INSERT,
-// so the real (immutable) drained message and the array removal are atomic.
+func TestQueuedTranscriptionLifecycle(t *testing.T) {
+	database := setupTestDB(t)
+	defer database.Close()
+	ctx := t.Context()
+
+	parent, err := database.CreateConversation(ctx, stringPtr("queued-transcription"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued := QueuedMessage{
+		ID:        "transcription-1",
+		CreatedAt: time.Now().UTC(),
+		Model:     "predictable",
+		Kind:      QueuedMessageKindTranscription,
+		State:     QueuedMessageStateWorking,
+		Transcription: &QueuedTranscription{
+			MediaPath: "/tmp/a.webm",
+		},
+	}
+	updatedParent, child, created, err := database.CreateQueuedTranscription(
+		ctx,
+		parent.ConversationID,
+		"transcription-child",
+		nil,
+		queued,
+		ConversationOptions{Kind: "transcription", ThinkingLevel: "low"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.ParentConversationID == nil || *child.ParentConversationID != parent.ConversationID {
+		t.Fatalf("child parent = %v", child.ParentConversationID)
+	}
+	if child.Model == nil || *child.Model != "predictable" {
+		t.Fatalf("child model = %v", child.Model)
+	}
+	if opts := ParseConversationOptions(child.ConversationOptions); opts.Kind != "transcription" || opts.ThinkingLevel != "low" {
+		t.Fatalf("child options = %#v", opts)
+	}
+	if created.Transcription.ChildConversationID != child.ConversationID {
+		t.Fatalf("queued child = %q, child = %q", created.Transcription.ChildConversationID, child.ConversationID)
+	}
+	persisted := ParseQueuedMessages(updatedParent.QueuedMessages)
+	if len(persisted) != 1 || persisted[0].Kind != QueuedMessageKindTranscription || persisted[0].State != QueuedMessageStateWorking {
+		t.Fatalf("persisted queue = %#v", persisted)
+	}
+	if len(persisted[0].Llm) != 0 {
+		t.Fatalf("working transcription has llm payload: %s", persisted[0].Llm)
+	}
+
+	readyLLM := json.RawMessage(`{"Role":0,"Content":[{"Type":2,"Text":"hello"}]}`)
+	_, ready, err := database.UpdateQueuedMessage(ctx, parent.ConversationID, queued.ID, func(qm *QueuedMessage) error {
+		qm.State = QueuedMessageStateReady
+		qm.Llm = readyLLM
+		qm.Transcription.ContactSheetPath = "/tmp/a.jpg"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.State != QueuedMessageStateReady || string(ready.Llm) != string(readyLLM) || ready.Transcription.ContactSheetPath != "/tmp/a.jpg" {
+		t.Fatalf("ready item = %#v", ready)
+	}
+
+	_, _, err = database.UpdateQueuedMessage(ctx, parent.ConversationID, "missing", func(*QueuedMessage) error { return nil })
+	if !errors.Is(err, ErrQueuedMessageNotFound) {
+		t.Fatalf("missing update error = %v", err)
+	}
+}
+
+func TestRetryQueuedTranscriptionIsAtomic(t *testing.T) {
+	database := setupTestDB(t)
+	defer database.Close()
+	ctx := t.Context()
+
+	parent, err := database.CreateConversation(ctx, stringPtr("retry-transcription"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued := QueuedMessage{
+		ID:        "retry-1",
+		Llm:       json.RawMessage(`{"Role":0}`),
+		CreatedAt: time.Now().UTC(),
+		Model:     "predictable",
+		Kind:      QueuedMessageKindTranscription,
+		State:     QueuedMessageStateFailed,
+		Error:     "first attempt failed",
+		Transcription: &QueuedTranscription{
+			MediaPath:           "/tmp/a.webm",
+			ContactSheetPath:    "/tmp/old.jpg",
+			ChildConversationID: "old-child",
+		},
+	}
+	if _, err := database.AppendQueuedMessage(ctx, parent.ConversationID, queued); err != nil {
+		t.Fatal(err)
+	}
+
+	_, child, retried, err := database.RetryQueuedTranscription(
+		ctx,
+		parent.ConversationID,
+		queued.ID,
+		"retry-child",
+		nil,
+		ConversationOptions{Kind: "transcription", ThinkingLevel: "low"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.State != QueuedMessageStateWorking || retried.Error != "" || retried.Transcription.ContactSheetPath != "" {
+		t.Fatalf("retried item = %#v", retried)
+	}
+	if retried.Transcription.ChildConversationID != child.ConversationID || child.ConversationID == "old-child" {
+		t.Fatalf("replacement child: item=%q child=%q", retried.Transcription.ChildConversationID, child.ConversationID)
+	}
+
+	_, _, _, err = database.RetryQueuedTranscription(
+		ctx,
+		parent.ConversationID,
+		queued.ID,
+		"duplicate-child",
+		nil,
+		ConversationOptions{Kind: "transcription", ThinkingLevel: "low"},
+	)
+	if !errors.Is(err, ErrQueuedMessageNotRetryable) {
+		t.Fatalf("duplicate retry error = %v", err)
+	}
+	children, err := database.GetSubagents(ctx, parent.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 1 {
+		t.Fatalf("children after duplicate retry = %d, want 1", len(children))
+	}
+}
+
+// TestCreateMessageRemoveQueuedIDAtomic verifies that RemoveQueuedID drops the
+// matching queued entry in the SAME Tx as the INSERT, so the real immutable
 func TestCreateMessageRemoveQueuedIDAtomic(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -1074,6 +1208,30 @@ func TestCreateMessageRemoveQueuedIDAtomic(t *testing.T) {
 	}
 	if users != 1 {
 		t.Fatalf("expected exactly 1 real user row after drain, got %d", users)
+	}
+
+	// A cancellation that wins the race with drain must not leave a parent
+	// message behind. Missing queue identity aborts the entire INSERT Tx.
+	if _, err := db.CreateMessage(ctx, CreateMessageParams{
+		ConversationID: id,
+		Type:           MessageTypeUser,
+		LLMData:        map[string]any{"Role": 0},
+		RemoveQueuedID: "already-cancelled",
+	}); !errors.Is(err, ErrQueuedMessageNotFound) {
+		t.Fatalf("missing RemoveQueuedID error = %v", err)
+	}
+	msgs, err = db.ListMessages(ctx, id)
+	if err != nil {
+		t.Fatalf("ListMessages after cancelled drain: %v", err)
+	}
+	users = 0
+	for _, m := range msgs {
+		if m.Type == string(MessageTypeUser) {
+			users++
+		}
+	}
+	if users != 1 {
+		t.Fatalf("cancelled drain inserted a user row: got %d", users)
 	}
 }
 
@@ -1481,5 +1639,43 @@ func TestManagedBtwIdentityAndUserInitiatedScrubbing(t *testing.T) {
 	malformed.ConversationOptions = `{"kind":"btw_reader","parent_pointer":{"generation":0,"sequence_id":0}}`
 	if _, ok := ManagedBtwReaderIdentity(malformed); ok {
 		t.Fatal("malformed reader identity validated")
+	}
+}
+
+// Recovery relies on the serialized form of a transcription item matching the
+// ListConversationsWithQueuedTranscriptions filter; pin that here.
+func TestListConversationsWithQueuedTranscriptions(t *testing.T) {
+	database := setupTestDB(t)
+	defer database.Close()
+	ctx := t.Context()
+
+	plain, err := database.CreateConversation(ctx, stringPtr("plain-queue"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AppendQueuedMessage(ctx, plain.ConversationID, QueuedMessage{ID: "plain", Llm: json.RawMessage(`{}`), CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := database.CreateConversation(ctx, stringPtr("transcription-queue"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AppendQueuedMessage(ctx, parent.ConversationID, QueuedMessage{
+		ID: "t", Llm: json.RawMessage(`{}`), CreatedAt: time.Now().UTC(),
+		Kind: QueuedMessageKindTranscription, State: QueuedMessageStateFailed,
+		Transcription: &QueuedTranscription{MediaPath: "/tmp/a.webm", ChildConversationID: "child"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ArchiveConversation(ctx, parent.ConversationID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := database.ListConversationsWithQueuedTranscriptions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ConversationID != parent.ConversationID {
+		t.Fatalf("conversations with queued transcriptions = %#v", got)
 	}
 }

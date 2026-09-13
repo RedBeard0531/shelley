@@ -10,6 +10,11 @@ export const SLASH_COMMANDS = {
     description: "asks a one-off side question",
     takesArgs: true,
   },
+  TRANSCRIPTION: {
+    command: "/transcription",
+    description: "transcribes an uploaded recording",
+    takesArgs: true,
+  },
   FORK: {
     command: "/fork",
     description: "forks this conversation",

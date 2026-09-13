@@ -1,0 +1,839 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"shelley.exe.dev/claudetool/browse"
+	"shelley.exe.dev/db"
+	"shelley.exe.dev/llm"
+)
+
+func transcriptionTestFile(t *testing.T, name string) string {
+	t.Helper()
+	if err := os.MkdirAll(browse.UploadDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(browse.UploadDir, "transcription-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestParseTranscriptionCommand(t *testing.T) {
+	tests := []struct {
+		message string
+		path    string
+		context string
+		ok      bool
+	}{
+		{"/transcription /tmp/shelley-uploads/a.webm", "/tmp/shelley-uploads/a.webm", "", true},
+		{"  /transcription\t/tmp/a file.webm\nkeep this  ", "/tmp/a file.webm", "keep this", true},
+		{"/transcription", "", "", true},
+		{"/transcriptionx /tmp/a", "", "", false},
+		{"please /transcription /tmp/a", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.message, func(t *testing.T) {
+			path, context, ok := parseTranscriptionCommand(tt.message)
+			if path != tt.path || context != tt.context || ok != tt.ok {
+				t.Fatalf("parseTranscriptionCommand(%q) = (%q, %q, %v), want (%q, %q, %v)", tt.message, path, context, ok, tt.path, tt.context, tt.ok)
+			}
+		})
+	}
+}
+
+func TestValidateTranscriptionPath(t *testing.T) {
+	valid := transcriptionTestFile(t, "recording.webm")
+	if got, err := validateTranscriptionPath(valid); err != nil || got != valid {
+		t.Fatalf("valid path = %q, %v", got, err)
+	}
+
+	if _, err := validateTranscriptionPath("relative.webm"); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("relative path error = %v", err)
+	}
+	if _, err := validateTranscriptionPath(filepath.Join(browse.UploadDir, "missing.webm")); err == nil {
+		t.Fatal("missing file accepted")
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.webm")
+	if err := os.WriteFile(outside, []byte("media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateTranscriptionPath(outside); err == nil || !strings.Contains(err.Error(), "inside") {
+		t.Fatalf("outside path error = %v", err)
+	}
+
+	symlink := filepath.Join(filepath.Dir(valid), "link.webm")
+	if err := os.Symlink(valid, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateTranscriptionPath(symlink); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("symlink error = %v", err)
+	}
+}
+
+func TestProbeTranscriptionMedia(t *testing.T) {
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "ffprobe" || args[len(args)-1] != "/tmp/video.webm" {
+			return nil, fmt.Errorf("unexpected command: %s %v", name, args)
+		}
+		return []byte(`{"streams":[{"codec_type":"audio"},{"codec_type":"video","duration":"8.5"}],"format":{"duration":"9.25"}}`), nil
+	}
+	media, err := probeTranscriptionMedia(context.Background(), "/tmp/video.webm", run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !media.HasVideo || media.DurationSeconds != 9.25 {
+		t.Fatalf("media = %#v", media)
+	}
+}
+
+func TestProbeTranscriptionMediaUsesRecordingMetadataDuration(t *testing.T) {
+	mediaPath := transcriptionTestFile(t, "streamed-screen.webm")
+	metadata, err := json.Marshal(recordingMetadata{Path: mediaPath, DurationMS: 25_644})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath+".json", metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "ffprobe" || args[len(args)-1] != mediaPath {
+			return nil, fmt.Errorf("unexpected command: %s %v", name, args)
+		}
+		return []byte(`{"streams":[{"codec_type":"audio"},{"codec_type":"video"}],"format":{}}`), nil
+	}
+	media, err := probeTranscriptionMedia(context.Background(), mediaPath, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !media.HasVideo || media.DurationSeconds != 25.644 {
+		t.Fatalf("media = %#v", media)
+	}
+}
+
+func TestCreateVideoContactSheet(t *testing.T) {
+	mediaPath := transcriptionTestFile(t, "screen.webm")
+	var gotArgs []string
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "ffmpeg" {
+			return nil, fmt.Errorf("unexpected command %q", name)
+		}
+		gotArgs = append([]string(nil), args...)
+		return nil, os.WriteFile(args[len(args)-1], []byte("jpeg"), 0o600)
+	}
+
+	got, err := createVideoContactSheet(context.Background(), mediaPath, transcriptionMedia{HasVideo: true, DurationSeconds: 24}, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := mediaPath + ".contact-sheet.jpg"
+	if got != want {
+		t.Fatalf("contact path = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("contact sheet missing: %v", err)
+	}
+	joined := strings.Join(gotArgs, " ")
+	for _, wantArg := range []string{"-i " + mediaPath, "fps=fps=0.500000000:start_time=1.000000000", "tile=4x3", "-frames:v 1"} {
+		if !strings.Contains(joined, wantArg) {
+			t.Errorf("ffmpeg args %q missing %q", joined, wantArg)
+		}
+	}
+}
+
+func queuedTranscriptionReceipt(t *testing.T, w *httptest.ResponseRecorder, database *db.DB, parentID string) db.QueuedMessage {
+	t.Helper()
+	var receipt map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt["status"] != "queued" {
+		t.Fatalf("receipt = %#v", receipt)
+	}
+	queued := queuedMessages(t, database, parentID)
+	for i := len(queued) - 1; i >= 0; i-- {
+		if queued[i].Kind == db.QueuedMessageKindTranscription {
+			return queued[i]
+		}
+	}
+	t.Fatal("queued transcription missing")
+	return db.QueuedMessage{}
+}
+
+func transcriptionDone(t *testing.T, server *Server, queuedID string) <-chan struct{} {
+	t.Helper()
+	server.transcriptionMu.Lock()
+	defer server.transcriptionMu.Unlock()
+	job, ok := server.transcriptionJobs[queuedID]
+	if !ok {
+		t.Fatalf("transcription job %q not registered", queuedID)
+	}
+	return job.done
+}
+
+func TestTranscriptionCommandPersistsBeforeDetachedWork(t *testing.T) {
+	server, database, predictable := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	mediaPath := transcriptionTestFile(t, "audio.webm")
+	cwd := t.TempDir()
+	model := "predictable"
+	draft, err := database.CreateDraftConversation(t.Context(), &cwd, &model, db.ConversationOptions{}, "Keep draft")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server.mediaRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "ffprobe" || args[len(args)-1] != mediaPath {
+			return nil, fmt.Errorf("unexpected command %s %v", name, args)
+		}
+		close(started)
+		<-release
+		return []byte(`{"streams":[{"codec_type":"audio"}],"format":{"duration":"2"}}`), nil
+	}
+
+	body := fmt.Sprintf(`{"message":%q,"model":"predictable","conversation_options":{"thinking_level":"high"}}`, "/transcription "+mediaPath+"\nKeep draft")
+	req := httptest.NewRequest(http.MethodPost, "/api/conversation/"+draft.ConversationID+"/chat", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, req, draft.ConversationID)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	receipt := queuedTranscriptionReceipt(t, w, database, draft.ConversationID)
+	done := transcriptionDone(t, server, receipt.ID)
+
+	<-started
+	queued := queuedMessages(t, database, draft.ConversationID)
+	if len(queued) != 1 || queued[0].ID != receipt.ID {
+		t.Fatalf("queued = %#v", queued)
+	}
+	item := queued[0]
+	if item.Kind != db.QueuedMessageKindTranscription || item.State != db.QueuedMessageStateWorking || item.Transcription == nil {
+		t.Fatalf("queued item = %#v", item)
+	}
+	if item.Transcription.MediaPath != mediaPath || item.Transcription.ChildConversationID == "" {
+		t.Fatalf("transcription = %#v", item.Transcription)
+	}
+	if item.Model != "predictable" || item.CreatedAt.IsZero() || len(item.Llm) != 0 {
+		t.Fatalf("working queue fields = %#v", item)
+	}
+
+	parent, err := database.GetConversationByID(t.Context(), draft.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent.IsDraft || parent.Draft != "" {
+		t.Fatalf("transcription parent was not promoted: %#v", parent)
+	}
+	children, err := database.GetSubagents(t.Context(), draft.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 1 || children[0].ConversationID != item.Transcription.ChildConversationID {
+		t.Fatalf("children = %#v", children)
+	}
+	childOptions := db.ParseConversationOptions(children[0].ConversationOptions)
+	if childOptions.Kind != transcriptionKind || childOptions.ThinkingLevel != "low" {
+		t.Fatalf("child options = %#v", childOptions)
+	}
+	server.mu.Lock()
+	parentManager := server.activeConversations[draft.ConversationID]
+	server.mu.Unlock()
+	parentManager.SetAgentWorking(true)
+
+	close(release)
+	<-done
+	lastRequest := predictable.GetLastRequest()
+	if lastRequest == nil {
+		t.Fatal("transcription subagent did not call predictable model")
+	}
+	var prompt strings.Builder
+	for _, message := range lastRequest.Messages {
+		for _, content := range message.Content {
+			prompt.WriteString(content.Text)
+		}
+	}
+	for _, want := range []string{"<transcribing_audio_skill>", "gpt-transcribe", mediaPath, "return ONLY the user's spoken words"} {
+		if !strings.Contains(prompt.String(), want) {
+			t.Errorf("subagent prompt missing %q: %s", want, prompt.String())
+		}
+	}
+	parentManager.SetAgentWorking(false)
+	if _, err := parentManager.CancelQueuedMessages(t.Context(), server); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOrphanedTranscriptionBarrierSelfHeals(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := llm.UserStringMessage("echo: after orphan")
+	llmJSON, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued := db.QueuedMessage{ID: "after-orphan", Llm: llmJSON, CreatedAt: time.Now().UTC(), Model: "predictable"}
+	if _, err := database.AppendQueuedMessage(t.Context(), conversation.ConversationID, queued); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.pendingBatches = []pendingBatch{
+		{Kind: pendingBatchTranscription, MessageIDs: []string{"already-cancelled"}, ModelID: "predictable"},
+		{Kind: pendingBatchUser, MessageIDs: []string{queued.ID}, Messages: []llm.Message{message}, ModelID: "predictable"},
+	}
+	manager.mu.Unlock()
+
+	manager.drainPendingMessages(server)
+	if !userMessageRowExists(t, database, conversation.ConversationID, "after orphan") {
+		t.Fatal("orphaned transcription barrier blocked the following user message")
+	}
+}
+
+func TestTranscriptionBarrierDoesNotStarveSubagentCompletion(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AppendQueuedMessage(t.Context(), conversation.ConversationID, db.QueuedMessage{
+		ID: "failed-transcription", CreatedAt: time.Now().UTC(), Model: "predictable",
+		Kind: db.QueuedMessageKindTranscription, State: db.QueuedMessageStateFailed,
+		Transcription: &db.QueuedTranscription{MediaPath: "/tmp/failed.webm", ChildConversationID: "cFAILED"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.pendingBatches = append(manager.pendingBatches, pendingBatch{
+		Kind: pendingBatchSubagentDone,
+		Messages: []llm.Message{
+			{Role: llm.MessageRoleAssistant, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "subagent completed"}}},
+			llm.UserStringMessage("subagent result"),
+		},
+		ModelID: "predictable",
+	})
+	manager.mu.Unlock()
+
+	manager.drainPendingMessages(server)
+	messages, err := database.ListMessages(t.Context(), conversation.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range messages {
+		if message.LlmData != nil && strings.Contains(*message.LlmData, "subagent result") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("failed transcription starved subagent completion")
+	}
+	queued := queuedMessages(t, database, conversation.ConversationID)
+	if len(queued) != 1 || queued[0].State != db.QueuedMessageStateFailed {
+		t.Fatalf("transcription barrier changed while draining subagent completion: %#v", queued)
+	}
+}
+
+func TestQueuedTranscriptionPreservesFIFOAndVideoPaths(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	mediaPath := transcriptionTestFile(t, "screen.webm")
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server.mediaRun = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "ffprobe":
+			close(started)
+			<-release
+			return []byte(`{"streams":[{"codec_type":"audio"},{"codec_type":"video"}],"format":{"duration":"12"}}`), nil
+		case "ffmpeg":
+			return nil, os.WriteFile(args[len(args)-1], []byte("jpeg"), 0o600)
+		default:
+			return nil, fmt.Errorf("unexpected command %q", name)
+		}
+	}
+
+	body := fmt.Sprintf(`{"message":%q,"model":"predictable"}`, "/transcription "+mediaPath+"\nKeep this note. [/tmp/shelley-uploads/context.png]")
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)), conversation.ConversationID)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	receipt := queuedTranscriptionReceipt(t, w, database, conversation.ConversationID)
+	done := transcriptionDone(t, server, receipt.ID)
+	<-started
+
+	server.mu.Lock()
+	manager := server.activeConversations[conversation.ConversationID]
+	server.mu.Unlock()
+	manager.SetAgentWorking(true)
+
+	ordinaryBody := `{"message":"echo: after transcription","model":"predictable"}`
+	ordinaryW := httptest.NewRecorder()
+	server.handleChatConversation(ordinaryW, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(ordinaryBody)), conversation.ConversationID)
+	if ordinaryW.Code != http.StatusAccepted || !strings.Contains(ordinaryW.Body.String(), "queued") {
+		t.Fatalf("ordinary send = %d %s", ordinaryW.Code, ordinaryW.Body.String())
+	}
+	if userMessageRowExists(t, database, conversation.ConversationID, "after transcription") {
+		t.Fatal("ordinary send overtook working transcription")
+	}
+
+	close(release)
+	<-done
+	queued := queuedMessages(t, database, conversation.ConversationID)
+	if len(queued) != 2 || queued[0].ID != receipt.ID || queued[0].State != db.QueuedMessageStateReady {
+		t.Fatalf("ready queue = %#v", queued)
+	}
+	var final llm.Message
+	if err := json.Unmarshal(queued[0].Llm, &final); err != nil {
+		t.Fatal(err)
+	}
+	finalText := final.Content[0].Text
+	for _, want := range []string{
+		"Keep this note. [/tmp/shelley-uploads/context.png]",
+		"predictable spoken words",
+		"(transcribed by subagent " + queued[0].Transcription.ChildConversationID + ")",
+		"[" + mediaPath + "]",
+		"[" + mediaPath + ".contact-sheet.jpg]",
+	} {
+		if !strings.Contains(finalText, want) {
+			t.Errorf("final text missing %q: %s", want, finalText)
+		}
+	}
+
+	manager.SetAgentWorking(false)
+	manager.drainPendingMessages(server)
+	if got := queuedMessages(t, database, conversation.ConversationID); len(got) != 0 {
+		t.Fatalf("queue after drain = %#v", got)
+	}
+	messages, err := database.ListMessages(t.Context(), conversation.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var users []string
+	for _, message := range messages {
+		if message.Type == string(db.MessageTypeUser) && message.LlmData != nil {
+			users = append(users, *message.LlmData)
+		}
+	}
+	if len(users) < 2 || !strings.Contains(users[0], "transcribed by subagent") || !strings.Contains(users[1], "after transcription") {
+		t.Fatalf("user message order = %#v", users)
+	}
+}
+
+func TestFailedTranscriptionBlocksUntilRetry(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	mediaPath := transcriptionTestFile(t, "retry.webm")
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	server.mediaRun = func(context.Context, string, ...string) ([]byte, error) {
+		close(firstStarted)
+		<-firstRelease
+		return nil, errors.New("broken media")
+	}
+	body := fmt.Sprintf(`{"message":%q,"model":"predictable"}`, "/transcription "+mediaPath)
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)), conversation.ConversationID)
+	receipt := queuedTranscriptionReceipt(t, w, database, conversation.ConversationID)
+	firstDone := transcriptionDone(t, server, receipt.ID)
+	<-firstStarted
+	close(firstRelease)
+	<-firstDone
+
+	queued := queuedMessages(t, database, conversation.ConversationID)
+	if len(queued) != 1 || queued[0].State != db.QueuedMessageStateFailed || !strings.Contains(queued[0].Error, "broken media") {
+		t.Fatalf("failed queue = %#v", queued)
+	}
+	firstChild := queued[0].Transcription.ChildConversationID
+
+	ordinaryW := httptest.NewRecorder()
+	server.handleChatConversation(ordinaryW, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"message":"echo: held behind failure","model":"predictable"}`)), conversation.ConversationID)
+	if ordinaryW.Code != http.StatusAccepted || userMessageRowExists(t, database, conversation.ConversationID, "held behind failure") {
+		t.Fatalf("ordinary send overtook failure: %d %s", ordinaryW.Code, ordinaryW.Body.String())
+	}
+
+	server.mu.Lock()
+	manager := server.activeConversations[conversation.ConversationID]
+	server.mu.Unlock()
+	manager.SetAgentWorking(true)
+	secondStarted := make(chan struct{})
+	secondRelease := make(chan struct{})
+	server.mediaRun = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name != "ffprobe" {
+			return nil, fmt.Errorf("unexpected command %q", name)
+		}
+		close(secondStarted)
+		<-secondRelease
+		return []byte(`{"streams":[{"codec_type":"audio"}],"format":{"duration":"2"}}`), nil
+	}
+	retryW := httptest.NewRecorder()
+	retryReq := httptest.NewRequest(http.MethodPost, "/api/conversation/"+conversation.ConversationID+"/retry-queued?queued_id="+receipt.ID, nil)
+	server.handleRetryQueued(retryW, retryReq, conversation.ConversationID)
+	if retryW.Code != http.StatusAccepted {
+		t.Fatalf("retry = %d: %s", retryW.Code, retryW.Body.String())
+	}
+	retryReceipt := queuedTranscriptionReceipt(t, retryW, database, conversation.ConversationID)
+	if retryReceipt.ID != receipt.ID || retryReceipt.Transcription.ChildConversationID == firstChild {
+		t.Fatalf("retry receipt = %#v", retryReceipt)
+	}
+	secondDone := transcriptionDone(t, server, receipt.ID)
+	<-secondStarted
+	close(secondRelease)
+	<-secondDone
+
+	queued = queuedMessages(t, database, conversation.ConversationID)
+	if len(queued) != 2 || queued[0].State != db.QueuedMessageStateReady || queued[0].Error != "" {
+		t.Fatalf("retried queue = %#v", queued)
+	}
+	manager.SetAgentWorking(false)
+	manager.drainPendingMessages(server)
+	if !userMessageRowExists(t, database, conversation.ConversationID, "held behind failure") {
+		t.Fatal("ordinary message did not drain after retry became ready")
+	}
+}
+
+type blockingTranscriptionService struct {
+	inner     llm.Service
+	started   chan struct{}
+	cancelled chan struct{}
+	once      sync.Once
+}
+
+func (s *blockingTranscriptionService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	for _, message := range req.Messages {
+		for _, content := range message.Content {
+			if strings.Contains(content.Text, "<transcribing_audio_skill>") {
+				s.once.Do(func() { close(s.started) })
+				<-ctx.Done()
+				close(s.cancelled)
+				return nil, ctx.Err()
+			}
+		}
+	}
+	return s.inner.Do(ctx, req)
+}
+
+func (s *blockingTranscriptionService) Provider() string       { return s.inner.Provider() }
+func (s *blockingTranscriptionService) MaxImageDimension() int { return s.inner.MaxImageDimension() }
+func (s *blockingTranscriptionService) MaxImageBytes() int     { return s.inner.MaxImageBytes() }
+func (s *blockingTranscriptionService) SupportsImages() bool   { return s.inner.SupportsImages() }
+
+func TestCancelQueuedTranscriptionCancelsChild(t *testing.T) {
+	server, database, predictable := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	blocking := &blockingTranscriptionService{
+		inner: predictable, started: make(chan struct{}), cancelled: make(chan struct{}),
+	}
+	server.llmManager = &testLLMManager{service: blocking}
+	server.mediaRun = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name != "ffprobe" {
+			return nil, fmt.Errorf("unexpected command %q", name)
+		}
+		return []byte(`{"streams":[{"codec_type":"audio"}],"format":{"duration":"2"}}`), nil
+	}
+	mediaPath := transcriptionTestFile(t, "cancel.webm")
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"message":%q,"model":"predictable"}`, "/transcription "+mediaPath)
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)), conversation.ConversationID)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	receipt := queuedTranscriptionReceipt(t, w, database, conversation.ConversationID)
+	done := transcriptionDone(t, server, receipt.ID)
+	<-blocking.started
+
+	cancelW := httptest.NewRecorder()
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/conversation/"+conversation.ConversationID+"/cancel-queued?queued_id="+receipt.ID, nil)
+	server.handleCancelQueued(cancelW, cancelReq, conversation.ConversationID)
+	if cancelW.Code != http.StatusOK {
+		t.Fatalf("cancel = %d: %s", cancelW.Code, cancelW.Body.String())
+	}
+	<-blocking.cancelled
+	<-done
+	if queued := queuedMessages(t, database, conversation.ConversationID); len(queued) != 0 {
+		t.Fatalf("queue after cancel = %#v", queued)
+	}
+	server.mu.Lock()
+	childManager := server.activeConversations[receipt.Transcription.ChildConversationID]
+	server.mu.Unlock()
+	if childManager != nil && childManager.IsAgentWorking() {
+		t.Fatal("transcription child still working after queue cancellation")
+	}
+}
+
+func TestCancelConversationCancelsQueuedTranscriptionWithoutParentLoop(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	server.mediaRun = func(ctx context.Context, name string, _ ...string) ([]byte, error) {
+		if name != "ffprobe" {
+			return nil, fmt.Errorf("unexpected command %q", name)
+		}
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return nil, ctx.Err()
+	}
+	mediaPath := transcriptionTestFile(t, "cancel-parent.webm")
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"message":%q,"model":"predictable"}`, "/transcription "+mediaPath)
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)), conversation.ConversationID)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	<-started
+
+	cancelW := httptest.NewRecorder()
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/conversation/"+conversation.ConversationID+"/cancel", nil)
+	server.handleCancelConversation(cancelW, cancelReq, conversation.ConversationID)
+	if cancelW.Code != http.StatusOK {
+		t.Fatalf("cancel = %d: %s", cancelW.Code, cancelW.Body.String())
+	}
+	<-cancelled
+	if queued := queuedMessages(t, database, conversation.ConversationID); len(queued) != 0 {
+		t.Fatalf("queue after parent cancel = %#v", queued)
+	}
+}
+
+func TestQueuedTranscriptionRecoveryResumesInterruptedChild(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	parent, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, child, queued, err := database.CreateQueuedTranscription(
+		t.Context(),
+		parent.ConversationID,
+		"transcription-interrupted",
+		nil,
+		db.QueuedMessage{
+			ID: "interrupted-queued", CreatedAt: time.Now().UTC(), Model: "predictable",
+			Kind: db.QueuedMessageKindTranscription, State: db.QueuedMessageStateWorking,
+			Transcription: &db.QueuedTranscription{MediaPath: "/tmp/interrupted.webm"},
+		},
+		db.ConversationOptions{Kind: transcriptionKind, ThinkingLevel: "low"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: child.ConversationID,
+		Type:           db.MessageTypeUser,
+		LLMData:        llm.UserStringMessage(transcriptionPrompt("/tmp/interrupted.webm", "", "skill")),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetConversationAgentWorking(t.Context(), child.ConversationID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetConversationAgentWorking(t.Context(), parent.ConversationID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	server.recoverQueuedTranscriptions(t.Context())
+	<-transcriptionDone(t, server, queued.ID)
+	persisted := queuedMessages(t, database, parent.ConversationID)
+	if len(persisted) != 1 || persisted[0].State != db.QueuedMessageStateReady {
+		t.Fatalf("resumed queue = %#v", persisted)
+	}
+	messages, err := database.ListMessages(t.Context(), child.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userCount := 0
+	for _, message := range messages {
+		if message.Type == string(db.MessageTypeUser) {
+			userCount++
+		}
+	}
+	if userCount != 1 {
+		t.Fatalf("resume added another child prompt: got %d user rows", userCount)
+	}
+}
+
+func TestQueuedTranscriptionRecoveryIncludesArchivedParents(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	parent, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, child, queued, err := database.CreateQueuedTranscription(
+		t.Context(), parent.ConversationID, "transcription-archived", nil,
+		db.QueuedMessage{
+			ID: "archived-queued", CreatedAt: time.Now().UTC(), Model: "predictable",
+			Kind: db.QueuedMessageKindTranscription, State: db.QueuedMessageStateWorking,
+			Transcription: &db.QueuedTranscription{MediaPath: "/tmp/archived.webm"},
+		},
+		db.ConversationOptions{Kind: transcriptionKind, ThinkingLevel: "low"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: child.ConversationID,
+		Type:           db.MessageTypeAgent,
+		LLMData: llm.Message{
+			Role: llm.MessageRoleAssistant, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "archived words"}}, EndOfTurn: true,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetConversationAgentWorking(t.Context(), parent.ConversationID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ArchiveConversation(t.Context(), parent.ConversationID); err != nil {
+		t.Fatal(err)
+	}
+
+	server.recoverQueuedTranscriptions(t.Context())
+	persisted := queuedMessages(t, database, parent.ConversationID)
+	if len(persisted) != 1 || persisted[0].ID != queued.ID || persisted[0].State != db.QueuedMessageStateReady {
+		t.Fatalf("archived recovered queue = %#v", persisted)
+	}
+}
+
+func TestQueuedTranscriptionRecoveryIsIdempotent(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	parent, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, child, queued, err := database.CreateQueuedTranscription(
+		t.Context(),
+		parent.ConversationID,
+		"transcription-recovery",
+		nil,
+		db.QueuedMessage{
+			ID: "recovery-queued", CreatedAt: time.Now().UTC(), Model: "predictable",
+			Kind: db.QueuedMessageKindTranscription, State: db.QueuedMessageStateWorking,
+			Transcription: &db.QueuedTranscription{MediaPath: "/tmp/recovery.webm"},
+		},
+		db.ConversationOptions{Kind: transcriptionKind, ThinkingLevel: "low"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: child.ConversationID,
+		Type:           db.MessageTypeAgent,
+		LLMData: llm.Message{
+			Role:      llm.MessageRoleAssistant,
+			Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "recovered words"}},
+			EndOfTurn: true,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetConversationAgentWorking(t.Context(), parent.ConversationID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	server.recoverQueuedTranscriptions(t.Context())
+	server.recoverQueuedTranscriptions(t.Context())
+	persisted := queuedMessages(t, database, parent.ConversationID)
+	if len(persisted) != 1 || persisted[0].ID != queued.ID || persisted[0].State != db.QueuedMessageStateReady {
+		t.Fatalf("recovered queue = %#v", persisted)
+	}
+	if userMessageRowExists(t, database, parent.ConversationID, "recovered words") {
+		t.Fatal("recovery drained despite parent working")
+	}
+
+	server.mu.Lock()
+	manager := server.activeConversations[parent.ConversationID]
+	server.mu.Unlock()
+	manager.SetAgentWorking(false)
+	manager.drainPendingMessages(server)
+	if queued := queuedMessages(t, database, parent.ConversationID); len(queued) != 0 {
+		t.Fatalf("queue after recovered drain = %#v", queued)
+	}
+	messages, err := database.ListMessages(t.Context(), parent.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, message := range messages {
+		if message.Type == string(db.MessageTypeUser) && message.LlmData != nil && strings.Contains(*message.LlmData, "recovered words") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("recovered transcript count = %d, want 1", count)
+	}
+}
+
+func TestTranscriptionCommandRejectsInvalidPathBeforeCreatingChild(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"message":"/transcription /etc/passwd","model":"predictable"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/conversation/"+conv.ConversationID+"/chat", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, req, conv.ConversationID)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	children, err := database.GetSubagents(context.Background(), conv.ConversationID)
+	if err != nil || len(children) != 0 {
+		t.Fatalf("children = %#v, %v", children, err)
+	}
+	if messages, err := database.ListMessages(context.Background(), conv.ConversationID); err != nil || len(messages) != 0 {
+		t.Fatalf("parent messages = %#v, %v", messages, err)
+	}
+}

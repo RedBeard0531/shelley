@@ -120,6 +120,63 @@ func testQueuedMessageImmutableFlow(t *testing.T) {
 		len(queuedMessages(t, database, convID)))
 }
 
+func TestSendQueuedNowInterruptsActiveTurnAndPreservesQueue(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		server, database, _ := newTestServer(t)
+		defer stopActiveConversationLoops(server)
+		conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		conversationID := conversation.ConversationID
+		sendChat(t, server, conversationID, "delay: 60", false)
+		synctest.Wait()
+		sendChat(t, server, conversationID, "echo: send this now", true)
+		synctest.Wait()
+		queued := queuedMessages(t, database, conversationID)
+		if len(queued) != 1 {
+			t.Fatalf("queued = %#v", queued)
+		}
+
+		request := httptest.NewRequest(http.MethodPost, "/api/conversation/"+conversationID+"/send-queued?queued_id="+queued[0].ID, nil)
+		response := httptest.NewRecorder()
+		server.handleSendQueuedNow(response, request, conversationID)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("send now = %d: %s", response.Code, response.Body.String())
+		}
+		synctest.Wait()
+		if !userMessageRowExists(t, database, conversationID, "send this now") {
+			t.Fatal("queued message was not sent after interruption")
+		}
+		if got := queuedMessages(t, database, conversationID); len(got) != 0 {
+			t.Fatalf("queue after send now = %#v", got)
+		}
+	})
+}
+
+func TestSendQueuedNowRejectsNonHeadItem(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"first", "second"} {
+		if _, err := database.AppendQueuedMessage(t.Context(), conversation.ConversationID, db.QueuedMessage{
+			ID: id, Llm: []byte(`{"Role":0,"Content":[{"Type":2,"Text":"queued"}]}`),
+			CreatedAt: time.Now(), Model: "predictable",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/conversation/"+conversation.ConversationID+"/send-queued?queued_id=second", nil)
+	response := httptest.NewRecorder()
+	server.handleSendQueuedNow(response, request, conversation.ConversationID)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("send non-head = %d, want %d", response.Code, http.StatusConflict)
+	}
+}
+
 // TestCancelQueuedClearsArray verifies whole-queue and per-message cancel clear
 // the conversation's queued_messages array.
 func TestCancelQueuedClearsArray(t *testing.T) {

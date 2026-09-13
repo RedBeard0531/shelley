@@ -39,6 +39,9 @@ func Capabilities() []string {
 		// distill endpoints. Clients can expose a picker; older
 		// servers without this capability silently ignore the field.
 		"thinking-levels",
+		// Queued transcription commands are persisted as specialized queued
+		// messages and continue independently of the submitting HTTP request.
+		"queued-transcriptions",
 		// "drafts": conversations may have is_draft=true with their body
 		// in the draft column instead of messages. Promoted to a normal
 		// conversation when POSTed to /api/conversation/<id>/chat.

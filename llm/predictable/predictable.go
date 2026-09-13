@@ -331,6 +331,10 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 			return s.makeResponse("", inputTokens), nil
 		}
 
+		if strings.Contains(inputText, "<transcribing_audio_skill>") {
+			return s.makeResponse("predictable spoken words", inputTokens), nil
+		}
+
 		// Default response for undefined inputs
 		return s.makeResponse("edit predictable.go to add a response for that one...", inputTokens), nil
 	}

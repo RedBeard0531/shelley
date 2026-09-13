@@ -612,6 +612,13 @@ func (r *SubagentRunner) notifySubagentConversation(ctx context.Context, convers
 		return
 	}
 
+	// Internal transcription workers are implementation details, not navigable
+	// conversations. Publishing them can steal attention from the composer that
+	// is waiting for their synchronous result.
+	if db.ParseConversationOptions(conv.ConversationOptions).Kind == transcriptionKind {
+		return
+	}
+
 	// Publish the subagent conversation to all active streams
 	s.publishConversationListUpdate(ConversationListUpdate{
 		Type:         "update",
@@ -702,8 +709,8 @@ func (s *Server) notifyParentSubagentDone(subagentConversationID, response strin
 	if err != nil || !isManagedChild(conv) {
 		return
 	}
-	if isBtwReader(conv) {
-		// Detached BTW readers never inject completion into parent history.
+	if isBtwReader(conv) || db.ParseConversationOptions(conv.ConversationOptions).Kind == transcriptionKind {
+		// Detached and internal workers never inject completion into parent history.
 		return
 	}
 

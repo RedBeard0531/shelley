@@ -1,5 +1,5 @@
 <!-- Vue port of components/MessageInput.tsx. The composer: textarea,
-     send/queue split button, attach, drag/paste upload, voice (SpeechRecognition).
+     send/queue split button, attach, drag/paste upload, inline recording.
      PRESERVES EXACTLY the e2e contract (file-upload.spec, queue-messages.spec,
      smoke, conversation): data-testid message-input, send-button,
      send-options-button, queue-option, queued-badge, cancel-queued,
@@ -36,7 +36,13 @@
     <div v-if="isDraggingOver" class="drag-overlay">
       <div class="drag-overlay-content">{{ t("dropFilesHere") }}</div>
     </div>
-    <form class="message-input-form" @submit="handleSubmit">
+    <RecordingPanel
+      v-if="recordingActive"
+      :preserved-text="recordingSubmission?.message"
+      :on-complete="handleRecordingComplete"
+      @close="closeRecording"
+    />
+    <form v-else class="message-input-form" @submit="handleSubmit">
       <input
         ref="fileInputRef"
         type="file"
@@ -203,21 +209,39 @@
           </svg>
         </button>
         <button
-          v-if="speechRecognitionAvailable"
+          v-if="mediaRecordingAvailable"
           type="button"
-          :disabled="isDisabled"
-          :class="`message-voice-btn ${isListening ? 'listening' : ''}`"
-          :aria-label="isListening ? t('stopVoiceInput') : t('startVoiceInput')"
+          :disabled="isDisabled || uploadsInProgress > 0"
+          class="message-voice-btn"
+          :aria-label="t('recordingTitle')"
           data-testid="voice-button"
-          @click="toggleListening"
+          @click="beginRecording"
         >
-          <svg v-if="isListening" fill="currentColor" viewBox="0 0 24 24" width="20" height="20">
-            <circle cx="12" cy="12" r="6" />
+          <svg
+            v-if="screenRecordingAvailable"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            data-testid="voice-video-icon"
+          >
+            <rect x="3" y="5" width="13" height="14" rx="2" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="m16 10 5-3v10l-5-3z" />
           </svg>
-          <svg v-else fill="currentColor" viewBox="0 0 24 24" width="20" height="20">
-            <path
-              d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"
-            />
+          <svg
+            v-else
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            data-testid="voice-microphone-icon"
+          >
+            <rect x="9" y="3" width="6" height="11" rx="3" />
+            <path stroke-linecap="round" d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" />
           </svg>
         </button>
         <div ref="queueMenuRef" class="message-send-wrapper">
@@ -366,9 +390,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "../composables/i18n";
-import type { Locale } from "../../i18n/types";
 import { pickPlaceholderHint } from "../../utils/placeholderHints";
 import type { ContextUsageLevel } from "../../utils/contextUsage";
 import { SLASH_COMMANDS, slashCommandsForConversation } from "../../utils/slashCommands";
@@ -379,51 +402,12 @@ import {
   type ComposerSubmissionIntent,
 } from "./composerDispatch";
 import { isImeComposing } from "../../utils/imeComposing";
+import RecordingPanel from "./RecordingPanel.vue";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,
   type ReasoningModelCapabilities,
 } from "./thinkingLevel";
-
-// Web Speech API types
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
-}
-interface SpeechRecognitionResultList {
-  length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-}
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  /** Chrome 151+: engine infers punctuation from prosody. Ignored where unsupported. */
-  unspokenPunctuation?: boolean;
-  lang: string;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: Event & { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
-}
-declare global {
-  interface Window {
-    SpeechRecognition: new () => SpeechRecognition;
-    webkitSpeechRecognition: new () => SpeechRecognition;
-  }
-}
 
 interface Attachment {
   id: string;
@@ -441,6 +425,10 @@ const props = withDefaults(
   defineProps<{
     /** Async send handler (awaited). Mirrors React's onSend prop. */
     onSend: (message: string) => Promise<void> | void;
+    /** Called once the server has assembled the finished media file. The
+     * second argument is the pre-existing composer text plus ready attachments,
+     * which become part of the durable transcribed user turn. */
+    onRecordingComplete: (path: string, context: string) => Promise<void>;
     /** Async queue handler (awaited). Mirrors React's onQueue prop. */
     onQueue?: (message: string) => Promise<void> | void;
     /** Async compaction handler (awaited). When provided, the send-options
@@ -509,7 +497,7 @@ const emit = defineEmits<{
   (e: "draft-cleared"): void;
 }>();
 
-const { t, locale } = useI18n();
+const { t } = useI18n();
 
 const hasQueueHandler = computed(() => props.onQueue !== undefined);
 // The "Compact and send" option is available whenever a compaction handler is
@@ -518,6 +506,13 @@ const canCompact = computed(() => props.onCompact !== undefined && !props.autoQu
 const sendSelectedLevel = ref<ContextUsageLevel>("");
 
 const message = ref(props.draftSeed?.value ?? "");
+const recordingActive = ref(false);
+type RecordingSubmission = {
+  message: string;
+  context: string;
+  attachmentIDs: string[];
+};
+const recordingSubmission = ref<RecordingSubmission | null>(null);
 // setMessage mirrors the React controlled-value path: surfaces every change via
 // draft-change so the parent can persist it.
 function setMessage(next: string | ((prev: string) => string)) {
@@ -531,7 +526,7 @@ function setMessage(next: string | ((prev: string) => string)) {
 watch(
   () => props.draftSeed,
   (seed) => {
-    if (seed != null) message.value = seed.value;
+    if (seed != null && !recordingActive.value) message.value = seed.value;
   },
 );
 
@@ -544,7 +539,6 @@ const readyAttachments = computed(() =>
   attachments.value.filter((a) => a.status === "ready" && a.path),
 );
 const dragCounter = ref(0);
-const isListening = ref(false);
 const isSmallScreen = ref(typeof window !== "undefined" ? window.innerWidth < 480 : false);
 const showQueueMenu = ref(false);
 const slashMenuSelectedIndex = ref(0);
@@ -558,58 +552,12 @@ const queueMenuRef = ref<HTMLDivElement | null>(null);
 const slashMenuRef = ref<HTMLDivElement | null>(null);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
-let recognition: SpeechRecognition | null = null;
-// Text present before the current recognition session started; the message is rebuilt
-// from it plus the session's full results list on every event.
-let baseText = "";
-// Android Chrome ignores `continuous` (the session ends at the first pause) and reports
-// every result as the whole cumulative transcript of the session rather than a new
-// segment, so only the last result is meaningful there. Because Android ends the
-// session at every pause, an ended session is restarted while listening.
-//
-// On every platform the mic turns off once no result (Android also emits empty ones)
-// has arrived for SPEECH_SILENCE_MS; the API has no silence timeout of its own.
-const androidSpeech = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
-const SPEECH_SILENCE_MS = 2000;
-let speechSilenceTimer: ReturnType<typeof setTimeout> | undefined;
-
-function armSpeechSilenceTimer() {
-  clearTimeout(speechSilenceTimer);
-  speechSilenceTimer = setTimeout(stopListening, SPEECH_SILENCE_MS);
-}
-
-// Chrome's engine returns raw words with no punctuation; honour common spoken commands.
-const SPOKEN_PUNCTUATION: [RegExp, string][] = [
-  [/\s*\b(?:full stop|period)\b/gi, "."],
-  [/\s*\bcomma\b/gi, ","],
-  [/\s*\bquestion mark\b/gi, "?"],
-  [/\s*\bexclamation (?:mark|point)\b/gi, "!"],
-  [/\s*\bnew line\b\s*/gi, "\n"],
-];
-
-function punctuateSpoken(text: string): string {
-  const punctuated = SPOKEN_PUNCTUATION.reduce((s, [re, rep]) => s.replace(re, rep), text)
-    // Some engines emit inferred punctuation as its own token ("word .").
-    .replace(/\s+([.,!?])/g, "$1");
-  // Capitalize the first word and the first word after sentence-ending punctuation.
-  return punctuated.replace(/(^|[.!?]\s+|\n)(\p{Ll})/gu, (_, pre, ch) => pre + ch.toUpperCase());
-}
-
-// falling back to the browser language.
-const SPEECH_LANG: Record<Locale, string | undefined> = {
-  en: undefined,
-  upgoer5: undefined,
-  ja: "ja-JP",
-  fr: "fr-FR",
-  ru: "ru-RU",
-  es: "es-ES",
-  "zh-CN": "zh-CN",
-  "zh-TW": "zh-TW",
-  vi: "vi-VN",
-};
-
-const speechRecognitionAvailable =
-  typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+const screenRecordingAvailable =
+  typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
+const mediaRecordingAvailable =
+  typeof window !== "undefined" &&
+  typeof window.MediaRecorder === "function" &&
+  typeof navigator.mediaDevices?.getUserMedia === "function";
 
 // Pick a placeholder hint per mount; re-pick when the platform flips.
 const hint = ref(pickPlaceholderHint(isSmallScreen.value));
@@ -629,57 +577,34 @@ function handleResize() {
   isSmallScreen.value = window.innerWidth < 480;
 }
 
-function stopListening() {
-  clearTimeout(speechSilenceTimer);
-  isListening.value = false;
-  if (recognition) {
-    recognition.stop();
-    recognition = null;
-  }
+function beginRecording() {
+  recordingSubmission.value = {
+    message: message.value,
+    context: composeMessageWithAttachments(message.value),
+    attachmentIDs: readyAttachments.value.map(({ id }) => id),
+  };
+  recordingActive.value = true;
 }
 
-function startListening() {
-  if (!speechRecognitionAvailable) return;
-  const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const rec = new SpeechRecognitionClass();
-  rec.continuous = true;
-  rec.interimResults = true;
-  rec.unspokenPunctuation = true;
-  rec.lang = SPEECH_LANG[locale.value] ?? navigator.language ?? "en-US";
-
-  // Capture current message as base text
-  baseText = message.value;
-
-  rec.onresult = (event: SpeechRecognitionEvent) => {
-    armSpeechSilenceTimer();
-    const results = Array.from(event.results, (r) => r[0].transcript);
-    const spoken = punctuateSpoken(androidSpeech ? (results.at(-1) ?? "") : results.join(""));
-    const base = baseText;
-    const needsSpace = base.length > 0 && !/\s$/.test(base);
-    const spacer = needsSpace ? " " : "";
-    setMessage(base + spacer + spoken);
-  };
-  rec.onerror = (event) => {
-    if (event.error !== "no-speech") console.error("Speech recognition error:", event.error);
-    stopListening();
-  };
-  rec.onend = () => {
-    recognition = null;
-    if (!androidSpeech || !isListening.value) {
-      isListening.value = false;
-      return;
-    }
-    startListening();
-  };
-  recognition = rec;
-  rec.start();
-  armSpeechSilenceTimer();
-  isListening.value = true;
+function handleRecordingComplete(path: string) {
+  const submission = recordingSubmission.value;
+  if (!submission) throw new Error("recording completed without preserved composer state");
+  // On failure the parent surfaces the error and the composer keeps its text
+  // and attachments so the user can retry.
+  void props
+    .onRecordingComplete(path, submission.context)
+    .then(() => {
+      if (message.value === submission.message) setMessage("");
+      for (const id of submission.attachmentIDs) removeAttachment(id);
+    })
+    .catch(() => {});
 }
 
-function toggleListening() {
-  if (isListening.value) stopListening();
-  else startListening();
+async function closeRecording() {
+  recordingActive.value = false;
+  recordingSubmission.value = null;
+  await nextTick();
+  textareaRef.value?.focus();
 }
 
 // Close queue menu on click outside
@@ -777,6 +702,8 @@ watch(
   () => props.conversationId,
   (newId) => {
     if (newId != null && newId === props.lazyDraftId) return;
+    recordingActive.value = false;
+    recordingSubmission.value = null;
     if (attachments.value.length > 0) clearAttachments();
   },
 );
@@ -1075,7 +1002,6 @@ watch([composerSession, () => props.compactSendLevel], () => {
 async function handleSubmit(e: Event) {
   e.preventDefault();
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
-    if (isListening.value) stopListening();
     if (preferCompactAndSend.value) {
       await handleCompactAndSend();
       return;
@@ -1127,7 +1053,6 @@ async function handleQueueMessage() {
     return;
   }
   if (hasContent.value && props.onQueue) {
-    if (isListening.value) stopListening();
     const messageToQueue = composeMessageWithAttachments(message.value).trim();
     const origin = composerOrigin();
     setMessage("");
@@ -1156,7 +1081,6 @@ async function handleCompactAndSend() {
     return;
   }
   if (hasContent.value && props.onCompact && props.onQueue) {
-    if (isListening.value) stopListening();
     const messageToQueue = composeMessageWithAttachments(message.value).trim();
     const origin = composerOrigin();
     setMessage("");
@@ -1178,7 +1102,6 @@ async function handleCompactAndSend() {
 async function handleSendNow() {
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
     const dispatch = composerDispatch(message.value, { intent: "send-now" });
-    if (isListening.value) stopListening();
     const composed = composeMessageWithAttachments(message.value);
     const messageToSend = dispatch.route === "btw" ? composed : composed.trim();
     setMessage("");
@@ -1326,8 +1249,6 @@ onUnmounted(() => {
   }
   document.removeEventListener("mousedown", onQueueMenuOutside);
   document.removeEventListener("mousedown", onSlashMenuOutside);
-  isListening.value = false;
-  if (recognition) recognition.abort();
   attachments.value.forEach((a) => {
     if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
   });

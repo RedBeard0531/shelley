@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,12 +21,16 @@ import (
 	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/loop"
 	"shelley.exe.dev/skills"
+	"shelley.exe.dev/slug"
 	"shelley.exe.dev/subpub"
 )
 
-var errConversationModelMismatch = errors.New("conversation model mismatch")
+var (
+	errConversationModelMismatch = errors.New("conversation model mismatch")
+	errQueuedMessagesPending     = errors.New("queued messages pending")
+)
 
-// pendingBatchKind discriminates the two sources of queued work.
+// pendingBatchKind discriminates the sources of queued work.
 type pendingBatchKind int
 
 const (
@@ -41,6 +46,11 @@ const (
 	// records them in order, then feeds them to the loop as a single
 	// atomic batch via loop.QueueMessages.
 	pendingBatchSubagentDone
+	// pendingBatchTranscription is a durable transcription queue item whose
+	// worker has not produced deliverable user text yet. It occupies its FIFO
+	// position and blocks every later user batch until it becomes ready or is
+	// cancelled. Subagent-completion batches bypass it.
+	pendingBatchTranscription
 )
 
 // pendingBatch is one atomic unit of work waiting in the conversation's queue.
@@ -51,17 +61,17 @@ type pendingBatch struct {
 	Kind     pendingBatchKind
 	Messages []llm.Message
 	ModelID  string
-	// MessageIDs is non-empty only for Kind=pendingBatchUser. It holds the
-	// QueuedMessage ids in the conversation's queued_messages array (NOT
-	// messages-row ids — no row exists yet). Used to remove the entry from
-	// the array on drain or cancel. Indexed parallel to Messages.
+	// MessageIDs holds QueuedMessage ids in the conversation's durable JSON
+	// array. User batches index them parallel to Messages; transcription
+	// blockers carry one id and no Messages until resolution.
 	MessageIDs []string
 	// UserEmail is the exe.dev author of a queued user message (Kind=
 	// pendingBatchUser), captured at queue time. Stamped onto the messages
 	// row when the batch drains (drain runs on a background context, so the
 	// value can't be read from the request there). Empty for other kinds and
 	// for requests without the X-ExeDev-Email header.
-	UserEmail string
+	UserEmail    string
+	GenerateSlug bool
 	// SubagentConversationID is set only for Kind=pendingBatchSubagentDone.
 	// It identifies the child subagent whose completion this batch notifies
 	// the parent about. Used to coalesce stale notifications: if a subagent
@@ -86,6 +96,7 @@ type pendingBatch struct {
 type ConversationManager struct {
 	conversationID      string
 	conversationOptions db.ConversationOptions
+	managedChild        bool
 	decorateService     func(llm.Service) (llm.Service, error)
 	btwReader           bool
 	db                  *db.DB
@@ -282,7 +293,10 @@ type ConversationManager struct {
 	// the parent for a turn the user (or a resend) cut short. A cancellation
 	// is not a completion, so we suppress onDone for its working→idle
 	// transition. Guarded by cm.mu.
-	cancelling bool
+	// preservePendingOnCancel keeps batches that arrive during a Send now
+	// interruption; full cancellation still drops them. Guarded by cm.mu.
+	preservePendingOnCancel bool
+	cancelling              bool
 }
 
 // messageBatchRecordFunc persists a batch of messages atomically (one Tx,
@@ -693,6 +707,7 @@ func (cm *ConversationManager) Hydrate(ctx context.Context) error {
 	// Load conversation options
 	cm.conversationOptions = db.ParseConversationOptions(conversation.ConversationOptions)
 	managedChild := isManagedChild(*conversation)
+	cm.managedChild = managedChild
 
 	// Set ParentConversationID on toolSetConfig so that subagent tool is included
 	// in the display_data tools list when generating system prompt.
@@ -729,22 +744,28 @@ func (cm *ConversationManager) Hydrate(ctx context.Context) error {
 	}
 
 	// Parse the persisted queued_messages array up front (outside cm.mu).
-	// We turn these into in-memory user batches below so messages queued
-	// before a server restart survive and still drain.
-	type restoredQueued struct {
-		id    string
-		msg   llm.Message
-		mdl   string
-		email string
-	}
-	var restored []restoredQueued
+	// Specialized transcriptions restore as FIFO blockers while working or
+	// failed, and as ordinary user batches once ready.
+	var restored []pendingBatch
 	for _, qm := range db.ParseQueuedMessages(conversation.QueuedMessages) {
-		var msg llm.Message
-		if err := json.Unmarshal(qm.Llm, &msg); err != nil {
-			cm.logger.Error("Failed to parse persisted queued message; dropping", "queued_id", qm.ID, "error", err)
-			continue
+		batch := pendingBatch{
+			Kind:         pendingBatchUser,
+			ModelID:      qm.Model,
+			MessageIDs:   []string{qm.ID},
+			UserEmail:    qm.UserEmail,
+			GenerateSlug: qm.Kind == db.QueuedMessageKindTranscription,
 		}
-		restored = append(restored, restoredQueued{id: qm.ID, msg: msg, mdl: qm.Model, email: qm.UserEmail})
+		if qm.Kind == db.QueuedMessageKindTranscription && qm.State != db.QueuedMessageStateReady {
+			batch.Kind = pendingBatchTranscription
+		} else {
+			var msg llm.Message
+			if err := json.Unmarshal(qm.Llm, &msg); err != nil {
+				cm.logger.Error("Failed to parse persisted queued message; dropping", "queued_id", qm.ID, "error", err)
+				continue
+			}
+			batch.Messages = []llm.Message{msg}
+		}
+		restored = append(restored, batch)
 	}
 
 	cm.mu.Lock()
@@ -761,27 +782,15 @@ func (cm *ConversationManager) Hydrate(ctx context.Context) error {
 	// drain before batches that arrived while Hydrate was running.
 	existingQueuedIDs := make(map[string]bool)
 	for _, b := range cm.pendingBatches {
-		if b.Kind == pendingBatchUser {
+		if b.Kind == pendingBatchUser || b.Kind == pendingBatchTranscription {
 			for _, id := range b.MessageIDs {
 				existingQueuedIDs[id] = true
 			}
 		}
 	}
-	var restoredBatches []pendingBatch
-	for _, r := range restored {
-		if existingQueuedIDs[r.id] {
-			continue
-		}
-		restoredBatches = append(restoredBatches, pendingBatch{
-			Kind:       pendingBatchUser,
-			Messages:   []llm.Message{r.msg},
-			ModelID:    r.mdl,
-			MessageIDs: []string{r.id},
-			UserEmail:  r.email,
-		})
-	}
-	if len(restoredBatches) > 0 {
-		cm.pendingBatches = append(restoredBatches, cm.pendingBatches...)
+	restored = slices.DeleteFunc(restored, func(b pendingBatch) bool { return existingQueuedIDs[b.MessageIDs[0]] })
+	if len(restored) > 0 {
+		cm.pendingBatches = append(restored, cm.pendingBatches...)
 	}
 	// Seed agentWorking from the persisted column so a fresh manager (e.g.
 	// after switching back to a conversation whose loop is still running) sees
@@ -822,6 +831,13 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 	if err := cm.Hydrate(ctx); err != nil {
 		return false, "", err
 	}
+
+	cm.mu.Lock()
+	if !cm.managedChild && cm.hasPersistedQueuedBatchesLocked() {
+		cm.mu.Unlock()
+		return false, "", errQueuedMessagesPending
+	}
+	cm.mu.Unlock()
 
 	cm.mu.Lock()
 	hadLoop := cm.loop != nil
@@ -895,6 +911,7 @@ func (cm *ConversationManager) rejectTurnStart(keepWorking bool) {
 	cm.SetAgentWorking(false)
 	cm.mu.Lock()
 	cm.cancelling = false
+	cm.preservePendingOnCancel = false
 	needsDrain := len(cm.pendingBatches) > 0 && !cm.distilling
 	onRejected := cm.onTurnStartRejected
 	cm.mu.Unlock()
@@ -1153,6 +1170,101 @@ func (cm *ConversationManager) ResumeInterruptedTurn(ctx context.Context, servic
 	return nil
 }
 
+// HasQueuedMessages reports whether durable queued user work already reserves
+// a position ahead of a new immediate send.
+func (cm *ConversationManager) HasQueuedMessages() bool {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.hasPersistedQueuedBatchesLocked()
+}
+
+func (cm *ConversationManager) hasPersistedQueuedBatchesLocked() bool {
+	for _, batch := range cm.pendingBatches {
+		if batch.Kind == pendingBatchUser || batch.Kind == pendingBatchTranscription {
+			return true
+		}
+	}
+	return false
+}
+
+// QueueTranscription atomically persists a transcription item and its hidden
+// child, then installs an in-memory FIFO blocker. Unlike QueueMessage it never
+// drains immediately: only a ready transition can make it deliverable.
+func (cm *ConversationManager) QueueTranscription(ctx context.Context, s *Server, qm db.QueuedMessage, cwd *string) (db.QueuedMessage, error) {
+	cm.waitDistillingSetup()
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
+	if err := cm.Hydrate(ctx); err != nil {
+		return db.QueuedMessage{}, err
+	}
+
+	childSlug, childOptions := transcriptionChildOptions()
+	_, _, queued, err := s.db.CreateQueuedTranscription(ctx, cm.conversationID, childSlug, cwd, qm, childOptions)
+	if err != nil {
+		return db.QueuedMessage{}, err
+	}
+	cm.mu.Lock()
+	cm.pendingBatches = append(cm.pendingBatches, pendingBatch{
+		Kind:         pendingBatchTranscription,
+		ModelID:      queued.Model,
+		MessageIDs:   []string{queued.ID},
+		UserEmail:    queued.UserEmail,
+		GenerateSlug: true,
+	})
+	cm.lastActivity = time.Now()
+	cm.mu.Unlock()
+
+	// Cancellation may win after the DB commit but before the in-memory
+	// blocker is appended. Reconcile that narrow window immediately so an
+	// already-removed item cannot leave a permanent FIFO barrier behind.
+	if _, err := s.db.GetQueuedMessage(ctx, cm.conversationID, queued.ID); errors.Is(err, db.ErrQueuedMessageNotFound) {
+		cm.mu.Lock()
+		if i := cm.transcriptionBatchIndexLocked(queued.ID); i >= 0 {
+			cm.pendingBatches = slices.Delete(cm.pendingBatches, i, i+1)
+		}
+		cm.mu.Unlock()
+	} else if err != nil {
+		cm.logger.Error("Failed to reconcile queued transcription after append", "queued_id", queued.ID, "error", err)
+	}
+	go s.notifySubscribers(context.WithoutCancel(ctx), cm.conversationID)
+	return queued, nil
+}
+
+// ResolveQueuedTranscription replaces its in-memory blocker with the ready
+// user message and invokes the ordinary queue drainer when the parent is idle.
+func (cm *ConversationManager) ResolveQueuedTranscription(s *Server, queuedID string, message llm.Message, modelID, userEmail string) {
+	cm.mu.Lock()
+	cm.resolveTranscriptionBatchLocked(queuedID, message, modelID, userEmail)
+	needsDrain := !cm.agentWorking && !cm.distilling
+	cm.mu.Unlock()
+	if needsDrain {
+		go cm.drainPendingMessages(s)
+	}
+}
+
+// transcriptionBatchIndexLocked returns the position of the transcription
+// blocker for queuedID in pendingBatches, or -1.
+func (cm *ConversationManager) transcriptionBatchIndexLocked(queuedID string) int {
+	return slices.IndexFunc(cm.pendingBatches, func(b pendingBatch) bool {
+		return b.Kind == pendingBatchTranscription && len(b.MessageIDs) == 1 && b.MessageIDs[0] == queuedID
+	})
+}
+
+// resolveTranscriptionBatchLocked converts the transcription blocker for
+// queuedID, if still present, into a deliverable user batch in place.
+func (cm *ConversationManager) resolveTranscriptionBatchLocked(queuedID string, message llm.Message, modelID, userEmail string) {
+	i := cm.transcriptionBatchIndexLocked(queuedID)
+	if i < 0 {
+		return
+	}
+	batch := &cm.pendingBatches[i]
+	batch.Kind = pendingBatchUser
+	batch.Messages = []llm.Message{message}
+	batch.ModelID = modelID
+	batch.UserEmail = userEmail
+}
+
 // QueueMessage appends a user message to the conversation's queued_messages
 // JSON array (the single source of truth for queued user input) and holds it
 // for delivery after the current agent turn (or distillation) completes. It
@@ -1349,7 +1461,7 @@ func (cm *ConversationManager) takeInjectableSubagentDone(ctx context.Context, g
 // batches for the winning drainer to pick up.
 func (cm *ConversationManager) enqueueBatch(s *Server, b pendingBatch) {
 	cm.mu.Lock()
-	if cm.cancelling {
+	if cm.cancelling && !cm.preservePendingOnCancel {
 		cm.mu.Unlock()
 		cm.logger.Info("Dropping queued batch during cancellation", "kind", b.Kind)
 		return
@@ -1397,47 +1509,57 @@ func (cm *ConversationManager) enqueueBatch(s *Server, b pendingBatch) {
 // array. Subagent-done batches stay queued: they represent work the parent
 // agent still needs to acknowledge, and they live only in memory (no array
 // entry).
-func (cm *ConversationManager) CancelQueuedMessages(ctx context.Context, s *Server) {
+func (cm *ConversationManager) CancelQueuedMessages(ctx context.Context, s *Server) (*generated.Conversation, error) {
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
+	conv, err := s.db.ClearQueuedMessages(ctx, cm.conversationID)
+	if err != nil {
+		return nil, err
+	}
+
 	cm.mu.Lock()
 	var keep []pendingBatch
 	cancelled := 0
 	for _, b := range cm.pendingBatches {
-		if b.Kind == pendingBatchUser {
+		if b.Kind == pendingBatchUser || b.Kind == pendingBatchTranscription {
 			cancelled += len(b.MessageIDs)
 		} else {
 			keep = append(keep, b)
 		}
 	}
 	cm.pendingBatches = keep
+	needsDrain := len(keep) > 0 && !cm.agentWorking && !cm.distilling
 	cm.mu.Unlock()
 
-	// Clear the persistent array regardless of the in-memory count so a
-	// restart-orphaned queue (array populated but no in-memory batches) can
-	// still be cleared by the user.
-	if _, err := s.db.ClearQueuedMessages(ctx, cm.conversationID); err != nil {
-		cm.logger.Error("Failed to clear queued messages", "error", err)
-		return
-	}
 	cm.logger.Info("Cancelled queued messages", "count", cancelled)
-	// Broadcast the updated (now-empty) queued_messages array. The list-patch
-	// stream refreshes via the clear Tx's Pool.OnCommit hook.
 	go s.notifySubscribers(context.WithoutCancel(ctx), cm.conversationID)
+	if needsDrain {
+		go cm.drainPendingMessages(s)
+	}
+	return conv, nil
 }
 
 // CancelQueuedMessage removes a single queued user message by its QueuedMessage
 // id, from both the in-memory drain queue and the persistent array. Used by the
 // per-ghost cancel affordance in the UI.
-func (cm *ConversationManager) CancelQueuedMessage(ctx context.Context, s *Server, queuedID string) {
+func (cm *ConversationManager) CancelQueuedMessage(ctx context.Context, s *Server, queuedID string) (*generated.Conversation, error) {
+	cm.loopLifecycleMu.Lock()
+	defer cm.loopLifecycleMu.Unlock()
+	cm.waitForLoopTeardownLocked()
+	conv, err := s.db.RemoveQueuedMessages(ctx, cm.conversationID, queuedID)
+	if err != nil {
+		return nil, err
+	}
+
 	cm.mu.Lock()
 	var keep []pendingBatch
 	removed := false
 	for _, b := range cm.pendingBatches {
-		if b.Kind != pendingBatchUser {
+		if b.Kind != pendingBatchUser && b.Kind != pendingBatchTranscription {
 			keep = append(keep, b)
 			continue
 		}
-		// User batches carry exactly one message (QueueMessage appends one at
-		// a time), so drop the whole batch when its id matches.
 		if len(b.MessageIDs) == 1 && b.MessageIDs[0] == queuedID {
 			removed = true
 			continue
@@ -1445,24 +1567,23 @@ func (cm *ConversationManager) CancelQueuedMessage(ctx context.Context, s *Serve
 		keep = append(keep, b)
 	}
 	cm.pendingBatches = keep
+	needsDrain := removed && !cm.agentWorking && !cm.distilling
 	cm.mu.Unlock()
 
-	if _, err := s.db.RemoveQueuedMessages(ctx, cm.conversationID, queuedID); err != nil {
-		cm.logger.Error("Failed to remove queued message", "queued_id", queuedID, "error", err)
-		return
-	}
 	cm.logger.Info("Cancelled queued message", "queued_id", queuedID, "in_memory", removed)
 	go s.notifySubscribers(context.WithoutCancel(ctx), cm.conversationID)
+	if needsDrain {
+		go cm.drainPendingMessages(s)
+	}
+	return conv, nil
 }
 
 // processBatch feeds one pendingBatch into the loop and handles its
-// batch-kind-specific persistence side effects. It returns false when a USER
-// batch failed to persist (insert error): the caller re-enqueues it so it
-// retries on the next drain rather than being silently dropped (it is still in
-// the queued_messages array, and Hydrate already ran). Subagent-done failures
-// return true — we do NOT unwind/retry those (a half-written tool_use/result
-// pair would corrupt history).
-func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loopInstance *loop.Loop, b pendingBatch) (ok bool) {
+// batch-kind-specific persistence side effects. ok=false means a durable USER
+// item failed to persist and must be retried. fed=true means messages were
+// actually delivered to the loop; a concurrently cancelled queue item is
+// successfully discarded with ok=true, fed=false.
+func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loopInstance *loop.Loop, b pendingBatch) (ok, fed bool) {
 	switch b.Kind {
 	case pendingBatchUser:
 		// User batches: no DB row exists yet — the message lives only in the
@@ -1478,15 +1599,22 @@ func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loop
 				queuedID = b.MessageIDs[i]
 			}
 			if err := s.recordDrainedQueuedMessage(ctx, cm.conversationID, queuedID, msg, b.UserEmail); err != nil {
+				if errors.Is(err, db.ErrQueuedMessageNotFound) {
+					cm.logger.Info("Skipping cancelled queued message", "queued_id", queuedID)
+					return true, false
+				}
 				cm.logger.Error("Failed to record drained queued message; will retry", "error", err)
-				return false
+				return false, false
+			}
+			if i == 0 && b.GenerateSlug {
+				s.generateSlugAsync(cm.conversationID, messageText(msg), b.ModelID)
 			}
 		}
 		// notifySubscribersNewMessage (fired by recordDrainedQueuedMessage)
 		// already carried the cleaned array, so the ghost clears live; no extra
 		// broadcast needed.
 		loopInstance.QueueMessages(b.Messages...)
-		return true
+		return true, true
 	case pendingBatchSubagentDone:
 		// Subagent-done batches: persist the synthetic tool_use/tool_result
 		// pair in a SINGLE transaction so they receive consecutive sequence
@@ -1505,12 +1633,48 @@ func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loop
 		}
 		if err := s.recordMessages(ctx, cm.conversationID, inputs); err != nil {
 			cm.logger.Error("Failed to record synthetic subagent messages", "error", err)
-			return true // do not retry subagent-done batches
+			return true, false // do not retry subagent-done batches
 		}
 		loopInstance.QueueMessages(b.Messages...)
-		return true
+		return true, true
 	}
-	return true
+	return true, false
+}
+
+// messageText concatenates a message's text blocks.
+func messageText(message llm.Message) string {
+	var b strings.Builder
+	for _, content := range message.Content {
+		if content.Type == llm.ContentTypeText {
+			b.WriteString(content.Text)
+		}
+	}
+	return b.String()
+}
+
+// generateSlugAsync names the conversation after its first user text in the
+// background. The usage marker is published first: it owns a real
+// sequence_id, so a client that never sees it observes a hole and throws away
+// its cached history. It is published even when slug assignment failed, since
+// the row exists regardless. Empty source text (a message with no text blocks)
+// is skipped: there is nothing to name the conversation after.
+func (s *Server) generateSlugAsync(conversationID, source, modelID string) {
+	if source == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, marker, err := slug.GenerateSlug(ctx, s.llmManager, s.db, s.logger, conversationID, source, modelID)
+		if marker != nil {
+			s.notifySubscribersNewMessage(ctx, conversationID, marker)
+		}
+		if err != nil {
+			s.logger.Warn("Failed to generate slug for conversation", "conversationID", conversationID, "error", err)
+			return
+		}
+		go s.notifySubscribers(context.Background(), conversationID)
+	}()
 }
 
 // drainPendingMessages processes any queued batches after an agent turn ends.
@@ -1572,14 +1736,59 @@ restart:
 		cm.mu.Unlock()
 		return
 	}
-	// Snapshot+clear the batches we will feed this pass. We clear up front
-	// (rather than after Hydrate) so subagent-done batches keep their atomic
-	// ordering guarantee: a turn-end recordMessage that fires a re-entrant
-	// drainPendingMessages must NOT see these batches half-processed. The
-	// loop==nil/Hydrate dedup below handles the only resulting hazard (a queued
-	// user id present in BOTH this snapshot and the array Hydrate restores).
-	batches := cm.pendingBatches
-	cm.pendingBatches = nil
+	// Snapshot deliverable work. A transcription blocks later USER messages,
+	// preserving their durable FIFO order, but it must not starve synthetic
+	// subagent-completion batches, which have no queued_messages position.
+	batches := make([]pendingBatch, 0, len(cm.pendingBatches))
+	pending := make([]pendingBatch, 0, len(cm.pendingBatches))
+	userBlocked := false
+	for _, batch := range cm.pendingBatches {
+		switch {
+		case batch.Kind == pendingBatchTranscription:
+			userBlocked = true
+			pending = append(pending, batch)
+		case batch.Kind == pendingBatchSubagentDone:
+			batches = append(batches, batch)
+		case userBlocked:
+			pending = append(pending, batch)
+		default:
+			batches = append(batches, batch)
+		}
+	}
+	if len(batches) == 0 {
+		// Only a transcription barrier can head a queue with nothing
+		// deliverable. Its in-memory state may lag the durable item (the
+		// worker finished or the item was cancelled while no manager was
+		// listening), so reconcile against the DB before giving up.
+		barrierID := cm.pendingBatches[0].MessageIDs[0]
+		cm.mu.Unlock()
+		queued, err := s.db.GetQueuedMessage(ctx, cm.conversationID, barrierID)
+		switch {
+		case errors.Is(err, db.ErrQueuedMessageNotFound):
+			cm.mu.Lock()
+			if i := cm.transcriptionBatchIndexLocked(barrierID); i >= 0 {
+				cm.pendingBatches = slices.Delete(cm.pendingBatches, i, i+1)
+			}
+			cm.mu.Unlock()
+			goto restart
+		case err != nil:
+			cm.logger.Error("Failed to reconcile transcription queue barrier", "queued_id", barrierID, "error", err)
+			return
+		case queued.State == db.QueuedMessageStateReady:
+			var message llm.Message
+			if err := json.Unmarshal(queued.Llm, &message); err != nil {
+				cm.logger.Error("Failed to decode ready transcription queue barrier", "queued_id", barrierID, "error", err)
+				return
+			}
+			cm.mu.Lock()
+			cm.resolveTranscriptionBatchLocked(barrierID, message, queued.Model, queued.UserEmail)
+			cm.mu.Unlock()
+			goto restart
+		default:
+			return
+		}
+	}
+	cm.pendingBatches = pending
 	loopInstance := cm.loop
 	defaultModelID := cm.modelID
 	cm.mu.Unlock()
@@ -1637,8 +1846,9 @@ restart:
 	var failedUser []pendingBatch
 	fedAny := false
 	for _, b := range batches {
-		if cm.processBatch(ctx, s, loopInstance, b) {
-			fedAny = true
+		ok, fed := cm.processBatch(ctx, s, loopInstance, b)
+		if ok {
+			fedAny = fedAny || fed
 		} else {
 			// User batch failed to persist (still in the queued_messages array).
 			// Re-enqueue so it retries on a LATER drain instead of being lost
@@ -1669,7 +1879,9 @@ restart:
 		return
 	}
 
-	cm.SetAgentWorking(true)
+	if fedAny {
+		cm.SetAgentWorking(true)
+	}
 
 	// More batches may have been enqueued while we were draining. Loop
 	// back to pick them up under the same draining ownership so we never
@@ -1686,7 +1898,7 @@ restart:
 func (cm *ConversationManager) dropRestoredDuplicatesLocked(snapshot []pendingBatch) {
 	snapIDs := make(map[string]bool)
 	for _, b := range snapshot {
-		if b.Kind == pendingBatchUser {
+		if b.Kind == pendingBatchUser || b.Kind == pendingBatchTranscription {
 			for _, id := range b.MessageIDs {
 				snapIDs[id] = true
 			}
@@ -1697,7 +1909,7 @@ func (cm *ConversationManager) dropRestoredDuplicatesLocked(snapshot []pendingBa
 	}
 	kept := cm.pendingBatches[:0]
 	for _, b := range cm.pendingBatches {
-		if b.Kind == pendingBatchUser && len(b.MessageIDs) == 1 && snapIDs[b.MessageIDs[0]] {
+		if (b.Kind == pendingBatchUser || b.Kind == pendingBatchTranscription) && len(b.MessageIDs) == 1 && snapIDs[b.MessageIDs[0]] {
 			continue
 		}
 		kept = append(kept, b)
@@ -2067,6 +2279,7 @@ func (cm *ConversationManager) finishLoopTeardownLocked(expectedGeneration uint6
 	cm.loopTearingDown = false
 	cm.loopLifecycleDone = nil
 	cm.cancelling = false
+	cm.preservePendingOnCancel = false
 	cm.mu.Unlock()
 	close(done)
 }
@@ -2394,23 +2607,83 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 	cm.loopLifecycleMu.Unlock()
 }
 
-// CancelConversation cancels the active loop and synchronously ends its turn.
+// CancelConversation cancels the active loop, clears queued user work, and
+// synchronously ends its turn.
+func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
+	return cm.cancelConversation(ctx, true, "")
+}
+
+// SendQueuedNow interrupts the active turn without clearing its durable queue,
+// then starts draining from the FIFO head.
+func (cm *ConversationManager) SendQueuedNow(ctx context.Context, s *Server, queuedID string) error {
+	cm.mu.Lock()
+	distilling := cm.distilling
+	cm.mu.Unlock()
+	if distilling {
+		return fmt.Errorf("cannot send queued message while compacting")
+	}
+	if err := cm.cancelConversation(ctx, false, queuedID); err != nil {
+		return err
+	}
+	go cm.drainPendingMessages(s)
+	return nil
+}
+
+// cancelConversation cancels the active loop and synchronously ends its turn.
+// When clearQueued is false, pending user batches and queued_messages survive
+// the interruption so SendQueuedNow can feed them immediately afterward.
 // The loop records the complete tool-result batch, including partial output from
 // cancelled tools, before this method writes the end-of-turn marker.
-func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
+func (cm *ConversationManager) cancelConversation(ctx context.Context, clearQueued bool, sendQueuedID string) error {
 	cm.loopLifecycleMu.Lock()
 	cm.waitForLoopTeardownLocked()
+	if sendQueuedID != "" {
+		conversation, err := cm.db.GetConversationByID(ctx, cm.conversationID)
+		if err != nil {
+			cm.loopLifecycleMu.Unlock()
+			return err
+		}
+		queued, err := db.ParseQueuedMessagesStrict(conversation.QueuedMessages)
+		if err != nil {
+			cm.loopLifecycleMu.Unlock()
+			return err
+		}
+		if len(queued) == 0 || queued[0].ID != sendQueuedID {
+			cm.loopLifecycleMu.Unlock()
+			return fmt.Errorf("queued message is no longer first")
+		}
+		if queued[0].Kind == db.QueuedMessageKindTranscription && queued[0].State != db.QueuedMessageStateReady {
+			cm.loopLifecycleMu.Unlock()
+			return fmt.Errorf("transcription is not ready")
+		}
+	}
 
 	var teardownGeneration uint64
 	cm.mu.Lock()
+	if sendQueuedID != "" && !cm.agentWorking {
+		cm.mu.Unlock()
+		cm.loopLifecycleMu.Unlock()
+		return nil
+	}
 	loopInstance := cm.loop
 	loopDone := cm.loopDone
 	cancel := cm.loopCancel
 	toolSet := cm.toolSet
 	if loopInstance == nil {
+		if clearQueued {
+			cm.pendingBatches = nil
+			cm.hydrated = false
+			cm.hasConversationEvents = false
+		}
 		cm.mu.Unlock()
 		cm.loopLifecycleMu.Unlock()
-		cm.logger.Info("No active loop to cancel")
+		if clearQueued {
+			persistCtx := context.WithoutCancel(ctx)
+			if _, err := cm.db.ClearQueuedMessages(persistCtx, cm.conversationID); err != nil {
+				return fmt.Errorf("failed to clear queued messages: %w", err)
+			}
+		}
+		cm.logger.Info("No active loop to cancel", "clear_queued", clearQueued)
 		return nil
 	}
 	cm.loopGeneration++ // stale queues/callbacks cannot target this loop
@@ -2418,7 +2691,10 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 	cm.loopTearingDown = true
 	cm.loopLifecycleDone = make(chan struct{})
 	cm.cancelling = true
-	cm.pendingBatches = nil
+	cm.preservePendingOnCancel = !clearQueued
+	if clearQueued {
+		cm.pendingBatches = nil
+	}
 	cm.loopCancel = nil
 	cm.loopCtx = nil
 	cm.loopDone = nil
@@ -2430,13 +2706,15 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 	cm.mu.Unlock()
 	cm.loopLifecycleMu.Unlock()
 
-	cm.logger.Info("Cancelling conversation")
+	cm.logger.Info("Cancelling conversation", "clear_queued", clearQueued)
 	persistCtx := context.WithoutCancel(ctx)
-	if conv, err := cm.db.GetConversationByID(persistCtx, cm.conversationID); err != nil {
-		cm.logger.Error("Failed to read queued messages on cancel", "error", err)
-	} else if conv.QueuedMessages != "" && conv.QueuedMessages != "[]" {
-		if _, err := cm.db.ClearQueuedMessages(persistCtx, cm.conversationID); err != nil {
-			cm.logger.Error("Failed to clear queued messages on cancel", "error", err)
+	if clearQueued {
+		if conv, err := cm.db.GetConversationByID(persistCtx, cm.conversationID); err != nil {
+			cm.logger.Error("Failed to read queued messages on cancel", "error", err)
+		} else if conv.QueuedMessages != "" && conv.QueuedMessages != "[]" {
+			if _, err := cm.db.ClearQueuedMessages(persistCtx, cm.conversationID); err != nil {
+				cm.logger.Error("Failed to clear queued messages on cancel", "error", err)
+			}
 		}
 	}
 

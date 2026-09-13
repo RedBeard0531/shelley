@@ -391,15 +391,31 @@ export function isCompactionCarried(message: Message): boolean {
 }
 
 // A queued user message held in the conversation's queued_messages JSON array
-// while the agent is busy. These are NOT messages rows — they are rendered as
-// ghost/pending items at the bottom of the conversation and only become real
-// (immutable) messages when the agent drains the queue. Mirror of
-// db.QueuedMessage on the Go side.
+// while the agent is busy or while server-side work is preparing the final
+// user turn. These are NOT messages rows — they are rendered as ghost/pending
+// items at the bottom of the conversation and only become real (immutable)
+// messages when the agent drains the queue. Mirror of db.QueuedMessage on the
+// Go side.
+export interface QueuedTranscription {
+  media_path: string;
+  contact_sheet_path?: string;
+  child_conversation_id: string;
+  context?: string;
+}
+
+export type QueuedMessageKind = "transcription";
+export type QueuedMessageState = "working" | "ready" | "failed";
+
 export interface QueuedMessage {
+  // Shared queue metadata. Specialized items omit llm until their result is ready.
   id: string;
-  llm: LLMMessage;
+  llm?: LLMMessage;
   created_at: string;
   model: string;
+  kind?: QueuedMessageKind;
+  state?: QueuedMessageState;
+  transcription?: QueuedTranscription;
+  error?: string;
 }
 
 // Parse the conversation.queued_messages JSON array into QueuedMessage[].
@@ -422,4 +438,23 @@ export function queuedMessageText(qm: QueuedMessage): string {
     .filter((c) => c.Type === 2 && typeof c.Text === "string")
     .map((c) => c.Text)
     .join("");
+}
+
+export function queuedMessageRestoreText(qm: QueuedMessage): string {
+  if (qm.kind !== "transcription" || qm.state === "ready") return queuedMessageText(qm);
+  return qm.transcription?.context?.trim() ?? "";
+}
+
+// Only mutable transcription states get the specialized task card. A ready
+// transcription is already an ordinary queued user turn and deliberately uses
+// the same ghost rendering as every other queued message.
+export function queuedTranscriptionTaskState(
+  qm: QueuedMessage,
+): Extract<QueuedMessageState, "working" | "failed"> | null {
+  if (qm.kind !== "transcription") return null;
+  return qm.state === "working" || qm.state === "failed" ? qm.state : null;
+}
+
+export function queuedTranscriptionPath(qm: QueuedMessage): string {
+  return qm.transcription?.media_path ?? "";
 }

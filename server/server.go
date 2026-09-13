@@ -378,13 +378,16 @@ type Server struct {
 	// streamPub is the server-wide subpub that fans out per-conversation
 	// events to every /api/stream2 subscriber. Events are tagged with their
 	// ConversationID so clients can route them.
-	streamPub   *subpub.SubPub[StreamResponse]
-	diskSpace   *diskSpaceMonitor
-	shutdownCh  chan struct{} // Signals background routines to stop
-	listenPort  int           // TCP port the server is listening on
-	terminals   *TerminalSessions
-	exitDelay   time.Duration
-	exitProcess func(int)
+	streamPub         *subpub.SubPub[StreamResponse]
+	diskSpace         *diskSpaceMonitor
+	shutdownCh        chan struct{} // Signals background routines to stop
+	listenPort        int           // TCP port the server is listening on
+	terminals         *TerminalSessions
+	exitDelay         time.Duration
+	exitProcess       func(int)
+	mediaRun          mediaCommandRunner
+	transcriptionMu   sync.Mutex
+	transcriptionJobs map[string]transcriptionJob
 
 	// Banner, when non-empty, is shown in a full-width bar at the top of
 	// the UI. Useful for marking demo instances so they're not confused
@@ -431,6 +434,8 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		hooksDir:              defaultHooksDir(),
 		exitDelay:             500 * time.Millisecond,
 		exitProcess:           os.Exit,
+		mediaRun:              runMediaCommand,
+		transcriptionJobs:     make(map[string]transcriptionJob),
 	}
 
 	s.conversationListStream = newConversationListStream(s)
@@ -1991,6 +1996,10 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 	// Resume conversations interrupted by an upgrade restart now that the
 	// listeners (and therefore ports, streams and the subagent runner) are live.
 	go s.resumeInterruptedConversations(context.Background(), resumeIDs)
+
+	// Recover durable queued transcription workers independently of browser
+	// connections and request lifetimes.
+	go s.recoverQueuedTranscriptions(context.Background())
 
 	// Wait for shutdown signal or server error
 	quit := make(chan os.Signal, 1)
