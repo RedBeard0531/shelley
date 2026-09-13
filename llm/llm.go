@@ -720,12 +720,18 @@ func CostUSDFromResponse(headers http.Header) float64 {
 // However, the front-end uses this struct, and it relies on its JSON serialization.
 // Do NOT use this struct directly when implementing an llm.Service.
 type Usage struct {
-	InputTokens              uint64  `json:"input_tokens"`
-	CacheCreationInputTokens uint64  `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     uint64  `json:"cache_read_input_tokens"`
-	OutputTokens             uint64  `json:"output_tokens"`
-	CostUSD                  float64 `json:"cost_usd"`
-	Model                    string  `json:"model,omitempty"`
+	InputTokens              uint64 `json:"input_tokens"`
+	CacheCreationInputTokens uint64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     uint64 `json:"cache_read_input_tokens"`
+	OutputTokens             uint64 `json:"output_tokens"`
+	// ReasoningTokens is the part of OutputTokens the provider attributes to
+	// internal reasoning ("thinking"). Providers report it inconsistently:
+	// Anthropic as output_tokens_details.thinking_tokens, OpenAI Responses and
+	// most OpenAI-compatible servers as ..._tokens_details.reasoning_tokens.
+	// Zero means the provider did not report it, or the call did no reasoning.
+	ReasoningTokens uint64  `json:"reasoning_tokens,omitempty"`
+	CostUSD         float64 `json:"cost_usd"`
+	Model           string  `json:"model,omitempty"`
 	// URL is the LLM API endpoint the request was sent to (e.g.
 	// https://api.anthropic.com/v1/messages). Set by the loop from the
 	// response so it can be recorded alongside the model name.
@@ -747,6 +753,7 @@ func (u *Usage) Add(other Usage) {
 	u.CacheCreationInputTokens += other.CacheCreationInputTokens
 	u.CacheReadInputTokens += other.CacheReadInputTokens
 	u.OutputTokens += other.OutputTokens
+	u.ReasoningTokens += other.ReasoningTokens
 	u.CostUSD += other.CostUSD
 }
 
@@ -779,6 +786,7 @@ func (u *Usage) Attr() slog.Attr {
 		"usage",
 		slog.Uint64("input_tokens", u.InputTokens),
 		slog.Uint64("output_tokens", u.OutputTokens),
+		slog.Uint64("reasoning_tokens", u.ReasoningTokens),
 		slog.Uint64("cache_creation_input_tokens", u.CacheCreationInputTokens),
 		slog.Uint64("cache_read_input_tokens", u.CacheReadInputTokens),
 		slog.Float64("cost_usd", u.CostUSD),

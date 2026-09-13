@@ -946,6 +946,25 @@ func TestToLLMUsage(t *testing.T) {
 	}
 }
 
+func TestToLLMUsageReasoningTokens(t *testing.T) {
+	// OpenAI-compatible servers report the reasoning subset of the completion
+	// via completion_tokens_details (Fireworks sets it on reasoner models).
+	service := &Service{}
+	usage := service.toLLMUsage(openai.Usage{
+		PromptTokens:     61,
+		CompletionTokens: 8779,
+		CompletionTokensDetails: &openai.CompletionTokensDetails{
+			ReasoningTokens: 8514,
+		},
+	}, nil)
+	if usage.ReasoningTokens != 8514 {
+		t.Errorf("toLLMUsage().ReasoningTokens = %d, expected 8514", usage.ReasoningTokens)
+	}
+	if usage.OutputTokens != 8779 {
+		t.Errorf("toLLMUsage().OutputTokens = %d, expected 8779", usage.OutputTokens)
+	}
+}
+
 func TestToLLMResponse(t *testing.T) {
 	// Create a service instance
 	service := &Service{}

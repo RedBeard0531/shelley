@@ -236,10 +236,14 @@ const points = computed<Point[]>(() => {
     model?: string;
     fallback: boolean;
     imageCount: number;
+    /** Provider-reported reasoning tokens this point can claim, i.e. those the
+     *  request is known to carry (see the reasoning band's comment below). */
+    claim: number;
   }[] = [];
   let generation: number | undefined;
   let generationHasMedia = false;
-  const counts = { images: 0 };
+  let claimUnsigned = 0;
+  const counts = { images: 0, thinking: 0, signedThinking: 0, signed: false };
 
   for (const message of props.messages) {
     if (generation !== undefined && message.generation !== generation) {
@@ -248,8 +252,12 @@ const points = computed<Point[]>(() => {
       toolKeys.clear();
       generationHasMedia = false;
       counts.images = 0;
+      claimUnsigned = 0;
     }
     generation = message.generation;
+    counts.thinking = 0;
+    counts.signedThinking = 0;
+    counts.signed = false;
     generationHasMedia =
       addMessage(running, runningToolBreakdown, toolKeys, message, counts) || generationHasMedia;
     if (message.type !== "agent") continue;
@@ -257,15 +265,46 @@ const points = computed<Point[]>(() => {
     const total = usage ? contextWindowUsed(usage) : 0;
     if (total === 0) continue;
 
-    const estimated = Object.values(running).reduce((sum, tokens) => sum + tokens, 0);
+    // Which reasoning ends up in the request differs by how the provider hands
+    // it back, and the two cases below are the ones Shelley can see:
+    //
+    //  * Unsigned thinking (OpenAI Responses' encrypted items, Fireworks'
+    //    reasoning_content) is replayed on every turn. The provider's count
+    //    replaces that call's bytes/4 guess and accumulates, so the band is the
+    //    reasoning the prompt actually carries.
+    //  * Signed thinking (Anthropic) is replayed only for the newest assistant
+    //    turn — fromLLMRequest strips it from all earlier ones to avoid stale
+    //    signatures — so it replaces rather than accumulates, and only the
+    //    call being plotted contributes. (Measured: Anthropic bills the full
+    //    reasoning for such a block, ~647 tokens for a 647-token call.)
+    const reported = contributesToContext(message) ? usage?.reasoning_tokens || 0 : 0;
+    const signedValue = counts.signed ? reported || counts.signedThinking : 0;
+    const unsignedValue = counts.signed ? 0 : reported || counts.thinking;
+    // Swap the exact count in for this call's byte guess (addMessage already
+    // added the guess to `running`), then accumulate.
+    running.reasoning =
+      (running.reasoning || 0) + unsignedValue - counts.thinking;
+    claimUnsigned += counts.signed ? 0 : reported;
+
+    const estimated =
+      Object.values(running).reduce((sum, tokens) => sum + tokens, 0) + signedValue;
+    const parts: Composition =
+      estimated > 0 ? { ...running } : generationHasMedia ? {} : { assistant: total };
+    if (estimated > 0 && signedValue > 0) {
+      parts.reasoning = (parts.reasoning || 0) + signedValue;
+      parts.reasoning = Math.round(parts.reasoning);
+    }
     raw.push({
       total,
       generation: message.generation,
-      parts: estimated > 0 ? { ...running } : generationHasMedia ? {} : { assistant: total },
+      parts,
       toolBreakdown: copyToolBreakdown(runningToolBreakdown),
       model: message.model_name || undefined,
       fallback: estimated === 0,
       imageCount: counts.images,
+      // Only counts the request proves are replayed: every unsigned call's
+      // reported reasoning, plus the newest signed call's.
+      claim: claimUnsigned + (counts.signed ? reported : 0),
     });
   }
 
@@ -338,16 +377,18 @@ const points = computed<Point[]>(() => {
   // result changed the estimate/provider ratio. Calibrate once at the last
   // call in each generation instead: within a generation, reconstructed
   // context is cumulative and must only grow. A compaction starts a new
-  // generation and is the one legitimate reset. Image tokens are
-  // provider-derived and excluded from the scaling.
+  // generation and is the one legitimate reset. Image tokens and the reasoning
+  // the request provably carries are provider-derived, so they claim their
+  // tokens up front and the byte estimates only explain what is left.
   const scaleByGeneration = new Map<number, number>();
   raw.forEach((point, index) => {
     if (point.fallback) return;
-    const estimatedOthers = othersEstimate(point);
     const images = correctedImagesByPoint.get(index) || 0;
+    const claim = clampedClaim(point, images);
+    const estimatedOthers = othersEstimate(point) - claim;
     scaleByGeneration.set(
       point.generation,
-      estimatedOthers > 0 ? Math.max(0, (point.total - images) / estimatedOthers) : 1,
+      estimatedOthers > 0 ? Math.max(0, (point.total - images - claim) / estimatedOthers) : 1,
     );
   });
   return raw.map((point, index) => {
@@ -363,8 +404,20 @@ const points = computed<Point[]>(() => {
         parts[key] = (parts[key] || 0) + tokens * scale;
       }
     }
-    const images = correctedImagesByPoint.get(index);
-    if (images !== undefined && images > 0) parts.images = Math.round(images);
+    const images = correctedImagesByPoint.get(index) || 0;
+    const claim = clampedClaim(point, images);
+    const basisReasoning = point.parts.reasoning || 0;
+    const exact = Math.min(claim, basisReasoning);
+    if (basisReasoning > 0 || exact > 0) {
+      // The reported part stands as measured; only the bytes/4 remainder is
+      // calibrated against the provider's total like every other band.
+      parts.reasoning = Math.round(exact + (basisReasoning - exact) * scale);
+      // A fallback point lumps every token into `assistant`; take the claimed
+      // reasoning back out of that lump so the point still sums to its total.
+      if (point.fallback && parts.assistant !== undefined)
+        parts.assistant = Math.max(0, parts.assistant - exact);
+    }
+    if (images > 0) parts.images = Math.round(images);
     for (const key of Object.keys(parts)) if (key !== "images") parts[key] = Math.round(parts[key]);
     const toolBreakdown = Object.fromEntries(
       Object.entries(point.toolBreakdown).map(([key, details]) => [
@@ -551,18 +604,21 @@ function clearHover() {
   hoverIndex.value = null;
 }
 
+// gitinfo/modelchange/error messages are user-visible only — the server never
+// sends them to the LLM, so they are not part of the context the graph
+// reconstructs.
+function contributesToContext(message: Message) {
+  return !!message.llm_data && !["gitinfo", "modelchange", "error"].includes(message.type);
+}
+
 function addMessage(
   running: Composition,
   runningToolBreakdown: ToolBreakdown,
   toolKeys: Map<string, Attribution>,
   message: Message,
-  counts: { images: number },
+  counts: { images: number; thinking: number; signedThinking: number; signed: boolean },
 ): boolean {
-  // gitinfo/modelchange/error messages are user-visible only — the server
-  // never sends them to the LLM, so they are not part of the context the
-  // graph reconstructs.
-  if (!message.llm_data || ["gitinfo", "modelchange", "error"].includes(message.type))
-    return false;
+  if (!contributesToContext(message)) return false;
   try {
     const llm = typeof message.llm_data === "string" ? JSON.parse(message.llm_data) : message.llm_data;
     const fallback = {
@@ -589,7 +645,7 @@ function addContent(
   toolKeys: Map<string, Attribution>,
   content: LLMContent,
   fallback: Attribution,
-  counts: { images: number },
+  counts: { images: number; thinking: number; signedThinking: number; signed: boolean },
 ): boolean {
   if (content.MediaType || content.DisplayImageURL || content.Data) {
     counts.images++;
@@ -633,14 +689,24 @@ function addContent(
         estimateTokens(content.Text || content.Thinking || ""),
       );
       return false;
-    case TYPE_THINKING:
-      addAttributedTokens(
-        running,
-        runningToolBreakdown,
-        isToolCategory(fallback.key) ? fallback : { key: "reasoning" },
-        estimateTokens(content.Text || content.Thinking || ""),
-      );
+    case TYPE_THINKING: {
+      const tokens = estimateTokens(content.Text || content.Thinking || "");
+      // Signed blocks are the ones the request drops from all but the newest
+      // assistant turn, so they are counted per call instead of accumulated.
+      if (content.Signature) {
+        counts.signedThinking += tokens;
+        counts.signed = true;
+      } else {
+        counts.thinking += tokens;
+        addAttributedTokens(
+          running,
+          runningToolBreakdown,
+          isToolCategory(fallback.key) ? fallback : { key: "reasoning" },
+          tokens,
+        );
+      }
       return false;
+    }
     default:
       addAttributedTokens(
         running,
@@ -664,7 +730,8 @@ const CATEGORY_HINTS: Record<string, string> = {
   system: "System prompt injected before the first user message",
   user: "Text typed by the user, plus mid-conversation injections (e.g. subagent-done pokes)",
   assistant: "Assistant text output",
-  reasoning: "Assistant thinking blocks",
+  reasoning:
+    "Assistant internal reasoning the request carries: the provider's reported counts where it replays its reasoning, thinking text otherwise",
   images: "Image content in messages or tool results (provider-derived: reported context growth not explained by text/tool estimates)",
 };
 
@@ -691,6 +758,13 @@ function othersEstimate(point: { parts: Composition; fallback: boolean }) {
   let sum = 0;
   for (const [key, tokens] of Object.entries(point.parts)) if (key !== "images") sum += tokens;
   return sum;
+}
+
+/** How many tokens this point's reported reasoning may claim from its own
+ *  total: at most what is left after the provider-derived image tokens, so the
+ *  calibration can never be handed a negative budget. */
+function clampedClaim(point: { claim: number; total: number }, images: number) {
+  return Math.min(point.claim, Math.max(0, point.total - images));
 }
 
 function addTokens(running: Composition, key: string, tokens: number) {

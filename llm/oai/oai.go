@@ -1136,6 +1136,9 @@ func (s *Service) toLLMUsage(au openai.Usage, headers http.Header) llm.Usage {
 		CacheReadInputTokens: cached,
 		OutputTokens:         out,
 	}
+	if au.CompletionTokensDetails != nil {
+		u.ReasoningTokens = uint64(au.CompletionTokensDetails.ReasoningTokens)
+	}
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
 }
