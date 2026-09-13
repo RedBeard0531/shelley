@@ -121,6 +121,7 @@ func TestSyntheticEndMarkerUsageGuard(t *testing.T) {
 		{"output tokens", marker, llm.Usage{OutputTokens: 1}, false},
 		{"cache write", marker, llm.Usage{CacheCreationInputTokens: 1}, false},
 		{"cache read", marker, llm.Usage{CacheReadInputTokens: 1}, false},
+		{"reasoning", marker, llm.Usage{ReasoningTokens: 1}, false},
 		{"reported cost", marker, llm.Usage{CostUSD: 0.125}, false},
 		{"model", marker, llm.Usage{Model: "failed-model"}, false},
 		{"URL", marker, llm.Usage{URL: "https://example.invalid"}, false},

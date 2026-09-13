@@ -1135,9 +1135,10 @@ func toLLMContents(msg openai.ChatCompletionMessage) []llm.Content {
 // chatCompletionUsage is the Chat Completions usage object, decoded locally
 // because go-openai's PromptTokensDetails lacks cache_write_tokens.
 type chatCompletionUsage struct {
-	PromptTokens        int                      `json:"prompt_tokens"`
-	CompletionTokens    int                      `json:"completion_tokens"`
-	PromptTokensDetails openAIInputTokensDetails `json:"prompt_tokens_details"`
+	PromptTokens            int                             `json:"prompt_tokens"`
+	CompletionTokens        int                             `json:"completion_tokens"`
+	PromptTokensDetails     openAIInputTokensDetails        `json:"prompt_tokens_details"`
+	CompletionTokensDetails *openai.CompletionTokensDetails `json:"completion_tokens_details"`
 }
 
 // openAIInputTokensDetails is prompt_tokens_details (Chat Completions) and
@@ -1161,6 +1162,7 @@ func chatCompletionUsageFromOpenAI(au openai.Usage) chatCompletionUsage {
 	if au.PromptTokensDetails != nil {
 		u.PromptTokensDetails.CachedTokens = au.PromptTokensDetails.CachedTokens
 	}
+	u.CompletionTokensDetails = au.CompletionTokensDetails
 	return u
 }
 
@@ -1168,6 +1170,9 @@ func chatCompletionUsageFromOpenAI(au openai.Usage) chatCompletionUsage {
 func (s *Service) toLLMUsage(au chatCompletionUsage, headers http.Header) llm.Usage {
 	u := splitOpenAIInputUsage(au.PromptTokens, au.PromptTokensDetails)
 	u.OutputTokens = uint64(au.CompletionTokens)
+	if au.CompletionTokensDetails != nil {
+		u.ReasoningTokens = uint64(au.CompletionTokensDetails.ReasoningTokens)
+	}
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
 }
