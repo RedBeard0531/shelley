@@ -67,6 +67,7 @@ export default async function globalSetup() {
       }
     } finally {
       delete process.env.SHELLEY_TEST_CWD;
+      delete process.env.SHELLEY_TEST_HOME;
       restoreGitEnvironment();
     }
   };
@@ -93,6 +94,10 @@ async function startTestEnvironment(cleanup: () => void, originalEnvironment: No
   mkdirSync(cwd);
   mkdirSync(home);
   process.env.SHELLEY_TEST_CWD = cwd;
+  // The server runs with HOME set to this isolated home, so specs that need to
+  // place a file under the server's ~ (file references) must use it too, not
+  // the runner's own home.
+  process.env.SHELLEY_TEST_HOME = home;
 
   // External servers keep their own environment; API fixtures still get a
   // small, real directory instead of the shared /tmp tree.
