@@ -137,6 +137,11 @@ const props = withDefaults(
      *  makes the editor read-only; submitted comments are emitted as
      *  "comment" with a quoted block for the message input. */
     commentable?: boolean;
+    /** 1-based line to reveal and place the cursor on (file references in
+     *  messages). Absent for plain opens, which start at the top. */
+    line?: number;
+    /** Last line of the selection; only set for line-range references. */
+    endLine?: number;
   }>(),
   {},
 );
@@ -390,10 +395,64 @@ watch(
   { immediate: true, flush: "post" },
 );
 
+// Reveal the lines a reference points at (file references in messages). The
+// referenced lines are highlighted with a decoration rather than selected: a
+// selection is replaced by the next keystroke, and this editor autosaves, so a
+// "just show me line 87" click must not arm a whole-line edit. A range is
+// additionally selected, since a range is something you may want to copy.
+// Clamped to the document in case the file changed under a stale reference.
+// Runs whenever the editor appears or the line props change (clicking a second
+// reference while the modal is already open).
+let refDecorations: string[] = [];
+
+function revealLineRange() {
+  const ed = editor.value;
+  const model = ed?.getModel();
+  if (!ed || !model || !monacoMod) return;
+  if (props.line === undefined) {
+    refDecorations = ed.deltaDecorations(refDecorations, []);
+    return;
+  }
+  const lastLine = model.getLineCount();
+  const start = Math.min(Math.max(1, props.line), lastLine);
+  const end = Math.min(Math.max(props.endLine ?? start, start), lastLine);
+  // Monaco paints a whole-line decoration on every visual row the line wraps
+  // onto, which is what makes a long referenced line read as one highlighted
+  // block.
+  refDecorations = ed.deltaDecorations(refDecorations, [
+    {
+      range: new monacoMod.Range(start, 1, end, 1),
+      options: { isWholeLine: true, className: "file-ref-line" },
+    },
+  ]);
+  if (start === end) {
+    const pos = new monacoMod.Position(start, 1);
+    ed.setPosition(pos);
+    ed.revealPositionInCenter(pos);
+    return;
+  }
+  const range = new monacoMod.Range(start, 1, end, model.getLineMaxColumn(end));
+  ed.setSelection(range);
+  ed.revealRangeInCenter(range);
+}
+
+watch(
+  () => [editor.value, props.line, props.endLine] as const,
+  () => {
+    if (props.isOpen) revealLineRange();
+  },
+  { flush: "post" },
+);
+
 function disposeEditor() {
   if (saveTimeout) {
+    // Flush a pending debounced save synchronously: dispose runs when the
+    // modal unmounts — including the :key remount when a file reference opens
+    // a different file while the modal is open — and dropping the timer would
+    // lose keystrokes from the last second. Same flush as vim quit.
     clearTimeout(saveTimeout);
     saveTimeout = null;
+    if (editor.value) saveContent(editor.value.getValue());
   }
   commentsCleanup?.();
   commentsCleanup = null;
