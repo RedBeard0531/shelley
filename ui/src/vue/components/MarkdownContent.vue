@@ -11,14 +11,16 @@
   <div
     ref="containerRef"
     class="markdown-content break-words"
+    :class="{ 'markdown-refs': renderFileRefs }"
     @click="onActivate"
     @keydown="onActivate"
+    @auxclick="onAuxActivate"
     v-html="html"
   ></div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onBeforeUpdate, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onBeforeUpdate, ref, watch } from "vue";
 import { highlightCode, normalizeCodeLanguage } from "../../services/markdownHighlight";
 import {
   addCodeBlockHeaders,
@@ -29,11 +31,13 @@ import { applyHighlightTokens } from "../../utils/codeHighlight";
 import { COMMENT_ICON } from "../../utils/icons";
 import { localhostLinkOptionsFromInit } from "../../utils/linkify";
 import {
+  parseFileRef,
   renderMarkdownToSafeHTML,
   type MarkdownRenderInfo,
 } from "../../utils/markdownRender";
 import { perfWrap } from "../../utils/perf";
 import { handleImageCommentClick, openImageComment } from "../composables/imageComment";
+import { OpenFileEditorKey } from "../composables/fileEditor";
 import { whenNearViewport } from "../composables/nearViewport";
 
 const props = defineProps<{
@@ -58,6 +62,15 @@ const props = defineProps<{
   runKey?: string;
   // Rewrite VM-local links for user-clickable assistant content only.
   rewriteLocalhostLinks?: boolean;
+  // Working directory the message containing this markdown was emitted under
+  // (stamped by the server at record time). File references resolve against
+  // it rather than the conversation's current cwd; without it the opener
+  // falls back to the current cwd.
+  cwd?: string;
+  // Render file references (`📄path:line`) as chips that open the editor. Off
+  // by default: references are a feature of agent replies, so only the hosts
+  // rendering those ask for it (a host with no editor to open passes nothing).
+  fileRefs?: boolean;
   // Live-streaming text (the chat streaming preview): the trailing fenced
   // block's fence may still be open, so its highlighting must wait for the
   // fence to close rather than tokenize half-written code on every token.
@@ -67,6 +80,12 @@ const props = defineProps<{
 }>();
 
 const containerRef = ref<HTMLDivElement | null>(null);
+
+// Host for file-reference clicks (message views are under App, which provides
+// the editor opener). A reference is only rendered when a host both says its
+// text is the agent's and has somewhere to open it.
+const fileOpener = inject(OpenFileEditorKey, null);
+const renderFileRefs = computed(() => props.fileRefs === true && fileOpener !== null);
 
 // Highlighting swaps a block's single text node for one span per token —
 // measured at 22% of all DOM elements in a large conversation when done
@@ -113,13 +132,14 @@ const html = computed(
       props.cacheOwner && props.runKey !== undefined
         ? {
             owner: props.cacheOwner,
-            runKey: props.rewriteLocalhostLinks
-              ? `${props.runKey}:rewrite-localhost-links`
-              : props.runKey,
+            // Distinguish renders of one run that differ: localhost link
+            // rewriting, and whether references are rendered as chips.
+            runKey: `${props.runKey}:${props.rewriteLocalhostLinks ? "links" : ""}:${renderFileRefs.value ? "refs" : ""}`,
           }
         : undefined,
       props.rewriteLocalhostLinks ? localhostLinkOptionsFromInit() : undefined,
       renderInfo,
+      renderFileRefs.value,
     ),
   ),
 );
@@ -276,6 +296,52 @@ async function copyCodeBlock(button: HTMLButtonElement): Promise<void> {
   }
 }
 
+// Activate a file-reference chip: open the editor at the line it names,
+// selecting the range when it carries one (a reference without a line opens at
+// line 1). The reference is read back out of the chip's own text, so a chip
+// cannot open something other than what it displays. Returns whether the event
+// targeted a reference.
+function onFileRefActivate(e: MouseEvent | KeyboardEvent): boolean {
+  const anchor = (e.target as HTMLElement | null)?.closest?.("a.file-ref");
+  // A chip is only live where this host renders references (text the agent
+  // wrote, and an editor to open). HTML claiming the class anywhere else — a
+  // fetched page, tool output, a tour annotation — is inert rather than a way
+  // into the editor.
+  if (!anchor || !renderFileRefs.value) return false;
+  // Claim the event before any refusal, so an inert href cannot act as a jump.
+  e.preventDefault();
+  // One text node: a child element can be styled away, which would let a label
+  // show one path while contributing a different one to textContent.
+  if (anchor.children.length > 0) return true;
+  // A chip the reader cannot see must not open a file: CSS can hide it (a
+  // clipping class, a wrapper) and it is still in the tab order, so Enter on an
+  // invisible chip would otherwise open something nobody can read. Require the
+  // label to fit inside the box the anchor paints. Not airtight — a wrapper can
+  // clip the anchor and its text together — but it stops the cases that hide the
+  // whole label or crop it.
+  const box = anchor.getBoundingClientRect();
+  const label = document.createRange();
+  label.selectNodeContents(anchor);
+  const painted = label.getBoundingClientRect();
+  if (painted.width > box.width + 1 || painted.height > box.height + 1) return true;
+  // Layout is not paint: a class can make the chip fully transparent, which the
+  // rect check above cannot see.
+  if (!anchor.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return true;
+  const ref = parseFileRef(anchor.textContent ?? "");
+  // Autorepeat must not reopen the editor for every repeat.
+  if (ref && fileOpener && !(e instanceof KeyboardEvent && e.repeat)) {
+    fileOpener(ref.path, { line: ref.line ?? 1, endLine: ref.endLine, baseDir: props.cwd || undefined });
+  }
+  return true;
+}
+
+// A middle-click or ctrl-click on a reference would otherwise follow the inert
+// href and open a second copy of the app in a new tab; the editor is the only
+// destination a reference has.
+function onAuxActivate(e: MouseEvent) {
+  if ((e.target as HTMLElement | null)?.closest?.("a.file-ref")) e.preventDefault();
+}
+
 function onActivate(e: MouseEvent | KeyboardEvent) {
   const target = e.target;
   if (e instanceof MouseEvent && target instanceof Element) {
@@ -286,7 +352,17 @@ function onActivate(e: MouseEvent | KeyboardEvent) {
     }
   }
 
-  const img = target;
+  if (e instanceof KeyboardEvent) {
+    // Keyboard activation of a focused reference: Enter natively synthesizes
+    // a click (handled by the MouseEvent path below), but Space does not
+    // activate links, and either key would otherwise also trigger the
+    // href="#" default jump. Handle both explicitly; preventDefault stops
+    // the default so no synthetic click follows.
+    if (!e.repeat && (e.key === "Enter" || e.key === " ") && onFileRefActivate(e)) return;
+  } else if (onFileRefActivate(e)) {
+    return;
+  }
+  const img = e.target;
   if (!(img instanceof HTMLImageElement) || !isCommentable(img)) return;
   if (e instanceof KeyboardEvent) {
     // Only the activation keys, and only once the target is known to be an

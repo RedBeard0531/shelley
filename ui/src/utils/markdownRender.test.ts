@@ -15,7 +15,7 @@ g.document = dom.window.document;
 const purify = DOMPurify(dom.window as any);
 Object.assign(DOMPurify, purify);
 
-const { renderMarkdownToSafeHTML } = await import("./markdownRender");
+const { renderMarkdownToSafeHTML, parseFileRef } = await import("./markdownRender");
 
 let passed = 0;
 let failed = 0;
@@ -343,6 +343,139 @@ assert(
     "closed fence inside a blockquote is not open",
   );
   assert(endsOpen("> ```js\n> x") === true, "unterminated fence inside a blockquote is open");
+}
+
+// ---- File references (`📄path:line` inline code -> clickable chip) ----
+
+// The marker that makes an inline-code span a file reference.
+const M = "📄";
+
+// References are opt-in per render (agent-authored text in a host with an
+// editor), so the tests say so explicitly, as MarkdownContent does.
+const render = (text: string) =>
+  renderMarkdownToSafeHTML(text, undefined, undefined, undefined, undefined, true);
+
+{
+  // parseFileRef: accepted shapes. Every reference is marked, and the parser is
+  // also what reads a chip's label back, so these shapes are the contract.
+  const single = parseFileRef(`${M}ui/src/App.vue:100`);
+  assert(single?.path === "ui/src/App.vue" && single?.line === 100 && single?.endLine === 100,
+    "marked path:line parses");
+  const range = parseFileRef(`${M}ui/src/App.vue:100-140`);
+  assert(range?.line === 100 && range?.endLine === 140, "marked path:start-end parses");
+  assert(parseFileRef(`${M}src/app.ts`)?.path === "src/app.ts"
+    && parseFileRef(`${M}src/app.ts`)?.line === undefined,
+    "marked path parses without a line");
+  assert(parseFileRef(`${M}./.gitignore`)?.path === "./.gitignore", "marked dotfile parses");
+  assert(parseFileRef(`${M}Makefile:10`)?.path === "Makefile",
+    "marked slash-less name parses: the marker, not the slash, is what makes it a reference");
+  assert(parseFileRef(`${M}~/.config/shelley/AGENTS.md:12-20`)?.endLine === 20,
+    "marked home-relative path with range parses");
+  assert(parseFileRef(`${M}src/app.ts:140-100`)?.line === 100, "reversed range is normalized");
+  assert(parseFileRef(`${M}~tim/x:2`) === null, "~user path is not a reference");
+  assert(parseFileRef(`${M}a~b/c`) === null, "mid-path tilde is not a reference");
+  assert(parseFileRef(`${M}src/app.ts:` + "9".repeat(400)) === null,
+    "overflow line number is not a reference");
+
+  // The canonical form has nothing between the marker and the path, but a space
+  // (or trailing whitespace) is tolerated.
+  assert(parseFileRef(`${M} src/app.ts:7`)?.line === 7, "space after the marker is tolerated");
+  assert(parseFileRef(`${M}src/app.ts:7 `)?.line === 7, "trailing space is tolerated");
+  assert(parseFileRef(`${M}\uFE0Fsrc/app.ts:5`)?.path === "src/app.ts",
+    "a variation selector after the marker is the same marker");
+
+  // parseFileRef: rejections. Unmarked spans are never references, however
+  // path-shaped they look — that is the entire point of the marker.
+  assert(parseFileRef("ui/src/App.vue:100") === null, "unmarked path:line is not a reference");
+  assert(parseFileRef("ui/src/App.vue") === null, "unmarked path is not a reference");
+  assert(parseFileRef("npm run build") === null, "whitespace is not a reference");
+  assert(parseFileRef("localhost:3000") === null, "host:port is not a reference");
+
+  // ...and a marked span must still be path-shaped.
+  assert(parseFileRef(`${M}`) === null, "a bare marker is not a reference");
+  assert(parseFileRef(`${M} `) === null, "marker plus whitespace is not a reference");
+  assert(parseFileRef(`${M}npm run build`) === null, "marked command is not a reference");
+  assert(parseFileRef(`${M}src/app.ts:0`) === null, "non-positive line is not a reference");
+  assert(parseFileRef(`${M}ui/src/`) === null, "trailing slash (directory) is not a reference");
+  assert(parseFileRef(` ${M}src/app.ts`) === null, "marker must open the span");
+  assert(parseFileRef(`📎src/app.ts`) === null, "only the marker emoji marks a reference");
+
+  // Paths are a plain allowlist: letters in any script and the punctuation real
+  // filenames use. Everything else — spaces, quotes, invisible runes — ends the
+  // reference, which is what keeps a chip's text equal to the path it opens.
+  for (const [span, path] of [
+    [`${M}node_modules/@types/node/index.d.ts:5`, "node_modules/@types/node/index.d.ts"],
+    [`${M}a+b.ts:5`, "a+b.ts"],
+    [`${M}café.ts`, "café.ts"],
+    [`${M}cafe\u0301.ts`, "cafe\u0301.ts"],
+    [`${M}दस्तावेज़.md`, "दस्तावेज़.md"],
+    [`${M}[id].vue`, "[id].vue"],
+    [`${M}file(1).ts`, "file(1).ts"],
+    [`${M}./x:1-2`, "./x"],
+    [`${M}src/with-hyphen_and.dot`, "src/with-hyphen_and.dot"],
+  ] as const) {
+    assert(parseFileRef(span)?.path === path, `path parses: ${span}`);
+  }
+  for (const span of [`${M}src/with space.ts:3`, `${M}a\u200Bb.ts:2`, `${M}a\u202Eb.txt:2`,
+                      `${M}a'b.ts`, `${M}a&b.ts`, `${M}a:b.ts`, `${M}${M}a.ts`] as const) {
+    assert(parseFileRef(span) === null, `not a reference: ${span}`);
+  }
+
+  // A `..` segment may lead, where the reader sees it, but never sit inside the
+  // path: a chip's text is meant to name what it opens, and a traversal hidden
+  // behind a prefix the reader can see is the one way to break that.
+  assert(parseFileRef(`${M}../shared/x.ts`)?.path === "../shared/x.ts", "a leading .. is allowed");
+  assert(parseFileRef(`${M}docs/../x.ts`) === null, "an interior .. is refused");
+  assert(parseFileRef(`${M}docs/../../etc/hostname:1`) === null, "an interior traversal is refused");
+  assert(parseFileRef(`${M}..`) === null, "`..` alone is a directory, not a reference");
+  assert(parseFileRef(`${M}x/.`) === null, "a trailing /. is a directory, not a reference");
+
+  // Rendering: a marked span becomes a chip whose text is the reference.
+  const singleHtml = render(`See \`${M}ui/src/App.vue:100\` here.`);
+  assert(singleHtml.includes('class="file-ref"'), "reference renders as a chip");
+  assert(singleHtml.includes(`>${M}ui/src/App.vue:100</a>`),
+    "the chip carries the reference in its own text");
+  assert(!singleHtml.includes("data-file-path"), "the chip carries no reference attributes");
+  assert(!singleHtml.includes('target="_blank"'), "chips are not new-tab links");
+  assert(singleHtml.includes('href="#"'), "the chip href is inert");
+
+  const rangeHtml = render(`\`${M}ui/src/App.vue:100-140\``);
+  assert(rangeHtml.includes(`>${M}ui/src/App.vue:100-140</a>`), "a range renders as written");
+
+  const bareHtml = render(`\`${M}src/app.ts\``);
+  assert(bareHtml.includes(`>${M}src/app.ts</a>`), "a bare path renders without a line");
+
+  // A reference is displayed in canonical form, matching what clicking it opens.
+  assert(render(`\`${M}src/app.ts:007\``).includes(`>${M}src/app.ts:7</a>`),
+    "a padded line number displays canonically");
+  assert(render(`\`${M}src/app.ts:140-100\``).includes(`>${M}src/app.ts:100-140</a>`),
+    "a reversed range displays in the order it opens");
+
+  // Unmarked spans keep the default code-span rendering, whatever they look
+  // like — the false-positive regression that motivated the marker.
+  for (const code of ["ui/src/App.vue:100", "src/app.ts", "npm run build", "v1.2.3",
+                      "localhost:3000", "data[10:20]", "read/write"]) {
+    const html = render(`\`${code}\``);
+    assert(html.includes(`<code>${code}</code>`), `unmarked ${code} stays plain code`);
+    assert(!html.includes("file-ref"), `unmarked ${code} is not a chip`);
+  }
+  assert(render("`📎src/app.ts`").includes("<code>"), "another emoji does not mark a reference");
+
+  // A host that does not render references (tool output, a fetched page, the
+  // export preview) gets plain code — which is also the default.
+  const noRefs = renderMarkdownToSafeHTML(`\`${M}src/app.ts:5\``);
+  assert(!noRefs.includes("file-ref") && noRefs.includes(`<code>${M}src/app.ts:5</code>`),
+    "without refs, a marked span stays plain code");
+
+  // Raw HTML can produce a chip (the class is not a secret) and that is fine:
+  // the handler reads the label, so a chip's text is its target and it cannot
+  // point somewhere else. What it cannot do is navigate — the href is inert.
+  const forged = render(`<a class="file-ref" href="https://evil.example">${M}/etc/passwd:1</a>`);
+  assert(forged.includes(`>${M}/etc/passwd:1</a>`), "a forged chip keeps its own label");
+  assert(forged.includes('href="#"') && !forged.includes("evil.example"), "its href is inert");
+  assert(!forged.includes('target="_blank"'), "and it gets no new-tab target");
+  const linked = render(`[\`${M}src/app.ts:5\`](https://example.com)`);
+  assert(!/<a[^>]*><\/a>/.test(linked), "a link whose label was a reference leaves no empty anchor");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -210,6 +210,8 @@
                 :cache-owner="message"
                 :run-key="`${entity.key}-${index}`"
                 :rewrite-localhost-links="message.type === 'agent' || !!conversationSource"
+                :cwd="messageCwd(message) ?? undefined"
+                :file-refs="message.type === 'agent'"
               />
               <MessageContentBlock v-else :content="item.content!" :message-id="message.message_id" />
             </div>
@@ -244,6 +246,7 @@ import {
   type Usage,
   cwdChange,
   isDistillStatusMessage,
+  messageCwd,
 } from "../../types";
 import { type MarkdownMode } from "../../services/settings";
 import { useMarkdownMode } from "../composables/markdownMode";

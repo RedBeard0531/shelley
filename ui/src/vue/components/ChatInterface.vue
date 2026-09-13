@@ -214,7 +214,13 @@
                 >
               </div>
               <div v-else-if="showStreamingPreview" class="streaming-markdown">
-                <MarkdownContent :text="streamingText" live rewrite-localhost-links />
+                <MarkdownContent
+                  :text="streamingText"
+                  live
+                  rewrite-localhost-links
+                  file-refs
+                  :cwd="currentConversation?.cwd ?? undefined"
+                />
                 <span class="streaming-cursor">▊</span>
               </div>
             </div>

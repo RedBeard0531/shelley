@@ -7902,6 +7902,20 @@ button.tour-visibility-control:focus-visible,
   background-color: rgba(96, 165, 250, 0.12) !important;
 }
 
+/* The line(s) a file-reference chip points at, highlighted while the editor is
+   open: a cursor alone is too easy to miss, and selecting the line would be
+   replaced by the next keystroke. The inset shadow is the accent — a border
+   would shift the text. */
+.diff-viewer-editor .monaco-editor .file-ref-line {
+  background-color: rgba(37, 99, 235, 0.16) !important;
+  box-shadow: inset 3px 0 0 rgba(37, 99, 235, 0.55);
+}
+
+.dark .diff-viewer-editor .monaco-editor .file-ref-line {
+  background-color: rgba(96, 165, 250, 0.2) !important;
+  box-shadow: inset 3px 0 0 rgba(96, 165, 250, 0.6);
+}
+
 /* Comment indicator glyph in margin for diff viewer */
 .diff-viewer-editor .monaco-editor .diff-viewer-comment-glyph {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'%3E%3C/path%3E%3Cline x1='9' y1='10' x2='15' y2='10'%3E%3C/line%3E%3C/svg%3E");
@@ -10216,6 +10230,26 @@ kbd {
 
 .markdown-content a:hover {
   text-decoration: none;
+}
+
+/* File references (`📄path:line` inline code rendered as a chip): monospace
+   with a link affordance, so they read as code but invite a click. The gate is
+   the host — `markdown-refs` is how one says it renders references — but this is
+   only decoration: raw HTML can claim any class, which is why what makes a chip
+   live is host state, not this selector. */
+.markdown-content.markdown-refs a.file-ref {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  background: var(--code-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  color: var(--link-color);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.markdown-content.markdown-refs a.file-ref:hover {
+  text-decoration: underline;
 }
 
 .markdown-content del {

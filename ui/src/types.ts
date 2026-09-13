@@ -41,6 +41,10 @@ export interface BtwTurn {
   status: BtwTurnStatus;
   error?: string | null;
   kind: BtwTurnKind;
+  // Working directory the reader's answer was emitted under, so file
+  // references in it resolve against the reader's own directory rather than
+  // the parent conversation's. Absent when the message carries no stamp.
+  cwd?: string;
   tool_call_count?: number;
   tool_calls?: BtwToolCall[];
   unresolved_tool_call_count?: number;
@@ -344,17 +348,34 @@ export interface CommitInfo {
   date: string;
 }
 
+// user_data is a JSON string on the wire and an object once the API layer has
+// parsed it, and compaction copies carry whole summaries in it. Message objects
+// are stable, so parse each one at most once: every accessor below reads through
+// this instead of re-parsing the same string on each render.
+const userDataCache = new WeakMap<Message, Record<string, unknown> | null>();
+
+function userData(message: Message): Record<string, unknown> | null {
+  const cached = userDataCache.get(message);
+  if (cached !== undefined) return cached;
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const raw = message.user_data;
+    if (raw) {
+      const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (typeof value === "object" && value !== null) parsed = value as Record<string, unknown>;
+    }
+  } catch {
+    parsed = null;
+  }
+  userDataCache.set(message, parsed);
+  return parsed;
+}
+
 // Helper to read a message's distill_status value ("in_progress" | "complete"
 // | "error"), or null if the message is not a distill status message.
 export function distillStatus(message: Message): string | null {
-  if (!message.user_data) return null;
-  try {
-    const userData =
-      typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
-    return userData.distill_status || null;
-  } catch {
-    return null;
-  }
+  const status = userData(message)?.distill_status;
+  return typeof status === "string" && status ? status : null;
 }
 
 // Helper to check if a message is a distill status message
@@ -368,15 +389,22 @@ export function isDistillStatusMessage(message: Message): boolean {
 // directory), but they aren't something the user typed, so the UI renders them
 // as a status line rather than a chat bubble. See recordCwdChangeNotice.
 export function cwdChange(message: Message): { from: string; to: string } | null {
-  if (!message.user_data) return null;
-  try {
-    const userData =
-      typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
-    if (!userData?.cwd_change) return null;
-    return { from: userData.from || "", to: userData.to || "" };
-  } catch {
-    return null;
-  }
+  const data = userData(message);
+  if (!data?.cwd_change) return null;
+  return {
+    from: typeof data.from === "string" ? data.from : "",
+    to: typeof data.to === "string" ? data.to : "",
+  };
+}
+
+// The working directory the conversation had when this message was emitted
+// (stamped into user_data by the server at record time). File references in
+// the message resolve against it, so a later change_dir can't re-point older
+// references. Null for messages recorded before the stamp existed; callers
+// fall back to the conversation's current cwd.
+export function messageCwd(message: Message): string | null {
+  const cwd = userData(message)?.cwd;
+  return typeof cwd === "string" && cwd ? cwd : null;
 }
 
 // Helper to check if a message was copied verbatim into the current generation
@@ -384,14 +412,7 @@ export function cwdChange(message: Message): { from: string; to: string } | null
 // single "messages carried forward" band so the re-played tail isn't
 // re-rendered one message at a time.
 export function isCompactionCarried(message: Message): boolean {
-  if (!message.user_data) return false;
-  try {
-    const userData =
-      typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
-    return userData.compaction_carried === "true";
-  } catch {
-    return false;
-  }
+  return userData(message)?.compaction_carried === "true";
 }
 
 // A queued user message held in the conversation's queued_messages JSON array
