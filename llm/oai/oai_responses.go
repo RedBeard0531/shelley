@@ -609,6 +609,9 @@ func (s *ResponsesService) toLLMResponseFromResponses(resp *responsesResponse, h
 func (s *ResponsesService) toLLMUsageFromResponses(usage responsesUsage, headers http.Header) llm.Usage {
 	u := splitOpenAIInputUsage(usage.InputTokens, usage.InputTokensDetails)
 	u.OutputTokens = uint64(usage.OutputTokens)
+	if usage.OutputTokensDetails != nil {
+		u.ReasoningTokens = uint64(usage.OutputTokensDetails.ReasoningTokens)
+	}
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
 }
