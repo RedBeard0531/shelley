@@ -229,6 +229,12 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 	case "wide tables":
 		return s.makeResponse(wideTablesMarkdown, inputTokens), nil
 
+	case "file references":
+		// Clickable `path:line`/`path:start-end` references, including the
+		// reference-then-fenced-block pattern the system prompt teaches. Paths
+		// are relative so they resolve against the conversation cwd.
+		return s.makeResponse(fileReferencesMarkdown, inputTokens), nil
+
 	case "web search", "citations":
 		// Reproduce the Anthropic server-side web-search shape: a server_tool_use
 		// block, a web_search_tool_result block, then MANY short text blocks
@@ -1304,3 +1310,31 @@ func idleNudgeFirstRow(req *llm.Request) (string, bool) {
 	}
 	return m[1], true
 }
+
+// fileReferencesMarkdown exercises the clickable file-reference format: inline
+// code marked with 📄 (`path:line`, `path:start-end`) that opens the editor at
+// that location, plus the reference-then-fenced-block pattern the system prompt
+// teaches (annotated with comments, elided with a `...` comment). Paths are
+// relative so they resolve against the conversation's cwd. The trailing
+// unmarked spans are the regression guard: they look path-shaped but must stay
+// plain code.
+const fileReferencesMarkdown = `Here are some file references to test:
+
+A single line: ` + "`📄AGENTS.md:1`" + ` and a bare path: ` + "`📄./server/system_prompt.go`" + ` and a home-relative one: ` + "`📄~/.config/shelley/AGENTS.md:1-5`" + `.
+
+A range, with the code it points at:
+
+` + "`📄server/system_prompt.txt:1-3`" + `
+
+` + "```go" + `
+// Shelley is a coding agent. It greets the user, ...
+func Greet(name string) string {
+	return "Hello, " + name
+}
+// ... (middle of the file elided)
+func Farewell(name string) string {
+	return "Goodbye, " + name
+}
+` + "```" + `
+
+And unmarked spans that must stay plain code: ` + "`server/system_prompt.txt:1-3`" + ` and ` + "`127.0.0.1:8080`" + `.`

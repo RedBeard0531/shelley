@@ -128,7 +128,7 @@ func TestSyntheticEndMarkerUsageGuard(t *testing.T) {
 		{"end time", marker, llm.Usage{EndTime: &stamp}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			params, err := srv.buildCreateMessageParams("conversation", tc.message, tc.usage, nil)
+			params, err := srv.buildCreateMessageParams(t.Context(), "conversation", tc.message, tc.usage, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1,3 +1,4 @@
+import { messageCwd } from "../types";
 import type {
   BtwExchange,
   BtwReaderDescriptor,
@@ -117,6 +118,7 @@ function presentTurn(turn: ProjectedTurn): BtwTurn {
     status: turn.status,
     error: turn.error,
     kind: turn.kind,
+    cwd: turn.cwd,
     tool_call_count: turn.tool_call_count,
     tool_calls: turn.tool_calls,
     unresolved_tool_call_count: turn.unresolved_tool_call_count,
@@ -130,6 +132,10 @@ export function projectBtwReader(
 ): BtwExchange {
   const conversation: Conversation | null = child?.conversation ?? null;
   const messages = child?.messages ?? [];
+  // The reader's own directory, used when a turn has no stamp of its own: an
+  // answer still streaming has no stored message yet, and a reader moved by the
+  // new-conversation hook must not resolve against the parent's directory.
+  const readerCwd = conversation?.cwd ?? undefined;
   const turns: ProjectedTurn[] = [];
   let cursor = 0;
   const current = () => turns[cursor];
@@ -172,6 +178,7 @@ export function projectBtwReader(
     applyContent(turn, content);
     if (message.type === "agent") {
       activate(turn);
+      turn.cwd ??= messageCwd(message) ?? readerCwd;
       const { answer, cancelled } = agentText(content);
       if (cancelled) {
         turn.status = "cancelled";
@@ -196,6 +203,7 @@ export function projectBtwReader(
   if (unfinished && unfinished.status !== "completed" && unfinished.status !== "cancelled") {
     if (transient.agentWorking || conversation?.agent_working === true) {
       activate(unfinished);
+      unfinished.cwd ??= readerCwd;
       unfinished.answer += transient.streamingText;
     } else if (conversation?.agent_working === false) {
       for (const turn of turns) {
