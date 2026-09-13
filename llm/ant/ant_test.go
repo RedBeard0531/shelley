@@ -132,6 +132,23 @@ func TestToLLMUsage(t *testing.T) {
 				CostUSD:                  0.05,
 			},
 		},
+		{
+			// The breakdown is what makes reasoning visible for models whose
+			// thinking text is summarized, omitted, or redacted.
+			name: "thinking token breakdown",
+			u: usage{
+				InputTokens:  48,
+				OutputTokens: 152,
+				OutputTokensDetails: &usageOutputTokensDetails{
+					ThinkingTokens: 113,
+				},
+			},
+			want: llm.Usage{
+				InputTokens:     48,
+				OutputTokens:    152,
+				ReasoningTokens: 113,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -3394,4 +3411,27 @@ func postRawAnthropic(t *testing.T, apiKey string, req *request) error {
 		return nil
 	}
 	return fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+}
+
+func TestParseSSEStreamThinkingTokens(t *testing.T) {
+	// The thinking-token breakdown arrives only on message_delta, and it is the
+	// sole reasoning signal for calls whose thinking text is omitted/redacted.
+	var b strings.Builder
+	b.WriteString(`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_think","type":"message","role":"assistant","model":"test","content":[],"stop_reason":null,"usage":{"input_tokens":48,"output_tokens":2}}}` + "\n\n")
+	b.WriteString(`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}` + "\n\n")
+	b.WriteString(`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}` + "\n\n")
+	b.WriteString(`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":152,"output_tokens_details":{"thinking_tokens":113}}}` + "\n\n")
+	b.WriteString(`event: message_stop` + "\n" + `data: {"type":"message_stop"}` + "\n\n")
+
+	resp, err := parseSSEStream(strings.NewReader(b.String()), nil)
+	if err != nil {
+		t.Fatalf("parseSSEStream() error = %v", err)
+	}
+	got := toLLMResponse(resp)
+	if got.Usage.OutputTokens != 152 {
+		t.Errorf("OutputTokens = %d, want 152", got.Usage.OutputTokens)
+	}
+	if got.Usage.ReasoningTokens != 113 {
+		t.Errorf("ReasoningTokens = %d, want 113", got.Usage.ReasoningTokens)
+	}
 }

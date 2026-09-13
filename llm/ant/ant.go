@@ -263,11 +263,21 @@ type tool struct {
 
 // usage represents the billing and rate-limit usage.
 type usage struct {
-	InputTokens              uint64  `json:"input_tokens"`
-	CacheCreationInputTokens uint64  `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     uint64  `json:"cache_read_input_tokens"`
-	OutputTokens             uint64  `json:"output_tokens"`
-	CostUSD                  float64 `json:"cost_usd"`
+	InputTokens              uint64                    `json:"input_tokens"`
+	CacheCreationInputTokens uint64                    `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     uint64                    `json:"cache_read_input_tokens"`
+	OutputTokens             uint64                    `json:"output_tokens"`
+	OutputTokensDetails      *usageOutputTokensDetails `json:"output_tokens_details,omitempty"`
+	CostUSD                  float64                   `json:"cost_usd"`
+}
+
+// usageOutputTokensDetails is Anthropic's breakdown of output tokens.
+// ThinkingTokens counts the raw internal reasoning the model generated (not the
+// possibly-shorter summarized thinking returned in the body), including the
+// thinking-block delimiters. It is a subset of OutputTokens, and it is the only
+// signal for models whose thinking text is omitted or redacted.
+type usageOutputTokensDetails struct {
+	ThinkingTokens uint64 `json:"thinking_tokens"`
 }
 
 func (u *usage) Add(other usage) {
@@ -275,6 +285,10 @@ func (u *usage) Add(other usage) {
 	u.CacheCreationInputTokens += other.CacheCreationInputTokens
 	u.CacheReadInputTokens += other.CacheReadInputTokens
 	u.OutputTokens += other.OutputTokens
+	if other.OutputTokensDetails != nil {
+		// The breakdown is a whole-response count, not a delta.
+		u.OutputTokensDetails = other.OutputTokensDetails
+	}
 	u.CostUSD += other.CostUSD
 }
 
@@ -888,13 +902,17 @@ func applyAnthropicThinking(req *request, model string, level llm.ThinkingLevel,
 }
 
 func toLLMUsage(u usage) llm.Usage {
-	return llm.Usage{
+	ret := llm.Usage{
 		InputTokens:              u.InputTokens,
 		CacheCreationInputTokens: u.CacheCreationInputTokens,
 		CacheReadInputTokens:     u.CacheReadInputTokens,
 		OutputTokens:             u.OutputTokens,
 		CostUSD:                  u.CostUSD,
 	}
+	if u.OutputTokensDetails != nil {
+		ret.ReasoningTokens = u.OutputTokensDetails.ThinkingTokens
+	}
+	return ret
 }
 
 func toLLMContent(c content) llm.Content {
@@ -1194,8 +1212,10 @@ func parseSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*response, err
 				}
 			}
 			if event.Usage != nil && resp != nil {
-				// message_delta usage contains output_tokens
+				// message_delta usage carries the final output_tokens and the
+				// thinking-token breakdown; message_start reported neither.
 				resp.Usage.OutputTokens = event.Usage.OutputTokens
+				resp.Usage.OutputTokensDetails = event.Usage.OutputTokensDetails
 			}
 
 		case "message_stop":
