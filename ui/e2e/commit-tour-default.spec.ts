@@ -63,7 +63,7 @@ test.describe("Commit tour defaults", () => {
       execFileSync(shelleyBin, ["tour", "attach", "-C", repo, "HEAD", tourPath]);
 
       const slug = await createConversationViaAPI(request, "Hello", { cwd: repo });
-      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.setViewportSize({ width: 1800, height: 900 });
       await page.addInitScript(() => localStorage.setItem("diff-viewer-layout", "sidebar"));
       await page.goto(`/c/${slug}`);
       await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
@@ -102,8 +102,20 @@ test.describe("Commit tour defaults", () => {
       await expect(overlay.getByRole("navigation", { name: "Tour contents" })).toBeVisible();
       await expect(overlay.locator(".diff-viewer-toast-hint")).toHaveCount(0);
 
-      await section.click();
       const tourView = overlay.locator(".commit-tour-view");
+      const tourDocument = overlay.locator(".commit-tour-document");
+      await expect
+        .poll(async () => {
+          const [viewBox, documentBox] = await Promise.all([
+            tourView.boundingBox(),
+            tourDocument.boundingBox(),
+          ]);
+          if (!viewBox || !documentBox) return 0;
+          return documentBox.width / viewBox.width;
+        })
+        .toBeGreaterThan(0.97);
+
+      await section.click();
       await expect
         .poll(() => tourView.evaluate((element) => element.scrollTop))
         .toBeGreaterThan(100);
@@ -116,6 +128,25 @@ test.describe("Commit tour defaults", () => {
           }),
         )
         .toBeLessThan(40);
+
+      const firstChunk = overlay.locator(".commit-tour-chunk").first();
+      await firstChunk.scrollIntoViewIfNeeded();
+      const pierreDiff = firstChunk.locator("diffs-container");
+      await expect(pierreDiff).toBeVisible();
+      await expect
+        .poll(() =>
+          pierreDiff.evaluate((element) => {
+            const pre = element.shadowRoot?.querySelector("pre");
+            if (!pre) return null;
+            const style = window.getComputedStyle(pre);
+            return {
+              fontSize: style.fontSize,
+              lineHeight: style.lineHeight,
+              usesUiMonospace: style.fontFamily.startsWith("ui-monospace"),
+            };
+          }),
+        )
+        .toEqual({ fontSize: "12px", lineHeight: "18px", usesUiMonospace: true });
     });
   });
 });

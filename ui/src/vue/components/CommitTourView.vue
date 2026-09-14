@@ -229,7 +229,7 @@ onUnmounted(() => {
 
 .commit-tour-document {
   min-width: 0;
-  width: min(100%, 1100px);
+  width: 100%;
   margin: 0 auto;
   padding: 1rem clamp(1rem, 3vw, 2.5rem) 4rem;
   display: flex;

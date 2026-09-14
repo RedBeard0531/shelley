@@ -2476,6 +2476,14 @@ body {
   contain-intrinsic-size: auto 200px;
 }
 
+/* Keep every Pierre diff as compact as Monaco's macOS defaults. The custom
+   properties inherit through the diffs-container shadow root. */
+diffs-container {
+  --diffs-font-family: var(--font-mono);
+  --diffs-font-size: 12px;
+  --diffs-line-height: 18px;
+}
+
 /* Target the diffs-container custom element from @pierre/diffs */
 .patch-tool-diffs-container diffs-container {
   display: block;

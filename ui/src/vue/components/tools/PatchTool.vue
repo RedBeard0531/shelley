@@ -428,7 +428,7 @@ const fileDiff = computed<FileDiffMetadata | null>(() => {
 const diffError = computed(() => nearViewport.value && hasDiff.value && fileDiff.value == null);
 
 // Rough height reserved for a not-yet-hydrated diff so scrolling up through
-// history doesn't shift as diffs hydrate. ~20px per diff line; snapshots
+// history doesn't shift as diffs hydrate. ~18px per diff line; snapshots
 // (old/new content) render only changed hunks, so estimate conservatively.
 const placeholderHeight = computed(() => {
   const dd = displayData.value;
@@ -442,7 +442,7 @@ const placeholderHeight = computed(() => {
       80,
     );
   }
-  return `${Math.min(lines * 20, 2000)}px`;
+  return `${Math.min(lines * 18, 2000)}px`;
 });
 
 // Where this tool renders relative to the viewport: see nearViewport above.

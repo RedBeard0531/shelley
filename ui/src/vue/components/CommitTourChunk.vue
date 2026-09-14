@@ -182,7 +182,7 @@ const diffOptions = computed<FileDiffOptions<undefined, undefined>>(() => ({
 }));
 
 const placeholderHeight = computed(
-  () => `${Math.min(Math.max(props.entry.patch.split("\n").length, 4) * 20, 1600)}px`,
+  () => `${Math.min(Math.max(props.entry.patch.split("\n").length, 4) * 18, 1600)}px`,
 );
 const diffError = computed(
   () => expanded.value && nearViewport.value && isHunk.value && fileDiff.value == null,
