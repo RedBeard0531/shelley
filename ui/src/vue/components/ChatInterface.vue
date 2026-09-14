@@ -1395,7 +1395,10 @@ function saveScroll(scrollTop: number) {
   // off-screen content, so a saved offset can no longer sit at the bottom
   // after a reload (scrollHeight is inflated) — which silently disarmed
   // auto-follow. Restoring the sentinel re-pins to the real bottom instead.
-  localStorage.setItem(key, savedBottomRestoration !== null || atBottom ? "bottom" : String(scrollTop));
+  localStorage.setItem(
+    key,
+    savedBottomRestoration !== null || atBottom ? "bottom" : String(scrollTop),
+  );
 }
 function loadScroll(): number | null {
   const key = scrollKey();
@@ -2163,7 +2166,8 @@ function inferUserScrolledUp() {
 }
 
 function releaseBottomPinForUser() {
-  if (!bottomPinActive && !followExplicitSelectionToBottom && savedBottomRestoration === null) return;
+  if (!bottomPinActive && !followExplicitSelectionToBottom && savedBottomRestoration === null)
+    return;
   markUserScrolledUp();
 }
 
