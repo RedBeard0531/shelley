@@ -48,7 +48,7 @@ assert(contextSegmentStarts(points).join() === "2", "compaction starts a segment
 assert(contextSegmentStarts(points.slice(0, 2)).length === 0, "no compaction, no starts");
 
 assert(categoryHint("text", points[1]) === "user 100 · assistant 80 · reasoning 20", "text hint");
-assert(categoryHint("repo/read", points[1]) === "a.go 3k · b.go 1k", "tool hint, biggest first");
+assert(categoryHint("repo/read", points[1]) === "a.go 3.0k · b.go 1.0k", "tool hint, biggest first");
 assert(categoryHint("bash:other", points[1]) === "Tool output", "tool hint without breakdown");
 
 if (failed) process.exit(1);
