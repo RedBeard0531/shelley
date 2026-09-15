@@ -326,7 +326,7 @@
           <div class="diff-viewer-sidebar-section diff-viewer-sidebar-files">
             <template v-if="diffView === 'tour'">
               <div class="diff-viewer-sidebar-label"><span>Table of Contents</span></div>
-              <div class="diff-viewer-sidebar-tour-scroll">
+              <div ref="tourContentsScrollRef" class="diff-viewer-sidebar-tour-scroll">
                 <div v-if="tourLoading" class="diff-viewer-file-list-empty">Loading tour...</div>
                 <div v-else-if="tourError" class="diff-viewer-file-list-empty">
                   Tour unavailable
@@ -346,6 +346,7 @@
                         type="button"
                         :data-tour-target="item.anchor"
                         :title="item.label"
+                        :aria-current="item.anchor === activeTourAnchor ? 'location' : undefined"
                         @click="scrollToTourAnchor(item.anchor)"
                       >
                         {{ item.label }}
@@ -390,6 +391,7 @@
               ref="tourViewRef"
               :tour="tourResponse"
               :commit-message="selectedTourCommitMessage"
+              @active-anchor-change="handleTourActiveAnchor"
               @open-comment="openTourComment"
             />
           </div>
@@ -604,6 +606,9 @@ const selectedTo = ref<"working" | "self">("working");
 const diffView = ref<"tour" | "files">("files");
 const tourResponse = ref<GitTourResponse | null>(null);
 const tourViewRef = ref<{ scrollToAnchor: (anchor: string) => void } | null>(null);
+const tourContentsScrollRef = ref<HTMLElement | null>(null);
+const activeTourAnchor = ref<string | null>(null);
+let tourContentsResizeObserver: ResizeObserver | null = null;
 const tourLoading = ref(false);
 const tourError = ref<string | null>(null);
 const files = ref<GitFileInfo[]>([]);
@@ -677,6 +682,7 @@ watch(
   async (key) => {
     const requestId = ++tourRequestId;
     tourResponse.value = null;
+    activeTourAnchor.value = null;
     tourError.value = null;
     tourLoading.value = false;
     tourCommentTarget.value = null;
@@ -1501,6 +1507,36 @@ function scrollToTourAnchor(anchor: string) {
   tourViewRef.value?.scrollToAnchor(anchor);
 }
 
+function handleTourActiveAnchor(anchor: string) {
+  activeTourAnchor.value = anchor;
+  nextTick(revealActiveTourContents);
+}
+
+function revealActiveTourContents() {
+  const container = tourContentsScrollRef.value;
+  const anchor = activeTourAnchor.value;
+  if (!container || !anchor) return;
+  const button = Array.from(container.querySelectorAll<HTMLElement>("[data-tour-target]")).find(
+    (element) => element.dataset.tourTarget === anchor,
+  );
+  if (!button) return;
+
+  const containerRect = container.getBoundingClientRect();
+  const buttonRect = button.getBoundingClientRect();
+  const edgePadding = 4;
+  if (buttonRect.top < containerRect.top + edgePadding) {
+    container.scrollTop -= containerRect.top + edgePadding - buttonRect.top;
+  } else if (buttonRect.bottom > containerRect.bottom - edgePadding) {
+    container.scrollTop += buttonRect.bottom - containerRect.bottom + edgePadding;
+  }
+}
+
+watch(tourContentsScrollRef, (container) => {
+  tourContentsResizeObserver?.disconnect();
+  if (container) tourContentsResizeObserver?.observe(container);
+});
+watch(layout, () => nextTick(revealActiveTourContents), { flush: "post" });
+
 // Title for the sidebar layout's header.
 const currentTitleText = computed<string | null>(() => {
   if (diffView.value === "tour") {
@@ -1659,9 +1695,12 @@ function onDirSelect(path: string) {
 
 // --- Lifecycle ---
 onMounted(() => {
+  tourContentsResizeObserver = new ResizeObserver(revealActiveTourContents);
+  if (tourContentsScrollRef.value) tourContentsResizeObserver.observe(tourContentsScrollRef.value);
   window.addEventListener("resize", handleResize);
 });
 onUnmounted(() => {
+  tourContentsResizeObserver?.disconnect();
   window.removeEventListener("resize", handleResize);
   window.removeEventListener("keydown", handleKeyDown, true);
   themeObserver?.disconnect();

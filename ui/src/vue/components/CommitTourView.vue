@@ -1,6 +1,6 @@
 <template>
-  <div ref="viewRef" class="commit-tour-view">
-    <article class="commit-tour-document">
+  <div ref="viewRef" class="commit-tour-view" @scroll.passive="scheduleActiveAnchor">
+    <article ref="documentRef" class="commit-tour-document">
       <div v-if="!isMobile" class="commit-tour-toolbar">
         <button
           v-tooltip.top="sideBySide ? 'Switch to unified diffs' : 'Switch to side-by-side diffs'"
@@ -96,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ThemeTypes } from "@pierre/diffs";
 import type { GitTourEntry, GitTourHeaderEntry, GitTourResponse } from "../../services/api";
 import type { GitCommitMessage } from "../../types";
@@ -111,7 +111,10 @@ const props = defineProps<{
   tour: GitTourResponse;
   commitMessage: GitCommitMessage | null;
 }>();
-const emit = defineEmits<{ (e: "open-comment", target: TourCommentTarget): void }>();
+const emit = defineEmits<{
+  (e: "open-comment", target: TourCommentTarget): void;
+  (e: "active-anchor-change", anchor: string): void;
+}>();
 
 const themeType = ref<ThemeTypes>(isDarkModeActive() ? "dark" : "light");
 const isMobile = ref(window.innerWidth < 768);
@@ -119,13 +122,17 @@ const { sideBySidePreference, setSideBySidePreference } = useSideBySidePreferenc
 const sideBySide = computed(() => !isMobile.value && sideBySidePreference.value);
 const shortHash = computed(() => props.tour.hash.slice(0, 8));
 const viewRef = ref<HTMLElement | null>(null);
+const documentRef = ref<HTMLElement | null>(null);
 const selectionPrompt = ref<{
   top: number;
   left: number;
   target: TourCommentTarget;
 } | null>(null);
 let themeObserver: MutationObserver | null = null;
+let tourResizeObserver: ResizeObserver | null = null;
 let selectionFrame: number | null = null;
+let scrollFrame: number | null = null;
+let activeAnchor = "";
 
 function isHeaderEntry(entry: GitTourEntry): entry is GitTourHeaderEntry {
   return "header" in entry;
@@ -189,9 +196,48 @@ function openSelectionComment() {
   selectionPrompt.value = null;
 }
 
+function updateActiveAnchor() {
+  scrollFrame = null;
+  const view = viewRef.value;
+  if (!view) return;
+
+  const anchors = Array.from(view.querySelectorAll<HTMLElement>("[data-tour-anchor]"));
+  if (anchors.length === 0) return;
+
+  const activationTop = view.getBoundingClientRect().top + 24;
+  let current = anchors[0].dataset.tourAnchor ?? "";
+  for (const anchor of anchors) {
+    if (anchor.getBoundingClientRect().top > activationTop) break;
+    current = anchor.dataset.tourAnchor ?? current;
+  }
+
+  const canScroll = view.scrollHeight > view.clientHeight + 1;
+  if (canScroll && view.scrollTop + view.clientHeight >= view.scrollHeight - 1) {
+    current = anchors.at(-1)?.dataset.tourAnchor ?? current;
+  }
+  if (!current || current === activeAnchor) return;
+  activeAnchor = current;
+  emit("active-anchor-change", current);
+}
+
+function scheduleActiveAnchor() {
+  if (scrollFrame !== null) return;
+  scrollFrame = requestAnimationFrame(updateActiveAnchor);
+}
+
 function scrollToAnchor(anchor: string) {
   viewRef.value?.querySelector<HTMLElement>(`#${anchor}`)?.scrollIntoView({ block: "start" });
+  scheduleActiveAnchor();
 }
+
+watch(
+  () => props.tour,
+  () => {
+    activeAnchor = "";
+    nextTick(scheduleActiveAnchor);
+  },
+  { flush: "post" },
+);
 
 defineExpose({ scrollToAnchor });
 
@@ -206,15 +252,21 @@ onMounted(() => {
     }
   });
   themeObserver.observe(document.documentElement, { attributes: true });
+  tourResizeObserver = new ResizeObserver(scheduleActiveAnchor);
+  if (viewRef.value) tourResizeObserver.observe(viewRef.value);
+  if (documentRef.value) tourResizeObserver.observe(documentRef.value);
   document.addEventListener("selectionchange", handleSelectionChange);
   window.addEventListener("resize", handleResize);
+  scheduleActiveAnchor();
 });
 
 onUnmounted(() => {
   themeObserver?.disconnect();
+  tourResizeObserver?.disconnect();
   document.removeEventListener("selectionchange", handleSelectionChange);
   window.removeEventListener("resize", handleResize);
   if (selectionFrame !== null) cancelAnimationFrame(selectionFrame);
+  if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
 });
 </script>
 

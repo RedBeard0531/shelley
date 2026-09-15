@@ -52,6 +52,9 @@ test.describe("Commit tour defaults", () => {
         ).join("\n\n"),
         chunks: [
           { header: "## Core behavior" },
+          ...Array.from({ length: 12 }, (_, index) => ({
+            header: `### Detail ${index + 1}`,
+          })),
           ...scaffold.chunks.map((chunk: { ref: number }, index: number) => ({
             ...chunk,
             comment: `Guided change ${index + 1}.`,
@@ -88,7 +91,20 @@ test.describe("Commit tour defaults", () => {
       await expect(overlay.locator(".diff-viewer-toast-hint")).toHaveCount(0);
       await expect(overlay.getByText("Table of Contents", { exact: true })).toBeVisible();
       const contents = overlay.getByRole("navigation", { name: "Tour contents" });
-      await expect(contents.getByRole("button", { name: "Overview" })).toBeVisible();
+      const tourContentsScroll = overlay.locator(".diff-viewer-sidebar-tour-scroll");
+      const tourView = overlay.locator(".commit-tour-view");
+      const overview = contents.getByRole("button", { name: "Overview" });
+      await expect(overview).toBeVisible();
+      await page.setViewportSize({ width: 1800, height: 6000 });
+      await expect
+        .poll(() => tourView.evaluate((element) => element.scrollHeight <= element.clientHeight))
+        .toBe(true);
+      await expect(overview).toHaveAttribute("aria-current", "location");
+      await expect
+        .poll(() => overview.evaluate((element) => getComputedStyle(element).boxShadow))
+        .toBe("none");
+      await page.setViewportSize({ width: 1800, height: 900 });
+      await expect(overview).toHaveAttribute("aria-current", "location");
       const section = contents.getByRole("button", { name: "Core behavior" });
       await expect(section).toBeVisible();
       await expect(contents.getByRole("button", { name: /example\.txt/ })).toHaveCount(2);
@@ -102,7 +118,6 @@ test.describe("Commit tour defaults", () => {
       await expect(overlay.getByRole("navigation", { name: "Tour contents" })).toBeVisible();
       await expect(overlay.locator(".diff-viewer-toast-hint")).toHaveCount(0);
 
-      const tourView = overlay.locator(".commit-tour-view");
       const tourDocument = overlay.locator(".commit-tour-document");
       await expect
         .poll(async () => {
@@ -119,6 +134,7 @@ test.describe("Commit tour defaults", () => {
       await expect
         .poll(() => tourView.evaluate((element) => element.scrollTop))
         .toBeGreaterThan(100);
+      await expect(section).toHaveAttribute("aria-current", "location");
       await expect
         .poll(() =>
           overlay.locator("#tour-entry-0").evaluate((target) => {
@@ -130,7 +146,43 @@ test.describe("Commit tour defaults", () => {
         .toBeLessThan(40);
 
       const firstChunk = overlay.locator(".commit-tour-chunk").first();
-      await firstChunk.scrollIntoViewIfNeeded();
+      const firstChangeButton = contents.getByRole("button", { name: /example\.txt/ }).first();
+      await firstChunk.evaluate((element) => element.scrollIntoView({ block: "start" }));
+      await expect(firstChangeButton).toHaveAttribute("aria-current", "location");
+      await page.setViewportSize({ width: 1800, height: 600 });
+      await expect
+        .poll(async () => {
+          const [containerBox, buttonBox] = await Promise.all([
+            tourContentsScroll.boundingBox(),
+            firstChangeButton.boundingBox(),
+          ]);
+          if (!containerBox || !buttonBox) return false;
+          return (
+            buttonBox.y >= containerBox.y - 1 &&
+            buttonBox.y + buttonBox.height <= containerBox.y + containerBox.height + 1
+          );
+        })
+        .toBe(true);
+      await page.setViewportSize({ width: 1800, height: 900 });
+      await tourView.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      const lastChangeButton = contents.getByRole("button", { name: /example\.txt/ }).nth(1);
+      await expect(lastChangeButton).toHaveAttribute("aria-current", "location");
+      await expect
+        .poll(async () => {
+          const [containerBox, buttonBox] = await Promise.all([
+            tourContentsScroll.boundingBox(),
+            lastChangeButton.boundingBox(),
+          ]);
+          if (!containerBox || !buttonBox) return false;
+          return (
+            buttonBox.y >= containerBox.y - 1 &&
+            buttonBox.y + buttonBox.height <= containerBox.y + containerBox.height + 1
+          );
+        })
+        .toBe(true);
+
       const pierreDiff = firstChunk.locator("diffs-container");
       await expect(pierreDiff).toBeVisible();
       await expect

@@ -7150,6 +7150,11 @@ svg {
   padding-left: 0.25rem;
 }
 
+.diff-viewer-tour-contents-item button[aria-current="location"] {
+  background: var(--accent-bg, rgba(37, 99, 235, 0.15));
+  color: var(--accent-text, #2563eb);
+}
+
 .diff-viewer-file-list {
   display: flex;
   flex-direction: column;
