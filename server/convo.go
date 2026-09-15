@@ -2439,8 +2439,6 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 				ToolProgress: &progress,
 			})
 		},
-		OnStreamDelta: sf.Push,
-		OnStreamDone:  sf.Flush,
 		OnSuccessfulRequest: func(req *llm.Request) {
 			if !cm.isCurrentLoopGeneration(generation) {
 				return
@@ -2452,6 +2450,9 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 			cm.cacheWarmModelID, cm.cacheWarmRevision = modelID, sourceRevision
 			cm.mu.Unlock()
 		},
+		OnStreamDelta: sf.Push,
+		OnStreamDone:  sf.Flush,
+		OnStreamReset: sf.Reset,
 		InjectMessages: func(ctx context.Context) (loop.Injection, error) {
 			return cm.takeInjectable(ctx, generation, nudger)
 		},

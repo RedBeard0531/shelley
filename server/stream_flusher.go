@@ -64,6 +64,7 @@ func (sf *streamFlusher) Push(delta llm.StreamDelta) {
 
 func (sf *streamFlusher) flush() {
 	sf.mu.Lock()
+	defer sf.mu.Unlock()
 	deltas := sf.buf
 	sf.buf = nil
 	sf.running = false
@@ -71,15 +72,33 @@ func (sf *streamFlusher) flush() {
 		sf.timer.Stop()
 		sf.timer = nil
 	}
+	if len(deltas) == 0 || !sf.shouldPublish() {
+		return
+	}
 	for i := range deltas {
 		deltas[i].Seq = sf.nextSeq()
 	}
-	sf.mu.Unlock()
+	sf.cm.broadcastStreamDeltas(deltas)
+}
 
+// Reset drops buffered deltas from a dead attempt and tells clients to discard
+// the partial output they already rendered from it. Broadcasting happens under
+// sf.mu so a concurrent flush can't slip the dropped deltas out afterwards —
+// clients apply the reset to whatever they have, and no stale delta may arrive
+// after it.
+func (sf *streamFlusher) Reset() {
+	sf.mu.Lock()
+	defer sf.mu.Unlock()
+	sf.buf = nil
+	sf.running = false
+	if sf.timer != nil {
+		sf.timer.Stop()
+		sf.timer = nil
+	}
 	if !sf.shouldPublish() {
 		return
 	}
-	sf.cm.broadcastStreamDeltas(deltas)
+	sf.cm.broadcastStream(StreamResponse{StreamReset: true})
 }
 
 // Flush forces any buffered deltas to be broadcast immediately.

@@ -237,6 +237,7 @@ export interface StreamResponse extends Omit<StreamResponseForTS, "messages"> {
   models_changed?: boolean;
   tool_progress?: ToolProgress;
   stream_delta?: StreamDelta;
+  stream_reset?: boolean;
 }
 
 // Link represents a custom link that can be added to the UI

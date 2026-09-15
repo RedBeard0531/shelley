@@ -74,6 +74,12 @@ type Config struct {
 	// OnSuccessfulRequest receives each request the provider completed
 	// successfully, exactly as sent, so its prefix can be replayed.
 	OnSuccessfulRequest func(*llm.Request)
+	// OnStreamReset is called when partial streamed output has to be thrown
+	// away: the request that produced it failed mid-response and is either
+	// being retried from scratch or has given up, so whatever the UI rendered
+	// from those deltas no longer describes the conversation. Implementations
+	// must drop any buffered deltas too, so they can't arrive after the reset.
+	OnStreamReset func()
 	// InjectMessages, if set, is called between LLM rounds (immediately
 	// before each request is built, including the first of a turn). Its
 	// Injection is applied to history and included in that request. Used to
@@ -121,6 +127,7 @@ type Loop struct {
 	onStreamDelta    func(llm.StreamDelta)
 	onStreamDone     func()
 	onSuccess        func(*llm.Request)
+	onStreamReset    func()
 	injectMessages   func(ctx context.Context) (Injection, error)
 	rewriteReply     func(context.Context, llm.Message) (llm.Message, bool)
 	thinkingLevel    llm.ThinkingLevel
@@ -161,6 +168,7 @@ func NewLoop(config Config) *Loop {
 		onStreamDelta:    config.OnStreamDelta,
 		onStreamDone:     config.OnStreamDone,
 		onSuccess:        config.OnSuccessfulRequest,
+		onStreamReset:    config.OnStreamReset,
 		injectMessages:   config.InjectMessages,
 		rewriteReply:     config.RewriteFinalReply,
 		thinkingLevel:    config.ThinkingLevel,
@@ -450,6 +458,7 @@ func (l *Loop) hooks() Hooks {
 	if l.onStreamDelta != nil {
 		h.OnStreamingResponse = func(_ context.Context, d llm.StreamDelta) { l.onStreamDelta(d) }
 	}
+	h.OnStreamReset = l.onStreamReset
 	if l.onToolProgress != nil {
 		h.OnToolProgress = func(_ context.Context, p llm.ToolProgress) { l.onToolProgress(p) }
 	}
