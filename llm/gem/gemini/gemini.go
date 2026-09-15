@@ -193,11 +193,12 @@ func (m Model) GenerateContent(ctx context.Context, req *Request) (*Response, er
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/%s:generateContent?key=%s", m.endpoint(), m.Model, m.APIKey), bytes.NewReader(reqBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/%s:generateContent", m.endpoint(), m.Model), bytes.NewReader(reqBytes))
 	if err != nil {
 		return nil, fmt.Errorf("creating HTTP request: %w", err)
 	}
 	httpReq.Header.Add("Content-Type", "application/json")
+	httpReq.Header.Add("x-goog-api-key", m.APIKey)
 	httpResp, err := m.httpc().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("GenerateContent: do: %w", err)
