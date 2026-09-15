@@ -694,6 +694,54 @@ func TestHandleGitDiffsMergeCommitStats(t *testing.T) {
 	}
 }
 
+func TestGitDiffRejectsFlagID(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	mux := http.NewServeMux()
+	h.server.RegisterRoutes(mux)
+	srv := httptest.NewServer(http.NewCrossOriginProtection().Handler(mux))
+	defer srv.Close()
+
+	for _, tt := range []struct {
+		name   string
+		path   string
+		target string
+	}{
+		{"files", "/api/git/diffs/--output=go.mod/files", "go.mod"},
+		{"file-diff", "/api/git/file-diff/--output=go.mod/test.txt", "go.mod:test.txt"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gitDir := setupTestGitRepo(t)
+			target := filepath.Join(gitDir, tt.target)
+			const content = "must not be overwritten\n"
+			if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s%s?cwd=%s&to=self", srv.URL, tt.path, gitDir), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", resp.StatusCode)
+			}
+			got, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != content {
+				t.Errorf("GET overwrote %s: got %q", tt.target, got)
+			}
+		})
+	}
+}
+
 // TestHandleGitDiffFiles tests the handleGitDiffFiles function
 func TestHandleGitDiffFiles(t *testing.T) {
 	t.Parallel()

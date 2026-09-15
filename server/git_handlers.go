@@ -531,6 +531,10 @@ func (s *Server) handleGitDiffFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	diffID := parts[0]
+	if !safeRef(diffID) {
+		http.Error(w, "invalid diff ID", http.StatusBadRequest)
+		return
+	}
 
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
@@ -691,6 +695,10 @@ func (s *Server) handleGitFileDiff(w http.ResponseWriter, r *http.Request) {
 
 	if diffID == "" || filePath == "" {
 		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if !safeRef(diffID) {
+		http.Error(w, "invalid diff ID", http.StatusBadRequest)
 		return
 	}
 
