@@ -201,6 +201,11 @@ type Request struct {
 	// OnStream is called with each streaming delta as the LLM generates content.
 	// If nil, no streaming callbacks are made. The full response is still returned from Do.
 	OnStream func(StreamDelta) `json:"-"`
+	// OnStreamRestart is called before a provider re-issues a request whose
+	// earlier attempt already delivered output through OnStream. The re-issued
+	// response starts over, so the earlier partial output is dead and any
+	// consumer that rendered it must drop it.
+	OnStreamRestart func() `json:"-"`
 	// OnRetry is called before sleeping for a retryable LLM request failure.
 	OnRetry func(RetryEvent) `json:"-"`
 }

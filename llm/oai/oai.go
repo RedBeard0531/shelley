@@ -1197,14 +1197,14 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 		}
 		if err != nil {
 			if started {
-				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
+				return nil, llm.MarkStreamInterrupted(fmt.Errorf("chat completion stream failed after response started: %v", err))
 			}
 			return nil, err
 		}
 		var chunk chatCompletionStreamResponse
 		if err := json.Unmarshal(raw, &chunk); err != nil {
 			if started {
-				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
+				return nil, llm.MarkStreamInterrupted(fmt.Errorf("chat completion stream failed after response started: %v", err))
 			}
 			return nil, err
 		}

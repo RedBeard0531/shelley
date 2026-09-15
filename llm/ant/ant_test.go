@@ -2230,11 +2230,19 @@ func TestDoRetriesOnTruncatedStream(t *testing.T) {
 		Backoff: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
 	}
 
+	var (
+		deltas   []llm.StreamDelta
+		restarts int
+	)
 	req := &llm.Request{
 		Messages: []llm.Message{{
 			Role:    llm.MessageRoleUser,
 			Content: []llm.Content{{Type: llm.ContentTypeText, Text: "Hello"}},
 		}},
+		OnStream: func(delta llm.StreamDelta) {
+			deltas = append(deltas, delta)
+		},
+		OnStreamRestart: func() { restarts++ },
 	}
 
 	resp, err := s.Do(t.Context(), req)
@@ -2246,6 +2254,18 @@ func TestDoRetriesOnTruncatedStream(t *testing.T) {
 	}
 	if transport.calls != 3 {
 		t.Errorf("expected 3 attempts (2 truncated + 1 success), got %d", transport.calls)
+	}
+	// Each truncated attempt already streamed its partial text; before
+	// re-issuing, the provider must tell the caller to discard it, or the
+	// successful attempt's deltas land on top of the dead ones.
+	if restarts != 2 {
+		t.Errorf("expected 2 OnStreamRestart calls (one per truncated attempt), got %d", restarts)
+	}
+	// The dead attempts' deltas still reach the caller — the restart is what
+	// marks the boundary, and the consumer drops everything before it — and the
+	// successful attempt's deltas follow.
+	if len(deltas) != 3 || deltas[2].Text != "Hello, world!" || deltas[0].Text != "partial" {
+		t.Errorf("unexpected deltas: %v", deltas)
 	}
 }
 

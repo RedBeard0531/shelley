@@ -86,6 +86,116 @@ func TestStreamFlusherAssignsMonotonicSeq(t *testing.T) {
 	}
 }
 
+// TestStreamFlusherResetDropsBufferedDeltas verifies that a mid-response
+// failure discards everything the dead attempt buffered and tells clients to
+// drop what they already rendered, without leaking a stale delta out after the
+// reset (clients apply the reset to whatever they hold, so a delta arriving
+// after it would resurrect the dead attempt's text).
+func TestStreamFlusherResetDropsBufferedDeltas(t *testing.T) {
+	t.Parallel()
+	server, database, _ := newTestServer(t)
+
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatalf("failed to create conversation: %v", err)
+	}
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
+	if err != nil {
+		t.Fatalf("failed to get conversation manager: %v", err)
+	}
+
+	subCtx, subCancel := context.WithCancel(t.Context())
+	defer subCancel()
+	next := manager.subpub.Subscribe(subCtx, -1)
+
+	events := make(chan StreamResponse, 16)
+	go func() {
+		for {
+			data, ok := next()
+			if !ok {
+				return
+			}
+			events <- data
+		}
+	}()
+
+	// Long interval: only explicit Flushes and Resets emit.
+	sf := newStreamFlusher(manager, time.Hour, alwaysPublishStream)
+
+	// Deltas from the attempt that is about to die. The first went out live
+	// (explicit Flush, as the flusher's timer would have done); the rest are
+	// still buffered.
+	sf.Push(llm.StreamDelta{Type: "text", Text: "already sent", Index: 0})
+	sf.Flush()
+	sf.Push(llm.StreamDelta{Type: "text", Text: "never sent", Index: 0})
+
+	sf.Reset()
+
+	var got []StreamResponse
+	for len(got) < 2 {
+		select {
+		case data := <-events:
+			got = append(got, data)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for stream events; got %+v", got)
+		}
+	}
+	if got[1].StreamReset != true {
+		t.Fatalf("second event = %+v, want a stream reset", got[1])
+	}
+
+	// The retry's deltas still flow, and nothing from the dead attempt does.
+	sf.Push(llm.StreamDelta{Type: "text", Text: "retry", Index: 0})
+	sf.Flush()
+	select {
+	case data := <-events:
+		if data.StreamDelta == nil || data.StreamDelta.Text != "retry" {
+			t.Fatalf("event after reset = %+v, want the retry's text delta", data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the retry's delta")
+	}
+}
+
+// TestStreamFlusherResetWithoutBufferedDeltas verifies the reset is published
+// even when nothing was buffered: the client may have received deltas from an
+// earlier flush and only the reset can tell it to drop them.
+func TestStreamFlusherResetWithoutBufferedDeltas(t *testing.T) {
+	t.Parallel()
+	server, database, _ := newTestServer(t)
+
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatalf("failed to create conversation: %v", err)
+	}
+	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
+	if err != nil {
+		t.Fatalf("failed to get conversation manager: %v", err)
+	}
+
+	subCtx, subCancel := context.WithCancel(t.Context())
+	defer subCancel()
+	next := manager.subpub.Subscribe(subCtx, -1)
+
+	sf := newStreamFlusher(manager, time.Hour, alwaysPublishStream)
+	sf.Reset()
+
+	done := make(chan StreamResponse, 1)
+	go func() {
+		if data, ok := next(); ok {
+			done <- data
+		}
+	}()
+	select {
+	case data := <-done:
+		if !data.StreamReset {
+			t.Fatalf("event = %+v, want a stream reset", data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for stream reset")
+	}
+}
+
 // TestStreamFlusherBatchesThinkingDeltas verifies that thinking deltas are
 // coalesced like text deltas rather than broadcast one-per-token. Reasoning
 // models emit thinking deltas at the same rate as text; broadcasting each

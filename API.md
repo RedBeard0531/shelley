@@ -148,7 +148,7 @@ Event payload (`data: <json>`):
 interface StreamResponse {
   // Routing key for per-conversation events. Always set on messages,
   // conversation, conversation_state, context_window_size, tool_progress,
-  // and stream_delta. Empty for connection-scoped frames
+  // stream_delta, and stream_reset. Empty for connection-scoped frames
   // (conversation_list_patch, heartbeat, snapshot_complete) and for
   // global events that already carry their own conversation reference
   // (notification_event).
@@ -162,6 +162,11 @@ interface StreamResponse {
   context_window_size?: number;
   tool_progress?: ToolProgress;
   stream_delta?: StreamDelta;
+  // Emitted when partial streamed output has to be thrown away: the request
+  // that produced it failed mid-response and is either being retried from
+  // scratch or has given up. Clients must drop whatever they rendered from
+  // that request's deltas. A retry's deltas follow this event.
+  stream_reset?: true;
   notification_event?: NotificationEvent;
 
   // Conversation-list patch stream:

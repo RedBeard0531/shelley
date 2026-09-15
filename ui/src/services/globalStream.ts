@@ -281,6 +281,12 @@ export function connectGlobalStream({
     if (data.stream_delta?.type === "thinking") {
       messageStore.appendStreamThinking(convId, data.stream_delta.text);
     }
+    // The request that produced the partial output above died mid-response and
+    // is either being retried from scratch or has given up, so the partial text
+    // no longer belongs to anything. A retry's deltas follow this event.
+    if (data.stream_reset) {
+      messageStore.resetStreaming(convId);
+    }
   };
 
   const connect = () => {
