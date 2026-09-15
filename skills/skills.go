@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -269,93 +271,36 @@ func validateName(name string) error {
 }
 
 // parseFrontmatter extracts YAML frontmatter from markdown content.
-// This is a simple parser that handles basic YAML without external dependencies.
 func parseFrontmatter(content string) (map[string]any, error) {
-	if !strings.HasPrefix(content, "---") {
-		return nil, &ValidationError{Message: "SKILL.md must start with YAML frontmatter (---)"}
+	yamlContent, _, err := splitFrontmatter(content)
+	if err != nil {
+		return nil, err
 	}
 
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
-		return nil, &ValidationError{Message: "SKILL.md frontmatter not properly closed with ---"}
+	var result map[string]any
+	if err := yaml.Unmarshal([]byte(yamlContent), &result); err != nil {
+		return nil, &ValidationError{Message: "SKILL.md has invalid YAML frontmatter: " + err.Error()}
 	}
-
-	yamlContent := parts[1]
-	return parseSimpleYAML(yamlContent)
-}
-
-// parseSimpleYAML parses simple YAML frontmatter.
-// Supports: strings, and nested maps (for metadata).
-func parseSimpleYAML(content string) (map[string]any, error) {
-	result := make(map[string]any)
-	lines := strings.Split(content, "\n")
-
-	var currentKey string
-	var inNestedMap bool
-	nestedMap := make(map[string]any)
-
-	for _, line := range lines {
-		// Skip empty lines and comments
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-
-		// Check for nested map entries (indented with spaces)
-		if inNestedMap && (strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "\t")) {
-			parts := strings.SplitN(trimmed, ":", 2)
-			if len(parts) == 2 {
-				key := strings.TrimSpace(parts[0])
-				value := strings.TrimSpace(parts[1])
-				value = unquoteYAML(value)
-				nestedMap[key] = value
-			}
-			continue
-		}
-
-		// If we were in a nested map, save it
-		if inNestedMap && currentKey != "" {
-			result[currentKey] = nestedMap
-			nestedMap = make(map[string]any)
-			inNestedMap = false
-		}
-
-		// Parse top-level key: value
-		parts := strings.SplitN(trimmed, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		if value == "" {
-			// Could be start of a nested map
-			currentKey = key
-			inNestedMap = true
-			continue
-		}
-
-		value = unquoteYAML(value)
-		result[key] = value
-	}
-
-	// Handle final nested map
-	if inNestedMap && currentKey != "" && len(nestedMap) > 0 {
-		result[currentKey] = nestedMap
-	}
-
 	return result, nil
 }
 
-// unquoteYAML removes surrounding quotes from a YAML string value.
-func unquoteYAML(s string) string {
-	if len(s) >= 2 {
-		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
-			return s[1 : len(s)-1]
+// splitFrontmatter returns the YAML frontmatter and the markdown body. The
+// "---" delimiters must occupy their own lines, so a "---" inside a value (or a
+// horizontal rule in the body) doesn't truncate the frontmatter.
+func splitFrontmatter(content string) (yamlContent, body string, err error) {
+	content = strings.TrimPrefix(content, "\ufeff") // strip UTF-8 BOM
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return "", "", &ValidationError{Message: "SKILL.md must start with YAML frontmatter (---)"}
+	}
+
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			return strings.Join(lines[1:i], "\n"), strings.Join(lines[i+1:], "\n"), nil
 		}
 	}
-	return s
+
+	return "", "", &ValidationError{Message: "SKILL.md frontmatter not properly closed with ---"}
 }
 
 // ToPromptXML generates the <available_skills> XML block for system prompts.

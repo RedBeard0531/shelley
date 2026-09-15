@@ -96,6 +96,62 @@ description: 'A skill with quoted values'
 			wantDesc:  "A skill with quoted values",
 			wantError: false,
 		},
+		{
+			name: "folded block scalar description",
+			content: `---
+name: multi-line
+description: >
+  Use when you need to search, explore, or understand a codebase — finding where
+  something is implemented.
+---
+`,
+			wantName: "multi-line",
+			wantDesc: "Use when you need to search, explore, or understand a codebase — finding where something is implemented.",
+		},
+		{
+			name: "literal block scalar description",
+			content: `---
+name: literal
+description: |
+  Use when you need to search.
+  Second line.
+---
+`,
+			wantName: "literal",
+			wantDesc: "Use when you need to search.\nSecond line.",
+		},
+		{
+			name: "delimiter inside a value",
+			content: `---
+name: dashes
+description: Use when the user types --- in a message.
+---
+`,
+			wantName:  "dashes",
+			wantDesc:  "Use when the user types --- in a message.",
+			wantError: false,
+		},
+		{
+			name:     "leading BOM",
+			content:  "\ufeff---\nname: bom\ndescription: A skill saved with a byte order mark.\n---\n",
+			wantName: "bom",
+			wantDesc: "A skill saved with a byte order mark.",
+		},
+		{
+			name:     "CRLF line endings",
+			content:  "---\r\nname: crlf\r\ndescription: A skill saved on Windows.\r\n---\r\n",
+			wantName: "crlf",
+			wantDesc: "A skill saved on Windows.",
+		},
+		{
+			name: "invalid yaml",
+			content: `---
+name: broken
+description: "unterminated
+---
+`,
+			wantError: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -664,6 +720,37 @@ func TestToPromptXMLBuiltinSkill(t *testing.T) {
 	// Content should NOT be inlined
 	if contains(xml, "# Schedule") {
 		t.Error("skill content should not be inlined (progressive disclosure)")
+	}
+}
+
+func TestParseContentFields(t *testing.T) {
+	skill, err := ParseContent(`---
+name: data-analysis
+description: "Analyzes: datasets"
+license: MIT
+compatibility: Requires python3
+allowed-tools: read_file grep
+when: exe.dev
+metadata:
+  author: example-org
+  version: "1.0"
+  nested:
+    deep: value
+---
+
+Body.
+`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if skill.Description != "Analyzes: datasets" {
+		t.Errorf("description = %q", skill.Description)
+	}
+	if skill.License != "MIT" || skill.Compatibility != "Requires python3" || skill.AllowedTools != "read_file grep" || skill.When != "exe.dev" {
+		t.Errorf("fields = %+v", skill)
+	}
+	if skill.Metadata["author"] != "example-org" || skill.Metadata["version"] != "1.0" {
+		t.Errorf("metadata = %v", skill.Metadata)
 	}
 }
 
