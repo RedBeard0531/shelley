@@ -392,10 +392,17 @@ export function formatUsd(v: number): string {
   return `$${Math.round(v).toLocaleString()}`;
 }
 
+function scaled(v: number, divisor: number, suffix: string): string {
+  const mantissa = v / divisor;
+  // Two significant figures for single-digit mantissas ("1.0k", "9.9k");
+  // whole numbers at or above 9.95 ("10k", "137k") — never fewer than two.
+  return `${mantissa < 9.95 ? mantissa.toFixed(1) : Math.round(mantissa)}${suffix}`;
+}
+
 export function formatTokenCount(tokens: number): string {
-  if (tokens >= 999_500_000) return `${(tokens / 1e9).toFixed(1)}B`;
-  if (tokens >= 999_500) return `${(tokens / 1e6).toFixed(1)}M`;
-  if (tokens >= 1e3) return `${(tokens / 1e3).toFixed(0)}k`;
+  if (tokens >= 999_500_000) return scaled(tokens, 1e9, "B");
+  if (tokens >= 999_500) return scaled(tokens, 1e6, "M");
+  if (tokens >= 1e3) return scaled(tokens, 1e3, "k");
   return String(tokens);
 }
 

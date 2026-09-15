@@ -378,9 +378,17 @@ assert(formatUsd(0.0042) === "$0.0042", "formatUsd small");
 assert(formatUsd(0.5) === "$0.500", "formatUsd sub-dollar");
 assert(formatUsd(12.345) === "$12.35", "formatUsd dollars");
 assert(formatTokenCount(999) === "999", "tokens raw");
+assert(formatTokenCount(994) === "994", "tokens raw");
+assert(formatTokenCount(1_000) === "1.0k", "tokens single-digit mantissa keeps two sig figs");
+assert(formatTokenCount(5_000) === "5.0k", "tokens single-digit mantissa keeps two sig figs");
 assert(formatTokenCount(12_000) === "12k", "tokens k");
+assert(formatTokenCount(9_949) === "9.9k", "tokens just under the next unit");
+assert(formatTokenCount(9_990) === "10k", "tokens rounds up to two digits");
+assert(formatTokenCount(137_400) === "137k", "tokens three digits");
+assert(formatTokenCount(999_499) === "999k", "tokens at the k ceiling");
 assert(formatTokenCount(999_600) === "1.0M", "tokens rounding at 1M boundary");
 assert(formatTokenCount(3_400_000) === "3.4M", "tokens M");
+assert(formatTokenCount(0) === "0", "tokens zero");
 assert(TOKEN_BANDS.length === 4, "four bands");
 
 console.log(`tokenCostGraph: ${passed} passed, ${failed} failed`);
