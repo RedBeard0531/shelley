@@ -150,6 +150,17 @@ func cachedReflectionState(ctx context.Context, env exeenv.Environment) reflecti
 	// shared, so one client navigating away must not cancel the lookup for
 	// everyone else waiting on it.
 	v, _, _ := reflectionStateFly.Do("reflection", func() (any, error) {
+		// Re-check the cache: a caller can miss the check above while a flight
+		// is in progress, then reach Do after that flight completed and
+		// singleflight forgot the key, starting a fresh flight for an answer
+		// that was cached moments ago.
+		reflectionStateMu.Lock()
+		if reflectionStateOnce && time.Since(reflectionStateAt) < reflectionStateTTL {
+			v := reflectionStateVal
+			reflectionStateMu.Unlock()
+			return v, nil
+		}
+		reflectionStateMu.Unlock()
 		st := reflectionIntegrationState(context.WithoutCancel(ctx), env)
 		reflectionStateMu.Lock()
 		reflectionStateVal, reflectionStateAt, reflectionStateOnce = st, time.Now(), true
