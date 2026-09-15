@@ -965,11 +965,16 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 			streamResp, err := parseResponsesSSEStream(httpResp.Body, ir.OnStream)
 			httpResp.Body.Close()
 			if err != nil {
+				// The stream may already have delivered partial output; tell the
+				// caller to discard it before the retry's deltas arrive.
+				if ir.OnStreamRestart != nil {
+					ir.OnStreamRestart()
+				}
 				now := time.Now().Format(time.DateTime)
 				lastErrSummary = "stream: " + llm.Truncate(err.Error(), 160)
 				lastErrStatus = 0
 				slog.WarnContext(ctx, "responses_request_stream_failed", "error", err, "url", fullURL, "model", model.ModelName)
-				attemptErr := fmt.Errorf("attempt %d at %s: stream response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, err)
+				attemptErr := fmt.Errorf("attempt %d at %s: stream response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, llm.MarkStreamInterrupted(err))
 				info, classified := llm.RequestErrorInfoFromError(err)
 				lastRequestErrorInfo = info
 				if classified && !info.Retryable {

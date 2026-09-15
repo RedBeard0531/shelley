@@ -181,6 +181,7 @@ export interface StreamResponse extends Omit<StreamResponseForTS, "messages"> {
   disk_space_status?: DiskSpaceStatus;
   tool_progress?: ToolProgress;
   stream_delta?: StreamDelta;
+  stream_reset?: boolean;
 }
 
 // Link represents a custom link that can be added to the UI

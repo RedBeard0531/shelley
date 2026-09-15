@@ -1862,11 +1862,19 @@ func TestResponsesServiceStallTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
+	restarts := 0
 	_, err := svc.Do(ctx, &llm.Request{
-		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "Hello!"}}}},
+		Messages:        []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "Hello!"}}}},
+		OnStream:        func(llm.StreamDelta) {},
+		OnStreamRestart: func() { restarts++ },
 	})
 	if err == nil {
 		t.Fatalf("expected stall error, got nil")
+	}
+	// The stalled attempt streamed a delta before dying, so re-issuing it must
+	// tell the caller to drop that partial output.
+	if restarts == 0 {
+		t.Errorf("expected OnStreamRestart to be called before retrying the stalled stream")
 	}
 	info, ok := llm.RequestErrorInfoFromError(err)
 	if !ok || info.IdleStallDuration != 150*time.Millisecond || !info.Retryable {

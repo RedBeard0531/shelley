@@ -1426,6 +1426,18 @@ func (e *testRequestError) Error() string { return e.message }
 
 func (e *testRequestError) RequestErrorInfo() llm.RequestErrorInfo { return e.info }
 
+// midStreamInterruptionError builds the error a provider hands the loop when a
+// response dies after it started streaming, in the same shape the providers
+// produce it (attempt history joined with the marked stream failure).
+func midStreamInterruptionError() error {
+	return errors.Join(
+		errors.New("attempt 1 at 2026-09-15 21:02:02: TLS error"),
+		fmt.Errorf("attempt 2 at 2026-09-15 21:02:04: url=https://llm.example.com/v1/chat/completions model=test: %w",
+			llm.MarkStreamInterrupted(fmt.Errorf("chat completion stream failed after response started: %v",
+				errors.New("stream error: stream ID 15; INTERNAL_ERROR; received from peer")))),
+	)
+}
+
 func newIdleStallError(duration time.Duration) error {
 	return &testRequestError{
 		message: fmt.Sprintf("llm stream idle timeout: no data received within idle window after %s: context canceled", duration),
@@ -1474,6 +1486,167 @@ func (r *retryableLLMService) getCallCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.callCount
+}
+
+func TestLLMRequestRetryAfterMidStreamFailureDiscardsPartialOutput(t *testing.T) {
+	// A request that dies after the response started must be retried with the
+	// partial output of the failed attempt discarded: the retry restarts the
+	// response, so stitching its deltas onto the dead attempt's would show the
+	// user two half-answers glued together.
+	service := &midStreamFailureLLMService{failuresRemaining: 1}
+
+	var (
+		deltas        []llm.StreamDelta
+		resets        int
+		recordedTexts []string
+	)
+	recordFunc := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+		for _, content := range message.Content {
+			if content.Type == llm.ContentTypeText {
+				recordedTexts = append(recordedTexts, content.Text)
+			}
+		}
+		return nil
+	}
+
+	l := NewLoop(Config{
+		LLM:           service,
+		History:       []llm.Message{},
+		Tools:         []*llm.Tool{},
+		RecordMessage: recordFunc,
+		OnStreamDelta: func(delta llm.StreamDelta) {
+			deltas = append(deltas, delta)
+		},
+		OnStreamReset: func() { resets++ },
+	})
+
+	l.QueueUserMessage(llm.Message{
+		Role:    llm.MessageRoleUser,
+		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "test message"}},
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := l.ProcessOneTurn(ctx); err != nil {
+		t.Fatalf("expected no error after retry, got: %v", err)
+	}
+	if service.getCallCount() != 2 {
+		t.Fatalf("expected 2 LLM calls (retry after mid-stream failure), got %d", service.getCallCount())
+	}
+	if resets != 1 {
+		t.Errorf("expected exactly 1 stream reset, got %d", resets)
+	}
+	// The dead attempt's delta still reaches the caller, followed by the
+	// retry's — the reset is what marks the boundary, and the client drops
+	// everything before it.
+	if len(deltas) != 2 {
+		t.Fatalf("expected deltas from both attempts, got %v", deltas)
+	}
+	if deltas[0].Text != "partial answer" || deltas[1].Text != "Success after retry" {
+		t.Errorf("unexpected deltas: %v", deltas)
+	}
+	if len(recordedTexts) != 1 || recordedTexts[0] != "Success after retry" {
+		t.Errorf("expected only the retry's response recorded, got %v", recordedTexts)
+	}
+}
+
+func TestLLMRequestMidStreamFailureGivesUpAfterOneRetry(t *testing.T) {
+	// The retry budget is one: a second mid-stream failure ends the turn with a
+	// retryable error message (which is what offers the user a manual Retry).
+	service := &midStreamFailureLLMService{failuresRemaining: 10}
+
+	var (
+		resets           int
+		recordedMessages []llm.Message
+	)
+	recordFunc := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+		recordedMessages = append(recordedMessages, message)
+		return nil
+	}
+
+	l := NewLoop(Config{
+		LLM:           service,
+		History:       []llm.Message{},
+		Tools:         []*llm.Tool{},
+		RecordMessage: recordFunc,
+		OnStreamDelta: func(llm.StreamDelta) {},
+		OnStreamReset: func() { resets++ },
+	})
+
+	l.QueueUserMessage(llm.Message{
+		Role:    llm.MessageRoleUser,
+		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "test message"}},
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := l.ProcessOneTurn(ctx); err == nil {
+		t.Fatal("expected an error after the retry budget ran out")
+	}
+	if service.getCallCount() != 2 {
+		t.Errorf("expected 2 LLM calls (one retry), got %d", service.getCallCount())
+	}
+	// One reset per failed attempt, including the final give-up: no partial
+	// output may outlive the request that produced it.
+	if resets != 2 {
+		t.Errorf("expected 2 stream resets (one per failed attempt), got %d", resets)
+	}
+	if len(recordedMessages) != 1 {
+		t.Fatalf("expected 1 recorded error message, got %d", len(recordedMessages))
+	}
+	recorded := recordedMessages[0]
+	if recorded.ErrorType != llm.ErrorTypeLLMRequest || !recorded.ErrorRetryable {
+		t.Errorf("expected a retryable llm_request error, got %+v", recorded)
+	}
+}
+
+// midStreamFailureLLMService streams a partial answer and then fails, like a
+// provider whose connection dies mid-response.
+type midStreamFailureLLMService struct {
+	failuresRemaining int
+	callCount         int
+	mu                sync.Mutex
+}
+
+func (s *midStreamFailureLLMService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	s.mu.Lock()
+	s.callCount++
+	failing := s.failuresRemaining > 0
+	if failing {
+		s.failuresRemaining--
+	}
+	s.mu.Unlock()
+
+	if !failing {
+		if req.OnStream != nil {
+			req.OnStream(llm.StreamDelta{Type: "text", Text: "Success after retry"})
+		}
+		return &llm.Response{
+			Content:    []llm.Content{{Type: llm.ContentTypeText, Text: "Success after retry"}},
+			StopReason: llm.StopReasonEndTurn,
+		}, nil
+	}
+
+	if req.OnStream != nil {
+		req.OnStream(llm.StreamDelta{Type: "text", Text: "partial answer"})
+	}
+	return nil, llm.MarkStreamInterrupted(fmt.Errorf("chat completion stream failed after response started: stream error: stream ID 15; INTERNAL_ERROR; received from peer"))
+}
+
+func (s *midStreamFailureLLMService) Provider() string { return "" }
+
+func (s *midStreamFailureLLMService) MaxImageDimension() int { return 2000 }
+
+func (s *midStreamFailureLLMService) MaxImageBytes() int { return 5 * 1024 * 1024 }
+
+func (s *midStreamFailureLLMService) SupportsImages() bool { return true }
+
+func (s *midStreamFailureLLMService) getCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.callCount
 }
 
 func TestLLMRequestRetryOnEOF(t *testing.T) {
@@ -1597,6 +1770,7 @@ func TestIsRetryableError(t *testing.T) {
 		{"connection refused", fmt.Errorf("connection refused"), true},
 		{"timeout", fmt.Errorf("i/o timeout"), true},
 		{"idle stall timeout", fmt.Errorf("stream: %w", newIdleStallError(3*time.Minute)), true},
+		{"mid-stream interruption", midStreamInterruptionError(), true},
 		{"structured retryable", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true}}, true},
 		{"structured automatic retry suppressed", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true, NoImmediateRetry: true}}, false},
 		{"structured non-retryable overrides EOF text", &testRequestError{message: "EOF", info: llm.RequestErrorInfo{}}, false},
@@ -1631,6 +1805,7 @@ func TestIsRetryableLLMError(t *testing.T) {
 		{"upstream connect error retryable", fmt.Errorf("upstream connect error or disconnect/reset before headers"), true},
 		{"deadline exceeded retryable", fmt.Errorf("context deadline exceeded"), true},
 		{"idle stall timeout retryable", fmt.Errorf("stream: %w", newIdleStallError(3*time.Minute)), true},
+		{"mid-stream interruption retryable", midStreamInterruptionError(), true},
 		{"structured retryable", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true}}, true},
 		{"structured manual-only retry remains retryable", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true, NoImmediateRetry: true}}, true},
 		{"structured non-retryable overrides rate-limit text", &testRequestError{message: "rate limit exceeded", info: llm.RequestErrorInfo{}}, false},

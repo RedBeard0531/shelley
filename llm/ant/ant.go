@@ -1382,9 +1382,14 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			response, err := parseSSEStream(resp.Body, ir.OnStream)
 			resp.Body.Close()
 			if err != nil {
-				// Stream parse errors might be transient (connection reset, etc.)
+				// Stream parse errors might be transient (connection reset, etc.).
+				// The stream may already have delivered partial output, so tell
+				// the caller to discard it before the next attempt is issued.
+				if ir.OnStreamRestart != nil {
+					ir.OnStreamRestart()
+				}
 				lastErrSummary = "stream: " + llm.Truncate(err.Error(), 160)
-				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: %w", attempts+1, time.Now().Format(time.DateTime), err))
+				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: %w", attempts+1, time.Now().Format(time.DateTime), llm.MarkStreamInterrupted(err)))
 				continue
 			}
 			// Calculate and set the cost_usd field

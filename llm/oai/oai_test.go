@@ -1502,6 +1502,13 @@ func TestServiceDoRejectsIncompleteFireworksStream(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no finish reason") {
 		t.Fatalf("Do() error = %v, want incomplete stream", err)
 	}
+	// A clean EOF without a finish reason is still a dead attempt that may
+	// have streamed partial output, so it must carry mid-stream-interruption
+	// metadata: the loop retries it, and a final failure shows the Retry button.
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || !info.Retryable {
+		t.Fatalf("RequestErrorInfoFromError(%v) = %+v, %v; want retryable", err, info, ok)
+	}
 }
 
 func TestServiceDoDoesNotRetryBrokenFireworksStream(t *testing.T) {
@@ -1520,6 +1527,13 @@ func TestServiceDoDoesNotRetryBrokenFireworksStream(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	// The request is retryable, but by the LOOP, not here: the provider can't
+	// discard the partial output it already streamed, so it hands the failure
+	// up marked as a mid-stream interruption instead of re-issuing internally.
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || !info.Retryable {
+		t.Fatalf("RequestErrorInfoFromError(%v) = %+v, %v; want retryable", err, info, ok)
 	}
 }
 

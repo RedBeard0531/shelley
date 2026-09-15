@@ -20,6 +20,26 @@ transports may populate `llm.RequestTrace`, collect indirect usage through the
 `llm` context helpers, and expose retry/idle-stall details with
 `llm.RequestError`; the loop does not import a concrete transport package.
 
+## Partial Output and Retries
+
+Streamed deltas are final the moment they leave the loop: clients render them
+as they arrive. So a request that dies after the response started leaves dead
+partial output behind, and two rules follow:
+
+- Providers must not re-issue an in-flight request themselves without first
+  calling `Request.OnStreamRestart`, which tells the loop to discard what the
+  failed attempt streamed (`Config.OnStreamReset`, wired by the server to a
+  client-visible stream reset). Anthropic and the Responses API, which retry
+  mid-stream internally, do this; the OpenAI chat-completions path instead
+  hands the failure up wrapped in `llm.MarkStreamInterrupted`.
+- The loop's own retry (see `isRetryableError`) discards the failed attempt's
+  partial output before re-sending, and likewise when it gives up, so no
+  partial text outlives the request that produced it.
+
+`llm.MarkStreamInterrupted` marks a mid-response failure as retryable, which
+also offers the user the manual Retry button when the automatic retry doesn't
+save the turn.
+
 ## Basic Usage
 
 ```go

@@ -134,6 +134,11 @@ type StreamResponse struct {
 	// streamDeltas batches partial updates inside the server. SSE writers
 	// expand it back into the established StreamDelta wire format.
 	streamDeltas []llm.StreamDelta
+	// StreamReset tells clients to discard partial streamed output they have
+	// rendered for this conversation: the request that produced it died
+	// mid-response, so the response those deltas belonged to no longer exists.
+	// Any deltas for the current request follow this event.
+	StreamReset bool `json:"stream_reset,omitempty"`
 	// MaxSequenceID, when non-zero, reports the highest message sequence_id
 	// known for this conversation. Set by the REST GET /api/conversation/<id>
 	// handler (computed from the returned message list) so the client can

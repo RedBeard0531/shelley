@@ -71,6 +71,12 @@ type Config struct {
 	// before the assistant message is recorded. Use this to flush any
 	// buffered stream deltas so they reach the UI before the full message.
 	OnStreamDone func()
+	// OnStreamReset is called when partial streamed output has to be thrown
+	// away: the request that produced it failed mid-response and is either
+	// being retried from scratch or has given up, so whatever the UI rendered
+	// from those deltas no longer describes the conversation. Implementations
+	// must drop any buffered deltas too, so they can't arrive after the reset.
+	OnStreamReset func()
 	// InjectMessages, if set, is called between LLM rounds (immediately
 	// before each request is built, including the first of a turn). Any
 	// messages it returns are appended to history and included in that
@@ -103,6 +109,7 @@ type Loop struct {
 	onToolProgress   llm.ToolProgressFunc
 	onStreamDelta    func(llm.StreamDelta)
 	onStreamDone     func()
+	onStreamReset    func()
 	injectMessages   func(ctx context.Context) []llm.Message
 	thinkingLevel    llm.ThinkingLevel
 	promptCacheKey   string
@@ -140,6 +147,7 @@ func NewLoop(config Config) *Loop {
 		onToolProgress:   config.OnToolProgress,
 		onStreamDelta:    config.OnStreamDelta,
 		onStreamDone:     config.OnStreamDone,
+		onStreamReset:    config.OnStreamReset,
 		injectMessages:   config.InjectMessages,
 		thinkingLevel:    config.ThinkingLevel,
 		promptCacheKey:   config.PromptCacheKey,
@@ -387,6 +395,29 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 			OnRetry:       l.recordRetryWarning(ctx),
 		}
 
+		// Partial output from a failed attempt is unusable: a retry restarts
+		// the response and a give-up ends the turn, so either way clients must
+		// drop what they rendered. The attempt's own deltas are tracked here so
+		// the loop can discard them when IT retries, and OnStreamRestart lets a
+		// provider that retries mid-stream internally discard them itself.
+		var streamedPartial bool
+		discardPartialStream := func() {
+			if !streamedPartial {
+				return
+			}
+			streamedPartial = false
+			if l.onStreamReset != nil {
+				l.onStreamReset()
+			}
+		}
+		if l.onStreamDelta != nil {
+			req.OnStream = func(delta llm.StreamDelta) {
+				streamedPartial = true
+				l.onStreamDelta(delta)
+			}
+		}
+		req.OnStreamRestart = discardPartialStream
+
 		// Insert missing tool results if the previous message had tool_use blocks
 		// without corresponding tool_result blocks. This can happen when a request
 		// is cancelled or fails after the LLM responds but before tools execute.
@@ -434,6 +465,11 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 				if err == nil {
 					return resp, nil
 				}
+				// Whatever happens next — a retry that starts the response over
+				// or a give-up that ends the turn — the partial output this
+				// attempt already streamed is dead. Drop it before retrying so
+				// the client doesn't stitch the two attempts' deltas together.
+				discardPartialStream()
 				if !isRetryableError(err) || attempt == maxRetries {
 					return nil, err
 				}

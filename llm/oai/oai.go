@@ -1273,14 +1273,14 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 		}
 		if err != nil {
 			if started {
-				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
+				return nil, llm.MarkStreamInterrupted(fmt.Errorf("chat completion stream failed after response started: %v", err))
 			}
 			return nil, err
 		}
 		var chunk chatCompletionStreamResponse
 		if err := json.Unmarshal(raw, &chunk); err != nil {
 			if started {
-				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
+				return nil, llm.MarkStreamInterrupted(fmt.Errorf("chat completion stream failed after response started: %v", err))
 			}
 			return nil, err
 		}
@@ -1344,7 +1344,11 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 	}
 
 	if finishReason == "" {
-		return nil, fmt.Errorf("incomplete chat completion stream: no finish reason")
+		// The stream ended cleanly but the provider never sent a finish reason:
+		// a dead attempt that may already have streamed partial output. Mark it
+		// as a mid-response failure so the loop retries and the user gets the
+		// manual Retry button (see streamInterruptedError).
+		return nil, llm.MarkStreamInterrupted(fmt.Errorf("incomplete chat completion stream: no finish reason"))
 	}
 	return &llm.Response{
 		ID:         id,

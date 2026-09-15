@@ -231,6 +231,37 @@ await run("routes text and thinking deltas separately", () => {
   s.handle.close();
 });
 
+await run("stream reset discards partial output", () => {
+  reset();
+  const id = "stream-reset";
+  messageStore.resetTransient(id);
+  const s = newStream();
+  latest().emitOpen();
+  latest().emitMessage({
+    conversation_id: id,
+    stream_delta: { type: "text", text: "half an ans", index: 0, seq: 1 },
+  });
+  latest().emitMessage({
+    conversation_id: id,
+    stream_delta: { type: "thinking", text: "considering", index: 0, seq: 2 },
+  });
+  // The request died mid-response: the partial answer belongs to nothing.
+  latest().emitMessage({ conversation_id: id, stream_reset: true });
+  const transient = messageStore.getTransient(id);
+  assert(transient.streamingText === "", "reset clears partial text");
+  assert(transient.streamingThinking === "", "reset clears partial thinking");
+  // The retry's deltas then stream as usual.
+  latest().emitMessage({
+    conversation_id: id,
+    stream_delta: { type: "text", text: "whole answer", index: 0, seq: 3 },
+  });
+  assert(
+    messageStore.getTransient(id).streamingText === "whole answer",
+    "retry deltas stream after the reset",
+  );
+  s.handle.close();
+});
+
 await run("foreground resume reconnects a silent (zombie) connection", () => {
   reset();
   markAllStaleCalls = 0;
