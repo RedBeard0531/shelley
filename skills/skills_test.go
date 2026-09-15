@@ -410,6 +410,15 @@ func skillNames(skills []Skill) []string {
 	return names
 }
 
+func skillByName(skills []Skill, name string) *Skill {
+	for i := range skills {
+		if skills[i].Name == name {
+			return &skills[i]
+		}
+	}
+	return nil
+}
+
 func TestProjectSkillsDirs(t *testing.T) {
 	// Create a directory structure:
 	// tmpDir/
@@ -592,13 +601,7 @@ func TestBuiltinSkills(t *testing.T) {
 
 	wantSkills := []string{"commit-tour", "customizing-shelley", "excalidraw", "node-and-js-frameworks", "previous-conversations", "reflection-integration", "request-integration", "schedule", "shelley-hooks", "transcribing-audio"}
 	for _, wantName := range wantSkills {
-		var found *Skill
-		for i := range builtins {
-			if builtins[i].Name == wantName {
-				found = &builtins[i]
-				break
-			}
-		}
+		found := skillByName(builtins, wantName)
 		if found == nil {
 			t.Fatalf("expected built-in %q skill", wantName)
 		}
@@ -610,6 +613,21 @@ func TestBuiltinSkills(t *testing.T) {
 		}
 		if found.Path != "" {
 			t.Errorf("%s: built-in skill should have empty Path, got %q", wantName, found.Path)
+		}
+	}
+}
+
+func TestPreviousConversationsBuiltinIncludesSubagents(t *testing.T) {
+	previous := skillByName(BuiltinSkills(), "previous-conversations")
+	if previous == nil {
+		t.Fatal("previous-conversations built-in skill not found")
+	}
+	if !strings.Contains(strings.ToLower(previous.Description), "subagent") {
+		t.Errorf("description does not mention subagents: %q", previous.Description)
+	}
+	for _, want := range []string{"parent_conversation_id", "subagent ID"} {
+		if !strings.Contains(previous.Body, want) {
+			t.Errorf("instructions missing %q: %q", want, previous.Body)
 		}
 	}
 }

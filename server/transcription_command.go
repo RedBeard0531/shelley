@@ -502,7 +502,7 @@ func transcriptionParentMessage(text, childID, mediaPath, contactSheetPath, tran
 	if transcriptionContext = strings.TrimSpace(transcriptionContext); transcriptionContext != "" {
 		parts = append(parts, transcriptionContext)
 	}
-	parts = append(parts, strings.TrimSpace(text), fmt.Sprintf("(transcribed by subagent %s)", childID))
+	parts = append(parts, strings.TrimSpace(text), fmt.Sprintf("(transcribed by subagent %s from %s)", childID, filepath.Base(mediaPath)))
 	if contactSheetPath != "" {
 		parts = append(parts, "["+mediaPath+"]", "["+contactSheetPath+"]")
 	}

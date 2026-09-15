@@ -376,14 +376,18 @@ test.describe("media recording composer", () => {
           context: "Keep this image [/tmp/shelley-uploads/context.png]",
         },
       }),
-      queuedMessage("q-ready", "Finished spoken words.\n\n(transcribed by subagent cREADY)", {
-        kind: "transcription",
-        state: "ready",
-        transcription: {
-          media_path: "/tmp/shelley-uploads/ready.webm",
-          child_conversation_id: "cREADY",
+      queuedMessage(
+        "q-ready",
+        "Finished spoken words.\n\n(transcribed by subagent cREADY from ready.webm)",
+        {
+          kind: "transcription",
+          state: "ready",
+          transcription: {
+            media_path: "/tmp/shelley-uploads/ready.webm",
+            child_conversation_id: "cREADY",
+          },
         },
-      }),
+      ),
       queuedMessage("q-failed", "", {
         kind: "transcription",
         state: "failed",

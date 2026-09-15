@@ -36,6 +36,15 @@ func transcriptionTestFile(t *testing.T, name string) string {
 	return path
 }
 
+func TestTranscriptionParentMessageIncludesAudioFilename(t *testing.T) {
+	message := transcriptionParentMessage("Spoken words.", "c2BZBGH", "/tmp/shelley-uploads/voice memo.webm", "", "")
+	got := message.Content[0].Text
+	want := "Spoken words.\n\n(transcribed by subagent c2BZBGH from voice memo.webm)"
+	if got != want {
+		t.Fatalf("parent message = %q, want %q", got, want)
+	}
+}
+
 func TestParseTranscriptionCommand(t *testing.T) {
 	tests := []struct {
 		message string
@@ -429,7 +438,7 @@ func TestQueuedTranscriptionPreservesFIFOAndVideoPaths(t *testing.T) {
 	for _, want := range []string{
 		"Keep this note. [/tmp/shelley-uploads/context.png]",
 		"predictable spoken words",
-		"(transcribed by subagent " + queued[0].Transcription.ChildConversationID + ")",
+		"(transcribed by subagent " + queued[0].Transcription.ChildConversationID + " from " + filepath.Base(mediaPath) + ")",
 		"[" + mediaPath + "]",
 		"[" + mediaPath + ".contact-sheet.jpg]",
 	} {
