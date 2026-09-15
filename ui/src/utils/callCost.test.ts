@@ -128,7 +128,7 @@ const steady = entry({
   });
   eq(
     note([steady, expired], 1),
-    "Cache miss, 18m after the previous call: 7k of 155k prompt tokens were still cached.",
+    "Cache miss, 18m after the previous call: 7.2k of 155k prompt tokens were still cached.",
     "cache miss after a long gap",
   );
 }
@@ -143,7 +143,7 @@ const steady = entry({
   });
   eq(
     note([steady, missed], 1),
-    "Cache miss, 6s after the previous call: 7k of 155k prompt tokens were still cached.",
+    "Cache miss, 6s after the previous call: 7.2k of 155k prompt tokens were still cached.",
     "cache miss without a gap",
   );
   const cold = entry({ cache_creation_input_tokens: 152_000, start_time: iso(T0 + 11_000) });
@@ -164,7 +164,7 @@ const steady = entry({
   });
   eq(
     note([steady, suffix], 1),
-    "Cache miss, 6s after the previous call: 141k of 156k prompt tokens were still cached (5k new).",
+    "Cache miss, 6s after the previous call: 141k of 156k prompt tokens were still cached (5.0k new).",
     "recached suffix bigger than the growth",
   );
   const grew = entry({ cache_read_input_tokens: 146_000, cache_creation_input_tokens: 15_000 });
@@ -198,12 +198,12 @@ const steady = entry({
   });
   eq(
     note([prev, missed], 1),
-    "Cache miss, 1s after the previous call: 1k of 151k prompt tokens were still cached.",
+    "Cache miss, 1s after the previous call: 1.0k of 151k prompt tokens were still cached.",
     "gap starts at the previous message time without an end time",
   );
   eq(
     note([prev, { ...missed, start_time: undefined }], 1),
-    "Cache miss: 1k of 151k prompt tokens were still cached.",
+    "Cache miss: 1.0k of 151k prompt tokens were still cached.",
     "no gap without a start time",
   );
 }
@@ -250,7 +250,7 @@ const steady = entry({
     entry({ cache_read_input_tokens: read, cache_creation_input_tokens: 160_000 - read });
   eq(
     note([steady, switched, back(145_000)], 2, { label: "text", tokens: 9_000 }),
-    "9k new prompt tokens.",
+    "9.0k new prompt tokens.",
     "switch back to a warm cache, without the previous call's growth",
   );
   eq(
@@ -275,7 +275,7 @@ const steady = entry({
   const missed = entry({ cache_read_input_tokens: 1_000, cache_creation_input_tokens: 151_000 });
   eq(
     note([{ ...steady, model: undefined }, missed], 1),
-    "Cache miss: 1k of 152k prompt tokens were still cached.",
+    "Cache miss: 1.0k of 152k prompt tokens were still cached.",
     "no model switch without a previous model",
   );
 }
@@ -309,7 +309,7 @@ const steady = entry({
   const missed = entry({ cache_read_input_tokens: 3_000, cache_creation_input_tokens: 110_000 });
   eq(
     note([paused, missed], 1),
-    "Cache miss: 3k of 113k prompt tokens were still cached.",
+    "Cache miss: 3.0k of 113k prompt tokens were still cached.",
     "miss after a paused turn",
   );
 }
