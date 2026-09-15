@@ -35,6 +35,13 @@ type ToolResponse struct {
 type Hooks struct {
 	OnStreamingResponse func(context.Context, llm.StreamDelta)
 	OnStreamDone        func()
+	// OnStreamReset is called when partial streamed output has to be thrown
+	// away: the request that produced it failed mid-response and is either
+	// being retried from scratch or has given up, so whatever the client
+	// rendered from those deltas no longer describes the conversation.
+	// Implementations must drop any buffered deltas too, so they can't arrive
+	// after the reset.
+	OnStreamReset       func()
 	OnToolProgress      func(context.Context, llm.ToolProgress)
 	OnResponse          func(context.Context, Response) error
 	OnSuccessfulRequest func(*llm.Request)
@@ -60,6 +67,12 @@ type RunConfig struct {
 	Pending       PendingMessages
 	Hooks         Hooks
 	Logger        *slog.Logger
+
+	// streamedPartial records whether the request currently in flight has
+	// already emitted stream deltas. A retry restarts the response and a
+	// give-up ends the turn, so either way those deltas are dead and the
+	// client must be told to drop them. Reset before each request.
+	streamedPartial bool
 }
 
 // Run executes one agent turn. It checks RunConfig.Pending before every model
@@ -153,11 +166,19 @@ func (l *RunConfig) run(ctx context.Context) error {
 			ThinkingLevel: l.ThinkingLevel,
 			OnRetry:       onRetry,
 		}
+		// Partial output from a failed attempt is unusable: a retry restarts
+		// the response and a give-up ends the turn, so either way clients must
+		// drop what they rendered. The attempt's own deltas are tracked here so
+		// the run can discard them when IT retries, and OnStreamRestart lets a
+		// provider that retries mid-stream internally discard them itself.
+		l.streamedPartial = false
 		if l.Hooks.OnStreamingResponse != nil {
 			req.OnStream = func(delta llm.StreamDelta) {
+				l.streamedPartial = true
 				l.Hooks.OnStreamingResponse(ctx, delta)
 			}
 		}
+		req.OnStreamRestart = l.discardPartialStream
 
 		// Insert missing tool results if the previous message had tool_use blocks
 		// without corresponding tool_result blocks. This can happen when a request
@@ -272,6 +293,20 @@ func (l *RunConfig) run(ctx context.Context) error {
 	}
 }
 
+// discardPartialStream drops the deltas the request in flight already
+// streamed, if any. A retry restarts the response and a give-up ends the turn,
+// so either way what the client rendered from them no longer describes the
+// conversation.
+func (l *RunConfig) discardPartialStream() {
+	if !l.streamedPartial {
+		return
+	}
+	l.streamedPartial = false
+	if l.Hooks.OnStreamReset != nil {
+		l.Hooks.OnStreamReset()
+	}
+}
+
 // sendWithRetry issues one model request with transport retries. Provider-internal
 // retries own user-visible warnings; this catches transient failures that escape
 // the provider. The transport's idle timeout is the primary bound, while
@@ -292,6 +327,11 @@ func (l *RunConfig) sendWithRetry(ctx context.Context, req *llm.Request, request
 		if err == nil {
 			return resp, nil
 		}
+		// Whatever happens next — a retry that starts the response over or a
+		// give-up that ends the turn — the partial output this attempt already
+		// streamed is dead. Drop it before retrying so the client doesn't
+		// stitch the two attempts' deltas together.
+		l.discardPartialStream()
 		if !isRetryableError(err) || attempt == maxRetries {
 			return nil, err
 		}

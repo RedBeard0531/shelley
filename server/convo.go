@@ -2593,6 +2593,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		},
 		OnStreamDelta: sf.Push,
 		OnStreamDone:  sf.Flush,
+		OnStreamReset: sf.Reset,
 		InjectMessages: func(ctx context.Context) []llm.Message {
 			return cm.takeInjectable(ctx, generation)
 		},
