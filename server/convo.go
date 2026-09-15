@@ -2290,8 +2290,9 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 				ToolProgress: &progress,
 			})
 		},
-		OnStreamDelta: sf.Push,
-		OnStreamDone:  sf.Flush,
+		OnStreamDelta:  sf.Push,
+		OnStreamDone:   sf.Flush,
+		OnStreamReset:  sf.Reset,
 		InjectMessages: func(ctx context.Context) (loop.Injection, error) {
 			return cm.takeInjectable(ctx, generation, nudger)
 		},

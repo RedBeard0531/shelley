@@ -71,6 +71,12 @@ type Config struct {
 	// before the assistant message is recorded. Use this to flush any
 	// buffered stream deltas so they reach the UI before the full message.
 	OnStreamDone func()
+	// OnStreamReset is called when partial streamed output has to be thrown
+	// away: the request that produced it failed mid-response and is either
+	// being retried from scratch or has given up, so whatever the UI rendered
+	// from those deltas no longer describes the conversation. Implementations
+	// must drop any buffered deltas too, so they can't arrive after the reset.
+	OnStreamReset func()
 	// InjectMessages, if set, is called between LLM rounds (immediately
 	// before each request is built, including the first of a turn). Its
 	// Injection is applied to history and included in that request. Used to
@@ -113,6 +119,7 @@ type Loop struct {
 	onToolProgress   llm.ToolProgressFunc
 	onStreamDelta    func(llm.StreamDelta)
 	onStreamDone     func()
+	onStreamReset    func()
 	injectMessages   func(ctx context.Context) (Injection, error)
 	thinkingLevel    llm.ThinkingLevel
 	promptCacheKey   string
@@ -151,6 +158,7 @@ func NewLoop(config Config) *Loop {
 		onToolProgress:   config.OnToolProgress,
 		onStreamDelta:    config.OnStreamDelta,
 		onStreamDone:     config.OnStreamDone,
+		onStreamReset:    config.OnStreamReset,
 		injectMessages:   config.InjectMessages,
 		thinkingLevel:    config.ThinkingLevel,
 		promptCacheKey:   config.PromptCacheKey,
@@ -428,6 +436,7 @@ func (l *Loop) hooks() Hooks {
 	if l.onStreamDelta != nil {
 		h.OnStreamingResponse = func(_ context.Context, d llm.StreamDelta) { l.onStreamDelta(d) }
 	}
+	h.OnStreamReset = l.onStreamReset
 	if l.onToolProgress != nil {
 		h.OnToolProgress = func(_ context.Context, p llm.ToolProgress) { l.onToolProgress(p) }
 	}
