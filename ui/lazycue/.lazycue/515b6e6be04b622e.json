@@ -1,0 +1,63 @@
+{
+  "_README": "This file is managed by LazyCue (see shelley/lazycue). Do NOT edit by hand — it is the cached, machine-generated DSL for a self-healing browser test. To change behavior, edit the test description and re-run LazyCue.",
+  "description": "Navigate to /new. Into the message input (data-testid \"message-input\") type the text: bash: printf '\\033[1G\\033[1G\\033[1GDev code has changes not yet deployed' and click the send button (data-testid \"send-button\"). Wait for a completed bash tool pill (selector \".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']\") to appear, then click that pill to open its detail modal (\".tool-detail-modal .bash-tool-details\" should become visible). The output area (the last \".tool-detail-modal .bash-tool-code\" element) should contain the readable text \"Dev code has changes not yet deployed\" and must NOT contain the stray fragment \"GGG\" or the raw escape fragment \"[1G\".",
+  "version": 1,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "/new"
+    },
+    {
+      "action": "wait_visible",
+      "selector": "[data-testid='message-input']",
+      "timeout": "10s"
+    },
+    {
+      "action": "fill",
+      "selector": "[data-testid='message-input']",
+      "value": "bash: printf '\\033[1G\\033[1G\\033[1GDev code has changes not yet deployed'"
+    },
+    {
+      "action": "click",
+      "selector": "[data-testid='send-button']"
+    },
+    {
+      "action": "wait_visible",
+      "selector": ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']",
+      "timeout": "60s"
+    },
+    {
+      "action": "click",
+      "selector": ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']"
+    },
+    {
+      "action": "wait_visible",
+      "selector": ".tool-detail-modal .bash-tool-details",
+      "timeout": "10s"
+    },
+    {
+      "action": "eval",
+      "expression": "Array.from(document.querySelectorAll('.tool-detail-modal .bash-tool-code')).at(-1).textContent.includes('Dev code has changes not yet deployed')",
+      "expect": "true"
+    },
+    {
+      "action": "eval",
+      "expression": "Array.from(document.querySelectorAll('.tool-detail-modal .bash-tool-code')).at(-1).textContent.includes('GGG')",
+      "expect": "false"
+    },
+    {
+      "action": "eval",
+      "expression": "Array.from(document.querySelectorAll('.tool-detail-modal .bash-tool-code')).at(-1).textContent.includes('[1G')",
+      "expect": "false"
+    }
+  ],
+  "metadata": {
+    "created_at": "2026-09-16T21:53:55.614096078Z",
+    "hostname": "phil-dev",
+    "model": "claude-sonnet-4-6",
+    "input_tokens": 50086,
+    "output_tokens": 2622,
+    "estimated_cost_usd": 0.189588,
+    "mode": "generated"
+  }
+}

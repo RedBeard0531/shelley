@@ -1,0 +1,103 @@
+{
+  "_README": "This file is managed by LazyCue (see shelley/lazycue). Do NOT edit by hand — it is the cached, machine-generated DSL for a self-healing browser test. To change behavior, edit the test description and re-run LazyCue.",
+  "description": "Navigate to /new. Into the message input (data-testid \"message-input\") type the text: bash: printf '\\033[32mGreen\\033[0m \\033[31mRed\\033[0m \\033[1mBold\\033[0m plain' and click the send button (data-testid \"send-button\"). Wait for a completed bash tool pill (selector \".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']\") to appear, then click that pill to open its detail modal (\".tool-detail-modal .bash-tool-details\" should become visible). The output area (selector \".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code\") should contain the readable words \"Green\", \"Red\", \"Bold\" and \"plain\", and must NOT contain raw escape fragments like \"[0m\" or \"[32m\". Because ANSI colors are present, that output element should contain at least one \u003cspan\u003e element (selector \".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code span\" should match one or more elements).",
+  "version": 1,
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "/new"
+    },
+    {
+      "action": "wait_visible",
+      "selector": "[data-testid='message-input']",
+      "timeout": "10s"
+    },
+    {
+      "action": "fill",
+      "selector": "[data-testid='message-input']",
+      "value": "bash: printf '\\033[32mGreen\\033[0m \\033[31mRed\\033[0m \\033[1mBold\\033[0m plain'"
+    },
+    {
+      "action": "click",
+      "selector": "[data-testid='send-button']"
+    },
+    {
+      "action": "wait_visible",
+      "selector": ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']",
+      "timeout": "60s"
+    },
+    {
+      "action": "click",
+      "selector": ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']"
+    },
+    {
+      "action": "wait_visible",
+      "selector": ".tool-detail-modal .bash-tool-details",
+      "timeout": "10s"
+    },
+    {
+      "action": "wait_text",
+      "text": "Green",
+      "timeout": "10s"
+    },
+    {
+      "action": "wait_text",
+      "text": "Red",
+      "timeout": "10s"
+    },
+    {
+      "action": "wait_text",
+      "text": "Bold",
+      "timeout": "10s"
+    },
+    {
+      "action": "wait_text",
+      "text": "plain",
+      "timeout": "10s"
+    },
+    {
+      "action": "assert_text_contains",
+      "selector": ".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code",
+      "text": "Green"
+    },
+    {
+      "action": "assert_text_contains",
+      "selector": ".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code",
+      "text": "Red"
+    },
+    {
+      "action": "assert_text_contains",
+      "selector": ".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code",
+      "text": "Bold"
+    },
+    {
+      "action": "assert_text_contains",
+      "selector": ".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code",
+      "text": "plain"
+    },
+    {
+      "action": "eval",
+      "expression": "document.querySelector('.tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code').textContent.includes('[0m')",
+      "expect": "false"
+    },
+    {
+      "action": "eval",
+      "expression": "document.querySelector('.tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code').textContent.includes('[32m')",
+      "expect": "false"
+    },
+    {
+      "action": "eval",
+      "expression": "document.querySelectorAll('.tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code span').length \u003e= 1",
+      "expect": "true"
+    }
+  ],
+  "metadata": {
+    "created_at": "2026-09-16T22:10:07.849335118Z",
+    "hostname": "phil-dev",
+    "model": "claude-sonnet-4-6",
+    "input_tokens": 20655,
+    "output_tokens": 1918,
+    "estimated_cost_usd": 0.090735,
+    "mode": "generated"
+  }
+}

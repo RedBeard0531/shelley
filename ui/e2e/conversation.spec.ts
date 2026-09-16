@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { createConversationViaAPI } from "./helpers";
+import { createConversationViaAPI, openToolPill } from "./helpers";
 
 // The tool-call rendering tests were split out into
 // conversation-tool-calls.spec.ts: at 47s of test time this file was one of the
@@ -161,12 +161,12 @@ test.describe("Shelley Conversation Tests", () => {
       { timeout: 30000 },
     );
 
-    // Verify tool usage appears in the UI with coalesced tool call
-    await expect(page.locator('[data-testid="tool-call-completed"]').first()).toBeVisible({
+    // Verify tool usage appears as a completed bash pill.
+    await expect(
+      page.locator('.tool-pill[data-tool-name="bash"][data-testid="tool-call-completed"]').first(),
+    ).toBeVisible({
       timeout: 10000,
     });
-    // Check that the tool name "bash" is visible
-    await expect(page.locator("text=bash").first()).toBeVisible();
   });
 
   test("gives default response for undefined messages", async ({ page, request }) => {
@@ -299,7 +299,7 @@ test.describe("Shelley Conversation Tests", () => {
     await expect(page.locator("text=patch").first()).toBeVisible();
   });
 
-  test("displays tool results with collapsible details", async ({ page }) => {
+  test("displays tool results in a detail modal", async ({ page }) => {
     await page.goto("/");
     await page.waitForLoadState("domcontentloaded");
 
@@ -315,9 +315,7 @@ test.describe("Shelley Conversation Tests", () => {
       timeout: 30000,
     });
 
-    // Check for bash tool header (collapsible element)
-    const bashToolHeader = page.locator(".bash-tool-header");
-    await expect(bashToolHeader.first()).toBeVisible({ timeout: 10000 });
+    const modal = await openToolPill(page, "testing tool results");
+    await expect(modal.locator(".bash-tool-details")).toBeVisible({ timeout: 10000 });
   });
-
 });

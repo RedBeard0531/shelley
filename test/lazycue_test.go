@@ -260,13 +260,13 @@ func TestNewPageThinkingIndicator(t *testing.T) {
 }
 
 func TestNewPageBashTool(t *testing.T) {
-	lazyTest(t, `Navigate to /new. Type the text bash: echo "hello world" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for the agent text that begins with "I'll run the command:" and includes echo "hello world". A completed tool call (an element with data-testid "tool-call-completed") should become visible, and the text "bash" should be visible somewhere on the page.`)
+	lazyTest(t, `Navigate to /new. Type the text bash: echo "hello world" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for the agent text that begins with "I'll run the command:" and includes echo "hello world". A completed bash tool pill (selector ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']") should become visible and contain the text "hello world".`)
 }
 
 // Replaces the Playwright test that treated predictable's "think:" response
 // as a tool call and reused whichever shared conversation happened to be open.
 func TestNewPageConsecutiveToolCalls(t *testing.T) {
-	lazyTest(t, `Navigate to /new and confirm selector "[data-testid='tool-call-completed']" initially matches exactly 0 elements. Send three consecutive tool turns in this same conversation. For the first turn, type the text bash: echo "first command" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for exactly one completed tool call, then wait for the turn-ending agent message by evaluating "Array.from(document.querySelectorAll('.message-agent')).filter(function(el){return el.textContent.trim()==='Done.';}).length" and expecting "1"; this eval step must set timeout "30s". For the second turn, type the text bash: echo "second command" into the same message input and click the send button; wait for exactly two completed tool calls, then run the same eval and expect "2" with timeout "30s". For the third turn, type the text bash: echo "third command" into the same message input and click the send button; wait for exactly three completed tool calls, then run the same eval and expect "3" with timeout "30s". Finally, selector ".bash-tool-success" should match exactly 3 elements, and evaluate "Array.from(document.querySelectorAll('.bash-tool-command')).map(function(el){return el.textContent.trim();}).join('|')" expecting "echo \"first command\"|echo \"second command\"|echo \"third command\"". The three sent user messages should all remain visible.`)
+	lazyTest(t, `Navigate to /new and confirm selector "[data-testid='tool-call-completed']" initially matches exactly 0 elements. Send three consecutive tool turns in this same conversation. For the first turn, type the text bash: echo "first command" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for exactly one completed tool call, then wait for the turn-ending agent message by evaluating "Array.from(document.querySelectorAll('.message-agent')).filter(function(el){return el.textContent.trim()==='Done.';}).length" and expecting "1"; this eval step must set timeout "30s". For the second turn, type the text bash: echo "second command" into the same message input and click the send button; wait for exactly two completed tool calls, then run the same eval and expect "2" with timeout "30s". For the third turn, type the text bash: echo "third command" into the same message input and click the send button; wait for exactly three completed tool calls, then run the same eval and expect "3" with timeout "30s". Finally, selector ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']" should match exactly 3 elements, and evaluate "Array.from(document.querySelectorAll('.tool-pill[data-tool-name=\"bash\"] .tool-pill-text')).map(function(el){return el.textContent.trim();}).join('|')" expecting "echo first command|echo second command|echo third command". The three sent user messages should all remain visible.`)
 }
 
 // Regression test for tool-progress render churn. A running tool reports
@@ -276,12 +276,12 @@ func TestNewPageConsecutiveToolCalls(t *testing.T) {
 // them per event (~800 updates/event in a 250-turn conversation, one ~80ms
 // main-thread block per event for the life of the tool). Streaming output is
 // now injected per tool call (ui/src/vue/composables/toolProgress.ts), so a
-// progress event re-renders only the running tool's card. The UI counts
+// progress event re-renders only the running tool's pill. The UI counts
 // component updates at window.__shelleyPerf (ui/src/utils/perf.ts); we watch
 // a slow bash command stream its output and assert Message components stay
 // quiet while progress events arrive.
 func TestToolProgressDoesNotRerenderMessages(t *testing.T) {
-	lazyTest(t, `Navigate to /new. Type "echo: warmup one" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"), then wait for the reply text "warmup one" to appear. Then type the text bash: for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 1; done into the message input and click the send button. The bash tool card streams the command's output while it runs, so wait for the text "tick 2" to appear on the page (allow up to 30 seconds). Then reset the UI's recomputation counters: eval "(function(){window.__shelleyPerf.reset();return true;})()" and expect "true". Wait for at least 4 tool-progress events to arrive: eval "(function(){var s=window.__shelleyPerf.snapshot();return (((s['store.notifyTransient']||{}).count)||0)>=4;})()" with expect "true" (allow up to 15 seconds). Then assert the progress events did not re-render the conversation's message components: eval "(function(){var s=window.__shelleyPerf.snapshot();var prog=((s['store.notifyTransient']||{}).count)||0;var upd=((s['message.update']||{}).count)||0;return upd<=5?'pass':'fail: '+upd+' message updates during '+prog+' progress events';})()" and expect "pass". Finally wait for the completed tool call (data-testid "tool-call-completed") to become visible (allow up to 30 seconds).`)
+	lazyTest(t, `Navigate to /new. Type "echo: warmup one" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"), then wait for the reply text "warmup one" to appear. Then type the text bash: for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 1; done into the message input and click the send button. Wait for the running bash tool pill's latest-output element (".tool-pill-output") to become visible, then use a selector-scoped text assertion to verify that same ".tool-pill-output" element contains "tick" (allow up to 30 seconds). Then reset the UI's recomputation counters: eval "(function(){window.__shelleyPerf.reset();return true;})()" and expect "true". Wait for at least 4 tool-progress events to arrive: eval "(function(){var s=window.__shelleyPerf.snapshot();return (((s['store.notifyTransient']||{}).count)||0)>=4;})()" with expect "true" (allow up to 15 seconds). Then assert the progress events did not re-render the conversation's message components: eval "(function(){var s=window.__shelleyPerf.snapshot();var prog=((s['store.notifyTransient']||{}).count)||0;var upd=((s['message.update']||{}).count)||0;return upd<=5?'pass':'fail: '+upd+' message updates during '+prog+' progress events';})()" and expect "pass". Finally wait for the completed tool call (data-testid "tool-call-completed") to become visible (allow up to 30 seconds).`)
 }
 
 func TestNewPageThinkTool(t *testing.T) {
@@ -341,26 +341,26 @@ func TestNewPageUserMessageNoMarkdown(t *testing.T) {
 }
 
 // --- Bash tool result rendering (ported from ui/e2e/ansi-rendering.spec.ts and
-// the tool-result portions of conversation.spec.ts). The default UI renders
-// bash tool calls as a collapsible ".bash-tool" card whose details panel
-// (".bash-tool-details") is hidden until the ".bash-tool-header" is clicked.
-// Inside the panel, output is rendered by the AnsiText component, which turns
-// ANSI color codes into styled <span> elements rather than raw escape text. ---
+// the tool-result portions of conversation.spec.ts). Bash tool calls render as
+// compact pills; clicking a pill opens a detail modal containing the expanded
+// ".bash-tool-details" panel. Inside the panel, output is rendered by the
+// AnsiText component, which turns ANSI color codes into styled <span> elements
+// rather than raw escape text. ---
 
 func TestNewPageBashAnsiColors(t *testing.T) {
 	lazyTest(t, "Navigate to /new. Into the message input (data-testid \"message-input\") type the text: "+
 		"bash: printf '\\033[32mGreen\\033[0m \\033[31mRed\\033[0m \\033[1mBold\\033[0m plain' "+
-		"and click the send button (data-testid \"send-button\"). Wait for a completed tool call "+
-		"(data-testid \"tool-call-completed\") to appear, then click the bash tool header "+
-		"(\".bash-tool-header\") to expand the details panel (\".bash-tool-details\" should become visible). "+
-		"The output area (the last \".bash-tool-code\" element) should contain the readable words \"Green\", "+
+		"and click the send button (data-testid \"send-button\"). Wait for a completed bash tool pill "+
+		"(selector \".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']\") to appear, then click that pill "+
+		"to open its detail modal (\".tool-detail-modal .bash-tool-details\" should become visible). "+
+		"The output area (selector \".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code\") should contain the readable words \"Green\", "+
 		"\"Red\", \"Bold\" and \"plain\", and must NOT contain raw escape fragments like \"[0m\" or \"[32m\". "+
 		"Because ANSI colors are present, that output element should contain at least one <span> element "+
-		"(selector \".bash-tool-details .bash-tool-section:last-child .bash-tool-code span\" should match one or more elements).")
+		"(selector \".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code span\" should match one or more elements).")
 }
 
 func TestNewPageBashPlainText(t *testing.T) {
-	lazyTest(t, `Navigate to /new. Type the text bash: echo "just plain text with no escapes" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for a completed tool call (data-testid "tool-call-completed") to appear, then click the bash tool header (".bash-tool-header") to expand the details panel (".bash-tool-details" should become visible). The output area (the last ".bash-tool-code" element) should contain the text "just plain text with no escapes". Since there are no ANSI codes, that output element should contain zero <span> elements (selector ".bash-tool-details .bash-tool-section:last-child .bash-tool-code span" should match 0 elements).`)
+	lazyTest(t, `Navigate to /new. Type the text bash: echo "just plain text with no escapes" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for a completed bash tool pill (selector ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']") to appear, then click that pill to open its detail modal (".tool-detail-modal .bash-tool-details" should become visible). The output area (the last ".tool-detail-modal .bash-tool-code" element) should contain the text "just plain text with no escapes". Since there are no ANSI codes, that output element should contain zero <span> elements (selector ".tool-detail-modal .bash-tool-details .bash-tool-section:last-child .bash-tool-code span" should match 0 elements).`)
 }
 
 // TestNewPageBashAnsiCursorMovement guards against the regression where
@@ -372,20 +372,20 @@ func TestNewPageBashPlainText(t *testing.T) {
 func TestNewPageBashAnsiCursorMovement(t *testing.T) {
 	lazyTest(t, "Navigate to /new. Into the message input (data-testid \"message-input\") type the text: "+
 		"bash: printf '\\033[1G\\033[1G\\033[1GDev code has changes not yet deployed' "+
-		"and click the send button (data-testid \"send-button\"). Wait for a completed tool call "+
-		"(data-testid \"tool-call-completed\") to appear, then click the bash tool header "+
-		"(\".bash-tool-header\") to expand the details panel (\".bash-tool-details\" should become visible). "+
-		"The output area (the last \".bash-tool-code\" element) should contain the readable text "+
+		"and click the send button (data-testid \"send-button\"). Wait for a completed bash tool pill "+
+		"(selector \".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']\") to appear, then click that pill "+
+		"to open its detail modal (\".tool-detail-modal .bash-tool-details\" should become visible). "+
+		"The output area (the last \".tool-detail-modal .bash-tool-code\" element) should contain the readable text "+
 		"\"Dev code has changes not yet deployed\" and must NOT contain the stray fragment \"GGG\" "+
 		"or the raw escape fragment \"[1G\".")
 }
 
-func TestNewPageBashCommandInHeader(t *testing.T) {
-	lazyTest(t, `Navigate to /new. Type "bash: unique-test-command-xyz123" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for a completed tool call (data-testid "tool-call-completed") to appear. The bash tool command element (".bash-tool-command") should be visible and contain the text "unique-test-command-xyz123".`)
+func TestNewPageBashCommandInPill(t *testing.T) {
+	lazyTest(t, `Navigate to /new. Type "bash: unique-test-command-xyz123" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for a completed bash tool pill (selector ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']") to appear. Its visible headline (".tool-pill[data-tool-name='bash'] .tool-pill-text") should contain the text "unique-test-command-xyz123".`)
 }
 
-func TestNewPageBashCollapsibleDetails(t *testing.T) {
-	lazyTest(t, `Navigate to /new. Type the text bash: echo "testing tool results" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for a completed tool call (data-testid "tool-call-completed") to appear. The bash tool header (".bash-tool-header") should be visible. Initially the details panel (".bash-tool-details") is not visible. Click the header: the details panel should become visible. Click the header again: the details panel should become hidden again.`)
+func TestNewPageBashDetailModal(t *testing.T) {
+	lazyTest(t, `Navigate to /new. Type the text bash: echo "testing tool results" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"). Wait for a completed bash tool pill (selector ".tool-pill[data-tool-name='bash'][data-testid='tool-call-completed']") to appear. Initially selector ".tool-detail-modal" should match exactly 0 elements. Click the bash tool pill: the detail modal (".tool-detail-modal") and details panel (".tool-detail-modal .bash-tool-details") should become visible. Press the Escape key, then wait for selector ".tool-detail-modal" to match exactly 0 elements again.`)
 }
 
 // --- Scroll behavior (ported from ui/e2e/scroll-behavior.spec.ts). The

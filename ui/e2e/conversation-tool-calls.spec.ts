@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { createConversationViaAPI } from "./helpers";
+import { createConversationViaAPI, openToolPill } from "./helpers";
 
 // Split out of conversation.spec.ts (see the note there). These cover how tool
 // calls are rendered and coalesced in the transcript; they drive the UI from /
 // rather than seeding a conversation via the API.
-test("coalesces tool calls - shows tool result with details", async ({ page }) => {
+test("shows tool result details from its pill", async ({ page }) => {
   await page.goto("/");
   await page.waitForLoadState("domcontentloaded");
 
@@ -20,14 +20,15 @@ test("coalesces tool calls - shows tool result with details", async ({ page }) =
     timeout: 30000,
   });
 
-  // Verify the bash tool header is visible
-  await expect(page.locator(".bash-tool-header").first()).toBeVisible();
-
-  // Verify bash tool shows command
-  await expect(page.locator(".bash-tool-command").first()).toBeVisible();
+  const modal = await openToolPill(page, /hello world/);
+  const details = modal.locator(".bash-tool-details");
+  await expect(details).toBeVisible();
+  await expect(
+    details.locator(".bash-tool-code").filter({ hasText: 'echo "hello world"' }),
+  ).toBeVisible();
 });
 
-test("coalesces tool calls - displays agent text and tool separately", async ({ page }) => {
+test("displays agent text and tool pill separately", async ({ page }) => {
   await page.goto("/");
   await page.waitForLoadState("domcontentloaded");
 
@@ -46,9 +47,8 @@ test("coalesces tool calls - displays agent text and tool separately", async ({ 
   // Verify agent message is shown ("I'll run the command: pwd")
   await expect(page.locator("text=I'll run the command: pwd").first()).toBeVisible();
 
-  // Verify tool result is shown separately as coalesced tool call
-  await expect(page.locator('[data-testid="tool-call-completed"]').first()).toBeVisible();
-  await expect(page.locator("text=bash").first()).toBeVisible();
+  // Verify tool result is shown separately as a tool pill.
+  await expect(page.locator('.tool-pill[data-tool-name="bash"]').first()).toBeVisible();
 });
 
 test("handles sequential tool calls", async ({ page }) => {
