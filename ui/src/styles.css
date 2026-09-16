@@ -7175,15 +7175,52 @@ svg {
   margin-top: 0.375rem;
 }
 
-.diff-viewer-tour-contents-item.change button {
+.diff-viewer-tour-contents-tree {
+  min-width: 0;
+}
+
+.tour-file-tree {
+  min-width: 0;
+  padding: 0 0.25rem;
+}
+
+.tour-file-tree-directory .diff-tree-row {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.tour-file-tree-directory .diff-tree-row:hover {
+  background: transparent;
+}
+
+.diff-viewer-tour-contents-tree .diff-tree-row {
   font-family: var(--font-mono, monospace);
   font-size: 0.6875rem;
 }
 
-.diff-viewer-tour-contents-item.change.nested {
-  margin-left: 0.625rem;
-  border-left: 1px solid var(--border-color);
-  padding-left: 0.25rem;
+.tour-file-tree-item {
+  min-width: 0;
+}
+
+.tour-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  white-space: nowrap;
+}
+
+.tour-file-name-stem {
+  min-width: 1ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tour-file-name-suffix {
+  flex-shrink: 0;
+}
+
+.diff-viewer-tour-contents-tree .diff-tree-decoration {
+  font-size: 0.5625rem;
 }
 
 .diff-viewer-tour-contents-item button[aria-current="location"] {

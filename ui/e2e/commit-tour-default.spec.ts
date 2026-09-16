@@ -24,8 +24,10 @@ test.describe("Commit tour defaults", () => {
       git(repo, "config", "user.email", "tour@example.com");
 
       const lines = Array.from({ length: 220 }, (_, index) => `line ${index + 1}`);
-      writeFileSync(join(repo, "example.txt"), lines.join("\n") + "\n");
-      git(repo, "add", "example.txt");
+      const examplePath = join(repo, "src", "nested", "example.spec.ts");
+      mkdirSync(join(repo, "src", "nested"), { recursive: true });
+      writeFileSync(examplePath, lines.join("\n") + "\n");
+      git(repo, "add", "src/nested/example.spec.ts");
       git(repo, "commit", "-m", "Base commit\n\nPrompt: tour viewer base");
       git(repo, "branch", "upstream");
       git(repo, "switch", "-c", "feature");
@@ -33,8 +35,8 @@ test.describe("Commit tour defaults", () => {
 
       lines[1] = "updated near the top";
       lines[198] = "updated near the bottom";
-      writeFileSync(join(repo, "example.txt"), lines.join("\n") + "\n");
-      git(repo, "add", "example.txt");
+      writeFileSync(examplePath, lines.join("\n") + "\n");
+      git(repo, "add", "src/nested/example.spec.ts");
       git(repo, "commit", "-m", "Tour the top commit\n\nPrompt: tour viewer feature");
 
       const scaffold = JSON.parse(
@@ -107,7 +109,17 @@ test.describe("Commit tour defaults", () => {
       await expect(overview).toHaveAttribute("aria-current", "location");
       const section = contents.getByRole("button", { name: "Core behavior" });
       await expect(section).toBeVisible();
-      await expect(contents.getByRole("button", { name: /example\.txt/ })).toHaveCount(2);
+      const changesTree = contents.getByRole("list", { name: "Changes in Detail 12" });
+      await expect(changesTree.locator(".tour-file-tree-directory .diff-tree-label")).toHaveText(
+        "src / nested",
+      );
+      await expect(changesTree.getByRole("button", { name: /example\.spec\.ts/ })).toHaveCount(2);
+      await expect(changesTree.locator(".tour-file-name-stem", { hasText: "example" })).toHaveCount(
+        2,
+      );
+      await expect(
+        changesTree.locator(".tour-file-name-suffix", { hasText: ".spec.ts" }),
+      ).toHaveCount(2);
       await expect(overlay.locator(".diff-tree")).toHaveCount(0);
 
       await overlay.locator(".diff-viewer-view-switcher button", { hasText: "Files" }).click();
@@ -146,7 +158,9 @@ test.describe("Commit tour defaults", () => {
         .toBeLessThan(40);
 
       const firstChunk = overlay.locator(".commit-tour-chunk").first();
-      const firstChangeButton = contents.getByRole("button", { name: /example\.txt/ }).first();
+      const firstChangeButton = changesTree
+        .getByRole("button", { name: /example\.spec\.ts/ })
+        .first();
       await firstChunk.evaluate((element) => element.scrollIntoView({ block: "start" }));
       await expect(firstChangeButton).toHaveAttribute("aria-current", "location");
       await page.setViewportSize({ width: 1800, height: 600 });
@@ -167,7 +181,9 @@ test.describe("Commit tour defaults", () => {
       await tourView.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
-      const lastChangeButton = contents.getByRole("button", { name: /example\.txt/ }).nth(1);
+      const lastChangeButton = changesTree
+        .getByRole("button", { name: /example\.spec\.ts/ })
+        .nth(1);
       await expect(lastChangeButton).toHaveAttribute("aria-current", "location");
       await expect
         .poll(async () => {

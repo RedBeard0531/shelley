@@ -331,29 +331,12 @@
                 <div v-else-if="tourError" class="diff-viewer-file-list-empty">
                   Tour unavailable
                 </div>
-                <nav v-else-if="tourContents.length > 0" aria-label="Tour contents">
-                  <ol class="diff-viewer-tour-contents">
-                    <li
-                      v-for="item in tourContents"
-                      :key="item.anchor"
-                      :class="[
-                        'diff-viewer-tour-contents-item',
-                        item.kind,
-                        item.nested ? 'nested' : '',
-                      ]"
-                    >
-                      <button
-                        type="button"
-                        :data-tour-target="item.anchor"
-                        :title="item.label"
-                        :aria-current="item.anchor === activeTourAnchor ? 'location' : undefined"
-                        @click="scrollToTourAnchor(item.anchor)"
-                      >
-                        {{ item.label }}
-                      </button>
-                    </li>
-                  </ol>
-                </nav>
+                <CommitTourContents
+                  v-else-if="tourContents.length > 0"
+                  :items="tourContents"
+                  :active-anchor="activeTourAnchor"
+                  @select="scrollToTourAnchor"
+                />
                 <div v-else class="diff-viewer-file-list-empty">No tour sections</div>
               </div>
             </template>
@@ -535,6 +518,7 @@ import {
 import VimToggle from "./VimToggle.vue";
 import CommentDialog from "./CommentDialog.vue";
 import CommitTourView from "./CommitTourView.vue";
+import CommitTourContents from "./CommitTourContents.vue";
 import CommitPicker from "./CommitPicker.vue";
 import RangeToggle from "./RangeToggle.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
