@@ -10,7 +10,7 @@ when: exe.dev
 
 2. Check the input. The gpt-transcribe endpoint accepts mp3, mp4, mpeg, mpga, m4a, wav, webm, flac, and ogg, up to 25 MB. Transcode unsupported or larger inputs first using ffmpeg. Split and transcribe piecemeal if necessary; for better results, slightly overlap the chunks and then manually stitch together the overlapped outputs. Shelley browser recordings have a sibling `<recording-path>.json` sidecar with `started_at`, `duration_ms`, and `timeslice_ms`. Preserve each split chunk's media start offset so any chunk-relative timestamps can be rolled up to the original recording timeline; `started_at` anchors that timeline to wall-clock time.
 
-3. Transcribe. Let `$base` be the attached integration's URL (normally `https://llm.int.exe.xyz`). `response_format=json` is required. Optional `prompt`, `keywords[]`, and `languages[]` fields can supply known context, names, and language codes.
+3. Transcribe. Let `$base` be the attached integration's URL (normally `https://llm.int.exe.xyz`). A JSON response format is required. For `gpt-transcribe`, optional `prompt`, `keywords[]`, and `languages[]` fields can supply known context, names, and language codes.
    ```
    curl -sS --fail-with-body "$base/v1/audio/transcriptions" \
      -F model=gpt-transcribe \
@@ -18,6 +18,23 @@ when: exe.dev
      -F "file=@$upload" \
      -o "$tmpdir/response.json"
    jq -er '.text | select(type == "string")' "$tmpdir/response.json" > "$out"
+   ```
+
+   When the user asks for word or segment timestamps, use Whisper's verbose
+   JSON response instead; do not default to Whisper for ordinary transcription.
+   Whisper accepts `prompt` and singular `language`, rather than the
+   `gpt-transcribe`-specific keyword and language arrays. Preserve the full JSON
+   beside the transcript so the timing data is not lost.
+   ```
+   timestamp_out="${out%.transcript.txt}.timestamps.json"
+   curl -sS --fail-with-body "$base/v1/audio/transcriptions" \
+     -F model=whisper-1 \
+     -F response_format=verbose_json \
+     -F 'timestamp_granularities[]=word' \
+     -F 'timestamp_granularities[]=segment' \
+     -F "file=@$upload" \
+     -o "$timestamp_out"
+   jq -er '.text | select(type == "string")' "$timestamp_out" > "$out"
    ```
 
 ## Errors
