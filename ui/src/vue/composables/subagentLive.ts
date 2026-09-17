@@ -1,5 +1,5 @@
 // subagentLive.ts — live view of a subagent conversation for the parent's
-// subagent tool widgets (SubagentTool card + subagent pill).
+// SubagentTool cards.
 //
 // The unified /api/stream2 already delivers every conversation's events
 // (messages, stream deltas, tool progress) to this client, keyed by

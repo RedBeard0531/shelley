@@ -520,7 +520,6 @@ import { buildMessageQuote } from "../../utils/messageQuote";
 import { hasMultipleUsers } from "../../utils/messageAuthors";
 import { tildifyPath } from "../../utils/tildify";
 import { handleModifiedNavClick } from "../utils/openInNewTab";
-import { isAutoExpandTool } from "../../utils/toolMeta";
 import { formatDay } from "../../utils/messageTime";
 import {
   clearConversationViewCache,
@@ -664,7 +663,6 @@ watch(conversationViewMode, () => {
   resetTailFirst();
   primeTailFirstMount();
 });
-const toolPillsEnabled = useFeatureFlag("tool-pills");
 const compactSendThresholdsEnabled = useFeatureFlag("compact-send-thresholds");
 const {
   hasUpdate,
@@ -1313,14 +1311,6 @@ function collectChunkTargets(node: RenderNode, index: number, into: ChunkTargetI
       if (node.item.message) {
         into.byMessage.set(node.item.message.message_id, index);
         into.byMessageFrag.set(fragPrefix(node.item.message.message_id), index);
-      }
-      break;
-    case "tool-pills":
-      for (const item of node.items) {
-        if (item.toolUseId) {
-          into.byTool.set(item.toolUseId, index);
-          into.byToolFrag.set(fragPrefix(item.toolUseId), index);
-        }
       }
       break;
     case "tool-call":
@@ -1997,19 +1987,6 @@ function buildRenderModel(): GenerationBlock[] {
         exchanges: generationStartBtws,
       });
     }
-    let pillBuf: CoalescedItem[] = [];
-    let pillSink: RenderNode[] = sectionNodes;
-
-    const flushPills = (keySuffix: string | number) => {
-      if (pillBuf.length === 0) return;
-      const buf = pillBuf;
-      pillBuf = [];
-      pillSink.push({
-        kind: "tool-pills",
-        key: `tool-pills-${generation}-${buf[0].toolUseId || keySuffix}`,
-        items: buf,
-      });
-    };
     const appendBtws = (sink: RenderNode[], item: CoalescedItem) => {
       const exchanges = btwsByAnchor.get(item.anchorKey);
       if (exchanges?.length) {
@@ -2022,22 +1999,13 @@ function buildRenderModel(): GenerationBlock[] {
     };
 
     const renderItemInto = (sink: RenderNode[], item: CoalescedItem, index: number) => {
-      const isPillable =
-        toolPillsEnabled.value &&
-        item.type === "tool" &&
-        !isAutoExpandTool(item.toolName, item.toolInput, item.display);
-      if (!isPillable || pillBuf.length === 0) {
-        const tsNodes = maybeTimestamp(
+      sink.push(
+        ...maybeTimestamp(
           itemTime(item),
           item.message?.message_id || item.toolUseId || `g${generation}-i${index}`,
-        );
-        if (tsNodes.length > 0) {
-          flushPills(index);
-          tsNodes.forEach((n) => sink.push(n));
-        }
-      }
+        ),
+      );
       if (item.type === "message" && item.message) {
-        flushPills(index);
         sink.push({
           kind: "message",
           key: item.message.message_id,
@@ -2050,24 +2018,12 @@ function buildRenderModel(): GenerationBlock[] {
         );
         if (tokNode) sink.push(tokNode);
       } else if (item.type === "tool") {
-        if (isPillable) {
-          pillBuf.push(item);
-          // A pill row is normally one group, but an inline BTW is a real
-          // transcript boundary. Flush through its anchored tool before
-          // inserting it, then begin a new pill group for later tools.
-          if (btwsByAnchor.has(item.anchorKey)) {
-            flushPills(index);
-            appendBtws(sink, item);
-          }
-        } else {
-          flushPills(index);
-          sink.push({
-            kind: "tool-call",
-            key: item.toolUseId || `tool-${generation}-${item.toolName || "unknown"}-${index}`,
-            item,
-          });
-          appendBtws(sink, item);
-        }
+        sink.push({
+          kind: "tool-call",
+          key: item.toolUseId || `tool-${generation}-${item.toolName || "unknown"}-${index}`,
+          item,
+        });
+        appendBtws(sink, item);
       }
     };
 
@@ -2076,8 +2032,6 @@ function buildRenderModel(): GenerationBlock[] {
       if (items[i].carried) {
         const start = i;
         const band: RenderNode[] = [];
-        flushPills(`pre-carried-${start}`);
-        pillSink = band;
         const tsSnapshot = { ...tsState };
         let count = 0;
         while (i < items.length && items[i].carried) {
@@ -2085,8 +2039,6 @@ function buildRenderModel(): GenerationBlock[] {
           if (items[i].type === "message") count++;
           i++;
         }
-        flushPills(`carried-${start}`);
-        pillSink = sectionNodes;
         tsState.lastMin = tsSnapshot.lastMin;
         tsState.lastDay = tsSnapshot.lastDay;
         sectionNodes.push({
@@ -2100,7 +2052,6 @@ function buildRenderModel(): GenerationBlock[] {
       renderItemInto(sectionNodes, items[i], i);
       i++;
     }
-    flushPills("end");
 
     blocks.push({
       generation,

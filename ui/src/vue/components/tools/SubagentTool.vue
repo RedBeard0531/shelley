@@ -82,9 +82,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
-import { useToolExpanded } from "../../composables/toolDetail";
 import { useSubagentLive, navigateToConversationSlug } from "../../composables/subagentLive";
 import ToolChevron from "./ToolChevron.vue";
 import ToolStatusIcon from "./ToolStatusIcon.vue";
@@ -106,7 +105,7 @@ const props = defineProps<{
   displayData?: { slug?: string; conversation_id?: string; status?: string };
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const input = computed<SubagentInput>(() =>
   typeof props.toolInput === "object" && props.toolInput !== null

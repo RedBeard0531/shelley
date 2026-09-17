@@ -71,9 +71,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
-import { useToolExpanded } from "../../composables/toolDetail";
 import CommentableImage from "../CommentableImage.vue";
 import ToolChevron from "./ToolChevron.vue";
 import ToolStatusIcon from "./ToolStatusIcon.vue";
@@ -109,7 +108,7 @@ const props = defineProps<{
   display?: unknown; // Display data from the tool_result Content
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const input = computed<LLMOneShotInput>(() =>
   typeof props.toolInput === "object" && props.toolInput !== null

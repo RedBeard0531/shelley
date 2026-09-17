@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext, type Page, type Locator } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -130,37 +130,14 @@ export async function createConversationViaAPI(
   return slug;
 }
 
-/**
- * Tool calls (except diffs, screenshots, image reads and output_iframe)
- * now render as compact "pills" in the conversation stream. Clicking
- * a pill expands the full tool card inline beneath the pill row (no
- * modal). These helpers open that inline expansion and return its
- * scope for tests that need to assert against the expanded view.
- */
-/** Click the pill for the first tool call whose visible text matches
- *  `hasText` and wait for its inline expansion to appear. Returns the
- *  expanded card locator (scope for further assertions). */
-export async function openToolPill(page: Page, hasText: string | RegExp): Promise<Locator> {
-  const pill = page.locator(".tool-pill").filter({ hasText }).first();
-  await pill.click();
-  // The detail opens in a modal dialog (.tool-detail-modal).
-  const expanded = page.locator(".tool-detail-modal .tool-pill-expanded").first();
-  await expect(expanded).toBeVisible({ timeout: 5000 });
-  return expanded;
-}
-
-/** Close the currently-open tool detail modal. The `hasText` argument
- *  is accepted for backwards-compat but ignored — the modal closes the
- *  same way regardless of which pill opened it. */
-export async function closeToolModal(page: Page, _hasText?: string | RegExp) {
-  void _hasText;
-  const closeBtn = page.locator(".tool-detail-modal .modal-header .btn-icon");
-  if ((await closeBtn.count()) > 0) {
-    await closeBtn.first().click();
-  } else {
-    await page.keyboard.press("Escape");
-  }
-  await expect(page.locator(".tool-detail-modal")).toHaveCount(0, { timeout: 5000 });
+/** Completed tool cards far from the viewport render as cheap geometry
+ *  placeholders until they scroll near it (see composables/nearViewport.ts).
+ *  Printing reveals them all at once, which is how a spec that needs every
+ *  card in a long conversation mounted gets there without scrolling (and
+ *  without a sleep): the reveal is synchronous in the page. */
+export async function mountAllToolCards(page: Page): Promise<void> {
+  await page.evaluate(() => window.dispatchEvent(new Event("beforeprint")));
+  await expect(page.locator(".tool-card-mount-placeholder")).toHaveCount(0, { timeout: 15000 });
 }
 
 /** Override a boolean feature flag for THIS page only (via localStorage).

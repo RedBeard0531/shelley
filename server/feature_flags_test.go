@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,51 +11,25 @@ import (
 	"shelley.exe.dev/featureflags"
 )
 
-var testFeatureFlagBool = featureflags.Register(featureflags.Flag{
-	Name:        "test-feature-flag-bool",
-	Description: "test flag",
-	Default:     false,
-})
-
 var _ = featureflags.Register(featureflags.Flag{
 	Name:        "test-handlers-flag",
 	Description: "test flag",
 	Default:     false,
 })
 
-func TestFeatureFlagBool(t *testing.T) {
-	srv, database, _ := newTestServer(t)
-	ctx := t.Context()
-
-	// No override: the registered default applies.
-	if got := srv.featureFlagBool(ctx, testFeatureFlagBool); got != false {
-		t.Fatalf("featureFlagBool default = %v, want false", got)
-	}
-
-	// Override to true.
-	if err := database.SetFeatureFlagOverride(ctx, testFeatureFlagBool.Name, `true`); err != nil {
-		t.Fatal(err)
-	}
-	if got := srv.featureFlagBool(ctx, testFeatureFlagBool); got != true {
-		t.Fatalf("featureFlagBool with true override = %v, want true", got)
-	}
-
-	// A non-boolean override falls back to the default.
-	if err := database.SetFeatureFlagOverride(ctx, testFeatureFlagBool.Name, `"nope"`); err != nil {
-		t.Fatal(err)
-	}
-	if got := srv.featureFlagBool(ctx, testFeatureFlagBool); got != false {
-		t.Fatalf("featureFlagBool with bad override = %v, want false", got)
-	}
-}
-
 func TestFeatureFlagsHandlers(t *testing.T) {
 	srv, database, _ := newTestServer(t)
 	ctx := t.Context()
 
-	// Seed a stale row that's no longer registered: must be ignored on read.
-	if err := database.SetFeatureFlagOverride(ctx, "stale-unknown", `42`); err != nil {
-		t.Fatal(err)
+	// Seed stale rows, including overrides for removed flags: none may leak.
+	for name, value := range map[string]string{
+		"stale-unknown":            `42`,
+		"tool-pills":               `true`,
+		"reflection-emoji-favicon": `false`,
+	} {
+		if err := database.SetFeatureFlagOverride(ctx, name, value); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// GET
@@ -69,10 +44,10 @@ func TestFeatureFlagsHandlers(t *testing.T) {
 	}
 	var found *FeatureFlagDTO
 	for i := range list {
-		if list[i].Name == "stale-unknown" {
-			t.Fatal("unknown flag leaked into response")
-		}
-		if list[i].Name == "test-handlers-flag" {
+		switch list[i].Name {
+		case "stale-unknown", "tool-pills", "reflection-emoji-favicon":
+			t.Fatalf("removed or unknown flag %q leaked into response", list[i].Name)
+		case "test-handlers-flag":
 			found = &list[i]
 		}
 	}
@@ -91,12 +66,14 @@ func TestFeatureFlagsHandlers(t *testing.T) {
 		t.Fatalf("POST: %d %s", w.Code, w.Body.String())
 	}
 
-	// POST: unknown flag rejected.
-	w = httptest.NewRecorder()
-	srv.handleSetFeatureFlag(w, httptest.NewRequest("POST", "/feature-flags",
-		strings.NewReader(`{"name":"definitely-not-registered","value":true}`)))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400 for unknown flag, got %d %s", w.Code, w.Body.String())
+	// POST: unknown and removed flags are rejected.
+	for _, name := range []string{"definitely-not-registered", "tool-pills", "reflection-emoji-favicon"} {
+		w = httptest.NewRecorder()
+		body := fmt.Sprintf(`{"name":%q,"value":true}`, name)
+		srv.handleSetFeatureFlag(w, httptest.NewRequest("POST", "/feature-flags", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("POST %q: want 400, got %d %s", name, w.Code, w.Body.String())
+		}
 	}
 
 	// GET again, override present.

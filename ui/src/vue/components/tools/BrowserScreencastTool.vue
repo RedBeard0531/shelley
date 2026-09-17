@@ -1,7 +1,5 @@
 <!-- Vue port of components/BrowserScreencastTool.tsx. Preserves the exact DOM
-     classes, data-testid, and aria contracts the e2e tests rely on. Note: the
-     React version uses local useState(true) for expand (NOT the tool-detail
-     context), so this mirrors that with a plain ref(true). -->
+     classes, data-testid, and aria contracts the e2e tests rely on. -->
 <template>
   <div
     class="screencast-tool"

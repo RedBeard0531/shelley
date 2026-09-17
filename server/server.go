@@ -392,6 +392,9 @@ type Server struct {
 	transcriber       recordingTranscriber
 	transcriptionMu   sync.Mutex
 	transcriptionJobs map[string]transcriptionJob
+	// reflectionEmoji fetches the VM emoji for the favicon. Tests replace it to
+	// cover reflection-present and standalone behavior without ambient metadata.
+	reflectionEmoji func(context.Context) string
 
 	// Banner, when non-empty, is shown in a full-width bar at the top of
 	// the UI. Useful for marking demo instances so they're not confused
@@ -441,6 +444,7 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		mediaRun:              runMediaCommand,
 		transcriber:           newOpenAIRecordingTranscriber(),
 		transcriptionJobs:     make(map[string]transcriptionJob),
+		reflectionEmoji:       cachedReflectionEmoji,
 	}
 
 	s.conversationListStream = newConversationListStream(s)

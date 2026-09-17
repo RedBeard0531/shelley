@@ -7,7 +7,6 @@ export type RenderNode =
   | { kind: "timestamp"; key: string; createdAt: string }
   | { kind: "token-marker"; key: string; label: string; ctx: number }
   | { kind: "message"; key: string; item: CoalescedItem }
-  | { kind: "tool-pills"; key: string; items: CoalescedItem[] }
   | { kind: "tool-call"; key: string; item: CoalescedItem }
   | { kind: "btw"; key: string; exchanges: BtwExchange[] }
   | { kind: "carried-band"; key: string; count: number; children: RenderNode[] };
