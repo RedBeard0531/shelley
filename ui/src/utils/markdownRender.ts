@@ -77,11 +77,37 @@ function buildMarked(messageId?: string, localhostLinks?: LocalhostLinkOptions):
   return instance;
 }
 
+function setLinkTarget(node: Element): void {
+  node.setAttribute("target", "_blank");
+  node.setAttribute("rel", "noopener noreferrer");
+}
+
+// Work on the sanitized DOM so code text stays literal, attributes are escaped
+// by the DOM, and existing links (including raw HTML anchors) are easy to skip.
+function linkifyCodeSpans(root: HTMLElement, localhostLinks?: LocalhostLinkOptions): void {
+  for (const code of root.querySelectorAll("code")) {
+    if (code.closest("pre, a") || code.children.length > 0) continue;
+    const text = code.textContent ?? "";
+    if (!/^https?:\/\/\S+$/i.test(text)) continue;
+    try {
+      new URL(text);
+    } catch {
+      continue;
+    }
+    const href = localhostLinks ? rewriteLocalhostLink(text, localhostLinks) : text;
+    const link = root.ownerDocument.createElement("a");
+    link.setAttribute("href", href);
+    setLinkTarget(link);
+    code.textContent = href;
+    code.replaceWith(link);
+    link.append(code);
+  }
+}
+
 // Make all links open in new tabs, and restrict <input> to checkboxes only.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
+    setLinkTarget(node);
   }
   // Only allow checkbox inputs (for GFM task lists); remove all others.
   if (node.tagName === "INPUT" && node.getAttribute("type") !== "checkbox") {
@@ -195,7 +221,9 @@ export function renderMarkdownToSafeHTML(
   if (cached !== undefined) return cached;
 
   const raw = buildMarked(messageId, localhostLinks).parse(text, { async: false }) as string;
-  const html = DOMPurify.sanitize(raw, SANITIZE_OPTS);
+  const root = DOMPurify.sanitize(raw, { ...SANITIZE_OPTS, RETURN_DOM: true }) as HTMLElement;
+  linkifyCodeSpans(root, localhostLinks);
+  const html = root.innerHTML;
 
   if (cacheKey) {
     if (!runs) {

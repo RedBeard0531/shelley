@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { testWorkingDirectory } from "./helpers";
+import { createConversationViaAPI, testWorkingDirectory } from "./helpers";
 
 // Test that URLs in agent responses are properly linkified.
 // With markdown enabled (default), agent messages render via Marked which
@@ -58,3 +58,56 @@ test("URLs are linkified in user messages too", async ({ page }) => {
   await expect(link).toHaveCount(1);
   await expect(link).toHaveAttribute("href", "https://example.com");
 });
+
+for (const layout of ["desktop", "project device"]) {
+  test.describe(layout, () => {
+    // Otherwise inherit the project's device (Pixel 5 in the default project).
+    if (layout === "desktop") {
+      test.use({ viewport: { width: 1280, height: 900 }, isMobile: false, hasTouch: false });
+    }
+
+    test("standalone inline-code URLs are clickable", async ({ page, request, context }) => {
+      const url = "https://example.com/preview?q=one&other=two#fragment";
+      const slug = await createConversationViaAPI(
+        request,
+        [
+          "markdown: Preview: `" + url + "`",
+          "Command: `curl https://example.com/command`",
+          "Two URLs: `https://one.example https://two.example`",
+          "Explicit link: [`https://example.com/label`](https://example.com/destination)",
+          "```text\nhttps://example.com/fenced\n```",
+        ].join("\n\n"),
+      );
+      await page.goto(`/c/${slug}`);
+
+      const content = page.locator(".message-agent .markdown-content").last();
+      const link = content.locator(`a[href="${url}"]`);
+      await expect(link).toBeVisible({ timeout: 30000 });
+      await expect(link.locator("code")).toHaveText(url);
+      await expect(link.locator("code")).toHaveCSS("display", "inline");
+      await expect(link).toHaveAttribute("target", "_blank");
+      await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      await expect(content.locator("a")).toHaveCount(2);
+      await expect(content.locator('a[href="https://example.com/destination"] code')).toHaveText(
+        "https://example.com/label",
+      );
+      await expect(content.locator("pre code")).toHaveText("https://example.com/fenced\n");
+      await expect(content.locator("pre a")).toHaveCount(0);
+
+      // Exercise a real click without depending on an external website.
+      await context.route("https://example.com/**", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: "<h1>Preview destination</h1>",
+        }),
+      );
+      const popupPromise = page.waitForEvent("popup");
+      await link.click();
+      const popup = await popupPromise;
+      await expect(popup).toHaveURL(url);
+      await expect(popup.locator("h1")).toHaveText("Preview destination");
+      expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+      await popup.close();
+    });
+  });
+}
