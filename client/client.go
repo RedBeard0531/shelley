@@ -166,6 +166,29 @@ func Run(args []string) {
 	}
 }
 
+func buildChatRequestBody(prompt, model, cwd string, disableNotifications bool, targetConversationID string) map[string]any {
+	reqBody := map[string]any{"message": prompt}
+	if model != "" {
+		reqBody["model"] = model
+	}
+	if cwd != "" {
+		reqBody["cwd"] = cwd
+	}
+	if disableNotifications {
+		reqBody["conversation_options"] = map[string]any{"disable_notifications": true}
+	}
+
+	// Commands run by Shelley tools know which conversation launched them.
+	// Carry that provenance when they chat into a different conversation; the
+	// server validates that sender and target are a direct managed-child/parent
+	// pair before recording any label.
+	senderConversationID := os.Getenv("SHELLEY_CONVERSATION_ID")
+	if targetConversationID != "" && senderConversationID != "" && senderConversationID != targetConversationID {
+		reqBody["sender_conversation_id"] = senderConversationID
+	}
+	return reqBody
+}
+
 func cmdChat(cc *clientConfig, args []string) {
 	fs := flag.NewFlagSet("client chat", flag.ExitOnError)
 	prompt := fs.String("p", "", "Message to send (required)")
@@ -197,21 +220,12 @@ func cmdChat(cc *clientConfig, args []string) {
 		}
 	}
 
-	reqBody := map[string]any{"message": *prompt}
-	if *model != "" {
-		reqBody["model"] = *model
-	}
-	if effectiveCwd != "" {
-		reqBody["cwd"] = effectiveCwd
-	}
+	reqBody := buildChatRequestBody(*prompt, *model, effectiveCwd, *noNotify, *convID)
 	// Conversation options are applied only at creation time, so
 	// -disable-notifications is meaningful only for new conversations (no -c).
-	if *noNotify {
-		if *convID != "" {
-			fmt.Fprintf(os.Stderr, "Error: -disable-notifications only applies to new conversations (omit -c)\n")
-			os.Exit(1)
-		}
-		reqBody["conversation_options"] = map[string]any{"disable_notifications": true}
+	if *noNotify && *convID != "" {
+		fmt.Fprintf(os.Stderr, "Error: -disable-notifications only applies to new conversations (omit -c)\n")
+		os.Exit(1)
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

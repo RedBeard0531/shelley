@@ -66,6 +66,8 @@ export default async function globalSetup() {
   // Database and port file stay outside the conversation working directory.
   const testDb = path.join(tempDir, 'test.db');
   const portFile = path.join(tempDir, 'port');
+  const socketPath = path.join(tempDir, 'client.sock');
+  process.env.TEST_SERVER_SOCKET = socketPath;
 
   console.log(`Starting shelley (db=${testDb}, port-file=${portFile})`);
 
@@ -78,7 +80,7 @@ export default async function globalSetup() {
     'serve',
     '--port', '0',
     '--port-file', portFile,
-    '--socket', 'none',
+    '--socket', socketPath,
   ], {
     cwd,
     stdio: 'inherit',

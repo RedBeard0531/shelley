@@ -411,6 +411,7 @@ export interface QueuedMessage {
   llm?: LLMMessage;
   created_at: string;
   model: string;
+  user_data?: unknown;
   kind?: QueuedMessageKind;
   state?: QueuedMessageState;
   transcription?: QueuedTranscription;

@@ -1248,19 +1248,24 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 // can't re-feed an already-delivered message as a duplicate. Mirrors
 // recordMessage's manager-sync + notify tail.
 //
-// userEmail is the exe.dev author captured at queue time (drain runs on a
-// background context, so it can't be read from the request here); it is
-// stamped onto the new row. Empty when the queuing request carried no header.
-func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID, queuedID string, message llm.Message, userEmail string) error {
-	return s.recordDrainedQueuedMessages(ctx, conversationID, queuedID, []llm.Message{message}, userEmail)
+// userEmail and userData are provenance captured at queue time (drain runs on
+// a background context, so it can't read the original request). For a
+// transcription batch, only the final user row receives them; synthetic audit
+// rows remain unattributed and carry no sender metadata.
+func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID, queuedID string, message llm.Message, userEmail string, userData json.RawMessage) error {
+	return s.recordDrainedQueuedMessages(ctx, conversationID, queuedID, []llm.Message{message}, userEmail, userData)
 }
 
 // recordDrainedQueuedMessages writes the batch in one Tx; the first row removes
-// the queued entry and the last row carries the author.
-func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID, queuedID string, messages []llm.Message, userEmail string) error {
+// the queued entry and the last row carries the user provenance.
+func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID, queuedID string, messages []llm.Message, userEmail string, userData json.RawMessage) error {
 	paramsList := make([]db.CreateMessageParams, 0, len(messages))
 	for i, message := range messages {
-		params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil)
+		var userDataArgs []interface{}
+		if i == len(messages)-1 && len(userData) > 0 {
+			userDataArgs = append(userDataArgs, userData)
+		}
+		params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil, userDataArgs...)
 		if err != nil {
 			return err
 		}
@@ -1294,8 +1299,9 @@ func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID
 // Only the immediate-send path uses this; queued messages persist the email in
 // their QueuedMessage entry instead (drain runs on a background context).
 type (
-	userEmailContextKey    struct{}
-	turnUserDataContextKey struct{}
+	userEmailContextKey       struct{}
+	turnUserDataContextKey    struct{}
+	localCLIRequestContextKey struct{}
 )
 
 // contextWithUserEmail returns a child context carrying userEmail. An empty
@@ -1317,6 +1323,29 @@ func contextWithTurnUserData(ctx context.Context, userData any) context.Context 
 
 func turnUserDataFromContext(ctx context.Context) any {
 	return ctx.Value(turnUserDataContextKey{})
+}
+
+func marshalTurnUserData(ctx context.Context) (json.RawMessage, error) {
+	turnData := turnUserDataFromContext(ctx)
+	if turnData == nil {
+		return nil, nil
+	}
+	return json.Marshal(turnData)
+}
+
+func contextWithLocalCLIRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localCLIRequestContextKey{}, true)
+}
+
+func isLocalCLIRequest(ctx context.Context) bool {
+	trusted, _ := ctx.Value(localCLIRequestContextKey{}).(bool)
+	return trusted
+}
+
+func localCLIHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(contextWithLocalCLIRequest(r.Context())))
+	})
 }
 
 // recordTurnStartMessage records the user message that starts an agent turn,
@@ -2002,8 +2031,12 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 			s.logger.Warn("Failed to chmod socket", "path", actualSocketPath, "error", err)
 		}
 
-		// Unix socket handler: relaxed middleware (only logger, no CSRF or requireHeader)
-		socketHandler := LoggerMiddleware(s.logger)(mux)
+		// Unix socket handler: relaxed middleware (only logger, no CSRF or
+		// requireHeader). Mark it trusted so the CLI may attach sender
+		// provenance that browser/TCP callers cannot forge. Same-UID processes
+		// still self-report the sender ID; this is attribution, not proof of
+		// which conversation launched the process.
+		socketHandler := LoggerMiddleware(s.logger)(localCLIHandler(mux))
 
 		socketServer = &http.Server{
 			Handler: socketHandler,

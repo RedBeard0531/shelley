@@ -559,6 +559,16 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 	llmMsgs := make([]llm.Message, len(ctxMsgs))
 	for i, entry := range ctxMsgs {
 		llmMsgs[i] = entry.llm
+		if entry.source.Type == string(db.MessageTypeUser) && entry.source.UserData != nil {
+			wrapped, wrapErr := messageWithSenderProvenance(llmMsgs[i], []byte(*entry.source.UserData))
+			if wrapErr != nil {
+				errMsg := fmt.Sprintf("Compaction failed: invalid sender provenance on message %s: %v", entry.source.MessageID, wrapErr)
+				logger.Error("failed to apply sender provenance for compaction cut", "messageID", entry.source.MessageID, "error", wrapErr)
+				s.rollbackCompactionFailure(ctx, logger, conversationID, errMsg, sourceGeneration, sourceTurnInterrupted)
+				return ""
+			}
+			llmMsgs[i] = wrapped
+		}
 	}
 	cut := findPiCutPoint(llmMsgs, keepRecentTokens)
 	older := ctxMsgs[:cut]
@@ -571,6 +581,16 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 	olderMsgs := make([]llm.Message, len(older))
 	for i, entry := range older {
 		olderMsgs[i] = resolvePiSummarizationText(logger, entry)
+		if entry.source.Type == string(db.MessageTypeUser) && entry.source.UserData != nil {
+			wrapped, wrapErr := messageWithSenderProvenance(olderMsgs[i], []byte(*entry.source.UserData))
+			if wrapErr != nil {
+				errMsg := fmt.Sprintf("Compaction failed: invalid sender provenance on message %s: %v", entry.source.MessageID, wrapErr)
+				logger.Error("failed to apply sender provenance for compaction summary", "messageID", entry.source.MessageID, "error", wrapErr)
+				s.rollbackCompactionFailure(ctx, logger, conversationID, errMsg, sourceGeneration, sourceTurnInterrupted)
+				return ""
+			}
+			olderMsgs[i] = wrapped
+		}
 	}
 
 	var summary string

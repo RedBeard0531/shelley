@@ -221,11 +221,18 @@ func validateTranscriptionCommand(message string) (mediaPath, context string, is
 // owned by the server, not by this request, so navigation or disconnect does
 // nothing.
 func (s *Server) queueTranscription(ctx context.Context, w http.ResponseWriter, manager *ConversationManager, mediaPath, transcriptionContext, modelID string) {
+	userData, err := marshalTurnUserData(ctx)
+	if err != nil {
+		s.logger.Error("Failed to marshal transcription user data", "conversationID", manager.conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	queued := db.QueuedMessage{
 		ID:        uuid.NewString(),
 		CreatedAt: time.Now().UTC(),
 		Model:     modelID,
 		UserEmail: userEmailFromContext(ctx),
+		UserData:  userData,
 		Kind:      db.QueuedMessageKindTranscription,
 		State:     db.QueuedMessageStateWorking,
 		Transcription: &db.QueuedTranscription{
@@ -233,7 +240,7 @@ func (s *Server) queueTranscription(ctx context.Context, w http.ResponseWriter, 
 			Context:   strings.TrimSpace(transcriptionContext),
 		},
 	}
-	queued, err := manager.QueueTranscription(ctx, s, queued)
+	queued, err = manager.QueueTranscription(ctx, s, queued)
 	if err != nil {
 		s.logger.Error("Failed to queue transcription", "conversationID", manager.conversationID, "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -487,6 +494,24 @@ func transcriptionParentMessage(text, mediaPath, contactSheetPath, timestampsPat
 	return llm.UserStringMessage(strings.Join(parts, "\n\n"))
 }
 
+// queuedUserDataWithMessageText keeps FTS search text aligned with the final
+// transcription. messages_fts reads the Text key from user_data instead of the
+// message body whenever provenance metadata is present.
+func queuedUserDataWithMessageText(raw json.RawMessage, text string) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var data map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, err
+	}
+	if _, ok := data["sender_conversation_id"]; !ok {
+		return raw, nil
+	}
+	data["Text"] = text
+	return json.Marshal(data)
+}
+
 func (s *Server) finalizeQueuedTranscription(parentID string, queued db.QueuedMessage, attemptID string, result transcriptionResult, audit []llm.Message) {
 	var metadataPath string
 	if result.TimestampsPath != "" {
@@ -513,10 +538,16 @@ func (s *Server) finalizeQueuedTranscription(parentID string, queued db.QueuedMe
 		s.failQueuedTranscription(parentID, queued.ID, attemptID, audit, err)
 		return
 	}
+	userData, err := queuedUserDataWithMessageText(queued.UserData, messageText(message))
+	if err != nil {
+		s.failQueuedTranscription(parentID, queued.ID, attemptID, audit, fmt.Errorf("update transcription user data: %w", err))
+		return
+	}
 	ready, err := s.updateCurrentQueuedTranscription(context.Background(), parentID, queued.ID, attemptID, func(current *db.QueuedMessage) {
 		current.State = db.QueuedMessageStateReady
 		current.Llm = llmJSON
 		current.Transcription.Audit = auditJSON
+		current.UserData = userData
 		current.Error = ""
 	})
 	if err != nil {
@@ -533,7 +564,7 @@ func (s *Server) finalizeQueuedTranscription(parentID string, queued db.QueuedMe
 		s.logger.Error("Failed to decode finalized transcription", "parent", parentID, "queued_id", queued.ID, "error", err)
 		return
 	}
-	manager.ResolveQueuedTranscription(s, ready.ID, messages, ready.Model, ready.UserEmail)
+	manager.ResolveQueuedTranscription(s, ready.ID, messages, ready.Model, ready.UserEmail, ready.UserData)
 }
 
 func readyTranscriptionMessages(queued db.QueuedMessage) ([]llm.Message, error) {
@@ -672,7 +703,7 @@ func (s *Server) recoverQueuedTranscriptions(ctx context.Context) {
 					s.logger.Error("Failed to restore transcription parent", "conversationID", conversation.ConversationID, "error", err)
 					continue
 				}
-				manager.ResolveQueuedTranscription(s, queued.ID, messages, queued.Model, queued.UserEmail)
+				manager.ResolveQueuedTranscription(s, queued.ID, messages, queued.Model, queued.UserEmail, queued.UserData)
 			case db.QueuedMessageStateWorking:
 				s.launchQueuedTranscription(conversation.ConversationID, queued)
 			}

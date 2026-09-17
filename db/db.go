@@ -577,9 +577,12 @@ type QueuedMessage struct {
 	// context with no request/header available. Stamped onto the messages row
 	// when the message drains. Empty when the request carried no header.
 	UserEmail string `json:"user_email,omitempty"`
-	// ID, CreatedAt, Model, and UserEmail are shared queue metadata. Kind,
-	// State, Transcription, Error, and the optional ready Llm payload form the
-	// specialized-work variant.
+	// UserData is message provenance and other presentation metadata captured at
+	// queue time. It is copied to messages.user_data when the item drains.
+	UserData json.RawMessage `json:"user_data,omitempty"`
+	// ID, CreatedAt, Model, UserEmail, and UserData are shared queue metadata.
+	// Kind, State, Transcription, Error, and the optional ready Llm payload form
+	// the specialized-work variant.
 	Kind          QueuedMessageKind    `json:"kind,omitempty"`
 	State         QueuedMessageState   `json:"state,omitempty"`
 	Transcription *QueuedTranscription `json:"transcription,omitempty"`

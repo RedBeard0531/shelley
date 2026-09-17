@@ -1055,11 +1055,12 @@ func derefString(p *string) string {
 
 // ChatRequest represents a chat message from the user
 type ChatRequest struct {
-	Message             string                  `json:"message"`
-	Model               string                  `json:"model,omitempty"`
-	Cwd                 string                  `json:"cwd,omitempty"`
-	ConversationOptions *db.ConversationOptions `json:"conversation_options,omitempty"`
-	Queue               bool                    `json:"queue,omitempty"`
+	Message              string                  `json:"message"`
+	Model                string                  `json:"model,omitempty"`
+	Cwd                  string                  `json:"cwd,omitempty"`
+	ConversationOptions  *db.ConversationOptions `json:"conversation_options,omitempty"`
+	Queue                bool                    `json:"queue,omitempty"`
+	SenderConversationID string                  `json:"sender_conversation_id,omitempty"`
 }
 
 // handleChatConversation handles POST /conversation/<id>/chat
@@ -1095,6 +1096,13 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		s.logger.Error("Failed to load conversation", "conversationID", conversationID, "error", err)
 		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+
+	senderUserData, err := s.senderUserData(ctx, *existing, req.SenderConversationID)
+	if err != nil {
+		s.logger.Error("Failed to resolve chat sender", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -1336,6 +1344,10 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// The command itself is control input: it is never persisted as an LLM
 	// message and is replaced by the finished transcript before queue drain.
 	if isTranscription {
+		if senderUserData != nil {
+			senderUserData.Text = req.Message
+			ctx = contextWithTurnUserData(ctx, *senderUserData)
+		}
 		s.queueTranscription(ctx, w, manager, transcriptionPath, transcriptionContext, modelID)
 		return
 	}
@@ -1389,6 +1401,10 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	req.Message = newMsg
+	if senderUserData != nil {
+		senderUserData.Text = req.Message
+		ctx = contextWithTurnUserData(ctx, *senderUserData)
+	}
 
 	// Create user message
 	userMessage := llm.Message{

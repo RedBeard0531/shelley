@@ -1,6 +1,10 @@
 <template>
-  <div class="message message-tool transcription-task" data-testid="transcription-task">
+  <div
+    :class="['message message-tool transcription-task', { 'message-conversation': !!source }]"
+    data-testid="transcription-task"
+  >
     <div class="message-content">
+      <ConversationMessageAuthor v-if="source" :source="source" />
       <div :class="['transcription-task-card', { error: state === 'failed' }]">
         <div class="transcription-task-main">
           <div v-if="state === 'working'" class="spinner spinner-small" aria-hidden="true" />
@@ -62,6 +66,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { conversationMessageSource } from "../../utils/messageSource";
+import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
 import { useI18n } from "../composables/i18n";
 
 const props = defineProps<{
@@ -69,6 +75,7 @@ const props = defineProps<{
   state: "working" | "failed";
   error?: string;
   context?: string;
+  userData?: unknown;
 }>();
 
 defineEmits<{
@@ -78,5 +85,6 @@ defineEmits<{
 }>();
 
 const { t } = useI18n();
+const source = computed(() => conversationMessageSource(props.userData));
 const filename = computed(() => props.path.split("/").pop() || props.path);
 </script>

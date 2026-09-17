@@ -68,12 +68,10 @@ type pendingBatch struct {
 	// array. User batches index them parallel to Messages; transcription
 	// blockers carry one id and no Messages until resolution.
 	MessageIDs []string
-	// UserEmail is the exe.dev author of a queued user message (Kind=
-	// pendingBatchUser), captured at queue time. Stamped onto the messages
-	// row when the batch drains (drain runs on a background context, so the
-	// value can't be read from the request there). Empty for other kinds and
-	// for requests without the X-ExeDev-Email header.
+	// UserEmail and UserData are captured with a queued user message because
+	// drain runs on a background context with no access to the original request.
 	UserEmail    string
+	UserData     json.RawMessage
 	GenerateSlug bool
 	// SubagentConversationID is set only for Kind=pendingBatchSubagentDone.
 	// It identifies the child subagent whose completion this batch notifies
@@ -782,6 +780,7 @@ func (cm *ConversationManager) Hydrate(ctx context.Context) error {
 			ModelID:      qm.Model,
 			MessageIDs:   []string{qm.ID},
 			UserEmail:    qm.UserEmail,
+			UserData:     qm.UserData,
 			GenerateSlug: qm.Kind == db.QueuedMessageKindTranscription,
 		}
 		if qm.Kind == db.QueuedMessageKindTranscription {
@@ -903,6 +902,14 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 		return false, "", fmt.Errorf("turn-start recorder not configured")
 	}
 
+	modelMessage, err := messageWithContextSenderProvenance(ctx, message)
+	if err != nil {
+		if !hadLoop {
+			cm.discardUnstartedLoopLocked(loopInstance)
+		}
+		return false, "", fmt.Errorf("prepare user message provenance: %w", err)
+	}
+
 	// Reserve the working state before the fallible write. Other request paths
 	// use it to decide whether they can start immediately, so leaving it false
 	// here lets a concurrent user/subagent send overtake this turn in the DB.
@@ -932,7 +939,7 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 	cm.hasConversationEvents = true
 	cm.lastActivity = time.Now()
 	cm.mu.Unlock()
-	loopInstance.QueueUserMessage(message)
+	loopInstance.QueueUserMessage(modelMessage)
 
 	return isFirst, created.MessageID, nil
 }
@@ -1404,6 +1411,7 @@ func (cm *ConversationManager) QueueTranscription(ctx context.Context, s *Server
 		ModelID:      queued.Model,
 		MessageIDs:   []string{queued.ID},
 		UserEmail:    queued.UserEmail,
+		UserData:     queued.UserData,
 		GenerateSlug: true,
 	})
 	cm.lastActivity = time.Now()
@@ -1426,10 +1434,11 @@ func (cm *ConversationManager) QueueTranscription(ctx context.Context, s *Server
 }
 
 // ResolveQueuedTranscription replaces its in-memory blocker with the ready
-// user message and invokes the ordinary queue drainer when the parent is idle.
-func (cm *ConversationManager) ResolveQueuedTranscription(s *Server, queuedID string, messages []llm.Message, modelID, userEmail string) {
+// audit-plus-user batch and invokes the ordinary queue drainer when the parent
+// is idle.
+func (cm *ConversationManager) ResolveQueuedTranscription(s *Server, queuedID string, messages []llm.Message, modelID, userEmail string, userData json.RawMessage) {
 	cm.mu.Lock()
-	cm.resolveTranscriptionBatchLocked(queuedID, messages, modelID, userEmail)
+	cm.resolveTranscriptionBatchLocked(queuedID, messages, modelID, userEmail, userData)
 	needsDrain := !cm.agentWorking && !cm.distilling
 	cm.mu.Unlock()
 	if needsDrain {
@@ -1447,7 +1456,7 @@ func (cm *ConversationManager) transcriptionBatchIndexLocked(queuedID string) in
 
 // resolveTranscriptionBatchLocked converts the transcription blocker for
 // queuedID, if still present, into a deliverable user batch in place.
-func (cm *ConversationManager) resolveTranscriptionBatchLocked(queuedID string, messages []llm.Message, modelID, userEmail string) {
+func (cm *ConversationManager) resolveTranscriptionBatchLocked(queuedID string, messages []llm.Message, modelID, userEmail string, userData json.RawMessage) {
 	i := cm.transcriptionBatchIndexLocked(queuedID)
 	if i < 0 {
 		return
@@ -1458,6 +1467,7 @@ func (cm *ConversationManager) resolveTranscriptionBatchLocked(queuedID string, 
 	batch.TranscriptionReady = true
 	batch.ModelID = modelID
 	batch.UserEmail = userEmail
+	batch.UserData = userData
 }
 
 // syncPersistedAgentWorking repairs a manager whose startup hydration raced a
@@ -1526,12 +1536,17 @@ func (cm *ConversationManager) QueueMessage(ctx context.Context, s *Server, mode
 	if err != nil {
 		return fmt.Errorf("failed to marshal queued message: %w", err)
 	}
+	userData, err := marshalTurnUserData(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to marshal queued user data: %w", err)
+	}
 	qm := db.QueuedMessage{
 		ID:        uuid.New().String(),
 		Llm:       llmJSON,
 		CreatedAt: time.Now().UTC(),
 		Model:     modelID,
 		UserEmail: userEmailFromContext(ctx),
+		UserData:  userData,
 	}
 	if _, err := s.db.AppendQueuedMessage(ctx, cm.conversationID, qm); err != nil {
 		return fmt.Errorf("failed to append queued message: %w", err)
@@ -1549,6 +1564,7 @@ func (cm *ConversationManager) QueueMessage(ctx context.Context, s *Server, mode
 		ModelID:    modelID,
 		MessageIDs: []string{qm.ID},
 		UserEmail:  qm.UserEmail,
+		UserData:   qm.UserData,
 	})
 	return nil
 }
@@ -1829,7 +1845,13 @@ func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loop
 			cm.logger.Error("Invalid ready transcription batch")
 			return true, false
 		}
-		if err := s.recordDrainedQueuedMessages(ctx, cm.conversationID, b.MessageIDs[0], b.Messages, b.UserEmail); err != nil {
+		transcript := b.Messages[len(b.Messages)-1]
+		wrapped, err := messageWithSenderProvenance(transcript, b.UserData)
+		if err != nil {
+			cm.logger.Error("Failed to prepare transcription provenance", "error", err)
+			return false, false
+		}
+		if err := s.recordDrainedQueuedMessages(ctx, cm.conversationID, b.MessageIDs[0], b.Messages, b.UserEmail, b.UserData); err != nil {
 			if errors.Is(err, db.ErrQueuedMessageNotFound) {
 				cm.logger.Info("Skipping cancelled queued transcription", "queued_id", b.MessageIDs[0])
 				return true, false
@@ -1838,9 +1860,9 @@ func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loop
 			return false, false
 		}
 		if b.GenerateSlug {
-			s.generateSlugAsync(cm.conversationID, messageText(b.Messages[len(b.Messages)-1]), b.ModelID)
+			s.generateSlugAsync(cm.conversationID, messageText(transcript), b.ModelID)
 		}
-		loopInstance.QueueMessages(b.Messages[len(b.Messages)-1])
+		loopInstance.QueueMessages(wrapped)
 		return true, true
 	}
 	switch b.Kind {
@@ -1852,12 +1874,21 @@ func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loop
 		// time — exactly the immutability we want — and the atomic removal
 		// means a crash can't leave an orphan array entry that Hydrate would
 		// re-feed as a duplicate.
+		modelMessages := make([]llm.Message, len(b.Messages))
+		for i, msg := range b.Messages {
+			wrapped, err := messageWithSenderProvenance(msg, b.UserData)
+			if err != nil {
+				cm.logger.Error("Failed to prepare queued message provenance", "error", err)
+				return false, false
+			}
+			modelMessages[i] = wrapped
+		}
 		for i, msg := range b.Messages {
 			queuedID := ""
 			if i < len(b.MessageIDs) {
 				queuedID = b.MessageIDs[i]
 			}
-			if err := s.recordDrainedQueuedMessage(ctx, cm.conversationID, queuedID, msg, b.UserEmail); err != nil {
+			if err := s.recordDrainedQueuedMessage(ctx, cm.conversationID, queuedID, msg, b.UserEmail, b.UserData); err != nil {
 				if errors.Is(err, db.ErrQueuedMessageNotFound) {
 					cm.logger.Info("Skipping cancelled queued message", "queued_id", queuedID)
 					return true, false
@@ -1872,7 +1903,7 @@ func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loop
 		// notifySubscribersNewMessage (fired by recordDrainedQueuedMessage)
 		// already carried the cleaned array, so the ghost clears live; no extra
 		// broadcast needed.
-		loopInstance.QueueMessages(b.Messages...)
+		loopInstance.QueueMessages(modelMessages...)
 		return true, true
 	case pendingBatchSubagentDone:
 		// Subagent-done batches: persist the synthetic tool_use/tool_result
@@ -2068,7 +2099,7 @@ restart:
 				return
 			}
 			cm.mu.Lock()
-			cm.resolveTranscriptionBatchLocked(barrierID, messages, queued.Model, queued.UserEmail)
+			cm.resolveTranscriptionBatchLocked(barrierID, messages, queued.Model, queued.UserEmail, queued.UserData)
 			cm.mu.Unlock()
 			goto restart
 		default:
@@ -2447,7 +2478,7 @@ func (cm *ConversationManager) createSubagentSystemPrompt(ctx context.Context, p
 	return created, nil
 }
 
-func (cm *ConversationManager) partitionMessages(messages []generated.Message) ([]llm.Message, []llm.SystemContent) {
+func (cm *ConversationManager) partitionMessages(messages []generated.Message) ([]llm.Message, []llm.SystemContent, error) {
 	var history []llm.Message
 	var system []llm.SystemContent
 
@@ -2491,12 +2522,21 @@ func (cm *ConversationManager) partitionMessages(messages []generated.Message) (
 
 		if msg.Type == string(db.MessageTypeUser) {
 			cm.applyDistillationContentOverride(&llmMsg, msg)
+			var userData []byte
+			if msg.UserData != nil {
+				userData = []byte(*msg.UserData)
+			}
+			wrapped, wrapErr := messageWithSenderProvenance(llmMsg, userData)
+			if wrapErr != nil {
+				return nil, nil, fmt.Errorf("apply sender provenance to message %s: %w", msg.MessageID, wrapErr)
+			}
+			llmMsg = wrapped
 		}
 
 		history = append(history, llmMsg)
 	}
 
-	return history, system
+	return history, system, nil
 }
 
 func (cm *ConversationManager) applyDistillationContentOverride(llmMsg *llm.Message, msg generated.Message) {
@@ -2630,7 +2670,10 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 	if err != nil {
 		return fmt.Errorf("failed to load conversation history: %w", err)
 	}
-	history, system := cm.partitionMessages(dbMessages)
+	history, system, err := cm.partitionMessages(dbMessages)
+	if err != nil {
+		return fmt.Errorf("failed to prepare conversation history: %w", err)
+	}
 	cm.logSystemPromptState(system, len(dbMessages))
 
 	// Create tools for this conversation with the conversation's working directory

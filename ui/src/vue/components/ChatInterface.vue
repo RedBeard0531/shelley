@@ -223,6 +223,7 @@
               :state="queuedTranscriptionTaskState(qm)!"
               :error="qm.error"
               :context="qm.transcription?.context"
+              :user-data="qm.user_data"
               @stop="cancelQueuedMessage(qm.id)"
               @retry="retryQueuedMessage(qm.id)"
               @cancel="cancelQueuedMessage(qm.id)"
@@ -922,10 +923,7 @@ function setSelectedModel(model: string) {
   if (draftId) putDraftModel(draftId, model);
 }
 
-function setSelectedCombination(
-  model: string,
-  level: Exclude<ThinkingLevel, "default"> | null,
-) {
+function setSelectedCombination(model: string, level: Exclude<ThinkingLevel, "default"> | null) {
   if (level !== null) setThinkingLevel(level);
   setSelectedModel(model);
 }
@@ -1506,7 +1504,9 @@ const isDistilling = computed(() => {
 
 const conversationInterrupted = computed(() => {
   const conversation = props.currentConversation;
-  return !!conversation?.turn_interrupted && !conversation.parent_conversation_id && !agentWorking.value;
+  return (
+    !!conversation?.turn_interrupted && !conversation.parent_conversation_id && !agentWorking.value
+  );
 });
 watch(conversationInterrupted, (interrupted) => {
   if (!interrupted) resumingInterrupted.value = false;
@@ -3156,10 +3156,7 @@ async function handleCancel() {
     ({ conversationId }) => conversationId === props.conversationId,
   );
   const pendingText = pending.map(({ text }) => text).join("\n");
-  const queuedText = [
-    ...queued.map(queuedMessageRestoreText),
-    ...pending.map(({ text }) => text),
-  ]
+  const queuedText = [...queued.map(queuedMessageRestoreText), ...pending.map(({ text }) => text)]
     .filter(Boolean)
     .join("\n");
   pending.forEach(({ controller }) => controller.abort());

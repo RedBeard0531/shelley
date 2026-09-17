@@ -2,8 +2,16 @@
      the bottom of the conversation. Derived from conversation.queued_messages
      (NOT a messages row); offers a per-message cancel affordance. -->
 <template>
-  <div class="message message-user message-queued" data-testid="queued-ghost">
+  <div
+    :class="[
+      'message',
+      source ? 'message-tool message-conversation' : 'message-user',
+      'message-queued',
+    ]"
+    data-testid="queued-ghost"
+  >
     <div class="message-content" data-testid="message-content">
+      <ConversationMessageAuthor v-if="source" :source="source" />
       <div class="whitespace-pre-wrap break-words">{{ text }}</div>
       <div class="queued-message-badge" data-testid="queued-badge">
         <span class="queued-message-badge-label">
@@ -47,6 +55,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { type QueuedMessage, queuedMessageText } from "../../types";
+import { conversationMessageSource } from "../../utils/messageSource";
+import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
 
 const props = defineProps<{
   queued: QueuedMessage;
@@ -56,4 +66,5 @@ const props = defineProps<{
 }>();
 
 const text = computed(() => queuedMessageText(props.queued));
+const source = computed(() => conversationMessageSource(props.queued.user_data));
 </script>

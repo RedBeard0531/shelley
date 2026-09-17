@@ -129,14 +129,18 @@
       @mouseleave="hoveredRow = false"
     >
       <div class="message-content message-content-entities" data-testid="message-content">
-        <div v-if="authorEmail" class="message-author-email" data-testid="message-author-email">
+        <div
+          v-if="authorEmail && !conversationSource"
+          class="message-author-email"
+          data-testid="message-author-email"
+        >
           {{ authorEmail }}
         </div>
         <!-- One action region per content entity (thinking blocks stand alone,
              adjacent answer content stays grouped; see splitContentEntities).
              Copy is scoped to the entity; info/fork stay message-level. -->
         <div
-          v-for="entity in contentEntities"
+          v-for="(entity, entityIndex) in contentEntities"
           :key="entity.key"
           class="msg-container-relative"
           :data-content-entity="entity.kind"
@@ -146,12 +150,16 @@
         >
           <MessageActionBar
             v-if="
-              actionBarVisible(entity.key) &&
-              (entity.copyText || hasUsageAction || hasForkAction)
+              actionBarVisible(entity.key) && (entity.copyText || hasUsageAction || hasForkAction)
             "
             :on-copy="entity.copyText ? () => handleCopy(entity.copyText) : undefined"
             :on-show-usage="hasUsageAction ? handleShowUsage : undefined"
             :on-fork="hasForkAction ? handleFork : undefined"
+          />
+
+          <ConversationMessageAuthor
+            v-if="conversationSource && entityIndex === 0"
+            :source="conversationSource"
           />
 
           <!-- Distillation box takes precedence over content blocks. -->
@@ -194,11 +202,13 @@
                 :text="item.text"
                 :markdown-text="item.markdownText"
                 :citations="item.citations"
-                :render-markdown="shouldRenderMarkdown(markdownMode, isUser, isDistilledUser)"
+                :render-markdown="
+                  shouldRenderMarkdown(markdownMode, isUser && !conversationSource, isDistilledUser)
+                "
                 :message-id="message.message_id"
                 :cache-owner="message"
                 :run-key="`${entity.key}-${index}`"
-                :rewrite-localhost-links="message.type === 'agent'"
+                :rewrite-localhost-links="message.type === 'agent' || !!conversationSource"
               />
               <MessageContentBlock v-else :content="item.content!" />
             </div>
@@ -254,6 +264,8 @@ import MessageContentBlock from "./MessageContentBlock.vue";
 import CitedText from "./CitedText.vue";
 import { coalesceContent, splitContentEntities } from "../../utils/coalesceContent";
 import { perfCount } from "../../utils/perf";
+import { conversationMessageSource } from "../../utils/messageSource";
+import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
 import MessageDisplayData from "./MessageDisplayData.vue";
 
 interface ToolDisplay {
@@ -367,6 +379,11 @@ const isError = computed(() => props.message.type === "error");
 // distilled/compacted user messages (which render agent-side and aren't a
 // single person's turn).
 const showUserEmails = inject<ComputedRef<boolean>>("showUserEmails");
+const conversationSource = computed(() =>
+  isUser.value && !isDistilledUser.value
+    ? conversationMessageSource(props.message.user_data)
+    : null,
+);
 const authorEmail = computed(() =>
   isUser.value && !isDistilledUser.value && showUserEmails?.value
     ? props.message.user_email || null
@@ -562,8 +579,9 @@ const hasRenderableContent = computed(() => {
 
 // ---- Message container classes ----
 const messageClasses = computed(() => {
+  if (conversationSource.value) return "message message-tool message-conversation";
   if (isUser.value && !isDistilledUser.value) {
-    return `message message-user`;
+    return "message message-user";
   }
   if (isError.value) return "message message-error";
   if (isTool.value) return "message message-tool";

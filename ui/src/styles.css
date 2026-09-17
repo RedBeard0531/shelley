@@ -1485,6 +1485,21 @@ body {
   overflow-wrap: anywhere;
 }
 
+.message-author-conversation {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.message-author-conversation a {
+  color: var(--link-color);
+}
+
+.message-conversation > .message-content {
+  width: 100%;
+}
+
 .message-agent .message-content,
 .message-tool .message-content {
   margin-right: auto;
@@ -1873,14 +1888,16 @@ body {
 }
 
 /* Tool Component (shared styles for all tools) */
-.tool {
+.tool,
+.message-conversation {
   background: var(--gray-100);
   border-radius: 0.5rem;
   margin: 0.5rem 0;
   width: 100%;
 }
 
-.dark .tool {
+.dark .tool,
+.dark .message-conversation {
   background: var(--gray-800);
 }
 

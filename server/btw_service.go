@@ -85,6 +85,12 @@ func formatBtwFrozenReference(rows []generated.Message, recentLimit int) (string
 		if err != nil {
 			return "", fmt.Errorf("decode frozen parent message %s: %w", row.MessageID, err)
 		}
+		if row.Type == string(db.MessageTypeUser) && row.UserData != nil {
+			message, err = messageWithSenderProvenance(message, []byte(*row.UserData))
+			if err != nil {
+				return "", fmt.Errorf("apply frozen parent message provenance %s: %w", row.MessageID, err)
+			}
+		}
 		item := btwFrozenMessage{row: row, message: message}
 		if row.Type == string(db.MessageTypeSystem) {
 			system = append(system, item)
