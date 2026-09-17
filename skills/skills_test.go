@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,64 @@ Body content.
 			wantError: true,
 		},
 		{
+			name: "duplicate top-level keys are rejected",
+			content: `---
+name: first-name
+name: second-name
+description: Duplicate names.
+---
+`,
+			wantError: true,
+		},
+		{
+			name: "duplicate metadata keys are rejected",
+			content: `---
+name: duplicate-metadata
+description: Duplicate metadata.
+metadata:
+  owner: first
+  owner: second
+---
+`,
+			wantError: true,
+		},
+		{
+			name: "aliases in extra metadata are accepted",
+			content: `---
+name: alias-skill
+description: A skill using aliases.
+metadata: &metadata
+  author: example
+copy: *metadata
+---
+`,
+			wantName:  "alias-skill",
+			wantDesc:  "A skill using aliases.",
+			wantError: false,
+		},
+		{
+			name: "cyclic aliases are rejected",
+			content: `---
+name: cyclic-alias
+description: Cyclic alias.
+metadata: &metadata
+  self: *metadata
+---
+`,
+			wantError: true,
+		},
+		{
+			name: "multiple YAML documents are rejected",
+			content: `---
+name: multi-document
+description: First document.
+...
+name: second-document
+---
+`,
+			wantError: true,
+		},
+		{
 			name: "missing name",
 			content: `---
 description: A skill without a name
@@ -86,14 +145,52 @@ description: A skill with consecutive hyphens
 			wantError: true,
 		},
 		{
-			name: "quoted values",
+			name: "mixed quotes and delimiter text",
 			content: `---
-name: "my-skill"
-description: 'A skill with quoted values'
+name: "quoted-skill"
+description: "Use 'single quotes', \"double quotes\", and --- safely."
 ---
 `,
-			wantName:  "my-skill",
-			wantDesc:  "A skill with quoted values",
+			wantName:  "quoted-skill",
+			wantDesc:  `Use 'single quotes', "double quotes", and --- safely.`,
+			wantError: false,
+		},
+		{
+			name: "description with escaped NUL",
+			content: `---
+name: nul-description
+description: "bad\0description"
+---
+`,
+			wantError: true,
+		},
+		{
+			name: "null description scalar remains source text",
+			content: `---
+name: null-description
+description: null
+---
+`,
+			wantName:  "null-description",
+			wantDesc:  "null",
+			wantError: false,
+		},
+		{
+			name: "tagged description scalar remains source text",
+			content: `---
+name: tagged-description
+description: !!binary aGVsbG8=
+---
+`,
+			wantName:  "tagged-description",
+			wantDesc:  "aGVsbG8=",
+			wantError: false,
+		},
+		{
+			name:      "leading whitespace and delimiter trailing whitespace",
+			content:   "\n \t---  \nname: whitespace-skill\ndescription: Delimiters may have surrounding whitespace.\n---\t\n",
+			wantName:  "whitespace-skill",
+			wantDesc:  "Delimiters may have surrounding whitespace.",
 			wantError: false,
 		},
 	}
@@ -127,6 +224,37 @@ description: 'A skill with quoted values'
 				t.Errorf("description = %q, want %q", skill.Description, tt.wantDesc)
 			}
 		})
+	}
+}
+
+func TestParseRejectsExcessiveAliasExpansion(t *testing.T) {
+	var content strings.Builder
+	content.WriteString("---\nname: alias-expansion\ndescription: Excessive alias expansion.\nlevel0: &level0 [x, x]\n")
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&content, "level%d: &level%d [*level%d, *level%d]\n", i, i, i-1, i-1)
+	}
+	content.WriteString("---\n")
+
+	_, err := ParseContent(content.String())
+	if err == nil || !strings.Contains(err.Error(), "alias expansion exceeds limit") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseMetadataScalarsRemainStrings(t *testing.T) {
+	skill, err := ParseContent(`---
+name: metadata-scalars
+description: Preserve YAML scalar source values.
+metadata:
+  version: 1.0
+  enabled: true
+---
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skill.Metadata["version"] != "1.0" || skill.Metadata["enabled"] != "true" {
+		t.Fatalf("metadata = %#v", skill.Metadata)
 	}
 }
 
@@ -676,7 +804,7 @@ func TestToPromptXMLBuiltinSkill(t *testing.T) {
 }
 
 func TestExtractBody(t *testing.T) {
-	content := "---\nname: test\n---\n\n# Body\n\nContent here."
+	content := "---\nname: test\ndescription: 'Text containing --- safely.'\n---\n\n# Body\n\nContent here."
 	body := extractBody(content)
 	if body != "# Body\n\nContent here." {
 		t.Errorf("extractBody = %q, want %q", body, "# Body\n\nContent here.")

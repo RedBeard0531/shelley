@@ -71,9 +71,9 @@ func BuiltinSkills() []Skill {
 
 // extractBody returns the markdown content after the YAML frontmatter.
 func extractBody(content string) string {
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
+	_, body, err := splitFrontmatter(content)
+	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(parts[2])
+	return strings.TrimSpace(body)
 }
