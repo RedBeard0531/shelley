@@ -1,6 +1,6 @@
 {
   "_README": "This file is managed by LazyCue (see shelley/lazycue). Do NOT edit by hand — it is the cached, machine-generated DSL for a self-healing browser test. To change behavior, edit the test description and re-run LazyCue.",
-  "description": "Navigate to /new. Type \"echo: warmup one\" into the message input (data-testid \"message-input\") and click the send button (data-testid \"send-button\"), then wait for the reply text \"warmup one\" to appear. Then type the text bash: for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 1; done into the message input and click the send button. Wait for the running bash tool pill's latest-output element (\".tool-pill-output\") to become visible, then use a selector-scoped text assertion to verify that same \".tool-pill-output\" element contains \"tick\" (allow up to 30 seconds). Then reset the UI's recomputation counters: eval \"(function(){window.__shelleyPerf.reset();return true;})()\" and expect \"true\". Wait for at least 4 tool-progress events to arrive: eval \"(function(){var s=window.__shelleyPerf.snapshot();return (((s['store.notifyTransient']||{}).count)||0)\u003e=4;})()\" with expect \"true\" (allow up to 15 seconds). Then assert the progress events did not re-render the conversation's message components: eval \"(function(){var s=window.__shelleyPerf.snapshot();var prog=((s['store.notifyTransient']||{}).count)||0;var upd=((s['message.update']||{}).count)||0;return upd\u003c=5?'pass':'fail: '+upd+' message updates during '+prog+' progress events';})()\" and expect \"pass\". Finally wait for the completed tool call (data-testid \"tool-call-completed\") to become visible (allow up to 30 seconds).",
+  "description": "Navigate to /new. Type \"echo: warmup one\" into the message input (data-testid \"message-input\") and click the send button (data-testid \"send-button\"), then wait for the reply text \"warmup one\" to appear. Then type the text bash: for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 1; done into the message input and click the send button. The bash tool card streams the command's output while it runs, so wait for the text \"tick 2\" to appear on the page (allow up to 30 seconds). Then reset the UI's recomputation counters: eval \"(function(){window.__shelleyPerf.reset();return true;})()\" and expect \"true\". Wait for at least 4 tool-progress events to arrive: eval \"(function(){var s=window.__shelleyPerf.snapshot();return (((s['store.notifyTransient']||{}).count)||0)\u003e=4;})()\" with expect \"true\" (allow up to 15 seconds). Then assert the progress events did not re-render the conversation's message components: eval \"(function(){var s=window.__shelleyPerf.snapshot();var prog=((s['store.notifyTransient']||{}).count)||0;var upd=((s['message.update']||{}).count)||0;return upd\u003c=5?'pass':'fail: '+upd+' message updates during '+prog+' progress events';})()\" and expect \"pass\". Finally wait for the completed tool call (data-testid \"tool-call-completed\") to become visible (allow up to 30 seconds).",
   "version": 1,
   "steps": [
     {
@@ -27,6 +27,11 @@
       "timeout": "30s"
     },
     {
+      "action": "wait_visible",
+      "selector": "[data-testid='message-input']",
+      "timeout": "10s"
+    },
+    {
       "action": "fill",
       "selector": "[data-testid='message-input']",
       "value": "bash: for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 1; done"
@@ -36,14 +41,9 @@
       "selector": "[data-testid='send-button']"
     },
     {
-      "action": "wait_visible",
-      "selector": ".tool-pill-output",
+      "action": "wait_text",
+      "text": "tick 2",
       "timeout": "30s"
-    },
-    {
-      "action": "assert_text_contains",
-      "selector": ".tool-pill-output",
-      "text": "tick"
     },
     {
       "action": "eval",
@@ -68,12 +68,13 @@
     }
   ],
   "metadata": {
-    "created_at": "2026-09-16T22:18:40.012329532Z",
+    "created_at": "2026-07-24T20:47:51.616151478Z",
     "hostname": "phil-dev",
     "model": "claude-sonnet-4-6",
-    "input_tokens": 20834,
-    "output_tokens": 1448,
-    "estimated_cost_usd": 0.084222,
+    "input_tokens": 26634,
+    "output_tokens": 1592,
+    "estimated_cost_usd": 0.103782,
+    "git_sha": "14e918539bc72508aec36a2406e15cf98fa56b8b",
     "mode": "generated"
   }
 }

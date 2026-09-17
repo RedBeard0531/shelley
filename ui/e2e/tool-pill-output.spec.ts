@@ -1,11 +1,13 @@
 import { test, expect, type Locator } from "@playwright/test";
-import { createConversationViaAPI } from "./helpers";
+import { createConversationViaAPI, setPageFeatureFlag } from "./helpers";
 
 // A running tool pill shows the last line of the tool's streamed output in
 // place of its headline, so a long-running command is legible without opening
 // its detail modal. The output is transient: it disappears when the tool
 // finishes and the headline comes back.
 test("running tool pill shows the last line of streamed output", async ({ page, request }) => {
+  await setPageFeatureFlag(page, "tool-pills", true);
+
   const slug = await createConversationViaAPI(request, "hello");
   await page.goto(`/c/${slug}`);
   const input = page.getByTestId("message-input");

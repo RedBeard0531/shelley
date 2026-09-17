@@ -131,13 +131,15 @@ export async function createConversationViaAPI(
 }
 
 /**
- * Tool calls not marked for inline auto-expansion render as compact pills in
- * the conversation stream. These helpers open a pill's detail modal and return
- * its expanded tool-card scope.
+ * Tool calls (except diffs, screenshots, image reads and output_iframe)
+ * now render as compact "pills" in the conversation stream. Clicking
+ * a pill expands the full tool card inline beneath the pill row (no
+ * modal). These helpers open that inline expansion and return its
+ * scope for tests that need to assert against the expanded view.
  */
 /** Click the pill for the first tool call whose visible text matches
- *  `hasText` and wait for its detail modal to appear. Returns the expanded
- *  card locator (scope for further assertions). */
+ *  `hasText` and wait for its inline expansion to appear. Returns the
+ *  expanded card locator (scope for further assertions). */
 export async function openToolPill(page: Page, hasText: string | RegExp): Promise<Locator> {
   const pill = page.locator(".tool-pill").filter({ hasText }).first();
   await pill.click();

@@ -6,9 +6,13 @@ import (
 	"shelley.exe.dev/featureflags"
 )
 
-func TestToolPillsFeatureFlagRemoved(t *testing.T) {
-	if _, ok := featureflags.Lookup("tool-pills"); ok {
-		t.Fatal("tool-pills feature flag is still registered")
+func TestFlagToolPillsRegistered(t *testing.T) {
+	f, ok := featureflags.Lookup("tool-pills")
+	if !ok {
+		t.Fatal("tool-pills not registered")
+	}
+	if f.Default != false {
+		t.Fatalf("default = %v, want false", f.Default)
 	}
 }
 

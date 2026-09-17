@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createConversationViaAPI, openToolPill } from "./helpers";
+import { createConversationViaAPI } from "./helpers";
 
 test("Bash commands are Shiki-tokenized without changing output rendering", async ({
   page,
@@ -10,10 +10,9 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   await page.goto(`/c/${slug}`);
   await page.waitForLoadState("domcontentloaded");
 
-  const modal = await openToolPill(page, /if true/);
-  const bashTool = modal.locator(".bash-tool");
+  const bashTool = page.locator(".bash-tool").filter({ hasText: command }).first();
   const summary = bashTool.locator(".bash-tool-command");
-  await expect(summary).toHaveText(command);
+  await expect(summary).toHaveText(command, { timeout: 30000 });
   await expect(summary).toHaveAttribute("title", command);
   await expect(summary.locator(".shelley-code-token").first()).toBeAttached();
 
@@ -28,8 +27,9 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   expect(await summaryTokens.count()).toBe(tokenCount);
   expect(await summary.innerHTML()).toBe(tokenHtml);
 
+  await bashTool.locator(".bash-tool-header").click();
   const details = bashTool.locator(".bash-tool-details");
-  await expect(details).toBeVisible({ timeout: 30000 });
+  await expect(details).toBeVisible();
   const expandedCommand = details.locator(".bash-tool-code").filter({ hasText: command });
   await expect(expandedCommand).toHaveText(command);
   await expect(expandedCommand.locator(".shelley-code-token").first()).toBeAttached();
