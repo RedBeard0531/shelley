@@ -150,26 +150,50 @@ func TestExeScrollSpawnFailureTerminatesSessionServer(t *testing.T) {
 }
 
 func TestExeScrollSessionsShareExecutableMapping(t *testing.T) {
+	// Keep login-shell startup independent of the machine's user profile.
+	t.Setenv("HOME", t.TempDir())
 	ts := newExeScrollTestSessions(t)
 	firstSession, firstClient, err := ts.Spawn("read -r _", t.TempDir(), "", 80, 24, []string{"SHELLEY_EXE_SCROLL_HELPER=1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer firstClient.Close()
-	defer ts.Kill(firstSession.ID)
+	defer finishExeScrollTestSession(t, ts, firstSession, firstClient)
 
 	secondSession, secondClient, err := ts.Spawn("read -r _", t.TempDir(), "", 80, 24, []string{"SHELLEY_EXE_SCROLL_HELPER=1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer secondClient.Close()
-	defer ts.Kill(secondSession.ID)
+	defer finishExeScrollTestSession(t, ts, secondSession, secondClient)
 
 	firstMapping := exeScrollExecutableMapping(t, firstSession.PID)
 	secondMapping := exeScrollExecutableMapping(t, secondSession.PID)
 	if firstMapping != secondMapping {
 		t.Fatalf("exe-scroll mappings differ: %q != %q", firstMapping, secondMapping)
 	}
+}
+
+// finishExeScrollTestSession releases a command blocked on read before removing
+// its files. Kill only signals the server; the command wrapper can still be
+// writing its exit-status file after Kill returns.
+func finishExeScrollTestSession(t *testing.T, ts *TerminalSessions, sess *TerminalSession, client terminalClient) {
+	t.Helper()
+	defer client.Close()
+	defer func() {
+		if err := ts.Kill(sess.ID); err != nil {
+			t.Errorf("clean up exe-scroll session %s: %v", sess.ID, err)
+		}
+	}()
+	if err := client.SendInput([]byte("\n")); err != nil {
+		t.Fatalf("finish exe-scroll session %s: %v", sess.ID, err)
+	}
+	message, err := recvTerminalKind(t, client, terminalExit, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", message.exitCode)
+	}
+	waitForProcessGone(t, sess.PID)
 }
 
 func exeScrollExecutableMapping(t *testing.T, pid int) string {
