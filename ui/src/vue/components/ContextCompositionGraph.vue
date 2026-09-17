@@ -1,6 +1,10 @@
 <!-- Reconstructed context composition per LLM call. The top line is the
      provider-reported context size; colored stacked areas estimate which
-     visible history categories made it up. -->
+     visible history categories made it up. Each message's bytes/4 estimate
+     is added once when it enters the context and never rescaled; fixed
+     request overhead (tool definitions) folds into the system band at each
+     generation's first call, and the per-point residue is its own
+     "request overhead" band. -->
 <template>
   <div class="context-composition-graph">
     <template v-if="points.length > 0">
@@ -129,16 +133,12 @@
 
 <script setup lang="ts">
 import { computed, h, ref, watch } from "vue";
-import type { LLMContent, Message, Usage } from "../../types";
+import type { Message } from "../../types";
+import { buildCompositionPoints, type CompositionPoint } from "../../utils/contextComposition";
 import { formatTokenCount } from "../../utils/tokenCostGraph";
 
 const props = defineProps<{ messages: Message[] }>();
 
-const TYPE_TEXT = 2;
-const TYPE_THINKING = 3;
-const TYPE_TOOL_USE = 5;
-const TYPE_TOOL_RESULT = 6;
-const TYPE_WEB_SEARCH_TOOL_RESULT = 8;
 const W = 280;
 const H = 150;
 const PADL = 32;
@@ -148,25 +148,7 @@ const PADB = 18;
 const plotWidth = W - PADL - PADR;
 const plotHeight = H - PADT - PADB;
 
-type Composition = Record<string, number>;
-type ToolBreakdown = Record<string, Composition>;
-type Point = {
-  total: number;
-  generation: number;
-  parts: Composition;
-  args: Composition;
-  toolBreakdown: ToolBreakdown;
-  model?: string;
-};
 type Category = { key: string; label: string; color: string; isTool?: boolean };
-type Attribution = { key: string; detail?: string };
-type CommandInvocation = { name: string; args: string[] };
-
-// Tool-call tokens (name + input) are recorded under this suffix during the
-// walk, then split out into Point.args at mapping time so the breakdown
-// table can show args vs. output per tool category.
-const ARGS_SUFFIX = "\u0000args";
-
 const BASH_CATEGORIES = [
   "bash:code search",
   "bash:file read",
@@ -191,6 +173,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   user: "user",
   assistant: "assistant",
   reasoning: "reasoning",
+  overhead: "request overhead",
   images: "images",
   "bash:code search": "bash · code search",
   "bash:file read": "bash · file read",
@@ -211,6 +194,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   user: "hsl(160 64% 48%)",
   assistant: "hsl(140 55% 45%)",
   reasoning: "hsl(184 60% 44%)",
+  overhead: "hsl(220 10% 60%)",
   images: "hsl(325 65% 58%)",
   "bash:code search": "hsl(199 92% 56%)",
   "bash:file read": "hsl(199 68% 66%)",
@@ -224,220 +208,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   "tool:other": "hsl(213 15% 53%)",
 };
 
-const points = computed<Point[]>(() => {
-  const running: Composition = {};
-  const runningToolBreakdown: ToolBreakdown = {};
-  const toolKeys = new Map<string, Attribution>();
-  const raw: {
-    total: number;
-    generation: number;
-    parts: Composition;
-    toolBreakdown: ToolBreakdown;
-    model?: string;
-    fallback: boolean;
-    imageCount: number;
-    /** Provider-reported reasoning tokens this point can claim, i.e. those the
-     *  request is known to carry (see the reasoning band's comment below). */
-    claim: number;
-  }[] = [];
-  let generation: number | undefined;
-  let generationHasMedia = false;
-  let claimUnsigned = 0;
-  const counts = { images: 0, thinking: 0, signedThinking: 0, signed: false };
-
-  for (const message of props.messages) {
-    if (generation !== undefined && message.generation !== generation) {
-      for (const key of Object.keys(running)) delete running[key];
-      for (const key of Object.keys(runningToolBreakdown)) delete runningToolBreakdown[key];
-      toolKeys.clear();
-      generationHasMedia = false;
-      counts.images = 0;
-      claimUnsigned = 0;
-    }
-    generation = message.generation;
-    counts.thinking = 0;
-    counts.signedThinking = 0;
-    counts.signed = false;
-    generationHasMedia =
-      addMessage(running, runningToolBreakdown, toolKeys, message, counts) || generationHasMedia;
-    if (message.type !== "agent") continue;
-    const usage = parseUsage(message);
-    const total = usage ? contextWindowUsed(usage) : 0;
-    if (total === 0) continue;
-
-    // Which reasoning ends up in the request differs by how the provider hands
-    // it back, and the two cases below are the ones Shelley can see:
-    //
-    //  * Unsigned thinking (OpenAI Responses' encrypted items, Fireworks'
-    //    reasoning_content) is replayed on every turn. The provider's count
-    //    replaces that call's bytes/4 guess and accumulates, so the band is the
-    //    reasoning the prompt actually carries.
-    //  * Signed thinking (Anthropic) is replayed only for the newest assistant
-    //    turn — fromLLMRequest strips it from all earlier ones to avoid stale
-    //    signatures — so it replaces rather than accumulates, and only the
-    //    call being plotted contributes. (Measured: Anthropic bills the full
-    //    reasoning for such a block, ~647 tokens for a 647-token call.)
-    const reported = contributesToContext(message) ? usage?.reasoning_tokens || 0 : 0;
-    const signedValue = counts.signed ? reported || counts.signedThinking : 0;
-    const unsignedValue = counts.signed ? 0 : reported || counts.thinking;
-    // Swap the exact count in for this call's byte guess (addMessage already
-    // added the guess to `running`), then accumulate.
-    running.reasoning =
-      (running.reasoning || 0) + unsignedValue - counts.thinking;
-    claimUnsigned += counts.signed ? 0 : reported;
-
-    const estimated =
-      Object.values(running).reduce((sum, tokens) => sum + tokens, 0) + signedValue;
-    const parts: Composition =
-      estimated > 0 ? { ...running } : generationHasMedia ? {} : { assistant: total };
-    if (estimated > 0 && signedValue > 0) {
-      parts.reasoning = (parts.reasoning || 0) + signedValue;
-      parts.reasoning = Math.round(parts.reasoning);
-    }
-    raw.push({
-      total,
-      generation: message.generation,
-      parts,
-      toolBreakdown: copyToolBreakdown(runningToolBreakdown),
-      model: message.model_name || undefined,
-      fallback: estimated === 0,
-      imageCount: counts.images,
-      // Only counts the request proves are replayed: every unsigned call's
-      // reported reasoning, plus the newest signed call's.
-      claim: claimUnsigned + (counts.signed ? reported : 0),
-    });
-  }
-
-  // Provider-accurate image tokens. The server strips base64 image data from
-  // stored llm_data, so the chars/4 estimate gives every image block ~1
-  // token. Instead, when a point introduces new images, attribute the
-  // unexplained growth in the reported context total to them:
-  //   residual = clamp(total[i] - total[i-1] - estimatedOthersDelta,
-  //                    0, max(0, total[i] - total[i-1]))
-  // Imprecise by nature: if a big text/tool-result lands in the same window
-  // as an image, the residual lumps them; and if the server prunes old
-  // screenshots from actual requests, the carried-forward images value
-  // overstates later points. Both are unfixable client-side.
-  const correctedImagesByPoint = new Map<number, number>();
-  {
-    let start = 0;
-    while (start < raw.length) {
-      let end = start;
-      while (end < raw.length && raw[end].generation === raw[start].generation) end++;
-      // diffBoundary[i]: point i may be diffed against i-1 (same generation,
-      // neither side a fallback point whose parts were replaced by a reported
-      // total).
-      const boundary = new Set<number>([start]);
-      for (let i = start + 1; i < end; i++)
-        if (raw[i].fallback || raw[i - 1].fallback) boundary.add(i);
-
-      // Lookahead: the first image point's growth / new-image count defines
-      // the per-image value used to seed the chain base.
-      let perImage: number | null = null;
-      for (let i = start + 1; i < end; i++) {
-        const added = raw[i].imageCount - raw[i - 1].imageCount;
-        if (added <= 0 || boundary.has(i) || boundary.has(i - 1)) continue;
-        const growth = Math.max(0, raw[i].total - raw[i - 1].total);
-        const othersDelta = othersEstimate(raw[i]) - othersEstimate(raw[i - 1]);
-        const residual = Math.min(growth, Math.max(0, raw[i].total - raw[i - 1].total - othersDelta));
-        perImage = residual / added;
-        break;
-      }
-
-      let prev: number | null = null;
-      for (let i = start; i < end; i++) {
-        const point = raw[i];
-        if (point.fallback) continue;
-        if (prev === null || boundary.has(i)) {
-          const images = point.parts.images || 0;
-          correctedImagesByPoint.set(
-            i,
-            perImage !== null ? perImage * point.imageCount : images,
-          );
-        } else {
-          const growth = Math.max(0, point.total - raw[prev].total);
-          const othersDelta = othersEstimate(point) - othersEstimate(raw[prev]);
-          const residual = Math.min(
-            growth,
-            Math.max(0, point.total - raw[prev].total - othersDelta),
-          );
-          correctedImagesByPoint.set(
-            i,
-            (correctedImagesByPoint.get(prev) || 0) +
-              (point.imageCount > raw[prev].imageCount ? residual : 0),
-          );
-        }
-        prev = i;
-      }
-      start = end;
-    }
-  }
-
-  // A per-call scale made old text appear to shrink whenever a large tool
-  // result changed the estimate/provider ratio. Calibrate once at the last
-  // call in each generation instead: within a generation, reconstructed
-  // context is cumulative and must only grow. A compaction starts a new
-  // generation and is the one legitimate reset. Image tokens and the reasoning
-  // the request provably carries are provider-derived, so they claim their
-  // tokens up front and the byte estimates only explain what is left.
-  const scaleByGeneration = new Map<number, number>();
-  raw.forEach((point, index) => {
-    if (point.fallback) return;
-    const images = correctedImagesByPoint.get(index) || 0;
-    const claim = clampedClaim(point, images);
-    const estimatedOthers = othersEstimate(point) - claim;
-    scaleByGeneration.set(
-      point.generation,
-      estimatedOthers > 0 ? Math.max(0, (point.total - images - claim) / estimatedOthers) : 1,
-    );
-  });
-  return raw.map((point, index) => {
-    const scale = scaleByGeneration.get(point.generation) || 1;
-    const parts: Composition = {};
-    const args: Composition = {};
-    for (const [key, tokens] of Object.entries(point.parts)) {
-      if (key.endsWith(ARGS_SUFFIX)) {
-        const base = key.slice(0, -ARGS_SUFFIX.length);
-        args[base] = Math.round((args[base] || 0) + tokens * scale);
-        parts[base] = (parts[base] || 0) + tokens * scale;
-      } else if (key !== "images") {
-        parts[key] = (parts[key] || 0) + tokens * scale;
-      }
-    }
-    const images = correctedImagesByPoint.get(index) || 0;
-    const claim = clampedClaim(point, images);
-    const basisReasoning = point.parts.reasoning || 0;
-    const exact = Math.min(claim, basisReasoning);
-    if (basisReasoning > 0 || exact > 0) {
-      // The reported part stands as measured; only the bytes/4 remainder is
-      // calibrated against the provider's total like every other band.
-      parts.reasoning = Math.round(exact + (basisReasoning - exact) * scale);
-      // A fallback point lumps every token into `assistant`; take the claimed
-      // reasoning back out of that lump so the point still sums to its total.
-      if (point.fallback && parts.assistant !== undefined)
-        parts.assistant = Math.max(0, parts.assistant - exact);
-    }
-    if (images > 0) parts.images = Math.round(images);
-    for (const key of Object.keys(parts)) if (key !== "images") parts[key] = Math.round(parts[key]);
-    const toolBreakdown = Object.fromEntries(
-      Object.entries(point.toolBreakdown).map(([key, details]) => [
-        key,
-        Object.fromEntries(
-          Object.entries(details).map(([detail, tokens]) => [detail, Math.round(tokens * scale)]),
-        ),
-      ]),
-    );
-    return {
-      total: point.total,
-      generation: point.generation,
-      parts,
-      args,
-      toolBreakdown,
-      model: point.model,
-    };
-  });
-});
-
+const points = computed<CompositionPoint[]>(() => buildCompositionPoints(props.messages));
 const categories = computed<Category[]>(() => {
   const keys = new Set<string>();
   for (const point of points.value) {
@@ -449,6 +220,15 @@ const categories = computed<Category[]>(() => {
       label: CATEGORY_LABELS[key],
       color: CATEGORY_COLORS[key],
     })),
+    ...(keys.has("overhead")
+      ? [
+          {
+            key: "overhead",
+            label: CATEGORY_LABELS.overhead,
+            color: CATEGORY_COLORS.overhead,
+          },
+        ]
+      : []),
     ...(keys.has("images")
       ? [{ key: "images", label: CATEGORY_LABELS.images, color: CATEGORY_COLORS.images }]
       : []),
@@ -604,138 +384,26 @@ function clearHover() {
   hoverIndex.value = null;
 }
 
-// gitinfo/modelchange/error messages are user-visible only — the server never
-// sends them to the LLM, so they are not part of the context the graph
-// reconstructs.
-function contributesToContext(message: Message) {
-  return !!message.llm_data && !["gitinfo", "modelchange", "error"].includes(message.type);
-}
-
-function addMessage(
-  running: Composition,
-  runningToolBreakdown: ToolBreakdown,
-  toolKeys: Map<string, Attribution>,
-  message: Message,
-  counts: { images: number; thinking: number; signedThinking: number; signed: boolean },
-): boolean {
-  if (!contributesToContext(message)) return false;
-  try {
-    const llm = typeof message.llm_data === "string" ? JSON.parse(message.llm_data) : message.llm_data;
-    const fallback = {
-      key:
-        message.type === "user" ? "user" : message.type === "system" ? "system" : "assistant",
-    };
-    let hasMedia = false;
-    for (const content of (llm?.Content || []) as LLMContent[]) {
-      hasMedia =
-        addContent(running, runningToolBreakdown, toolKeys, content, fallback, counts) ||
-        hasMedia;
-    }
-    return hasMedia;
-  } catch {
-    // A malformed historic payload stays visible in the conversation but
-    // cannot contribute to a reconstructed graph.
-    return false;
-  }
-}
-
-function addContent(
-  running: Composition,
-  runningToolBreakdown: ToolBreakdown,
-  toolKeys: Map<string, Attribution>,
-  content: LLMContent,
-  fallback: Attribution,
-  counts: { images: number; thinking: number; signedThinking: number; signed: boolean },
-): boolean {
-  if (content.MediaType || content.DisplayImageURL || content.Data) {
-    counts.images++;
-    // Placeholder seed only (the server strips base64 data from stored
-    // llm_data, so this estimates ~1 token); provider-derived residuals
-    // replace it below.
-    addTokens(running, "images", Math.max(1, estimateTokens(content.Data || "")));
-    return true;
-  }
-  switch (content.Type) {
-    case TYPE_TOOL_USE: {
-      const attribution = toolAttribution(content.ToolName, content.ToolInput);
-      toolKeys.set(content.ID, attribution);
-      addAttributedTokens(
-        running,
-        runningToolBreakdown,
-        attribution,
-        estimateTokens(content.ToolName || "") + estimateTokens(stringify(content.ToolInput)),
-        true,
-      );
-      return false;
-    }
-    case TYPE_TOOL_RESULT:
-    case TYPE_WEB_SEARCH_TOOL_RESULT: {
-      const attribution =
-        toolKeys.get(content.ToolUseID || "") ||
-        toolAttribution(content.Type === TYPE_WEB_SEARCH_TOOL_RESULT ? "web_search" : "other");
-      let hasMedia = false;
-      for (const result of content.ToolResult || []) {
-        hasMedia =
-          addContent(running, runningToolBreakdown, toolKeys, result, attribution, counts) ||
-          hasMedia;
-      }
-      return hasMedia;
-    }
-    case TYPE_TEXT:
-      addAttributedTokens(
-        running,
-        runningToolBreakdown,
-        fallback,
-        estimateTokens(content.Text || content.Thinking || ""),
-      );
-      return false;
-    case TYPE_THINKING: {
-      const tokens = estimateTokens(content.Text || content.Thinking || "");
-      // Signed blocks are the ones the request drops from all but the newest
-      // assistant turn, so they are counted per call instead of accumulated.
-      if (content.Signature) {
-        counts.signedThinking += tokens;
-        counts.signed = true;
-      } else {
-        counts.thinking += tokens;
-        addAttributedTokens(
-          running,
-          runningToolBreakdown,
-          isToolCategory(fallback.key) ? fallback : { key: "reasoning" },
-          tokens,
-        );
-      }
-      return false;
-    }
-    default:
-      addAttributedTokens(
-        running,
-        runningToolBreakdown,
-        fallback,
-        estimateTokens(content.Text || ""),
-      );
-      return false;
-  }
-}
-
-function categoryTokens(point: Point, key: string) {
+function categoryTokens(point: CompositionPoint, key: string) {
   return point.parts[key] || 0;
 }
 
-function plottedTotal(point: Point) {
+function plottedTotal(point: CompositionPoint) {
   return categories.value.reduce((sum, category) => sum + categoryTokens(point, category.key), 0);
 }
-
 const CATEGORY_HINTS: Record<string, string> = {
-  system: "System prompt injected before the first user message",
+  system:
+    "System prompt and tool definitions: the byte-estimated prompt plus the fixed request overhead measured once at the generation's first call",
   user: "Text typed by the user, plus mid-conversation injections (e.g. subagent-done pokes)",
   assistant: "Assistant text output",
   reasoning:
     "Assistant internal reasoning the request carries: the provider's reported counts where it replays its reasoning, thinking text otherwise",
-  images: "Image content in messages or tool results (provider-derived: reported context growth not explained by text/tool estimates)",
+  overhead:
+    "Per-message framing, chars/4 tokenizer drift, and cache-page quantization: the per-point residue the reconstruction doesn't explain",
+  images: "Image content in messages or tool results; the server strips image bytes, so each image carries only a rough size allowance",
 };
 
-function categoryHint(key: string, point: Point) {
+function categoryHint(key: string, point: CompositionPoint) {
   if (CATEGORY_HINTS[key]) return CATEGORY_HINTS[key];
   const breakdown = point.toolBreakdown[key];
   if (!breakdown) return "Tool output";
@@ -746,357 +414,4 @@ function categoryHint(key: string, point: Point) {
     .join(" · ");
   return details || "Tool output";
 }
-
-function isToolCategory(key: string) {
-  return key.startsWith("bash:") || key.startsWith("tool:") || key.startsWith("repo/");
-}
-
-/** Estimated tokens across all non-image categories of a raw point (images
- *  are handled separately via provider-derived residuals). */
-function othersEstimate(point: { parts: Composition; fallback: boolean }) {
-  if (point.fallback) return 0;
-  let sum = 0;
-  for (const [key, tokens] of Object.entries(point.parts)) if (key !== "images") sum += tokens;
-  return sum;
-}
-
-/** How many tokens this point's reported reasoning may claim from its own
- *  total: at most what is left after the provider-derived image tokens, so the
- *  calibration can never be handed a negative budget. */
-function clampedClaim(point: { claim: number; total: number }, images: number) {
-  return Math.min(point.claim, Math.max(0, point.total - images));
-}
-
-function addTokens(running: Composition, key: string, tokens: number) {
-  running[key] = (running[key] || 0) + tokens;
-}
-
-function addAttributedTokens(
-  running: Composition,
-  runningToolBreakdown: ToolBreakdown,
-  attribution: Attribution,
-  tokens: number,
-  isArgs = false,
-) {
-  addTokens(running, isArgs ? attribution.key + ARGS_SUFFIX : attribution.key, tokens);
-  if (!attribution.detail || !isToolCategory(attribution.key)) return;
-  const breakdown = (runningToolBreakdown[attribution.key] ||= {});
-  breakdown[attribution.detail] = (breakdown[attribution.detail] || 0) + tokens;
-}
-
-function copyToolBreakdown(source: ToolBreakdown): ToolBreakdown {
-  return Object.fromEntries(
-    Object.entries(source).map(([key, details]) => [key, { ...details }]),
-  );
-}
-
-function toolAttribution(name: string | undefined, input?: unknown): Attribution {
-  if (name !== "bash") {
-    let key: string;
-    switch (name) {
-      case "browser":
-      case "web_search":
-      case "keyword_search":
-      case "WebSearch":
-      case "WebFetch":
-        key = "tool:browser/web";
-        break;
-      case "apply_patch":
-      case "patch":
-      case "write_file":
-        key = "repo/edit";
-        break;
-      default:
-        key = "tool:other";
-    }
-    return { key, detail: name || "other" };
-  }
-  const intent = bashCommandIntent(commandFromInput(input));
-  return {
-    key: intent.family.startsWith("repo/") ? intent.family : `bash:${intent.family}`,
-    detail: intent.command,
-  };
-}
-
-function commandFromInput(input: unknown) {
-  if (typeof input === "object" && input && "command" in input && typeof input.command === "string") {
-    return input.command;
-  }
-  if (typeof input !== "string") return "other";
-  try {
-    const parsed = JSON.parse(input);
-    return typeof parsed?.command === "string" ? parsed.command : input;
-  } catch {
-    return input;
-  }
-}
-
-function bashCommandIntent(command: string): { family: string; command: string } {
-  const invocations = bashCommandInvocations(command);
-  for (const invocation of invocations) {
-    if (invocation.name === "git") {
-      const subcommand = gitSubcommand(invocation.args);
-      return {
-        family: isReadOnlyGitCommand(subcommand, invocation.args) ? "repo/read" : "repo/edit",
-        command: subcommand ? `git ${subcommand}` : "git",
-      };
-    }
-    const family = bashCommandFamily(invocation.name);
-    if (family) return { family, command: invocation.name };
-  }
-  return { family: "other", command: invocations[0]?.name || "shell" };
-}
-
-function bashCommandFamily(name: string): string | null {
-  if (
-    ["rm", "mkdir", "gofmt", "chmod", "mv", "cp", "touch", "ln", "install", "patch"].includes(
-      name,
-    )
-  )
-    return "repo/edit";
-  if (["rg", "grep", "find", "fd", "ag", "ack"].includes(name)) return "code search";
-  if (
-    [
-      "cat",
-      "sed",
-      "head",
-      "tail",
-      "awk",
-      "ls",
-      "pwd",
-      "less",
-      "more",
-      "tree",
-      "stat",
-      "file",
-      "readlink",
-      "realpath",
-      "wc",
-      "cut",
-      "sort",
-      "uniq",
-      "column",
-      "diff",
-      "strings",
-    ].includes(name)
-  )
-    return "file read";
-  if (
-    [
-      "go",
-      "pnpm",
-      "npm",
-      "yarn",
-      "make",
-      "cargo",
-      "pytest",
-      "jest",
-      "vitest",
-      "bun",
-      "uv",
-      "ruff",
-      "mypy",
-      "eslint",
-      "tsc",
-      "biome",
-      "gradle",
-      "mvn",
-    ].includes(name)
-  )
-    return "build/test";
-  if (["python", "python3", "node", "ruby", "perl", "sqlite3", "psql", "mysql", "jq", "yq"].includes(name))
-    return "script/query";
-  if (
-    [
-      "tmux",
-      "curl",
-      "wget",
-      "df",
-      "du",
-      "ss",
-      "systemctl",
-      "journalctl",
-      "ps",
-      "pgrep",
-      "pkill",
-      "kill",
-      "lsof",
-      "ip",
-      "netstat",
-      "ping",
-      "dig",
-      "nslookup",
-      "hostname",
-      "uname",
-      "whoami",
-      "date",
-      "uptime",
-      "free",
-      "which",
-      "whereis",
-    ].includes(name)
-  )
-    return "system";
-  return null;
-}
-
-function bashCommandInvocations(command: string): CommandInvocation[] {
-  return command
-    .trim()
-    .split(/&&|\|\||;|\n/)
-    .flatMap((segment) => {
-      const words = segment.trim().split(/\s+/).filter(Boolean);
-      const invocation = executableInvocation(words);
-      return invocation ? [invocation] : [];
-    });
-}
-
-function executableInvocation(words: string[]): CommandInvocation | null {
-  let index = 0;
-  while (index < words.length) {
-    const word = commandBasename(words[index]);
-    if (!word || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || /^[0-9]*[<>]/.test(word)) {
-      index++;
-      continue;
-    }
-    if (["cd", "export", "set", "true", ":", ".", "source", "if", "then", "fi", "for", "do", "done", "while", "case", "esac", "{", "}"].includes(word)) return null;
-    if (!["env", "command", "exec", "timeout", "time", "nice", "nohup", "sudo"].includes(word)) {
-      return { name: word, args: words.slice(index + 1) };
-    }
-    index = skipWrapper(words, index + 1, word);
-  }
-  return null;
-}
-
-function gitSubcommand(args: string[]) {
-  let index = 0;
-  while (index < args.length) {
-    const arg = args[index].replace(/^['"]|['"]$/g, "");
-    if (!arg.startsWith("-")) return arg;
-    if (
-      !arg.includes("=") &&
-      ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(arg)
-    ) {
-      index = skipShellArgument(args, index + 1);
-    } else {
-      index++;
-    }
-  }
-  return "";
-}
-
-function skipShellArgument(words: string[], index: number) {
-  let singleQuoted = false;
-  let doubleQuoted = false;
-  for (; index < words.length; index++) {
-    const word = words[index];
-    for (let i = 0; i < word.length; i++) {
-      if (word[i] === "'" && !doubleQuoted) singleQuoted = !singleQuoted;
-      else if (word[i] === '"' && !singleQuoted && word[i - 1] !== "\\")
-        doubleQuoted = !doubleQuoted;
-    }
-    if (!singleQuoted && !doubleQuoted) return index + 1;
-  }
-  return index;
-}
-
-function isReadOnlyGitCommand(subcommand: string, args: string[]) {
-  if (
-    [
-      "status",
-      "diff",
-      "show",
-      "log",
-      "grep",
-      "blame",
-      "shortlog",
-      "describe",
-      "rev-parse",
-      "rev-list",
-      "ls-files",
-      "ls-tree",
-      "cat-file",
-      "name-rev",
-      "for-each-ref",
-      "show-ref",
-      "reflog",
-    ].includes(subcommand)
-  )
-    return true;
-  if (subcommand === "branch")
-    return args.some((arg) =>
-      ["--show-current", "--list", "--contains", "--no-contains", "--merged", "--no-merged"].includes(
-        arg,
-      ),
-    );
-  if (subcommand === "remote")
-    return args.some((arg) => ["-v", "--verbose", "show", "get-url"].includes(arg));
-  if (subcommand === "config")
-    return args.some((arg) => ["--get", "--get-all", "--get-regexp", "--list", "-l"].includes(arg));
-  if (subcommand === "tag") return args.some((arg) => ["--list", "-l"].includes(arg));
-  return false;
-}
-
-function commandBasename(word: string) {
-  return word.replace(/^['"]|['"]$/g, "").split("/").at(-1) || "";
-}
-
-function skipWrapper(words: string[], index: number, wrapper: string) {
-  while (index < words.length) {
-    const word = words[index];
-    if (word === "--") return index + 1;
-    if (wrapper === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
-      index++;
-      continue;
-    }
-    if (word.startsWith("-")) {
-      index++;
-      if (!word.includes("=") && wrapperOptionNeedsValue(wrapper, word)) index++;
-      continue;
-    }
-    if (wrapper === "timeout") return index + 1;
-    return index;
-  }
-  return index;
-}
-
-function wrapperOptionNeedsValue(wrapper: string, option: string) {
-  if (wrapper === "sudo") return ["-u", "-g", "-h", "-C", "-r", "-t", "--user", "--group", "--host", "--close-from", "--role", "--type", "--chdir"].includes(option);
-  if (wrapper === "env") return ["-u", "-C", "--unset", "--chdir"].includes(option);
-  if (wrapper === "timeout") return ["-k", "--kill-after"].includes(option);
-  if (wrapper === "nice") return ["-n", "--adjustment"].includes(option);
-  return wrapper === "time" && ["-f", "-o"].includes(option);
-}
-
-function parseUsage(message: Message): Usage | null {
-  if (!message.usage_data) return null;
-  try {
-    return typeof message.usage_data === "string" ? JSON.parse(message.usage_data) : message.usage_data;
-  } catch {
-    return null;
-  }
-}
-
-function contextWindowUsed(usage: Usage) {
-  return (
-    (usage.input_tokens || 0) +
-    (usage.cache_creation_input_tokens || 0) +
-    (usage.cache_read_input_tokens || 0) +
-    (usage.output_tokens || 0)
-  );
-}
-
-function estimateTokens(value: string) {
-  return value ? Math.ceil(new TextEncoder().encode(value).length / 4) : 0;
-}
-
-function stringify(value: unknown) {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value) || "";
-  } catch {
-    return "";
-  }
-}
-
 </script>
