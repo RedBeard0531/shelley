@@ -22,6 +22,8 @@ export interface TourChangeItem {
   treePath: string[];
   decoration?: string;
   decorationTitle?: string;
+  additions: number;
+  deletions: number;
 }
 
 export type TourContentsItem = TourOverviewItem | TourSectionItem | TourChangeItem;
@@ -93,13 +95,15 @@ export function buildTourContents(tour: GitTour, includeOverview: boolean): Tour
       : undefined;
     contents.push({
       anchor: tourEntryAnchor(position),
-      label: patch.label,
+      label: `${patch.label}${patch.additions ? ` +${patch.additions}` : ""}${patch.deletions ? ` −${patch.deletions}` : ""}`,
       kind: "change",
       treePath: patch.fileLabel.split("/"),
       decoration,
       decorationTitle: patch.displayRange
-        ? `lines ${patch.displayRange[0]}–${patch.displayRange[1]}`
+        ? `${patch.displayRange[0]}–${patch.displayRange[1]}`
         : undefined,
+      additions: patch.additions,
+      deletions: patch.deletions,
     });
   });
   return contents;

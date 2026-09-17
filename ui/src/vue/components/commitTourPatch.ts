@@ -142,7 +142,7 @@ export function analyzeTourPatch(patch: string): TourPatchInfo {
     fileLabel,
     hunkRanges,
     displayRange,
-    label: displayRange ? `${fileLabel} · lines ${displayRange[0]}–${displayRange[1]}` : fileLabel,
+    label: displayRange ? `${fileLabel} · ${displayRange[0]}–${displayRange[1]}` : fileLabel,
     additions,
     deletions,
     isHunk: hunkRanges.length > 0,

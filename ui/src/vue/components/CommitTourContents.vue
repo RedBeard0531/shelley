@@ -85,6 +85,18 @@
                   aria-hidden="true"
                   >{{ row.item.decoration }}</span
                 >
+                <span
+                  v-if="row.item.additions > 0 || row.item.deletions > 0"
+                  class="diff-tree-changes"
+                  aria-hidden="true"
+                >
+                  <span v-if="row.item.additions > 0" class="diff-tree-changes-added"
+                    >+{{ row.item.additions }}</span
+                  >
+                  <span v-if="row.item.deletions > 0" class="diff-tree-changes-deleted"
+                    >&minus;{{ row.item.deletions }}</span
+                  >
+                </span>
               </button>
             </div>
           </div>

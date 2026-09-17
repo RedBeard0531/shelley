@@ -113,7 +113,22 @@ test.describe("Commit tour defaults", () => {
       await expect(changesTree.locator(".tour-file-tree-directory .diff-tree-label")).toHaveText(
         "src / nested",
       );
-      await expect(changesTree.getByRole("button", { name: /example\.spec\.ts/ })).toHaveCount(2);
+      const changeButtons = changesTree.getByRole("button", { name: /example\.spec\.ts/ });
+      await expect(changeButtons).toHaveCount(2);
+      for (const button of await changeButtons.all()) {
+        await expect(button).toHaveAccessibleName(/example\.spec\.ts · \d+–\d+ \+1 −1$/);
+        await expect(button).not.toHaveAttribute("title", /lines/);
+        await expect(button.locator(".diff-tree-decoration")).toHaveText(/^L\d+–\d+$/);
+        await expect(button.locator(".diff-tree-decoration")).toHaveCSS(
+          "background-color",
+          "rgba(0, 0, 0, 0)",
+        );
+        await expect(button.locator(".diff-tree-changes-added")).toHaveText("+1");
+        await expect(button.locator(".diff-tree-changes-deleted")).toHaveText("−1");
+      }
+      await expect(overlay.locator(".commit-tour-chunk-header code").first()).toHaveText(
+        /^src\/nested\/example\.spec\.ts · \d+–\d+$/,
+      );
       await expect(changesTree.locator(".tour-file-name-stem", { hasText: "example" })).toHaveCount(
         2,
       );
@@ -163,6 +178,10 @@ test.describe("Commit tour defaults", () => {
         .first();
       await firstChunk.evaluate((element) => element.scrollIntoView({ block: "start" }));
       await expect(firstChangeButton).toHaveAttribute("aria-current", "location");
+      await expect(firstChangeButton.locator(".diff-tree-decoration")).toHaveCSS(
+        "background-color",
+        "rgba(0, 0, 0, 0)",
+      );
       await page.setViewportSize({ width: 1800, height: 600 });
       await expect
         .poll(async () => {
