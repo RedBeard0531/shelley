@@ -138,6 +138,7 @@ export const zhTW: TranslationKeys = {
   attachFile: "附加檔案",
   sendMessage: "傳送訊息",
   recordingTitle: "錄製媒體",
+  recordingReturn: "返回錄製",
   recordingStop: "停止錄製",
   recordingStopTranscription: "停止轉錄",
   recordingStarting: "正在開始錄製…",

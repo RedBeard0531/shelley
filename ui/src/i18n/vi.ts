@@ -138,6 +138,7 @@ export const vi: TranslationKeys = {
   attachFile: "Đính kèm file",
   sendMessage: "Gửi",
   recordingTitle: "Ghi nội dung",
+  recordingReturn: "Quay lại màn hình ghi",
   recordingStop: "Dừng ghi",
   recordingStopTranscription: "Dừng chuyển thành văn bản",
   recordingStarting: "Đang bắt đầu ghi…",

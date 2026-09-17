@@ -138,6 +138,7 @@ export const zhCN: TranslationKeys = {
   attachFile: "附加文件",
   sendMessage: "发送消息",
   recordingTitle: "录制媒体",
+  recordingReturn: "返回录制",
   recordingStop: "停止录制",
   recordingStopTranscription: "停止转写",
   recordingStarting: "正在开始录制…",

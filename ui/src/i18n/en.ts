@@ -138,6 +138,7 @@ export const en: TranslationKeys = {
   attachFile: "Attach file",
   sendMessage: "Send message",
   recordingTitle: "Record media",
+  recordingReturn: "Return to recording",
   recordingStop: "Stop recording",
   recordingStopTranscription: "Stop transcribing",
   recordingStarting: "Starting recording…",

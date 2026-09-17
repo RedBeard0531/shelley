@@ -138,6 +138,7 @@ export const ja: TranslationKeys = {
   attachFile: "ファイルを添付",
   sendMessage: "メッセージを送信",
   recordingTitle: "メディアを録画",
+  recordingReturn: "録画に戻る",
   recordingStop: "録画を停止",
   recordingStopTranscription: "文字起こしを停止",
   recordingStarting: "録画を開始しています…",

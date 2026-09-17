@@ -36,13 +36,33 @@
     <div v-if="isDraggingOver" class="drag-overlay">
       <div class="drag-overlay-content">{{ t("dropFilesHere") }}</div>
     </div>
-    <RecordingPanel
-      v-if="recordingActive"
-      :preserved-text="recordingSubmission?.message"
-      :on-complete="handleRecordingComplete"
-      @close="closeRecording"
-    />
-    <form v-else class="message-input-form" @submit="handleSubmit">
+    <!-- Teleport moves the same recorder; navigation must never remount it. -->
+    <Teleport to="body" :disabled="!recordingFloating">
+      <div
+        v-if="recordingActive"
+        :class="{ 'recording-floating': recordingFloating }"
+        :data-testid="recordingFloating ? 'recording-floating' : 'recording-inline'"
+      >
+        <button
+          v-if="recordingFloating"
+          type="button"
+          class="recording-return"
+          data-testid="recording-return-button"
+          @click="recordingSubmission?.destination?.returnTo()"
+        >
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 10-5-5 5-5M4 5h10a6 6 0 0 1 0 12h-3" />
+          </svg>
+          {{ t("recordingReturn") }}
+        </button>
+        <RecordingPanel
+          :preserved-text="recordingSubmission?.message"
+          :on-complete="handleRecordingComplete"
+          @close="closeRecording"
+        />
+      </div>
+    </Teleport>
+    <form v-if="!recordingActive || recordingFloating" class="message-input-form" @submit="handleSubmit">
       <input
         ref="fileInputRef"
         type="file"
@@ -297,14 +317,16 @@
         <button
           v-if="mediaRecordingAvailable"
           type="button"
-          :disabled="isDisabled || uploadsInProgress > 0"
+          :disabled="isDisabled || uploadsInProgress > 0 || !!recordingSubmission"
+          :aria-busy="!!recordingSubmission && !recordingActive"
           class="message-voice-btn"
           :aria-label="t('recordingTitle')"
           data-testid="voice-button"
           @click="beginRecording"
         >
+          <span v-if="recordingSubmission && !recordingActive" class="spinner spinner-small" />
           <svg
-            v-if="screenRecordingAvailable"
+            v-else-if="screenRecordingAvailable"
             fill="none"
             stroke="currentColor"
             stroke-width="1.8"
@@ -491,6 +513,7 @@ import {
 } from "./composerDispatch";
 import { isImeComposing } from "../../utils/imeComposing";
 import RecordingPanel from "./RecordingPanel.vue";
+import type { RecordingDestination } from "./recordingDestination";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,
@@ -517,10 +540,10 @@ const props = withDefaults(
   defineProps<{
     /** Async send handler (awaited). Mirrors React's onSend prop. */
     onSend: (message: string) => Promise<void> | void;
-    /** Called once the server has assembled the finished media file. The
-     * second argument is the pre-existing composer text plus ready attachments,
-     * which become part of the durable transcribed user turn. */
-    onRecordingComplete: (path: string, context: string) => Promise<void>;
+    /** Reserve the original destination before acquiring media. */
+    onStartRecording: (text: string) => Promise<RecordingDestination>;
+    /** Archived conversations hide the composer, but not an active recording. */
+    recordingInlineAvailable?: boolean;
     /** Async queue handler (awaited). Mirrors React's onQueue prop. */
     onQueue?: (message: string) => Promise<void> | void;
     /** Async compaction handler (awaited). When provided, the send-options
@@ -563,6 +586,7 @@ const props = withDefaults(
     isChildConversation?: boolean;
   }>(),
   {
+    recordingInlineAvailable: true,
     showQueueOption: false,
     canQueue: false,
     autoQueue: false,
@@ -591,14 +615,21 @@ const canCompact = computed(() => props.onCompact !== undefined && !props.autoQu
 const sendSelectedLevel = ref<ContextUsageLevel>("");
 
 const message = ref(props.draftSeed?.value ?? "");
-const recordingActive = ref(false);
 type RecordingSubmission = {
+  destination?: RecordingDestination;
   message: string;
   context: string;
   attachmentIDs: string[];
   attachmentSession: AttachmentSession;
 };
 const recordingSubmission = shallowRef<RecordingSubmission | null>(null);
+const recordingActive = computed(() => !!recordingSubmission.value?.destination);
+const recordingFloating = computed(
+  () =>
+    recordingActive.value &&
+    (props.conversationId !== recordingSubmission.value?.destination?.conversationId ||
+      !props.recordingInlineAvailable),
+);
 // setMessage mirrors the React controlled-value path: surfaces every change via
 // draft-change so the parent can persist it.
 function setMessage(next: string | ((prev: string) => string)) {
@@ -612,7 +643,7 @@ function setMessage(next: string | ((prev: string) => string)) {
 watch(
   () => props.draftSeed,
   (seed) => {
-    if (seed != null && !recordingActive.value) message.value = seed.value;
+    if (seed != null) message.value = seed.value;
   },
 );
 
@@ -666,25 +697,44 @@ function handleResize() {
   isSmallScreen.value = window.innerWidth < 480;
 }
 
-function beginRecording() {
-  recordingSubmission.value = {
+async function beginRecording() {
+  if (recordingSubmission.value) return;
+  const submission: RecordingSubmission = {
     message: message.value,
     context: composeMessageWithAttachments(message.value),
     attachmentIDs: readyAttachments.value.map(({ id }) => id),
     attachmentSession: activeAttachmentSession,
   };
-  recordingActive.value = true;
+  recordingSubmission.value = submission;
+  try {
+    const destination = await props.onStartRecording(submission.message);
+    if (recordingSubmission.value !== submission) return;
+    // A new draft may have finished creating after navigation away from /new.
+    if (attachmentSessions.get(null) === submission.attachmentSession) {
+      attachmentSessions.delete(null);
+    }
+    attachmentSessions.set(destination.conversationId, submission.attachmentSession);
+    recordingSubmission.value = { ...submission, destination };
+  } catch {
+    // The parent surfaces destination-creation errors. No media was acquired.
+    if (recordingSubmission.value === submission) recordingSubmission.value = null;
+    if (![...attachmentSessions.values()].includes(submission.attachmentSession)) {
+      clearAttachments(submission.attachmentSession);
+    }
+  }
 }
 
 function handleRecordingComplete(path: string) {
   const submission = recordingSubmission.value;
-  if (!submission) throw new Error("recording completed without preserved composer state");
-  // On failure the parent surfaces the error and the composer keeps its text
-  // and attachments so the user can retry.
-  void props
-    .onRecordingComplete(path, submission.context)
+  if (!submission?.destination) throw new Error("recording completed without a destination");
+  // On failure retain the source draft and attachments. The parent surfaces
+  // the uploaded media path and original destination for recovery.
+  const destination = submission.destination;
+  void destination.complete(path, submission.context)
     .then(() => {
-      if (message.value === submission.message) setMessage("");
+      if (props.conversationId === destination.conversationId && message.value === submission.message) {
+        setMessage("");
+      }
       for (const id of submission.attachmentIDs) {
         removeAttachment(id, submission.attachmentSession);
       }
@@ -693,10 +743,10 @@ function handleRecordingComplete(path: string) {
 }
 
 async function closeRecording() {
-  recordingActive.value = false;
+  const wasInline = !recordingFloating.value;
   recordingSubmission.value = null;
   await nextTick();
-  textareaRef.value?.focus();
+  if (wasInline) textareaRef.value?.focus();
 }
 
 // Close queue menu on click outside
@@ -801,14 +851,14 @@ watch(
 
     if (oldId == null && newId != null) {
       const abandoned = attachmentSessions.get(null);
-      if (abandoned) clearAttachments(abandoned);
+      if (abandoned && abandoned !== recordingSubmission.value?.attachmentSession) {
+        clearAttachments(abandoned);
+      }
       attachmentSessions.delete(null);
     }
     activeAttachmentSession = attachmentSessions.get(key) ?? { attachments: [] };
     attachmentSessions.set(key, activeAttachmentSession);
     attachments.value = activeAttachmentSession.attachments;
-    recordingActive.value = false;
-    recordingSubmission.value = null;
   },
 );
 
@@ -1430,6 +1480,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  recordingSubmission.value = null;
   window.removeEventListener("resize", handleResize);
   if (typeof window !== "undefined" && window.visualViewport) {
     window.visualViewport.removeEventListener("resize", handleViewportResize);

@@ -138,6 +138,7 @@ export const ru: TranslationKeys = {
   attachFile: "Прикрепить файл",
   sendMessage: "Отправить сообщение",
   recordingTitle: "Запись медиа",
+  recordingReturn: "Вернуться к записи",
   recordingStop: "Остановить запись",
   recordingStopTranscription: "Остановить расшифровку",
   recordingStarting: "Запуск записи…",

@@ -138,6 +138,7 @@ export interface TranslationKeys {
   attachFile: string;
   sendMessage: string;
   recordingTitle: string;
+  recordingReturn: string;
   recordingStop: string;
   recordingStopTranscription: string;
   recordingStarting: string;

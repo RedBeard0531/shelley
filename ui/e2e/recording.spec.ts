@@ -11,6 +11,7 @@ async function installMediaMocks(page: Page, screenCapture = true) {
       displayError: "",
       meterPeak: 4,
       recorderStarts: 0,
+      recorderStops: 0,
       dataOnlyOnStop: false,
       endDisplay: () => {},
     };
@@ -64,6 +65,7 @@ async function installMediaMocks(page: Page, screenCapture = true) {
         queueMicrotask(() => this.emitChunk("second"));
       }
       stop() {
+        mock.recorderStops++;
         this.state = "inactive";
         if (mock.dataOnlyOnStop) this.emitChunk("encodedlast", true);
         else this.emitChunk("last");
@@ -252,9 +254,705 @@ async function openQueuedConversation(
   return slug;
 }
 
+async function createDraftViaAPI(request: APIRequestContext, draft: string): Promise<string> {
+  const response = await request.post("/api/conversations/draft", {
+    data: { draft, model: "predictable", cwd: "/tmp" },
+  });
+  expect(response.ok()).toBeTruthy();
+  const conversation = (await response.json()) as { conversation_id: string };
+  return conversation.conversation_id;
+}
+
+async function selectConversationFromDrawer(page: Page, conversationId: string) {
+  const row = page.locator(`.conversation-item[data-conversation-id="${conversationId}"]`);
+  const openDrawer = page.getByRole("button", { name: "Open conversations" });
+  if (await openDrawer.isVisible()) await openDrawer.click();
+  await expect(row).toBeVisible();
+  await row.click();
+  await expect(row).toHaveClass(/active/);
+}
+
+async function pasteAttachment(page: Page, filename: string, contents = "attachment") {
+  await page.getByTestId("message-input").evaluate(
+    (input, file) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([file.contents], file.filename, { type: "text/plain" }));
+      input.dispatchEvent(
+        new ClipboardEvent("paste", {
+          clipboardData: transfer,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    },
+    { filename, contents },
+  );
+  await expect(page.locator(".message-attachment-ready")).toHaveCount(1);
+}
+
+function floatingAncestor(page: Page) {
+  return page
+    .getByTestId("recording-panel")
+    .locator('xpath=ancestor::*[@data-testid="recording-floating"]');
+}
+
 test.describe("media recording composer", () => {
   test.beforeEach(async ({ page }) => {
     await installMediaMocks(page);
+  });
+
+  for (const originKind of ["draft", "conversation"] as const) {
+    test(`keeps one live recorder when switching from an existing ${originKind} and returning`, async ({
+      page,
+      request,
+    }) => {
+      const other = await createConversationViaAPIWithDetails(
+        request,
+        `echo: floating recorder destination from ${originKind}`,
+      );
+      const originalText = `Preserve the ${originKind} recording context.`;
+      let originalId: string;
+      let originalUrl: string;
+      let originalPath: RegExp;
+      if (originKind === "draft") {
+        originalId = await createDraftViaAPI(request, originalText);
+        originalUrl = `/c/${originalId}`;
+        originalPath = new RegExp(`${originalUrl}$`);
+      } else {
+        const original = await createConversationViaAPIWithDetails(
+          request,
+          "echo: floating recorder origin",
+        );
+        originalId = original.conversationId;
+        originalUrl = `/c/${original.slug}`;
+        originalPath = new RegExp(`${originalUrl}$`);
+      }
+      let uploadCount = 0;
+      await page.route("**/api/upload/raw?filename=*", async (route) => {
+        uploadCount++;
+        await fulfillJSON(route, { path: "/tmp/shelley-uploads/unexpected.webm" });
+      });
+
+      await page.goto(originalUrl);
+      const originalInput = page.getByTestId("message-input");
+      await expect(originalInput).toBeVisible({ timeout: 30_000 });
+      if (originKind === "draft") await expect(originalInput).toHaveValue(originalText);
+      else await originalInput.fill(originalText);
+
+      await page.getByTestId("voice-button").click();
+      const panel = page.getByTestId("recording-panel");
+      await expect(panel).toBeVisible();
+      await panel.evaluate((element) => element.setAttribute("data-instance-marker", "original"));
+      await expect.poll(() => page.evaluate(() => window.__recordingMock.recorderStarts)).toBe(1);
+
+      await selectConversationFromDrawer(page, other.conversationId);
+      await expect(page).toHaveURL(new RegExp(`/c/${other.slug}$`));
+      await expect(panel).toHaveAttribute("data-instance-marker", "original");
+      await expect(floatingAncestor(page)).toHaveCount(1);
+      await expect(page.getByTestId("recording-return-button")).toBeVisible();
+      await expect(page.getByTestId("voice-button")).toBeDisabled();
+      expect(
+        await page.evaluate(() => ({
+          starts: window.__recordingMock.recorderStarts,
+          stops: window.__recordingMock.recorderStops,
+        })),
+      ).toEqual({ starts: 1, stops: 0 });
+
+      await page.getByTestId("recording-return-button").click();
+      await expect(page).toHaveURL(originalPath);
+      await expect(panel).toHaveAttribute("data-instance-marker", "original");
+      await expect(floatingAncestor(page)).toHaveCount(0);
+      await expect(page.getByTestId("recording-return-button")).toHaveCount(0);
+      expect(
+        await page.evaluate(() => ({
+          starts: window.__recordingMock.recorderStarts,
+          stops: window.__recordingMock.recorderStops,
+        })),
+      ).toEqual({ starts: 1, stops: 0 });
+
+      await expect(page.getByTestId("recording-preserved-text")).toHaveText(originalText);
+      await page.getByTestId("recording-cancel-button").click();
+      await expect(panel).toHaveCount(0);
+      expect(uploadCount).toBe(0);
+      expect(await page.evaluate(() => window.__recordingMock.recorderStops)).toBe(1);
+    });
+  }
+
+  test("keeps one screen capture and preview alive across navigation and return", async ({
+    page,
+    request,
+  }) => {
+    const original = await createConversationViaAPIWithDetails(
+      request,
+      "echo: floating screen origin",
+    );
+    const viewed = await createConversationViaAPIWithDetails(
+      request,
+      "echo: floating screen destination",
+    );
+    let uploadCount = 0;
+    await page.route("**/api/upload/raw?filename=*", async (route) => {
+      uploadCount++;
+      await fulfillJSON(route, { path: "/tmp/shelley-uploads/unexpected.webm" });
+    });
+
+    await page.goto(`/c/${original.slug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("voice-button").click();
+    await expect(page.getByTestId("recording-status")).toHaveText("Recording…");
+    await page.getByTestId("recording-screen-button").click();
+
+    const panel = page.getByTestId("recording-panel");
+    const preview = page.getByTestId("recording-preview");
+    await expect(panel).toHaveAttribute("data-mode", "screen");
+    await expect(preview).toBeVisible();
+    await panel.evaluate((element) => element.setAttribute("data-instance-marker", "screen"));
+    await preview.evaluate((element) => {
+      element.setAttribute("data-instance-marker", "screen-preview");
+      window.__recordingPreviewSource = (element as HTMLVideoElement).srcObject;
+    });
+    const recorderStarts = await page.evaluate(() => window.__recordingMock.recorderStarts);
+    expect(recorderStarts).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.__recordingMock.displayRequests)).toBe(1);
+
+    await selectConversationFromDrawer(page, viewed.conversationId);
+    await expect(panel).toHaveAttribute("data-instance-marker", "screen");
+    await expect(preview).toHaveAttribute("data-instance-marker", "screen-preview");
+    expect(
+      await preview.evaluate(
+        (element) => (element as HTMLVideoElement).srcObject === window.__recordingPreviewSource,
+      ),
+    ).toBe(true);
+    await expect(floatingAncestor(page)).toHaveCount(1);
+    expect(
+      await page.evaluate(() => ({
+        starts: window.__recordingMock.recorderStarts,
+        displayRequests: window.__recordingMock.displayRequests,
+      })),
+    ).toEqual({ starts: recorderStarts, displayRequests: 1 });
+
+    await page.getByTestId("recording-return-button").click();
+    await expect(page).toHaveURL(new RegExp(`/c/${original.slug}$`));
+    await expect(panel).toHaveAttribute("data-instance-marker", "screen");
+    await expect(preview).toHaveAttribute("data-instance-marker", "screen-preview");
+    expect(
+      await preview.evaluate(
+        (element) => (element as HTMLVideoElement).srcObject === window.__recordingPreviewSource,
+      ),
+    ).toBe(true);
+    await expect(floatingAncestor(page)).toHaveCount(0);
+    expect(
+      await page.evaluate(() => ({
+        starts: window.__recordingMock.recorderStarts,
+        displayRequests: window.__recordingMock.displayRequests,
+      })),
+    ).toEqual({ starts: recorderStarts, displayRequests: 1 });
+
+    await page.getByTestId("recording-cancel-button").click();
+    expect(uploadCount).toBe(0);
+  });
+
+  test("keeps the active recorder floating while an archived conversation is viewed", async ({
+    page,
+    request,
+  }) => {
+    const original = await createConversationViaAPIWithDetails(
+      request,
+      "echo: recorder beside archived view origin",
+    );
+    const archived = await createConversationViaAPIWithDetails(
+      request,
+      "echo: recorder beside archived view destination",
+    );
+    const archiveResponse = await request.post(
+      `/api/conversation/${archived.conversationId}/archive`,
+    );
+    expect(archiveResponse.ok()).toBeTruthy();
+    let uploadCount = 0;
+    await page.route("**/api/upload/raw?filename=*", async (route) => {
+      uploadCount++;
+      await fulfillJSON(route, { path: "/tmp/shelley-uploads/unexpected.webm" });
+    });
+
+    await page.goto(`/c/${original.slug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("voice-button").click();
+    const panel = page.getByTestId("recording-panel");
+    await expect(panel).toBeVisible();
+    await panel.evaluate((element) => element.setAttribute("data-instance-marker", "archived"));
+
+    const openDrawer = page.getByRole("button", { name: "Open conversations" });
+    if (await openDrawer.isVisible()) await openDrawer.click();
+    await page.getByRole("button", { name: "View archived" }).click();
+    await page
+      .locator(`.conversation-item[data-conversation-id="${archived.conversationId}"]`)
+      .click();
+
+    await expect(page).toHaveURL(new RegExp(`/c/${archived.slug}$`));
+    await expect(page.getByTestId("message-input")).toBeHidden();
+    await expect(panel).toBeVisible();
+    await expect(panel).toHaveAttribute("data-instance-marker", "archived");
+    await expect(floatingAncestor(page)).toHaveCount(1);
+    await expect(page.getByTestId("recording-return-button")).toBeVisible();
+
+    await page.getByTestId("recording-return-button").click();
+    await expect(page).toHaveURL(new RegExp(`/c/${original.slug}$`));
+    await expect(floatingAncestor(page)).toHaveCount(0);
+    await page.getByTestId("recording-cancel-button").click();
+    expect(uploadCount).toBe(0);
+  });
+
+  test("restores the source draft after return and keeps the viewed draft separate", async ({
+    page,
+    request,
+  }) => {
+    const original = await createConversationViaAPIWithDetails(
+      request,
+      "echo: composer restore recording origin",
+    );
+    const viewedSeed = "Seeded text in the viewed draft.";
+    const viewedEdit = "Edited and read text in the viewed draft.";
+    const viewedId = await createDraftViaAPI(request, viewedSeed);
+    const originalText = "Restore this source text after cancellation.";
+    let uploadCount = 0;
+    await page.route("**/api/upload/raw?filename=*", async (route) => {
+      uploadCount++;
+      await fulfillJSON(route, { path: "/tmp/shelley-uploads/unexpected.webm" });
+    });
+
+    await page.goto(`/c/${original.slug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("message-input").fill(originalText);
+    await page.getByTestId("voice-button").click();
+    await expect(page.getByTestId("recording-panel")).toBeVisible();
+
+    await selectConversationFromDrawer(page, viewedId);
+    const viewedInput = page.getByTestId("message-input");
+    await expect(viewedInput).toHaveValue(viewedSeed);
+    await viewedInput.fill(viewedEdit);
+    await expect(viewedInput).toHaveValue(viewedEdit);
+
+    await page.getByTestId("recording-return-button").click();
+    await expect(page).toHaveURL(new RegExp(`/c/${original.slug}$`));
+    await page.getByTestId("recording-cancel-button").click();
+    await expect(page.getByTestId("message-input")).toHaveValue(originalText);
+
+    await selectConversationFromDrawer(page, viewedId);
+    await expect(page.getByTestId("message-input")).toHaveValue(viewedEdit);
+    expect(uploadCount).toBe(0);
+  });
+
+  test("stops a floating recording into its original conversation without touching the viewed composer", async ({
+    page,
+    request,
+  }) => {
+    const original = await createConversationViaAPIWithDetails(
+      request,
+      "echo: floating stop origin",
+    );
+    const viewed = await createConversationViaAPIWithDetails(
+      request,
+      "echo: floating stop destination",
+    );
+    const chatRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    let rawUploadCount = 0;
+    await page.route(/\/api\/upload$/, (route) =>
+      fulfillJSON(route, { path: "/tmp/shelley-uploads/viewed-draft.txt" }),
+    );
+    await page.route("**/api/upload/raw?filename=*", async (route) => {
+      rawUploadCount++;
+      await fulfillJSON(route, { path: "/tmp/shelley-uploads/floating.webm" });
+    });
+    await page.route("**/api/conversation/*/chat", async (route) => {
+      chatRequests.push({
+        url: route.request().url(),
+        body: route.request().postDataJSON() as Record<string, unknown>,
+      });
+      await fulfillJSON(route, { status: "queued" }, 202);
+    });
+
+    await page.goto(`/c/${original.slug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("message-input").fill("Original spoken context.");
+    await page.getByTestId("voice-button").click();
+    await expect(page.getByTestId("recording-status")).toHaveText("Recording…");
+
+    await selectConversationFromDrawer(page, viewed.conversationId);
+    const viewedInput = page.getByTestId("message-input");
+    await viewedInput.fill("Do not disturb this viewed draft.");
+    await pasteAttachment(page, "viewed-draft.txt");
+    await expect(page.getByTestId("voice-button")).toBeDisabled();
+    await expect(floatingAncestor(page)).toHaveCount(1);
+
+    await page.getByTestId("recording-stop-button").click();
+    await expect.poll(() => chatRequests.length).toBe(1);
+    await expect(page.getByTestId("recording-panel")).toHaveCount(0);
+
+    expect(new URL(chatRequests[0]!.url).pathname).toBe(
+      `/api/conversation/${original.conversationId}/chat`,
+    );
+    expect(chatRequests[0]!.body).toMatchObject({
+      message: "/transcription /tmp/shelley-uploads/floating.webm\nOriginal spoken context.",
+      model: "predictable",
+    });
+    expect(chatRequests[0]!.body).not.toHaveProperty("transcription_context");
+    expect(rawUploadCount).toBe(1);
+    await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
+    await expect(viewedInput).toHaveValue("Do not disturb this viewed draft.");
+    await expect(page.locator(".message-attachment-name")).toHaveText("viewed-draft.txt");
+    await expect(page.locator(".message-attachment-ready")).toHaveCount(1);
+  });
+
+  test("discarding while floating saves a trailing source edit without touching the viewed draft", async ({
+    page,
+    request,
+  }) => {
+    const originalSeed = "Original saved draft before the final edit.";
+    const originalText = "Keep the original saved draft's final edit.";
+    const viewedText = "Keep the viewed saved draft.";
+    const originalId = await createDraftViaAPI(request, originalSeed);
+    const viewedId = await createDraftViaAPI(request, viewedText);
+    let uploadCount = 0;
+    await page.route("**/api/upload/raw?filename=*", async (route) => {
+      uploadCount++;
+      await fulfillJSON(route, { path: "/tmp/shelley-uploads/unexpected.webm" });
+    });
+
+    await page.goto(`/c/${originalId}`);
+    const originalInput = page.getByTestId("message-input");
+    await expect(originalInput).toHaveValue(originalSeed, { timeout: 30_000 });
+
+    // Leave the edit inside the autosave debounce, then switch immediately.
+    // The trailing save must retain the source id instead of reading the newly
+    // viewed draft from mutable composer mirrors.
+    await originalInput.fill(originalText);
+    await page.getByTestId("voice-button").click();
+    await selectConversationFromDrawer(page, viewedId);
+    await expect(page.getByTestId("message-input")).toHaveValue(viewedText);
+    await expect(floatingAncestor(page)).toHaveCount(1);
+
+    await expect
+      .poll(async () => {
+        const [originalResponse, viewedResponse] = await Promise.all([
+          request.get(`/api/conversation-by-slug/${originalId}`),
+          request.get(`/api/conversation-by-slug/${viewedId}`),
+        ]);
+        const original = (await originalResponse.json()) as { draft: string };
+        const viewed = (await viewedResponse.json()) as { draft: string };
+        return [original.draft, viewed.draft];
+      })
+      .toEqual([originalText, viewedText]);
+
+    await page.getByTestId("recording-cancel-button").click();
+    await expect(page.getByTestId("recording-panel")).toHaveCount(0);
+    await expect(page.getByTestId("message-input")).toHaveValue(viewedText);
+    await selectConversationFromDrawer(page, originalId);
+    await expect(page.getByTestId("message-input")).toHaveValue(originalText);
+    await selectConversationFromDrawer(page, viewedId);
+    await expect(page.getByTestId("message-input")).toHaveValue(viewedText);
+    expect(uploadCount).toBe(0);
+  });
+
+  test("gives a blank new-conversation recording a saved return target", async ({
+    page,
+    request,
+  }) => {
+    const viewed = await createConversationViaAPIWithDetails(
+      request,
+      "echo: blank recording destination",
+    );
+    let uploadCount = 0;
+    await page.route("**/api/upload/raw?filename=*", async (route) => {
+      uploadCount++;
+      await fulfillJSON(route, { path: "/tmp/shelley-uploads/unexpected.webm" });
+    });
+
+    await page.goto("/new");
+    const createDraftResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/conversations/draft",
+      { timeout: 10_000 },
+    );
+    await page.getByTestId("voice-button").click();
+    const draftResponse = await createDraftResponse;
+    expect(draftResponse.status()).toBe(201);
+    expect(draftResponse.request().postDataJSON()).toMatchObject({ draft: "" });
+    const draft = (await draftResponse.json()) as { conversation_id: string };
+    await expect(page).toHaveURL(new RegExp(`/c/${draft.conversation_id}$`));
+
+    const panel = page.getByTestId("recording-panel");
+    await expect(panel).toBeVisible();
+    await panel.evaluate((element) => element.setAttribute("data-instance-marker", "blank-new"));
+    await selectConversationFromDrawer(page, viewed.conversationId);
+    await expect(floatingAncestor(page)).toHaveCount(1);
+    await expect(page.getByTestId("voice-button")).toBeDisabled();
+
+    await page.getByTestId("recording-return-button").click();
+    await expect(page).toHaveURL(new RegExp(`/c/${draft.conversation_id}$`));
+    await expect(panel).toHaveAttribute("data-instance-marker", "blank-new");
+    await expect(floatingAncestor(page)).toHaveCount(0);
+    await page.getByTestId("recording-cancel-button").click();
+    expect(uploadCount).toBe(0);
+  });
+
+  test("does not let delayed blank-recording draft creation hijack a later selection", async ({
+    page,
+    request,
+  }) => {
+    const viewed = await createConversationViaAPIWithDetails(
+      request,
+      "echo: delayed blank recording destination",
+    );
+    const draftCreated = deferred();
+    const releaseDraftResponse = deferred();
+    let createdDraftId = "";
+    await page.route("**/api/conversations/draft", async (route) => {
+      const response = await route.fetch();
+      const draft = (await response.json()) as { conversation_id: string };
+      createdDraftId = draft.conversation_id;
+      draftCreated.resolve();
+      await releaseDraftResponse.promise;
+      await route.fulfill({ response, json: draft });
+    });
+
+    await page.goto("/new");
+    await page.getByTestId("voice-button").click();
+    await draftCreated.promise;
+    expect(createdDraftId).not.toBe("");
+    expect(await page.evaluate(() => window.__recordingMock.recorderStarts)).toBe(0);
+
+    try {
+      await selectConversationFromDrawer(page, viewed.conversationId);
+      await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
+      await expect(page.getByTestId("voice-button")).toBeDisabled();
+
+      releaseDraftResponse.resolve();
+      await expect(page.getByTestId("recording-panel")).toBeVisible();
+      await expect(floatingAncestor(page)).toHaveCount(1);
+      await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
+      await expect.poll(() => page.evaluate(() => window.__recordingMock.recorderStarts)).toBe(1);
+
+      await page.getByTestId("recording-return-button").click();
+      await expect(page).toHaveURL(new RegExp(`/c/${createdDraftId}$`));
+      await expect(floatingAncestor(page)).toHaveCount(0);
+      await page.getByTestId("recording-cancel-button").click();
+    } finally {
+      releaseDraftResponse.resolve();
+    }
+  });
+
+  for (const { label, message } of [
+    {
+      label: "normal send",
+      message: "Send this message to the draft that created it.",
+    },
+    {
+      label: "explicit transcription command",
+      message:
+        "/transcription /tmp/shelley-uploads/existing-recording.webm\nKeep this context with it.",
+    },
+  ]) {
+    test(`${label} waits for its delayed new-conversation draft without following later navigation`, async ({
+      page,
+      request,
+    }) => {
+      const viewed = await createConversationViaAPIWithDetails(
+        request,
+        `echo: delayed ${label} destination`,
+      );
+      const draftCreated = deferred();
+      const releaseDraftResponse = deferred();
+      let createdDraftId = "";
+      const chatRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+      await page.route("**/api/conversations/draft", async (route) => {
+        const response = await route.fetch();
+        const draft = (await response.json()) as { conversation_id: string };
+        createdDraftId = draft.conversation_id;
+        draftCreated.resolve();
+        await releaseDraftResponse.promise;
+        await route.fulfill({ response, json: draft });
+      });
+      await page.route("**/api/conversation/*/chat", async (route) => {
+        chatRequests.push({
+          url: route.request().url(),
+          body: route.request().postDataJSON() as Record<string, unknown>,
+        });
+        if (label === "normal send") await route.continue();
+        else await fulfillJSON(route, { status: "queued" }, 202);
+      });
+
+      await page.goto("/new");
+      await page.getByTestId("message-input").fill(message);
+      await draftCreated.promise;
+      expect(createdDraftId).not.toBe("");
+
+      await page.getByTestId("send-button").click();
+      try {
+        await selectConversationFromDrawer(page, viewed.conversationId);
+        await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
+
+        releaseDraftResponse.resolve();
+        await expect.poll(() => chatRequests.length).toBe(1);
+        expect(new URL(chatRequests[0]!.url).pathname).toBe(
+          `/api/conversation/${createdDraftId}/chat`,
+        );
+        expect(chatRequests[0]!.body).toMatchObject({ message });
+        await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
+        await expect
+          .poll(() =>
+            page.evaluate((id) => localStorage.getItem(`shelley-draft:${id}`), createdDraftId),
+          )
+          .toBeNull();
+        if (label === "normal send") {
+          await selectConversationFromDrawer(page, createdDraftId);
+          await expect(page.getByTestId("message-input")).toHaveValue("");
+        }
+      } finally {
+        releaseDraftResponse.resolve();
+      }
+    });
+  }
+
+  test("moves a delayed new-conversation recording draft after navigation and clears its source", async ({
+    page,
+    request,
+  }) => {
+    const viewed = await createConversationViaAPIWithDetails(
+      request,
+      "echo: delayed nonempty recording destination",
+    );
+    const initialText = "Initial text while the draft request starts.";
+    const recordedText = "Latest text owned by the delayed recording draft.";
+    const draftCreated = deferred();
+    const releaseDraftResponse = deferred();
+    let createdDraftId = "";
+    let draftRequest: Record<string, unknown> | null = null;
+    const chatRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    await page.route("**/api/conversations/draft", async (route) => {
+      draftRequest = route.request().postDataJSON() as Record<string, unknown>;
+      const response = await route.fetch();
+      const draft = (await response.json()) as { conversation_id: string };
+      createdDraftId = draft.conversation_id;
+      draftCreated.resolve();
+      await releaseDraftResponse.promise;
+      await route.fulfill({ response, json: draft });
+    });
+    await page.route("**/api/upload/raw?filename=*", (route) =>
+      fulfillJSON(route, { path: "/tmp/shelley-uploads/delayed-new.webm" }),
+    );
+    await page.route("**/api/conversation/*/chat", async (route) => {
+      chatRequests.push({
+        url: route.request().url(),
+        body: route.request().postDataJSON() as Record<string, unknown>,
+      });
+      await fulfillJSON(route, { status: "queued" }, 202);
+    });
+
+    await page.goto("/new");
+    const input = page.getByTestId("message-input");
+    await input.fill(initialText);
+    await draftCreated.promise;
+    expect(draftRequest).toMatchObject({ draft: initialText });
+    expect(createdDraftId).not.toBe("");
+
+    await input.fill(recordedText);
+    await page.getByTestId("voice-button").click();
+    expect(await page.evaluate(() => window.__recordingMock.recorderStarts)).toBe(0);
+
+    try {
+      await selectConversationFromDrawer(page, viewed.conversationId);
+      await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
+
+      releaseDraftResponse.resolve();
+      await expect(page.getByTestId("recording-panel")).toBeVisible();
+      await expect(floatingAncestor(page)).toHaveCount(1);
+      await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
+
+      await page.getByTestId("recording-stop-button").click();
+      await expect.poll(() => chatRequests.length).toBe(1);
+      await expect(page.getByTestId("recording-panel")).toHaveCount(0);
+      expect(new URL(chatRequests[0]!.url).pathname).toBe(
+        `/api/conversation/${createdDraftId}/chat`,
+      );
+      expect(chatRequests[0]!.body).toMatchObject({
+        message: `/transcription /tmp/shelley-uploads/delayed-new.webm\n${recordedText}`,
+        model: "predictable",
+      });
+      await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
+
+      await page.locator("button.btn-new").click();
+      await expect(page).toHaveURL(/\/new$/);
+      await expect(page.getByTestId("message-input")).toHaveValue("");
+    } finally {
+      releaseDraftResponse.resolve();
+    }
+  });
+
+  test("a delayed recording draft does not consume a newer new-conversation composer", async ({
+    page,
+    request,
+  }) => {
+    const viewed = await createConversationViaAPIWithDetails(
+      request,
+      "echo: delayed recording before newer new conversation",
+    );
+    const recordedText = "Text owned by the older delayed draft.";
+    const newerText = "Text entered in the newer new-conversation session.";
+    const oldDraftCreated = deferred();
+    const releaseOldDraftResponse = deferred();
+    const releaseOtherDraftResponses = deferred();
+    let oldDraftId = "";
+    let draftRequestCount = 0;
+
+    await page.route("**/api/conversations/draft", async (route) => {
+      draftRequestCount++;
+      const response = await route.fetch();
+      const draft = (await response.json()) as { conversation_id: string };
+      if (draftRequestCount === 1) {
+        oldDraftId = draft.conversation_id;
+        oldDraftCreated.resolve();
+        await releaseOldDraftResponse.promise;
+      } else {
+        await releaseOtherDraftResponses.promise;
+      }
+      await route.fulfill({ response, json: draft });
+    });
+
+    await page.goto("/new");
+    await page.getByTestId("message-input").fill(recordedText);
+    await oldDraftCreated.promise;
+    await page.getByTestId("voice-button").click();
+    expect(oldDraftId).not.toBe("");
+    expect(await page.evaluate(() => window.__recordingMock.recorderStarts)).toBe(0);
+
+    try {
+      await selectConversationFromDrawer(page, viewed.conversationId);
+      await page.locator("button.btn-new").click();
+      await expect(page).toHaveURL(/\/new$/);
+      const newerInput = page.getByTestId("message-input");
+      await newerInput.fill(newerText);
+
+      releaseOldDraftResponse.resolve();
+      await expect(page.getByTestId("recording-panel")).toBeVisible();
+      await expect(floatingAncestor(page)).toHaveCount(1);
+      await expect(page).toHaveURL(/\/new$/);
+      await expect(newerInput).toHaveValue(newerText);
+
+      await page.getByTestId("recording-return-button").click();
+      await expect(page).toHaveURL(new RegExp(`/c/${oldDraftId}$`));
+      await page.getByTestId("recording-cancel-button").click();
+      await expect(page.getByTestId("message-input")).toHaveValue(recordedText);
+
+      await page.locator("button.btn-new").click();
+      await expect(page).toHaveURL(/\/new$/);
+      await expect(page.getByTestId("message-input")).toHaveValue(newerText);
+    } finally {
+      releaseOldDraftResponse.resolve();
+      releaseOtherDraftResponses.resolve();
+    }
   });
 
   test("starts microphone recording inline and submits only the transcription command", async ({
@@ -307,18 +1005,16 @@ test.describe("media recording composer", () => {
     await expect.poll(() => page.evaluate(() => window.__recordingMock.recorderStarts)).toBe(1);
     await expect(page.getByTestId("recording-status")).toHaveText("Recording…");
     await expect(page.locator(".recording-status")).toHaveAttribute("data-state", "preroll");
-    await expect(page.getByTestId("recording-waveform")).toHaveClass(
-      /recording-waveform-preroll/,
-    );
+    await expect(page.getByTestId("recording-waveform")).toHaveClass(/recording-waveform-preroll/);
     await expect(page.locator(".recording-status")).toHaveAttribute("data-state", "recording");
     await expect(page.getByTestId("recording-status")).toHaveText("Recording…");
     await expect(page.getByTestId("recording-preserved-text")).toHaveText(
       "Keep this note with the recording.",
     );
     await expect(page.getByTestId("recording-waveform")).toBeVisible();
-    const waveformHeights = await page.locator(".recording-waveform-bar").evaluateAll((bars) =>
-      bars.map((bar) => getComputedStyle(bar).height),
-    );
+    const waveformHeights = await page
+      .locator(".recording-waveform-bar")
+      .evaluateAll((bars) => bars.map((bar) => getComputedStyle(bar).height));
     expect(new Set(waveformHeights).size).toBeGreaterThan(1);
     await page.evaluate(() => {
       window.__recordingMock.meterPeak = 48;
@@ -326,9 +1022,11 @@ test.describe("media recording composer", () => {
     await expect
       .poll(async () =>
         Math.max(
-          ...(await page.locator(".recording-waveform-bar").evaluateAll((bars) =>
-            bars.map((bar) => Number.parseFloat(getComputedStyle(bar).height)),
-          )),
+          ...(await page
+            .locator(".recording-waveform-bar")
+            .evaluateAll((bars) =>
+              bars.map((bar) => Number.parseFloat(getComputedStyle(bar).height)),
+            )),
         ),
       )
       .toBeGreaterThan(Math.max(...waveformHeights.map(Number.parseFloat)) * 2);
@@ -677,8 +1375,12 @@ test.describe("media recording composer", () => {
 
   test("accepts encoded data emitted when a short recording stops", async ({ page }) => {
     let uploadedBody = Buffer.alloc(0);
+    const uploadStarted = deferred();
+    const releaseUpload = deferred();
     await page.route("**/api/upload/raw?filename=*", async (route) => {
       uploadedBody = route.request().postDataBuffer() ?? Buffer.alloc(0);
+      uploadStarted.resolve();
+      await releaseUpload.promise;
       await fulfillJSON(route, { path: "/tmp/shelley-uploads/short.webm" });
     });
     await page.route("**/api/conversation/*/chat", async (route) => {
@@ -692,7 +1394,9 @@ test.describe("media recording composer", () => {
     await page.getByTestId("voice-button").click();
     await expect(page.locator(".recording-status")).toHaveAttribute("data-state", "preroll");
     await page.getByTestId("recording-stop-button").click();
+    await uploadStarted.promise;
     await expect(page.getByTestId("recording-status")).toHaveText("Finishing recording…");
+    releaseUpload.resolve();
     await expect(page.getByTestId("recording-panel")).toHaveCount(0);
     expect([...uploadedBody.subarray(0, 4)]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
     expect(uploadedBody.subarray(4).toString()).toBe("encodedlast");
@@ -709,6 +1413,7 @@ test("uses a microphone icon when screen capture is unavailable", async ({ page 
 
 declare global {
   interface Window {
+    __recordingPreviewSource: MediaProvider | null;
     __recordingMock: {
       displayRequests: number;
       microphoneRequests: number;
@@ -717,6 +1422,7 @@ declare global {
       displayError: string;
       meterPeak: number;
       recorderStarts: number;
+      recorderStops: number;
       dataOnlyOnStop: boolean;
       endDisplay: () => void;
     };

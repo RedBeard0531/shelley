@@ -3465,6 +3465,58 @@ diffs-container {
 }
 
 /* Inline media recording takeover */
+/* Detached controls retain the same recorder while another chat is selected. */
+.recording-floating {
+  position: fixed;
+  z-index: 30;
+  right: 1rem;
+  bottom: calc(9rem + env(safe-area-inset-bottom, 0px));
+  width: min(32rem, calc(100vw - 2rem));
+  box-sizing: border-box;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-base);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 20%);
+}
+
+.recording-return {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0 0 0.375rem;
+  padding: 0.25rem 0.375rem;
+  border: 0;
+  border-radius: 0.25rem;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.recording-return:hover {
+  background: var(--bg-hover);
+}
+
+.recording-floating .recording-panel {
+  height: auto;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.recording-floating .recording-panel-main {
+  flex-basis: 100%;
+}
+
+.recording-floating .recording-actions {
+  margin-left: auto;
+}
+
+.recording-floating .recording-preserved-text {
+  max-width: 8rem;
+}
+
 .recording-panel {
   display: flex;
   align-items: center;
@@ -3666,6 +3718,11 @@ diffs-container {
 }
 
 @media (max-width: 640px) {
+  .recording-floating {
+    top: calc(5.5rem + env(safe-area-inset-top, 0px));
+    bottom: auto;
+  }
+
   .recording-panel {
     height: 42px;
     flex-direction: row;
@@ -3719,6 +3776,12 @@ diffs-container {
 
   .recording-screen-btn {
     margin-right: 0;
+  }
+}
+
+@media print {
+  .recording-floating {
+    display: none;
   }
 }
 

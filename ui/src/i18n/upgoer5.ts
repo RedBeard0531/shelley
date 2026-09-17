@@ -138,6 +138,7 @@ export const upgoer5: TranslationKeys = {
   attachFile: "Add a thing",
   sendMessage: "Send it",
   recordingTitle: "Record sound or screen",
+  recordingReturn: "Go back to the recording",
   recordingStop: "Stop recording",
   recordingStopTranscription: "Stop turning voice into words",
   recordingStarting: "Starting recording…",
