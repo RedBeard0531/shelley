@@ -265,16 +265,8 @@
         </div>
       </div>
 
-      <!-- Floating nav cluster -->
+      <!-- Floating scroll-to-bottom button -->
       <div v-if="conversationId && messages.length > 0" class="chat-nav-cluster">
-        <ConversationTOC
-          :messages="visibleMessages"
-          :container-ref="messagesContainerRef"
-          :near-bottom="!showScrollToBottom"
-          :conversation-id="conversationId"
-          @scroll-bottom="scrollToBottom"
-          @scroll-away="markUserScrolledUp"
-        />
         <button
           v-if="showScrollToBottom"
           class="scroll-to-bottom-button"
@@ -341,6 +333,7 @@
     <div :class="statusBarClass">
       <div class="status-bar-content">
         <ChatStatusContent v-if="showStatusContent" v-bind="statusContentProps" />
+        <span :id="`${tocTargetId}-desktop`" class="status-navigation" />
       </div>
     </div>
 
@@ -388,8 +381,26 @@
     >
       <template v-if="statusSlotInline" #status>
         <ChatStatusContent v-bind="statusContentProps" />
+        <span :id="`${tocTargetId}-mobile`" class="status-navigation" />
       </template>
     </MessageInput>
+
+    <!-- Keep one TOC alive across responsive/status host changes: remounting
+         would restart fragment navigation and jump to an old message link. -->
+    <Teleport
+      v-if="conversationId && messages.length > 0"
+      defer
+      :to="`#${tocTargetId}-${statusSlotInline ? 'mobile' : 'desktop'}`"
+    >
+      <ConversationTOC
+        :messages="visibleMessages"
+        :container-ref="messagesContainerRef"
+        :near-bottom="!showScrollToBottom"
+        :conversation-id="conversationId"
+        @scroll-bottom="scrollToBottom"
+        @scroll-away="markUserScrolledUp"
+      />
+    </Teleport>
 
     <!-- Directory Picker Modal -->
     <DirectoryPickerModal
@@ -457,7 +468,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, useId, watch } from "vue";
 import Button from "primevue/button";
 import PvMessage from "primevue/message";
 import {
@@ -3512,6 +3523,8 @@ const messageInputInitialRows = computed(() =>
 const canQueue = computed(() => agentWorking.value && !!props.conversationId);
 const autoQueue = computed(() => isDistilling.value && !!props.conversationId);
 
+const tocTargetId = useId();
+
 // Status content visibility on mobile (mirrors the renderStatusContent gate)
 const showStatusContent = computed(
   () =>
@@ -3525,6 +3538,7 @@ const statusSlotInline = computed(
   () =>
     !!props.conversationId &&
     !props.currentConversation?.is_draft &&
+    !props.currentConversation?.archived &&
     !conversationInterrupted.value &&
     isMobile.value,
 );

@@ -4247,6 +4247,7 @@ select:disabled {
   align-items: center;
   justify-content: space-between;
   width: 100%;
+  min-width: 0;
   gap: 0.75rem;
 }
 
@@ -4266,6 +4267,9 @@ select:disabled {
   font-size: 0.75rem;
   line-height: 1.2;
   color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-message.status-warning {
@@ -4305,9 +4309,27 @@ select:disabled {
   }
 }
 
+/* Working text gives up space before the directory/model readout. */
 .animated-working {
-  display: inline;
+  container: working-status / inline-size;
+  flex: 0 1000 16ch;
+  width: 16ch;
+  min-width: 3ch;
+  overflow: hidden;
+  white-space: nowrap;
   font-family: var(--font-mono);
+}
+
+@container working-status (width < 16ch) {
+  .working-prefix {
+    display: none;
+  }
+}
+
+@container working-status (width < 10ch) {
+  .working-word {
+    display: none;
+  }
 }
 
 .animated-working .bold-letter {
@@ -4817,9 +4839,7 @@ svg {
   transform: translateX(-50%) scale(0.95);
 }
 
-/* Floating nav cluster — bottom of messages area. Contains TOC button
-   (always visible) and an optional scroll-to-bottom button. Replaces the
-   centered scroll-to-bottom button so the TOC is a first-class control. */
+/* Floating scroll control at the bottom of the messages area. */
 .chat-nav-cluster {
   position: absolute;
   bottom: 1rem;
@@ -4834,7 +4854,7 @@ svg {
 .chat-nav-cluster > * {
   pointer-events: auto;
 }
-/* Override centered positioning when inside the cluster; match TOC button size */
+/* Keep the floating scroll control at the bottom-right. */
 .chat-nav-cluster .scroll-to-bottom-button {
   position: static;
   transform: none;
@@ -4852,27 +4872,34 @@ svg {
   height: 1.125rem;
 }
 
-/* TOC trigger button */
+/* Teleport targets place the persistent TOC directly in the flex row. */
+.status-navigation {
+  display: contents;
+}
+
+/* Inline TOC trigger, immediately after the model readout. */
 .toc-button {
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  width: 2.5rem;
-  height: 2.5rem;
+  flex: none;
+  background: none;
+  border: none;
+  border-radius: 0.25rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: var(--text-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  transition:
-    background 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.1s ease;
+  color: var(--text-secondary);
+  transition: background 0.15s ease;
 }
 .toc-button:hover {
   background: var(--bg-hover);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+}
+.toc-button:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: 1px;
 }
 .toc-button:active {
   transform: scale(0.95);
@@ -5773,12 +5800,6 @@ svg {
   background: var(--bg-secondary);
 }
 
-.status-working-group {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
 /* Right-hand status readout: "~/dir · 15k · model-name", dot-separated. One
    type style for every segment (the cwd used to be mono at a different size,
    which read as three unrelated widgets sitting next to each other) — set
@@ -5875,6 +5896,7 @@ svg {
 }
 
 .status-stop-button {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -6051,23 +6073,13 @@ svg {
     flex: 1;
     min-width: 0;
     overflow: hidden;
+    gap: 0.375rem;
     font-size: 0.875rem;
   }
 
   /* Compact the status bar active layout when inline */
   .message-controls-status-slot .status-bar-active {
     gap: 0.375rem;
-  }
-
-  /* The hostname readout yields room to the context usage label rather than
-     wrapping to a second line. Scoped to .status-ready: error and
-     no-models messages are the whole point of the status bar when they
-     appear, and must keep wrapping rather than be clipped. */
-  .message-controls-status-slot .status-message.status-ready {
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   /* Let new-conversation fields share a row when they fit and wrap naturally

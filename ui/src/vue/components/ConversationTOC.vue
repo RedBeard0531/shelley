@@ -1,4 +1,4 @@
-<!-- Vue port of components/ConversationTOC.tsx. Floating table-of-contents
+<!-- Vue port of components/ConversationTOC.tsx. Status-row table-of-contents
      button + popover, backed by PrimeVue Popover (outside-click dismissal,
      Escape, viewport-aware positioning come for free — the manual
      getBoundingClientRect math and document listeners are gone). Preserves the

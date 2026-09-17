@@ -44,21 +44,19 @@
     class="status-bar-active"
     data-testid="agent-thinking"
   >
-    <div class="status-working-group">
-      <AnimatedWorkingStatus />
-      <button
-        :disabled="cancelling"
-        class="status-stop-button"
-        v-tooltip.top="'Stop'"
-        :aria-label="cancelling ? 'Cancelling...' : 'Stop'"
-        @click="onCancel"
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <rect x="6" y="6" width="12" height="12" rx="1" />
-        </svg>
-        <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
-      </button>
-    </div>
+    <AnimatedWorkingStatus />
+    <button
+      :disabled="cancelling"
+      class="status-stop-button"
+      v-tooltip.top="'Stop'"
+      :aria-label="cancelling ? 'Cancelling...' : 'Stop'"
+      @click="onCancel"
+    >
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <rect x="6" y="6" width="12" height="12" rx="1" />
+      </svg>
+      <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
+    </button>
     <StatusReadout
       v-bind="readoutProps"
       :cwd="cwd"
