@@ -74,37 +74,78 @@
           >tour</a
         >
       </template>
+      <template v-else-if="tourState === 'absent' && canRequestTour">
+        {{ " " }}
+        <button
+          type="button"
+          class="msg-tour-action"
+          data-testid="gitinfo-tour-request"
+          :disabled="requestingTour"
+          v-tooltip.top="'Build a guided tour in a subagent'"
+          @click="requestTour"
+        >
+          {{ requestingTour ? "requesting tour…" : "request tour" }}
+        </button>
+      </template>
+      <template v-else-if="tourState === 'building'">
+        {{ " " }}
+        <a
+          v-if="tourStatus?.worker_slug"
+          :href="`/c/${tourStatus.worker_slug}`"
+          class="msg-tour-building"
+          data-testid="gitinfo-tour-building"
+          v-tooltip.top="'Open the subagent building this tour'"
+          @click="onWorkerLinkClick"
+        >
+          <span class="working-indicator" aria-hidden="true" /> building tour…
+        </a>
+        <span v-else class="msg-tour-building" data-testid="gitinfo-tour-building">
+          <span class="working-indicator" aria-hidden="true" /> building tour…
+        </span>
+      </template>
+      <template v-else-if="tourState === 'failed' && canRequestTour">
+        {{ " " }}
+        <span class="msg-tour-failed" data-testid="gitinfo-tour-failed">tour failed</span>
+        {{ " " }}
+        <button
+          type="button"
+          class="msg-tour-action"
+          :disabled="requestingTour"
+          v-tooltip.top="tourStatus?.error || 'The subagent did not attach a valid tour'"
+          @click="requestTour"
+        >
+          retry
+        </button>
+      </template>
     </span>
   </div>
 </template>
 
-<script lang="ts">
-interface TourProbeCacheEntry {
-  promise: Promise<boolean>;
-  expiresAt: number;
-}
-
-const TOUR_PROBE_TTL_MS = 30_000;
-const TOUR_HOVER_RETRY_MS = 5_000;
-const tourProbeCache = new Map<string, TourProbeCacheEntry>();
-</script>
-
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { api } from "../../services/api";
+import type { GitTourBuildStatus } from "../../services/api";
+import {
+  loadCommitTourStatus,
+  requestCommitTour,
+  subscribeCommitTourStatus,
+} from "../../services/commitTourStatus";
 import type { Message as MessageType } from "../../types";
+import { navigateToConversationSlug } from "../composables/subagentLive";
 
 const props = defineProps<{
   message: MessageType;
   onOpenDiffViewer?: (commit: string, cwd?: string) => void;
+  canRequestTour?: boolean;
 }>();
 
 const copied = ref(false);
 const containerRef = ref<HTMLElement | null>(null);
-type TourState = "unknown" | "present" | "absent";
-const tourState = ref<TourState>("unknown");
-let tourProbeSequence = 0;
+const tourStatus = ref<GitTourBuildStatus | null>(null);
+const requestingTour = ref(false);
 let lastForcedTourProbeAt = 0;
+let tourPollTimer: ReturnType<typeof setTimeout> | null = null;
+let unsubscribeTour: (() => void) | null = null;
+let disposed = false;
 
 const parsed = computed(() => {
   let commitHash: string | null = null;
@@ -132,7 +173,7 @@ const commitHash = computed(() => parsed.value.commitHash);
 const subject = computed(() => parsed.value.subject);
 const branch = computed(() => parsed.value.branch);
 const worktree = computed(() => parsed.value.worktree);
-
+const tourState = computed(() => tourStatus.value?.status ?? "unknown");
 const canShowDiff = computed(() => !!commitHash.value && !!props.onOpenDiffViewer);
 
 const truncatedSubject = computed(() => {
@@ -154,55 +195,77 @@ function handleDiffClick() {
 }
 
 function onDiffLinkClick(e: MouseEvent) {
-  // Respect modifier/middle-click so users can open in a new tab.
-  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
-    return;
-  }
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
   e.preventDefault();
   handleDiffClick();
+}
+
+function onWorkerLinkClick(e: MouseEvent) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  const slug = tourStatus.value?.worker_slug;
+  if (!slug) return;
+  e.preventDefault();
+  navigateToConversationSlug(slug);
+}
+
+function scheduleTourPoll() {
+  if (tourPollTimer) clearTimeout(tourPollTimer);
+  tourPollTimer = null;
+  if (disposed || tourState.value !== "building") return;
+  tourPollTimer = setTimeout(() => void probeTour(true), 2_000);
+}
+
+function applyTourStatus(status: GitTourBuildStatus) {
+  tourStatus.value = status;
+  scheduleTourPoll();
 }
 
 async function probeTour(force = false) {
   const hash = commitHash.value;
   const cwd = worktree.value;
   if (!hash || !cwd) return;
-
-  const key = `${cwd}\u0000${hash}`;
-  const now = Date.now();
-  let entry = force ? undefined : tourProbeCache.get(key);
-  if (entry && entry.expiresAt <= now) {
-    tourProbeCache.delete(key);
-    entry = undefined;
-  }
-  if (!entry) {
-    entry = {
-      promise: api.hasGitTour(cwd, hash),
-      expiresAt: now + TOUR_PROBE_TTL_MS,
-    };
-    tourProbeCache.set(key, entry);
-  }
-
-  const sequence = ++tourProbeSequence;
   try {
-    const present = await entry.promise;
-    if (sequence === tourProbeSequence) {
-      tourState.value = present ? "present" : "absent";
-    }
+    const status = await loadCommitTourStatus(cwd, hash, force);
+    if (!disposed) applyTourStatus(status);
   } catch (error) {
-    if (tourProbeCache.get(key) === entry) tourProbeCache.delete(key);
+    if (disposed) return;
     console.error("Failed to check commit tour:", error);
+    scheduleTourPoll();
   }
 }
 
 function refreshTour() {
   const now = Date.now();
-  const force = tourState.value === "absent" && now - lastForcedTourProbeAt >= TOUR_HOVER_RETRY_MS;
+  const force =
+    (tourState.value === "absent" || tourState.value === "failed") &&
+    now - lastForcedTourProbeAt >= 5_000;
   if (force) lastForcedTourProbeAt = now;
   void probeTour(force);
 }
 
+async function requestTour() {
+  const hash = commitHash.value;
+  const cwd = worktree.value;
+  if (!hash || !cwd || !props.message.conversation_id || requestingTour.value) return;
+  requestingTour.value = true;
+  try {
+    applyTourStatus(await requestCommitTour(props.message.conversation_id, cwd, hash));
+  } catch (error) {
+    applyTourStatus({
+      status: "failed",
+      hash,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    requestingTour.value = false;
+  }
+}
+
 let tourObserver: IntersectionObserver | null = null;
 onMounted(() => {
+  const hash = commitHash.value;
+  const cwd = worktree.value;
+  if (hash && cwd) unsubscribeTour = subscribeCommitTourStatus(cwd, hash, applyTourStatus);
   if (!containerRef.value || !("IntersectionObserver" in window)) {
     void probeTour();
     return;
@@ -215,7 +278,12 @@ onMounted(() => {
   });
   tourObserver.observe(containerRef.value);
 });
-onBeforeUnmount(() => tourObserver?.disconnect());
+onBeforeUnmount(() => {
+  disposed = true;
+  tourObserver?.disconnect();
+  unsubscribeTour?.();
+  if (tourPollTimer) clearTimeout(tourPollTimer);
+});
 
 function handleCopyHash(e: MouseEvent) {
   e.preventDefault();

@@ -23,6 +23,7 @@
     <MessageComponent
       :message="node.item.message"
       :on-open-diff-viewer="onOpenDiffViewer"
+      :can-request-tour="canRequestTour"
       :on-comment-text-change="onCommentTextChange"
       :on-fork="conversationId ? onFork : undefined"
     />
@@ -54,6 +55,7 @@
       :node="child"
       :conversation-id="conversationId"
       :on-open-diff-viewer="onOpenDiffViewer"
+      :can-request-tour="canRequestTour"
       :on-comment-text-change="onCommentTextChange"
       :on-fork="onFork"
     />
@@ -72,6 +74,7 @@ defineProps<{
   node: RenderNode;
   conversationId: string | null;
   onOpenDiffViewer: (commit: string, cwd?: string) => void;
+  canRequestTour: boolean;
   onCommentTextChange: (text: string) => void;
   onFork: (messageId: string) => void;
 }>();

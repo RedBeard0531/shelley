@@ -584,3 +584,11 @@ RETURNING *;
 SELECT * FROM conversations
 WHERE queued_messages LIKE '%"kind":"transcription"%'
 ORDER BY created_at ASC;
+
+-- name: ListCommitTourWorkers :many
+-- Specialized child conversations durably tracking requested commit tours.
+SELECT * FROM conversations
+WHERE parent_conversation_id IS NOT NULL
+  AND user_initiated = FALSE
+  AND conversation_options LIKE '%"kind":"commit-tour"%'
+ORDER BY created_at ASC, rowid ASC;

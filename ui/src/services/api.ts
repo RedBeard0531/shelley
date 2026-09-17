@@ -69,6 +69,17 @@ export interface GitTour {
   chunks: GitTourEntry[];
 }
 
+export type GitTourBuildState = "absent" | "building" | "present" | "failed";
+
+export interface GitTourBuildStatus {
+  status: GitTourBuildState;
+  hash: string;
+  repository?: string;
+  worker_conversation_id?: string;
+  worker_slug?: string;
+  error?: string;
+}
+
 export interface GitTourResponse {
   hash: string;
   tour: GitTour;
@@ -77,6 +88,7 @@ export interface GitTourResponse {
 export interface ChatAcceptedResponse {
   status?: string;
   btw?: BtwReaderDescriptor;
+  tour?: GitTourBuildStatus;
 }
 
 export interface BtwSummaryReceipt {
@@ -613,6 +625,27 @@ class ApiService {
       throw new Error(text || response.statusText);
     }
     return response.json();
+  }
+
+  async getGitTourStatus(cwd: string, hash: string): Promise<GitTourBuildStatus> {
+    const params = new URLSearchParams({ cwd, hash });
+    const response = await fetch(`${this.baseUrl}/git/tour/status?${params}`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to check commit tour status");
+    }
+    return response.json();
+  }
+
+  async requestGitTour(
+    conversationId: string,
+    cwd: string,
+    hash: string,
+  ): Promise<GitTourBuildStatus> {
+    const accepted = await this.sendMessage(conversationId, {
+      message: `/tour ${hash}\n${cwd}`,
+    });
+    if (!accepted.tour) throw new Error("Commit tour request returned no status");
+    return accepted.tour;
   }
 
   async hasGitTour(cwd: string, hash: string): Promise<boolean> {

@@ -54,9 +54,9 @@ test("git info shows and opens an attached commit tour", async ({ page, request 
     await page.setViewportSize({ width: 1280, height: 900 });
     const missingProbe = page.waitForResponse(
       (response) =>
-        response.request().method() === "HEAD" &&
-        response.url().includes("/api/git/tour?") &&
-        response.status() === 404,
+        response.request().method() === "GET" &&
+        response.url().includes("/api/git/tour/status?") &&
+        response.status() === 200,
     );
     await page.goto(`/c/${slug}`);
     await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
@@ -65,6 +65,7 @@ test("git info shows and opens an attached commit tour", async ({ page, request 
     const gitInfo = page.getByTestId("message-gitinfo").filter({ hasText: shortHash });
     const tourLink = gitInfo.getByRole("link", { name: "tour", exact: true });
     await expect(tourLink).toHaveCount(0);
+    await expect(gitInfo.getByTestId("gitinfo-tour-request")).toBeVisible();
 
     execFileSync(shelleyBin, ["tour", "attach", "-C", repo, hash, tourPath]);
     git(repo, "reset", "--hard", "upstream");
@@ -77,5 +78,79 @@ test("git info shows and opens an attached commit tour", async ({ page, request 
     await expect(overlay).toBeVisible({ timeout: 30_000 });
     await expect(overlay.locator(".diff-viewer-view-switcher button.active")).toHaveText("Tour");
     await expect(overlay.locator(".commit-tour-introduction h1")).toHaveText("Tour this commit");
+  });
+});
+
+test("missing tour requests a visible background subagent", async ({ page, request }) => {
+  await withTempDir("shelley-gitinfo-tour-request-", async (tempDir) => {
+    const repo = join(tempDir, "repo");
+    mkdirSync(repo);
+    git(repo, "init");
+    git(repo, "config", "user.name", "Tour Test");
+    git(repo, "config", "user.email", "tour@example.com");
+    writeFileSync(join(repo, "example.txt"), "before\n");
+    git(repo, "add", "example.txt");
+    git(repo, "commit", "-m", "Base commit", "-m", "Prompt: prepare the request-tour fixture");
+    git(repo, "branch", "upstream");
+    git(repo, "switch", "-c", "feature");
+    git(repo, "branch", "--set-upstream-to=upstream", "feature");
+
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(
+      request,
+      "bash: printf 'after\\n' > example.txt && git add example.txt && git commit --no-verify -m 'Request this tour' -m 'Prompt: create a commit needing a tour'",
+      { cwd: repo },
+    );
+    const hash = git(repo, "rev-parse", "HEAD");
+    const shortHash = hash.slice(0, 7);
+    let state: "absent" | "building" | "present" = "absent";
+    let requestedMessage = "";
+
+    await page.route("**/api/git/tour/status?*", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: state,
+          hash,
+          worker_conversation_id: state === "building" ? "tour-worker" : undefined,
+          worker_slug: state === "building" ? "tour-worker-slug" : undefined,
+        }),
+      });
+    });
+    await page.route(`**/api/conversation/${conversationId}/chat`, async (route) => {
+      const body = route.request().postDataJSON() as { message?: string };
+      if (!body.message?.startsWith("/tour ")) {
+        await route.continue();
+        return;
+      }
+      requestedMessage = body.message;
+      state = "building";
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "accepted",
+          tour: {
+            status: "building",
+            hash,
+            worker_conversation_id: "tour-worker",
+            worker_slug: "tour-worker-slug",
+          },
+        }),
+      });
+    });
+
+    await page.goto(`/c/${slug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
+    const gitInfo = page.getByTestId("message-gitinfo").filter({ hasText: shortHash });
+    await gitInfo.getByTestId("gitinfo-tour-request").click();
+
+    const building = gitInfo.getByTestId("gitinfo-tour-building");
+    await expect(building).toContainText("building tour");
+    await expect(building).toHaveAttribute("href", "/c/tour-worker-slug");
+    expect(requestedMessage).toBe(`/tour ${shortHash}\n${repo}`);
+
+    state = "present";
+    await expect(gitInfo.getByTestId("gitinfo-tour-link")).toBeVisible({ timeout: 10_000 });
   });
 });

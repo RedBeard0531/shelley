@@ -709,7 +709,11 @@ func (s *Server) notifyParentSubagentDone(subagentConversationID, response strin
 	if err != nil || !isManagedChild(conv) {
 		return
 	}
-	if isBtwReader(conv) || db.ParseConversationOptions(conv.ConversationOptions).Kind == transcriptionKind {
+	if isBtwReader(conv) {
+		return
+	}
+	kind := db.ParseConversationOptions(conv.ConversationOptions).Kind
+	if kind == transcriptionKind || kind == commitTourKind {
 		// Detached and internal workers never inject completion into parent history.
 		return
 	}
@@ -911,8 +915,9 @@ func (s *Server) cancelSubagentTree(ctx context.Context, parentID string) {
 			if !isManagedChild(child) {
 				continue
 			}
-			if isBtwReader(child) {
-				// A BTW is detached from parent-turn cancellation. Do not
+			kind := db.ParseConversationOptions(child.ConversationOptions).Kind
+			if isBtwReader(child) || kind == commitTourKind {
+				// Detached work is independent of parent-turn cancellation. Do not
 				// cancel it or traverse through it.
 				continue
 			}

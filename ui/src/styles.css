@@ -10599,9 +10599,35 @@ kbd {
   margin-left: 0.3em;
 }
 
-.msg-diff-link {
+.msg-diff-link,
+.msg-tour-action,
+.msg-tour-building {
   color: var(--blue-text);
   text-decoration: underline;
+}
+
+.msg-tour-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  font-style: inherit;
+  cursor: pointer;
+}
+
+.msg-tour-action:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.msg-tour-building {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+}
+
+.msg-tour-failed {
+  color: var(--error-text);
 }
 
 .msg-distill-container {

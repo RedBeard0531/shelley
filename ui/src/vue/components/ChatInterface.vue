@@ -182,6 +182,11 @@
                 :chunk="chunk"
                 :conversation-id="conversationId"
                 :on-open-diff-viewer="handleOpenDiffViewer"
+                :can-request-tour="
+                  !!currentConversation &&
+                  !currentConversation.parent_conversation_id &&
+                  !currentConversation.is_draft
+                "
                 :on-comment-text-change="setDiffCommentText"
                 :on-fork="forkHandler"
               />
@@ -533,6 +538,7 @@ import {
 } from "../../utils/conversationView";
 import { SLASH_COMMANDS } from "../../utils/slashCommands";
 import { replaceLocationFragment } from "../../utils/locationFragment";
+import { applyCommitTourStatus } from "../../services/commitTourStatus";
 import { contextUsageLevel } from "../../utils/contextUsage";
 import {
   btwAnchor,
@@ -2889,10 +2895,13 @@ async function sendMessage(message: string) {
   const transcriptionCommand =
     trimmedMessage === SLASH_COMMANDS.TRANSCRIPTION.command ||
     trimmedMessage.startsWith(`${SLASH_COMMANDS.TRANSCRIPTION.command} `);
+  const tourCommand =
+    trimmedMessage === SLASH_COMMANDS.TOUR.command ||
+    trimmedMessage.startsWith(`${SLASH_COMMANDS.TOUR.command} `);
   const dispatch = composerDispatch(message, {
     isChildConversation: !!props.currentConversation?.parent_conversation_id,
   });
-  if (dispatch.route === "queue" && !transcriptionCommand) {
+  if (dispatch.route === "queue" && !transcriptionCommand && !tourCommand) {
     await queueMessage(trimmedMessage);
     return;
   }
@@ -2955,6 +2964,37 @@ async function sendMessage(message: string) {
     } catch (err) {
       error.value = err instanceof Error ? err.message : "Failed to start BTW";
       throw err;
+    }
+    return;
+  }
+
+  if (tourCommand) {
+    if (!props.conversationId || props.currentConversation?.is_draft) {
+      const err = new Error("Start a conversation before requesting a tour.");
+      error.value = err.message;
+      throw err;
+    }
+    if (props.currentConversation?.parent_conversation_id) {
+      const err = new Error("Commit tours can only be requested from top-level conversations.");
+      error.value = err.message;
+      throw err;
+    }
+    try {
+      sending.value = true;
+      error.value = null;
+      const accepted = await api.sendMessage(props.conversationId, {
+        message: trimmedMessage,
+        model: selectedModel.value,
+      });
+      const hash = trimmedMessage.slice(SLASH_COMMANDS.TOUR.command.length).trim();
+      const cwd = props.currentConversation?.cwd || selectedCwd.value;
+      if (accepted.tour && cwd && hash) applyCommitTourStatus(cwd, hash, accepted.tour);
+    } catch (err) {
+      console.error("Failed to run /tour:", err);
+      error.value = err instanceof Error ? err.message : "Failed to request tour";
+      throw err;
+    } finally {
+      sending.value = false;
     }
     return;
   }

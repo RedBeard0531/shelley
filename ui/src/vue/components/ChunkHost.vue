@@ -9,6 +9,7 @@
       :node="node"
       :conversation-id="conversationId"
       :on-open-diff-viewer="onOpenDiffViewer"
+      :can-request-tour="canRequestTour"
       :on-comment-text-change="onCommentTextChange"
       :on-fork="onFork"
     />
@@ -27,6 +28,7 @@ const props = defineProps<{
   chunk: RenderChunk;
   conversationId: string | null;
   onOpenDiffViewer: (commit: string, cwd?: string) => void;
+  canRequestTour: boolean;
   onCommentTextChange: (text: string) => void;
   onFork: (messageId: string) => void;
 }>();

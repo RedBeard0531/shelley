@@ -384,37 +384,13 @@ func (s *Server) handleGitTour(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cwd and hash are required", http.StatusBadRequest)
 		return
 	}
-	if len(hash) < 4 || len(hash) > 64 {
-		http.Error(w, "invalid hash", http.StatusBadRequest)
-		return
-	}
-	for _, c := range hash {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			http.Error(w, "invalid hash", http.StatusBadRequest)
-			return
-		}
-	}
-	if fi, err := os.Stat(cwd); err != nil || !fi.IsDir() {
-		http.Error(w, "invalid cwd", http.StatusBadRequest)
-		return
-	}
-	gitRoot, err := getGitRoot(cwd)
+	target, err := resolveCommitTourTarget(cwd, hash)
 	if err != nil {
-		http.Error(w, "not a git repository", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	fullHashCmd := exec.Command("git", "rev-parse", hash+"^{commit}")
-	fullHashCmd.Dir = gitRoot
-	fullHashBytes, err := fullHashCmd.Output()
-	if err != nil {
-		http.Error(w, "failed to read commit", http.StatusInternalServerError)
-		return
-	}
-	fullHash := strings.TrimSpace(string(fullHashBytes))
-
-	note, err := committour.ReadNote(gitRoot, fullHash)
-	if errors.Is(err, committour.ErrNoNote) {
+	resolved, err := verifiedCommitTour(target)
+	if errors.Is(err, errNoVerifiedCommitTour) {
 		writeGitTourNotFound(w)
 		return
 	}
@@ -422,31 +398,13 @@ func (s *Server) handleGitTour(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// A malformed or stale note (e.g. attached before an amend) is as good
-	// as no tour.
-	tour, err := committour.ParseTour(note)
-	if err != nil {
-		writeGitTourNotFound(w)
-		return
-	}
-	if _, err := committour.Verify(gitRoot, fullHash, tour); err != nil {
-		writeGitTourNotFound(w)
-		return
-	}
 	if r.Method == http.MethodHead {
 		w.Header().Set("Content-Type", "application/json")
 		return
 	}
-	// attach stores chunk references resolved, but a note written by other
-	// means may still contain them; serve the resolved form the UI renders.
-	resolved, err := json.Marshal(tour)
-	if err != nil {
-		writeGitTourNotFound(w)
-		return
-	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(GitTourResponse{Hash: fullHash, Tour: resolved})
+	json.NewEncoder(w).Encode(GitTourResponse{Hash: target.Hash, Tour: resolved})
 }
 
 func writeGitTourNotFound(w http.ResponseWriter) {

@@ -395,7 +395,14 @@ type Server struct {
 	transcriptionJobs map[string]transcriptionJob
 	// reflectionEmoji fetches the VM emoji for the favicon. Tests replace it to
 	// cover reflection-present and standalone behavior without ambient metadata.
-	reflectionEmoji func(context.Context) string
+	reflectionEmoji           func(context.Context) string
+	commitTourMu              sync.Mutex
+	commitTourJobs            map[string]*commitTourJob
+	commitTourRun             commitTourRunner
+	commitTourRecoverySlots   chan struct{}
+	commitTourRecoveryMu      sync.Mutex
+	commitTourRecoveryRunning bool
+	commitTourRecoveryPending bool
 
 	// Banner, when non-empty, is shown in a full-width bar at the top of
 	// the UI. Useful for marking demo instances so they're not confused
@@ -427,25 +434,27 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		logger = slog.Default()
 	}
 	s := &Server{
-		db:                    database,
-		llmManager:            llmManager,
-		toolSetConfig:         toolSetConfig,
-		activeConversations:   make(map[string]*ConversationManager),
-		deletingConversations: make(map[string]bool),
-		logger:                logger,
-		predictableOnly:       predictableOnly,
-		defaultModel:          defaultModel,
-		requireHeader:         requireHeader,
-		versionChecker:        NewVersionChecker(),
-		notifDispatcher:       notifications.NewDispatcher(logger),
-		shutdownCh:            make(chan struct{}),
-		hooksDir:              defaultHooksDir(),
-		exitDelay:             500 * time.Millisecond,
-		exitProcess:           os.Exit,
-		mediaRun:              runMediaCommand,
-		transcriber:           newOpenAIRecordingTranscriber(llmManager),
-		transcriptionJobs:     make(map[string]transcriptionJob),
-		reflectionEmoji:       cachedReflectionEmoji,
+		db:                      database,
+		llmManager:              llmManager,
+		toolSetConfig:           toolSetConfig,
+		activeConversations:     make(map[string]*ConversationManager),
+		deletingConversations:   make(map[string]bool),
+		logger:                  logger,
+		predictableOnly:         predictableOnly,
+		defaultModel:            defaultModel,
+		requireHeader:           requireHeader,
+		versionChecker:          NewVersionChecker(),
+		notifDispatcher:         notifications.NewDispatcher(logger),
+		shutdownCh:              make(chan struct{}),
+		hooksDir:                defaultHooksDir(),
+		exitDelay:               500 * time.Millisecond,
+		exitProcess:             os.Exit,
+		mediaRun:                runMediaCommand,
+		transcriber:             newOpenAIRecordingTranscriber(llmManager),
+		transcriptionJobs:       make(map[string]transcriptionJob),
+		reflectionEmoji:         cachedReflectionEmoji,
+		commitTourJobs:          make(map[string]*commitTourJob),
+		commitTourRecoverySlots: make(chan struct{}, 2),
 	}
 
 	s.conversationListStream = newConversationListStream(s)
@@ -520,6 +529,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/git/repos", compressionHandler(http.HandlerFunc(s.handleGitRepos)))
 	mux.Handle("/api/git/diffs", compressionHandler(http.HandlerFunc(s.handleGitDiffs)))
 	mux.Handle("/api/git/tour", compressionHandler(http.HandlerFunc(s.handleGitTour)))
+	mux.Handle("/api/git/tour/status", compressionHandler(http.HandlerFunc(s.handleCommitTourStatus)))
 	mux.Handle("/api/git/graph", compressionHandler(http.HandlerFunc(s.handleGitGraph)))
 	mux.Handle("/api/git/commit-detail", compressionHandler(http.HandlerFunc(s.handleGitCommitDetail)))
 	mux.Handle("/api/git/diffs/", compressionHandler(http.HandlerFunc(s.handleGitDiffFiles)))
@@ -2057,6 +2067,7 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 	// Recover durable queued transcription workers independently of browser
 	// connections and request lifetimes.
 	go s.recoverQueuedTranscriptions(context.Background())
+	go s.recoverCommitTourWorkers(context.Background())
 
 	// Wait for shutdown signal or server error
 	quit := make(chan os.Signal, 1)

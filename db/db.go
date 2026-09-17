@@ -274,10 +274,20 @@ type BtwParentPointer struct {
 	SequenceID int64 `json:"sequence_id"`
 }
 
+type CommitTourRequest struct {
+	Repository  string    `json:"repository"`
+	Worktree    string    `json:"worktree"`
+	Commit      string    `json:"commit"`
+	State       string    `json:"state"`
+	Error       string    `json:"error,omitempty"`
+	RequestedAt time.Time `json:"requested_at"`
+}
+
 type ConversationOptions struct {
 	// Kind identifies specialized child conversations. Empty is a normal chat.
-	Kind          string            `json:"kind,omitempty"`
-	ParentPointer *BtwParentPointer `json:"parent_pointer,omitempty"`
+	Kind          string             `json:"kind,omitempty"`
+	ParentPointer *BtwParentPointer  `json:"parent_pointer,omitempty"`
+	CommitTour    *CommitTourRequest `json:"commit_tour,omitempty"`
 	// ToolOverrides maps tool name to "on" or "off". Tools not listed use their default.
 	ToolOverrides map[string]string `json:"tool_overrides,omitempty"`
 	// DisableAllTools disables every tool by default; ToolOverrides with "on" re-enable individual tools.

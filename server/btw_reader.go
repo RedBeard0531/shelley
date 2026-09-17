@@ -246,6 +246,7 @@ func (s *Server) deleteConversation(ctx context.Context, conversationID string) 
 		s.releaseConversationDeletions(ids)
 		return err
 	}
+	s.cancelCommitTourJobs(ids...)
 	deletedReaders = append(deletedReaders, conversationID)
 	s.stopDeletedConversationManagers(deletedReaders)
 	return nil
