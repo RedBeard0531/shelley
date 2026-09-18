@@ -101,7 +101,7 @@ func isNoTrailerSet() bool {
 const (
 	bashName        = "bash"
 	bashDescription = `Executes shell commands via bash --login -c, returning combined stdout/stderr.
-Bash state changes (working dir, variables, aliases) don't persist between calls.
+Shell state (cwd, variables, aliases) does not persist; use change_dir for cwd.
 
 For long-running processes (servers, watch modes), use tmux instead.
 Do NOT use &, nohup, or disown — the bash tool kills its process group on exit.
@@ -115,8 +115,6 @@ Set slow_ok=true for potentially slow commands (increases timeout).
 
 Destructive commands (deleting .git, home directories, broad wildcards, etc) require
 explicit paths and user confirmation.
-
-Use the change_dir tool instead of 'cd <path> && ...'; 'cd' does not persist across calls.
 
 IMPORTANT: Keep commands concise. The command input must be less than 60k tokens.
 For complex scripts, write them to a file first and then execute the file.

@@ -32,14 +32,10 @@ type ChangeDirTool struct {
 
 const (
 	changeDirName        = "change_dir"
-	changeDirDescription = `Change the working directory for subsequent bash commands.
-
-This affects the working directory used by the bash tool. The directory must exist.
-Relative paths are resolved against the current working directory.
-
-Prefer this tool over 'cd <path> && ...' in bash: 'cd' inside a bash
-invocation does not persist, so you'd have to repeat it every call. Call
-change_dir once, then run subsequent commands directly.
+	changeDirDescription = `Change the working directory for subsequent tool calls.
+The directory must exist; relative paths resolve against the current directory.
+Use this instead of 'cd <path> && ...' in shell commands. Omit redundant cd
+when already in the target directory.
 `
 	changeDirInputSchema = `{
   "type": "object",
