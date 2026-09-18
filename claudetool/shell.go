@@ -70,10 +70,7 @@ in the background.
 
 For long-lived processes (servers, watchers), prefer tmux and/or systemd.
 
-To wake yourself later (longer than the max yield), detach a tmux session that
-sleeps then calls the Shelley client. Use double quotes so THIS shell expands
-$SHELLEY_CONVERSATION_ID (tmux's server env may be stale):
-  tmux new-session -d "sleep 3600 && shelley client chat -c $SHELLEY_CONVERSATION_ID -p 'Resume: <what next>'"
+For delayed wakeups or scheduled tasks, use the schedule skill.
 
 Destructive commands (deleting .git, home dirs, broad wildcards) require
 explicit paths and user confirmation.

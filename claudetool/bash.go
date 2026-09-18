@@ -106,10 +106,7 @@ Shell state (cwd, variables, aliases) does not persist; use change_dir for cwd.
 For long-running processes (servers, watch modes), use tmux instead.
 Do NOT use &, nohup, or disown — the bash tool kills its process group on exit.
 
-To wake yourself later (longer than the 15-min cap), detach a tmux session that
-sleeps then calls the Shelley client. Use double quotes so THIS shell expands
-$SHELLEY_CONVERSATION_ID (tmux's server env may be stale):
-  tmux new-session -d "sleep 3600 && shelley client chat -c $SHELLEY_CONVERSATION_ID -p 'Resume: <what next>'"
+For delayed wakeups or scheduled tasks, use the schedule skill.
 
 Set slow_ok=true for potentially slow commands (increases timeout).
 

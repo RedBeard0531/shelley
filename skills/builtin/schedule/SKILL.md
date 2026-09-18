@@ -1,7 +1,9 @@
 ---
 name: schedule
-description: Use when a user requests a task to be done later or on a schedule.
+description: Schedules future tasks or wakes the current conversation after a delay. Use for reminders, recurring tasks, or resuming work later.
 ---
+
+## Scheduled tasks
 
 Use systemd user timer units. Unless the user explicitly asked to schedule something, have the user confirm.
 
@@ -18,3 +20,15 @@ Each timer firing always creates a new conversation so that no conversation grow
 The prompt baked into the service unit should concisely convey the overarching goals and context from the user, preferably in their own words, as well as the specific task being achieved by this scheduled invocation. The prompt must always include the originating conversation ID (from `$SHELLEY_CONVERSATION_ID`), so that new agent can refer to the originating conversation for additional context if needed.
 
 You are responsible for ensuring that one-shot units will be cleaned up.
+
+## Resume this conversation after a delay
+
+For a one-off wait within ongoing work, detach a tmux session that sleeps then
+messages the current conversation. Use double quotes so the invoking shell
+expands `$SHELLEY_CONVERSATION_ID`; tmux's server environment may be stale.
+
+```bash
+tmux new-session -d "sleep 3600 && shelley client chat -c $SHELLEY_CONVERSATION_ID -p 'Resume: <what next>'"
+```
+
+Use a new conversation for recurring tasks, as above.
