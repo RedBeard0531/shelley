@@ -97,7 +97,10 @@ Subagents do not inherit your conversation. When writing prompts for subagents,
 convey intent, nuance, and operational details — not just prescriptive instructions.
 Explain how the task serves the user's broader goals, the rationale and constraints,
 and what success looks like. Distinguish hard requirements from suggested approaches.
-Give subagents enough context and autonomy to make good decisions and adapt as they learn.`
+Give subagents enough context and autonomy to make good decisions and adapt as they learn.
+
+Keep short context inline; put substantial context in reusable files, splitting
+out shared material. Have subagents read primary sources directly.`
 
 // subagentInputSchema builds the JSON schema, including model enum when models are available.
 func (s *SubagentTool) subagentInputSchema() string {
