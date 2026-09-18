@@ -68,7 +68,7 @@ If the command does not finish within yield_time_seconds, this tool returns
 the output so far, the PID, and the log file path; the process keeps running
 in the background.
 
-For long-lived processes (servers, watchers), prefer tmux.
+For long-lived processes (servers, watchers), prefer tmux and/or systemd.
 
 To wake yourself later (longer than the max yield), detach a tmux session that
 sleeps then calls the Shelley client. Use double quotes so THIS shell expands
