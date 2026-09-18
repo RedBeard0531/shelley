@@ -7,8 +7,11 @@ import (
 
 // RequestErrorInfo describes a provider-neutral LLM request failure.
 type RequestErrorInfo struct {
-	// Retryable reports whether immediately repeating the request is safe.
+	// Retryable reports whether manually repeating the request is safe.
 	Retryable bool
+	// NoImmediateRetry reports that the provider already handled or deliberately
+	// declined automatic retries. Callers may still offer a manual retry.
+	NoImmediateRetry bool
 	// IdleStallDuration is the no-progress window before an idle abort.
 	IdleStallDuration time.Duration
 }

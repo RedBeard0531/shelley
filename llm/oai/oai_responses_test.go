@@ -1117,6 +1117,375 @@ func TestResponsesServiceBoundsRetriedErrorBodies(t *testing.T) {
 	}
 }
 
+type responsesRequestErrorForTest struct {
+	info llm.RequestErrorInfo
+}
+
+func (e *responsesRequestErrorForTest) Error() string { return "request failed" }
+func (e *responsesRequestErrorForTest) RequestErrorInfo() llm.RequestErrorInfo {
+	return e.info
+}
+
+type responsesRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f responsesRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestResponsesServiceExhaustionUsesLatestRequestMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		latestAttemptStall bool
+		wantStallDuration  time.Duration
+	}{
+		{name: "earlier stall does not leak", wantStallDuration: 0},
+		{name: "latest stall is preserved", latestAttemptStall: true, wantStallDuration: 3 * time.Minute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			attempts := 0
+			httpc := &http.Client{Transport: responsesRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				attempts++
+				stall := attempts == 1
+				if tt.latestAttemptStall {
+					stall = attempts == 16
+				}
+				if stall {
+					return nil, &responsesRequestErrorForTest{info: llm.RequestErrorInfo{
+						Retryable:         true,
+						IdleStallDuration: 3 * time.Minute,
+					}}
+				}
+				stream := "event: response.failed\n" +
+					`data: {"type":"response.failed","response":{"status":"failed","error":{"message":"temporary server failure","type":"server_error","code":"server_error"}}}` + "\n\n"
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:       io.NopCloser(strings.NewReader(stream)),
+					Request:    req,
+				}, nil
+			})}
+
+			svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: "https://example.test", HTTPC: httpc, Backoff: []time.Duration{0}}
+			_, err := svc.Do(t.Context(), &llm.Request{
+				Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+			})
+			if err == nil {
+				t.Fatal("Do() error = nil, want exhausted retries")
+			}
+			info, ok := llm.RequestErrorInfoFromError(err)
+			if !ok || !info.Retryable || !info.NoImmediateRetry || info.IdleStallDuration != tt.wantStallDuration {
+				t.Fatalf("error metadata = %+v, %v; want stall %v", info, ok, tt.wantStallDuration)
+			}
+		})
+	}
+}
+
+func TestResponsesErrorRetryable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *responsesError
+		want bool
+	}{
+		{name: "nil", err: nil, want: true},
+		{name: "unclassified", err: &responsesError{Message: "provider-specific failure"}, want: true},
+		{name: "unsupported images override server code", err: &responsesError{Message: "This model does not support image inputs", Type: "server_error", Code: json.RawMessage(`"server_error"`)}, want: false},
+		{name: "unsupported value", err: &responsesError{Code: json.RawMessage(`"unsupported_value"`)}, want: false},
+		{name: "invalid prompt", err: &responsesError{Code: json.RawMessage(`"invalid_prompt"`)}, want: false},
+		{name: "misalignment policy violation", err: &responsesError{Code: json.RawMessage(`"misalignment_policy_violation"`)}, want: false},
+		{name: "invalid image", err: &responsesError{Code: json.RawMessage(`"invalid_image"`)}, want: false},
+		{name: "invalid request type", err: &responsesError{Type: "invalid_request_error"}, want: false},
+		{name: "vector store timeout", err: &responsesError{Code: json.RawMessage(`"vector_store_timeout"`)}, want: true},
+		{name: "numeric rate limit", err: &responsesError{Code: json.RawMessage(`429`)}, want: true},
+		{name: "numeric server error", err: &responsesError{Code: json.RawMessage(`503`)}, want: true},
+		{name: "numeric client error", err: &responsesError{Code: json.RawMessage(`400`)}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := responsesErrorRetryable(tt.err); got != tt.want {
+				t.Fatalf("responsesErrorRetryable(%+v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseResponsesSSEEmptyTerminalErrorMessage(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: error`,
+		`data: {"type":"error","error":{"message":"","type":"invalid_request_error","code":"unsupported_value"}}`,
+		``,
+	}, "\n")
+	_, err := parseResponsesSSEStream(strings.NewReader(stream), nil)
+	if err == nil {
+		t.Fatal("parseResponsesSSEStream() error = nil, want terminal error")
+	}
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.Retryable {
+		t.Fatalf("error metadata = %+v, %v; want non-retryable", info, ok)
+	}
+}
+
+func TestResponsesServiceDoesNotRetryUnclassifiedJSONError(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			Status: "failed",
+			Error:  &responsesError{Message: "response was filtered by content policy"},
+		})
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "filtered by content policy") {
+		t.Fatalf("Do() error = %v, want content policy error", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.Retryable {
+		t.Fatalf("error metadata = %+v, %v; want non-retryable", info, ok)
+	}
+}
+
+func TestResponsesServiceJSONServerErrorIsManualRetryOnly(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			Status: "failed",
+			Error: &responsesError{
+				Message: "The server had an error processing your request",
+				Type:    "server_error",
+				Code:    json.RawMessage(`"server_error"`),
+			},
+		})
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want server error")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || !info.Retryable || !info.NoImmediateRetry {
+		t.Fatalf("error metadata = %+v, %v; want manual retry only", info, ok)
+	}
+}
+
+func TestResponsesServiceMarksExhaustedRetries(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: response.failed\n")
+		fmt.Fprint(w, `data: {"type":"response.failed","response":{"status":"failed","error":{"message":"temporary server failure","type":"server_error","code":"server_error"}}}`)
+		fmt.Fprint(w, "\n\n")
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want exhausted retries")
+	}
+	if attempts != 16 {
+		t.Fatalf("attempts = %d, want 16", attempts)
+	}
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || !info.Retryable || !info.NoImmediateRetry {
+		t.Fatalf("error metadata = %+v, %v; want manual retry only", info, ok)
+	}
+}
+
+func TestResponsesServiceDoesNotRetryFailedStreamResponse(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: response.failed\n")
+		fmt.Fprint(w, `data: {"type":"response.failed","response":{"status":"failed","error":{"message":"This model does not support image inputs","type":"server_error","code":"server_error"}}}`)
+		fmt.Fprint(w, "\n\n")
+	}))
+	defer server.Close()
+
+	var retries []llm.RetryEvent
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
+	})
+	if err == nil || !strings.Contains(err.Error(), "This model does not support image inputs") {
+		t.Fatalf("Do() error = %v, want image support error", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	if len(retries) != 0 {
+		t.Fatalf("retry events = %#v, want none", retries)
+	}
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.Retryable {
+		t.Fatalf("error metadata = %+v, %v; want non-retryable", info, ok)
+	}
+}
+
+func TestResponsesServiceRetriesTransientFailedStreamResponse(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: response.failed\n")
+			fmt.Fprint(w, `data: {"type":"response.failed","response":{"status":"failed","error":{"message":"The service is temporarily overloaded","type":"server_error","code":"server_error"}}}`)
+			fmt.Fprint(w, "\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			ID:     "retry-ok",
+			Status: "completed",
+			Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+			Usage:  responsesUsage{InputTokens: 1, OutputTokens: 1},
+		})
+	}))
+	defer server.Close()
+
+	var retries []llm.RetryEvent
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	resp, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if len(retries) != 1 || !strings.Contains(retries[0].Err, "temporarily overloaded") {
+		t.Fatalf("retry events = %#v, want transient stream failure", retries)
+	}
+	if got := resp.Content[0].Text; got != "ok" {
+		t.Fatalf("response text = %q, want ok", got)
+	}
+}
+
+func TestResponsesServiceRetriesTopLevelTransientStreamError(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: error\n")
+			fmt.Fprint(w, `data: {"type":"error","code":"server_error","message":"The service is temporarily unavailable"}`)
+			fmt.Fprint(w, "\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			ID:     "retry-ok",
+			Status: "completed",
+			Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+			Usage:  responsesUsage{InputTokens: 1, OutputTokens: 1},
+		})
+	}))
+	defer server.Close()
+
+	var retries []llm.RetryEvent
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if attempts != 2 || len(retries) != 1 {
+		t.Fatalf("attempts = %d, retries = %#v; want 2 attempts and 1 retry", attempts, retries)
+	}
+}
+
+func TestResponsesServiceRetriesUnclassifiedStreamError(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: error\n")
+			fmt.Fprint(w, `data: {"type":"error","message":"upstream connect error or disconnect/reset before headers"}`)
+			fmt.Fprint(w, "\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(responsesResponse{
+			ID:     "retry-ok",
+			Status: "completed",
+			Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+			Usage:  responsesUsage{InputTokens: 1, OutputTokens: 1},
+		})
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestResponsesServiceTerminalErrorOverridesEarlierRetryMetadata(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: response.failed\n")
+			fmt.Fprint(w, `data: {"type":"response.failed","response":{"status":"failed","error":{"message":"The service is temporarily overloaded","type":"server_error","code":"server_error"}}}`)
+			fmt.Fprint(w, "\n\n")
+			return
+		}
+		http.Error(w, "invalid_request_error: unsupported model", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{APIKey: "test-api-key", Model: GPT41, ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want terminal client error")
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if !strings.Contains(err.Error(), "temporarily overloaded") {
+		t.Fatalf("error = %v, want earlier retry context", err)
+	}
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.Retryable {
+		t.Fatalf("error metadata = %+v, %v; want non-retryable", info, ok)
+	}
+}
+
 func TestResponsesServiceDoesNotRetryPlainTextClientError(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

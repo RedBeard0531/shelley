@@ -1208,9 +1208,10 @@ func isRetryableError(err error) bool {
 		return true
 	}
 	// Structured request metadata is authoritative when a transport or
-	// provider supplies it.
+	// provider supplies it. A provider that already exhausted its own retries
+	// remains manually retryable, but must not immediately restart that policy.
 	if info, ok := llm.RequestErrorInfoFromError(err); ok {
-		return info.Retryable
+		return info.Retryable && !info.NoImmediateRetry
 	}
 	lower := strings.ToLower(err.Error())
 	for _, p := range []string{
