@@ -27,35 +27,12 @@ func (t *OutputIframeTool) Tool() *llm.Tool {
 
 const (
 	outputIframeName        = "output_iframe"
-	outputIframeDescription = `Display HTML content to the user in a sandboxed iframe.
+	outputIframeDescription = `Display an HTML file as a sandboxed, script-enabled iframe in the chat.
+Use for charts, HTML demos, SVGs, and interactive widgets. Use normal messages
+for text or simple data.
 
-Use this tool for visualizations like charts, graphs, and HTML demos that the user should see.
-The HTML will be rendered in a secure sandbox with scripts enabled but isolated from the parent page.
-
-Do NOT use this tool for:
-- Regular text responses (use normal messages instead)
-- File operations (use patch or bash)
-- Simple data display (just describe it in text)
-
-Good uses:
-- Vega-Lite or other chart library visualizations  
-- HTML/CSS demonstrations
-- Interactive widgets or mini-apps
-- SVG graphics
-
-The HTML should be self-contained. You can include inline <script> and <style> tags.
-
-External resources can be loaded via CDN (e.g., https://cdn.jsdelivr.net/).
-
-For visualizations that need external data files (JSON, CSV, etc.), use the 'files' parameter
-to bundle them. They will be injected into the page and accessible via window.__FILES__['filename']
-for JSON/text/JS (as raw strings), or as <style> tags for CSS files.
-
-For large skill runtimes (excalidraw, etc.), use the 'libraries' parameter instead of 'files'.
-Libraries are streamed into the sandboxed iframe by the host page (so their bytes are not stored
-in the conversation) and exposed as a Promise at window.__LIBS__:
-  const { render } = (await window.__LIBS__).excalidraw;
-Valid library names: "excalidraw".`
+HTML may include inline scripts/styles and CDN resources. Bundle small local
+assets with files; use libraries for hosted runtimes such as Excalidraw.`
 
 	outputIframeInputSchema = `
 {
