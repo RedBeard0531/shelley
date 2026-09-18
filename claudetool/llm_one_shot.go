@@ -38,9 +38,7 @@ const (
 // disk, which /api/read must not serve).
 const OneShotImageDir = "/tmp/shelley-oneshot-images"
 
-// llmOneShotDescription builds the tool description, including model info when models are available.
-func (t *LLMOneShotTool) llmOneShotDescription() string {
-	base := `Send a one-shot prompt to an LLM and get a response.
+const llmOneShotDescription = `Send a one-shot prompt to an LLM and get a response.
 
 Unlike subagents, this is a single request/response with no conversation history or tools.
 Use this for simple LLM tasks like summarization, extraction, classification, reformatting,
@@ -51,20 +49,6 @@ is a list of paths: text files are concatenated in order, and image files
 (png, jpeg, gif, webp, heic) are attached as images. Attaching images requires a
 vision-capable model.
 Short results are returned inline; long results are written to a file.`
-
-	if len(t.AvailableModels) > 0 {
-		base += "\n\nAvailable models (use the \"model\" parameter to override the default):"
-		for _, m := range t.AvailableModels {
-			if m.DisplayName != "" && m.DisplayName != m.ID {
-				base += fmt.Sprintf("\n- %s (%s)", m.ID, m.DisplayName)
-			} else {
-				base += fmt.Sprintf("\n- %s", m.ID)
-			}
-		}
-	}
-
-	return base
-}
 
 // llmOneShotInputSchema builds the JSON schema, including model enum when models are available.
 func (t *LLMOneShotTool) llmOneShotInputSchema() string {
@@ -129,7 +113,7 @@ type llmOneShotInput struct {
 func (t *LLMOneShotTool) Tool() *llm.Tool {
 	return &llm.Tool{
 		Name:        llmOneShotName,
-		Description: t.llmOneShotDescription(),
+		Description: llmOneShotDescription,
 		InputSchema: llm.MustSchema(t.llmOneShotInputSchema()),
 		Run:         llm.RunJSON(t.run),
 	}

@@ -306,11 +306,13 @@ func TestLLMOneShotToolDescription(t *testing.T) {
 	}
 
 	llmTool := tool.Tool()
-	if !strings.Contains(llmTool.Description, "- model-a") {
-		t.Errorf("expected model-a in description, got: %s", llmTool.Description)
-	}
-	if !strings.Contains(llmTool.Description, "- model-b (Model B (fancy))") {
-		t.Errorf("expected model-b with display name in description, got: %s", llmTool.Description)
+	for _, model := range tool.AvailableModels {
+		if !strings.Contains(string(llmTool.InputSchema), model.ID) {
+			t.Errorf("model %q missing from schema", model.ID)
+		}
+		if strings.Contains(llmTool.Description, model.ID) {
+			t.Errorf("description duplicates model %q from schema", model.ID)
+		}
 	}
 }
 
