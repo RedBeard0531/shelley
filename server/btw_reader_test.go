@@ -552,7 +552,7 @@ func TestBtwUsesOnlyReaderToolsAndMetadataListing(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	sort.Strings(names)
-	if strings.Join(names, ",") != "bash,keyword_search,read_image" {
+	if strings.Join(names, ",") != "bash,read_image" {
 		t.Fatalf("BTW tools=%v", names)
 	}
 

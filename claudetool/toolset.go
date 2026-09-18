@@ -206,8 +206,6 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 	}
 	patchTool := &PatchTool{WorkingDir: wd, Provider: patchProvider, Profile: patchProfile}
 
-	keywordTool := NewKeywordToolWithWorkingDir(cfg.LLMProvider, cfg.ModelID, wd)
-
 	changeDirTool := &ChangeDirTool{
 		WorkingDir: wd,
 		OnChange:   cfg.OnWorkingDirChange,
@@ -228,7 +226,6 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		bashTool.Tool(),
 		shellTool.Tool(),
 		patchTool.Tool(),
-		keywordTool.Tool(),
 		changeDirTool.Tool(),
 		outputIframeTool.Tool(),
 	}

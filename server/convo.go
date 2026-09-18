@@ -2679,9 +2679,8 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		toolSetConfig.EnableBrowser = true
 		toolSetConfig.DisableAllTools = true
 		toolSetConfig.ToolOverrides = map[string]string{
-			"bash":           "on",
-			"keyword_search": "on",
-			"read_image":     "on",
+			"bash":       "on",
+			"read_image": "on",
 		}
 	}
 	toolSet := claudetool.NewToolSet(processCtx, toolSetConfig)

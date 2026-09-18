@@ -1,6 +1,7 @@
 package claudetool
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,39 @@ import (
 
 	"shelley.exe.dev/llm"
 )
+
+// Mock LLM provider for testing
+type mockLLMProvider struct{}
+
+type mockService struct{}
+
+func (m *mockService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	return &llm.Response{Content: llm.TextContent("test response")}, nil
+}
+
+func (m *mockService) Provider() string { return "" }
+
+func (m *mockService) MaxImageDimension() int {
+	return 0
+}
+
+func (m *mockService) MaxImageBytes() int {
+	return 0
+}
+
+func (m *mockLLMProvider) GetService(modelID string) (llm.Service, error) {
+	return &mockService{}, nil
+}
+
+func (m *mockLLMProvider) GetAvailableModels() []string {
+	return []string{"test-model"}
+}
+
+func (m *mockLLMProvider) GetWorkhorseService(modelID string) (llm.Service, error) {
+	return m.GetService(modelID)
+}
+
+func (m *mockService) SupportsImages() bool { return true }
 
 func TestNewToolSet(t *testing.T) {
 	provider := &mockLLMProvider{}
@@ -48,6 +82,11 @@ func TestToolSet_Tools(t *testing.T) {
 	ts := NewToolSet(ctx, cfg)
 
 	tools := ts.Tools()
+	for _, tool := range tools {
+		if tool.Name == "keyword_search" {
+			t.Fatal("keyword_search must not be offered")
+		}
+	}
 	if tools == nil {
 		t.Fatal("Tools() returned nil")
 	}

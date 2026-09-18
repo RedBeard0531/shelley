@@ -19,7 +19,6 @@ var ToolRegistry = []ToolInfo{
 	{Name: "bash", Summary: "Run shell commands.", DefaultOn: true, SourcePath: "claudetool/bash.go"},
 	{Name: "shell", Summary: "Run shell commands.", DefaultOn: false, SourcePath: "claudetool/shell.go"},
 	{Name: "patch", Summary: "Precise edits to files.", DefaultOn: true, SourcePath: "claudetool/patch.go"},
-	{Name: "keyword_search", Summary: "Search the codebase by keyword.", DefaultOn: true, SourcePath: "claudetool/keyword.go"},
 	{Name: "change_dir", Summary: "Change the working directory.", DefaultOn: true, SourcePath: "claudetool/changedir.go"},
 	{Name: "output_iframe", Summary: "Show HTML/visualizations to the user.", DefaultOn: true, SourcePath: "claudetool/output_iframe.go"},
 	{Name: "subagent", Summary: "Spawn a subagent conversation.", DefaultOn: true, SourcePath: "claudetool/subagent.go"},

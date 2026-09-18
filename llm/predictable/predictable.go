@@ -971,18 +971,6 @@ func (s *Service) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response 
 		ToolInput: json.RawMessage(screenshotInput),
 	})
 
-	// keyword_search tool
-	keywordInput, _ := json.Marshal(map[string]interface{}{
-		"query":        "find all references",
-		"search_terms": []string{"reference", "example"},
-	})
-	content = append(content, llm.Content{
-		ID:        fmt.Sprintf("tool_keyword_%d", (baseNano+4)%1000),
-		Type:      llm.ContentTypeToolUse,
-		ToolName:  "keyword_search",
-		ToolInput: json.RawMessage(keywordInput),
-	})
-
 	// browser: navigate action
 	navigateInput, _ := json.Marshal(map[string]string{"action": "navigate", "url": "https://example.com"})
 	content = append(content, llm.Content{

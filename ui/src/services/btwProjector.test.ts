@@ -80,7 +80,7 @@ const tools = project(
     user(1, "tools"),
     message(2, "agent", [
       { ID: "bash-id", Type: 5, ToolName: "bash", ToolInput: { command: "pwd" } },
-      { ID: "search-id", Type: 5, ToolName: "keyword_search", ToolInput: {} },
+      { ID: "search-id", Type: 5, ToolName: "read_image", ToolInput: {} },
     ]),
     message(3, "user", [{ ID: "", Type: 6, ToolUseID: "bash-id", ToolResult: [text("/repo")] }]),
     message(4, "user", [{ ID: "", Type: 8, ToolUseID: "search-id" }]),
@@ -98,7 +98,7 @@ assert.deepEqual(
     turns: 1,
     count: 2,
     unresolved: 0,
-    calls: [{ name: "bash", command: "pwd" }, { name: "keyword_search" }],
+    calls: [{ name: "bash", command: "pwd" }, { name: "read_image" }],
   },
   "tool results resolve projected calls without becoming turns",
 );

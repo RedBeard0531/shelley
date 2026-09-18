@@ -112,7 +112,6 @@ func (g *loremGen) toolBatch(i int) []toolCall {
 		g.bashCall,
 		g.shellCall,
 		g.patchCall,
-		g.keywordCall,
 		g.changeDirCall,
 		g.subagentCall,
 		g.webSearchCall,
@@ -207,24 +206,6 @@ func (g *loremGen) unifiedDiff(path string, i int) string {
 	fmt.Fprintf(&b, "+\t// added: %s\n", lorem(i+3, 5))
 	fmt.Fprintf(&b, " \t}\n")
 	return b.String()
-}
-
-func (g *loremGen) keywordCall(i, k int) toolCall {
-	var out strings.Builder
-	for j := 0; j < 5; j++ {
-		fmt.Fprintf(&out, "%d. server/match_%d.go — %s\n", j+1, i+j, lorem(i+j, 7))
-	}
-	return toolCall{
-		use: llm.Content{
-			Type: llm.ContentTypeToolUse, ID: toolUseID(i, k),
-			ToolName: "keyword_search",
-			ToolInput: rawInput(map[string]any{
-				"query":        lorem(i, 8),
-				"search_terms": []string{loremVocab[i%len(loremVocab)], loremVocab[(i+3)%len(loremVocab)]},
-			}),
-		},
-		result: textResult(out.String()),
-	}
 }
 
 func (g *loremGen) changeDirCall(i, k int) toolCall {

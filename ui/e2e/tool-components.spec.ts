@@ -18,6 +18,11 @@ test.describe('Tool Component Verification', () => {
 
   test('all tools use custom components, not GenericTool', async ({ page, request }) => {
     test.setTimeout(180000);
+    const registry = await request.get('/api/tools');
+    expect(registry.ok()).toBeTruthy();
+    const { tools } = await registry.json();
+    expect(tools.map((tool: { name: string }) => tool.name)).not.toContain('keyword_search');
+
     const slug = await ensureSmorgasbord(request);
 
     await page.goto(`/c/${slug}`);
@@ -76,7 +81,6 @@ test.describe('Tool Component Verification', () => {
     await expect(page.locator('.screencast-tool').first()).toBeAttached();
 
     // Spot-check the rest of the set.
-    await expectEmoji(toolCard('find all references'), '🔍');
     await expectEmoji(toolCard('https://example.com'), '🌐');
     await expectEmoji(toolCard('document.title'), '⚡');
     await expectEmoji(toolCard(/console/i), '📋');

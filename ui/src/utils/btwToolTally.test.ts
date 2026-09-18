@@ -4,17 +4,17 @@ import { btwToolCallTooltip } from "./btwToolTally";
 
 const cases: Array<[BtwToolCall[] | undefined, string]> = [
   [
-    [{ name: "bash" }, { name: "keyword_search" }, { name: "bash" }, { name: "legacy" }],
-    "• bash ×2\n• keyword_search\n• legacy",
+    [{ name: "bash" }, { name: "read_image" }, { name: "bash" }, { name: "legacy" }],
+    "• bash ×2\n• read_image\n• legacy",
   ],
   [
     [
       { name: "bash", command: "  rg -n 'ToolInput' server/\nui/src/  " },
-      { name: "keyword_search" },
-      { name: "keyword_search" },
+      { name: "read_image" },
+      { name: "read_image" },
       { name: "bash", command: " \n " },
     ],
-    "• bash — rg ToolInput\n• keyword_search ×2\n• bash",
+    "• bash — rg ToolInput\n• read_image ×2\n• bash",
   ],
   [
     [{ name: "bash", command: "cd /repo && go test ./server -run TestBTW" }],

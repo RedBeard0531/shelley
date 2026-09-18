@@ -128,7 +128,6 @@ import BrowserEmulateTool from "./tools/BrowserEmulateTool.vue";
 import BrowserNetworkTool from "./tools/BrowserNetworkTool.vue";
 import BrowserAccessibilityTool from "./tools/BrowserAccessibilityTool.vue";
 import BrowserProfileTool from "./tools/BrowserProfileTool.vue";
-import KeywordSearchTool from "./tools/KeywordSearchTool.vue";
 import ChangeDirTool from "./tools/ChangeDirTool.vue";
 import SubagentTool from "./tools/SubagentTool.vue";
 import LLMOneShotTool from "./tools/LLMOneShotTool.vue";
@@ -180,7 +179,6 @@ const TOOL_COMPONENTS: Record<string, any> = {
   browser: BrowserTool,
   screenshot: ScreenshotTool,
   read_image: ReadImageTool,
-  keyword_search: KeywordSearchTool,
   change_dir: ChangeDirTool,
   subagent: SubagentTool,
   output_iframe: OutputIframeTool,
