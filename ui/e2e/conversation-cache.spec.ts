@@ -2,12 +2,23 @@ import { test, expect } from '@playwright/test';
 import { createConversationViaAPIWithDetails } from './helpers';
 
 /**
- * Helper: wait for text to appear on the page.
+ * Helper: wait for `text` to be rendered in the conversation's message list.
+ *
+ * Scoped to [data-testid="message"] on purpose. Matching document.body instead
+ * is satisfied by the conversation DRAWER: ConversationDrawerRow renders each
+ * conversation's `preview` (the text of its latest message, delivered with the
+ * conversation list snapshot) and that markup is in the DOM even while the
+ * drawer is closed. So a body-wide text match passes as soon as the LIST
+ * arrives — before the conversation itself has been loaded, and therefore
+ * before the cache has been consulted at all. Every assertion after such a
+ * wait then raced the load: `__shelleyCache.stats()` came back empty and the
+ * incremental-fetch counters were still zero, which is exactly how this spec
+ * flaked under CI load.
  */
 async function waitForText(page: import('@playwright/test').Page, text: string, timeout = 15000) {
-  await page.waitForFunction((t) => document.body.textContent?.includes(t) ?? false, text, {
-    timeout
-  });
+  await expect
+    .poll(() => page.getByTestId('message').filter({ hasText: text }).count(), { timeout })
+    .toBeGreaterThan(0);
 }
 
 /**
@@ -167,7 +178,9 @@ test.describe('Conversation cache', () => {
 
     // Verify no loading spinner is shown
     await expect(page.locator('.spinner')).toHaveCount(0);
-    await expect(page.locator("text=Hello! I'm Shelley, your AI assistant.").first()).toBeVisible();
+    await expect(page.getByTestId('message').filter({
+      hasText: "Hello! I'm Shelley, your AI assistant.",
+    }).first()).toBeVisible();
   });
 
   test('page reload serves history from the IndexedDB cache', async ({ page, request }) => {

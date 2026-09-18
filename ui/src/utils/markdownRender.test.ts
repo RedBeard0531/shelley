@@ -73,6 +73,79 @@ assert(
   "raw script tags are stripped by sanitization",
 );
 
+// ---- Standalone inline-code URLs are links, not commands or code blocks ----
+
+for (const url of [
+  "https://phil-dev.exe.xyz:3979/",
+  "http://localhost:8000/path?q=one&other=two#fragment",
+  "https://example.com/path_(with_parentheses)?q=a,b!",
+  'https://example.com/?literal=&amp;&quote="value"',
+  "https://example.com/?q=<script>alert(1)</script>",
+  "HTTPS://EXAMPLE.COM/path",
+  "http://[::1]:8000/",
+]) {
+  const root = JSDOM.fragment(renderMarkdownToSafeHTML(`Preview: \`${url}\``));
+  const link = root.querySelector("a");
+  assert(link?.getAttribute("href") === url, `inline-code URL is linked intact: ${url}`);
+  assert(
+    link?.querySelector("code")?.textContent === url,
+    "linked URL keeps code markup and literal text",
+  );
+  assert(
+    link?.getAttribute("target") === "_blank" &&
+      link?.getAttribute("rel") === "noopener noreferrer",
+    "inline-code link has the same new-tab protections as other links",
+  );
+  assert(!root.querySelector("script"), "URL content cannot inject HTML");
+}
+
+for (const code of [
+  "const answer = 42;",
+  "curl https://example.com",
+  "https://example.com --flag",
+  "https://one.example https://two.example",
+  "javascript:alert(1)",
+  "data:text/html,<script>alert(1)</script>",
+  "file:///tmp/example.txt",
+  "ftp://example.com/file",
+  "//example.com/path",
+  "https://",
+  "https://example.com:invalid/",
+  "https://[invalid]/",
+]) {
+  const root = JSDOM.fragment(renderMarkdownToSafeHTML(`\`${code}\``));
+  assert(!root.querySelector("a"), `non-URL code is not linked: ${code}`);
+  assert(root.querySelector("code")?.textContent === code, "non-URL code is unchanged");
+}
+
+for (const markdown of [
+  "```\nhttps://example.com/fenced\n```",
+  "```text\nhttps://example.com/fenced\n```",
+  "    https://example.com/indented",
+  "<pre><code>https://example.com/raw-block</code></pre>",
+]) {
+  const root = JSDOM.fragment(renderMarkdownToSafeHTML(markdown));
+  assert(!!root.querySelector("pre > code"), "code block is preserved");
+  assert(!root.querySelector("a"), "code block URLs are not linked");
+}
+
+for (const markdown of [
+  "[`https://example.com/label`](https://example.com/destination)",
+  "[**`https://example.com/label`**](https://example.com/destination)",
+  '<a href="https://example.com/destination">`https://example.com/label`</a>',
+]) {
+  const root = JSDOM.fragment(renderMarkdownToSafeHTML(markdown));
+  assert(
+    root.querySelectorAll("a").length === 1,
+    "code inside an existing link gets no nested link",
+  );
+  assert(
+    root.querySelector("a")?.getAttribute("href") === "https://example.com/destination" &&
+      root.querySelector("a code")?.textContent === "https://example.com/label",
+    "explicit link destination and code label are preserved",
+  );
+}
+
 // Local-image rewriting is keyed by messageId, independent of caching.
 const withId = renderMarkdownToSafeHTML("![alt](out/plot.png)", "msg-1");
 assert(
@@ -118,10 +191,10 @@ const localURLCode = renderMarkdownToSafeHTML(
   exeDevLinks,
 );
 assert(
-  localURLCode.includes("<code>http://localhost:3000/inline</code>") &&
-    localURLCode.includes("<pre><code>http://localhost:3000/fenced\n</code></pre>") &&
-    !localURLCode.includes("demo.exe.xyz"),
-  "inline and fenced code URLs are never rewritten",
+  localURLCode.includes('href="https://demo.exe.xyz:3000/inline"') &&
+    localURLCode.includes("<code>https://demo.exe.xyz:3000/inline</code>") &&
+    localURLCode.includes("<pre><code>http://localhost:3000/fenced\n</code></pre>"),
+  "standalone inline-code URLs use the opt-in localhost rewrite, but fenced code is unchanged",
 );
 const remoteLocalhostImage = renderMarkdownToSafeHTML(
   "![plot](http://localhost:3000/plot.png)",

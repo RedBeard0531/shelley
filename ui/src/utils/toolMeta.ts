@@ -1,19 +1,15 @@
-// Tool metadata helpers mirroring the iOS client (see
-// iOS/exe.dev/Support/ToolEmoji.swift, ToolHeadline.swift, and
-// ToolPillsRow.swift). Used by the conversation UI to render
-// consecutive tool calls as a wrapped row of tightly packed,
-// color-coded "pills" instead of one full-width card per call.
+// Tool emoji and compact headlines for subagent activity and BTW summaries.
 
 // Extract the action string from a `browser` tool's input. We use this
 // to subspecialize emoji/headline for the umbrella "browser" tool name,
-// matching how BrowserTool.tsx picks a specialized child component.
+// matching how BrowserTool.vue picks a specialized child component.
 function browserAction(input: unknown): string {
   if (typeof input !== "object" || input === null) return "";
   const v = (input as Record<string, unknown>).action;
   return typeof v === "string" ? v : "";
 }
 
-/** Emoji for a tool pill. Pass `input` so the umbrella "browser" tool can
+/** Emoji for a tool activity summary. Pass `input` so the umbrella "browser" tool can
  *  pick a per-action emoji matching BrowserTool's per-action component. */
 export function toolEmoji(name: string | undefined | null, input?: unknown): string {
   if (!name) return "⚙️";
@@ -93,41 +89,9 @@ export function toolEmoji(name: string | undefined | null, input?: unknown): str
   }
 }
 
-// Character budgets for the pill headline. Desktop affords more room
-// than mobile, so we expose more of the command there. These are
-// soft targets that drive *which* tokens we surface; CSS still adds an
-// ellipsis as a final guard (see .tool-pill-text).
+// Soft character budgets for headlines in activity strips and compact summaries.
 export const HEADLINE_BUDGET_WIDE = 48;
 export const HEADLINE_BUDGET_NARROW = 24;
-
-// Human-friendly tool names for the detail modal's title bar. The card
-// itself shows the command/args, so the title just needs to say what
-// kind of tool this is (no duplication of the command).
-const TOOL_DISPLAY_NAMES: Record<string, string> = {
-  bash: "Shell command",
-  shell: "Shell command",
-  patch: "File edit",
-  change_dir: "Change directory",
-  read_image: "Read image",
-  keyword_search: "Keyword search",
-  web_search: "Web search",
-  WebSearch: "Web search",
-  WebFetch: "Web fetch",
-  subagent: "Subagent",
-  llm_one_shot: "LLM request",
-  output_iframe: "HTML preview",
-  screenshot: "Screenshot",
-  browser: "Browser",
-};
-
-/** Title for the tool detail modal: a human-friendly tool name, not the
- *  command (the card body already shows the command/args). */
-export function toolDisplayName(name: string | undefined | null): string {
-  if (!name) return "Tool";
-  if (TOOL_DISPLAY_NAMES[name]) return TOOL_DISPLAY_NAMES[name];
-  // browser_* etc: prettify the raw name.
-  return name.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-}
 
 // Subcommand-style programs: the meaning lives in the *second* token
 // ("git diff", "go test", "npm run"). Derived from analysing ~183k
@@ -215,7 +179,7 @@ function unquote(t: string): string {
   return t;
 }
 
-// Peel leading noise off a shell command so the pill shows the part
+// Peel leading noise off a shell command so the headline shows the part
 // that actually carries intent. Removes, repeatedly:
 //   * `cd <dir> &&` / `cd <dir>;` prefixes (~18% of real commands)
 //   * inline env assignments (`FOO=bar cmd`, `KEY="x y" cmd`)
@@ -448,45 +412,5 @@ function inputSummary(name: string | undefined | null, input: unknown): string {
         return "";
       }
     }
-  }
-}
-
-/** Tools whose entire value is the inline rendering (diffs, images,
- *  iframes). These are NOT collapsed into pills; they keep the
- *  current full-bleed card so the user sees the diff / image
- *  without an extra tap.
- */
-export function isAutoExpandTool(
-  name: string | undefined | null,
-  input?: unknown,
-  display?: unknown,
-): boolean {
-  // The umbrella "browser" tool multiplexes many actions; only its
-  // screenshot action produces an inline image worth auto-expanding.
-  if (name === "browser") {
-    return browserAction(input) === "screenshot";
-  }
-  if (name === "llm_one_shot") {
-    if (typeof display !== "object" || display === null) return false;
-    const images = (display as { images?: unknown }).images;
-    return (
-      Array.isArray(images) &&
-      images.some(
-        (image) =>
-          typeof image === "object" &&
-          image !== null &&
-          typeof (image as { url?: unknown }).url === "string",
-      )
-    );
-  }
-  switch (name) {
-    case "patch":
-    case "screenshot":
-    case "browser_take_screenshot":
-    case "read_image":
-    case "output_iframe":
-      return true;
-    default:
-      return false;
   }
 }

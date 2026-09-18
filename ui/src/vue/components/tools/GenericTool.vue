@@ -43,9 +43,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
-import { useToolExpanded } from "../../composables/toolDetail";
 import ToolChevron from "./ToolChevron.vue";
 import ToolStatusIcon from "./ToolStatusIcon.vue";
 
@@ -58,7 +57,7 @@ const props = defineProps<{
   executionTime?: string;
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const formatData = (data: unknown): string => {
   if (data === undefined || data === null) return "";

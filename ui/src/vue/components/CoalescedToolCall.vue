@@ -52,10 +52,7 @@
   <!-- Fallback: completed state -->
   <div v-else class="message message-tool" data-testid="tool-call-completed">
     <div class="message-content">
-      <details
-        :class="`tool-result-details ${toolError ? 'error' : ''}`"
-        :open="inToolDetail || undefined"
-      >
+      <details :class="`tool-result-details ${toolError ? 'error' : ''}`">
         <summary class="tool-result-summary">
           <div class="tool-result-meta">
             <div class="tool-result-primary flex items-center space-x-2">
@@ -116,7 +113,6 @@
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../types";
 import { useNearViewport } from "../composables/nearViewport";
-import { useInToolDetail } from "../composables/toolDetail";
 import { usePerfLifecycle } from "../composables/perfLifecycle";
 import { useToolStreamingOutput } from "../composables/toolProgress";
 import BashTool from "./tools/BashTool.vue";
@@ -155,15 +151,13 @@ const props = defineProps<{
   toolUseId?: string;
 }>();
 
-const inToolDetail = useInToolDetail();
-
 // Completed inline specialized cards are the dominant mount cost in very large
 // conversations. Keep a tiny geometry placeholder until the shared observer
-// says the card is near the viewport. Cards that started running (or render in
-// the tool-detail modal) stay eager and never get torn down on completion.
+// says the card is near the viewport. Cards that started running stay eager
+// and never get torn down on completion.
 const mountPlaceholderEl = ref<HTMLElement | null>(null);
 const nearViewport = useNearViewport(mountPlaceholderEl);
-const startedEager = !props.hasResult || inToolDetail;
+const startedEager = !props.hasResult;
 const mountSpecializedCard = computed(() => startedEager || !props.hasResult || nearViewport.value);
 
 const placeholderKind = computed(() =>

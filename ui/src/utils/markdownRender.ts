@@ -170,6 +170,33 @@ function buildMarked(
   return instance;
 }
 
+function setLinkTarget(node: Element): void {
+  node.setAttribute("target", "_blank");
+  node.setAttribute("rel", "noopener noreferrer");
+}
+
+// Work on the sanitized DOM so code text stays literal, attributes are escaped
+// by the DOM, and existing links (including raw HTML anchors) are easy to skip.
+function linkifyCodeSpans(root: HTMLElement, localhostLinks?: LocalhostLinkOptions): void {
+  for (const code of root.querySelectorAll("code")) {
+    if (code.closest("pre, a") || code.children.length > 0) continue;
+    const text = code.textContent ?? "";
+    if (!/^https?:\/\/\S+$/i.test(text)) continue;
+    try {
+      new URL(text);
+    } catch {
+      continue;
+    }
+    const href = localhostLinks ? rewriteLocalhostLink(text, localhostLinks) : text;
+    const link = root.ownerDocument.createElement("a");
+    link.setAttribute("href", href);
+    setLinkTarget(link);
+    code.textContent = href;
+    code.replaceWith(link);
+    link.append(code);
+  }
+}
+
 // Make all links open in new tabs, and restrict <input> to checkboxes only.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
@@ -191,8 +218,7 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
       node.remove();
       return;
     }
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
+    setLinkTarget(node);
   }
   // Only allow checkbox inputs (for GFM task lists); remove all others.
   if (node.tagName === "INPUT" && node.getAttribute("type") !== "checkbox") {
@@ -362,7 +388,12 @@ export function renderMarkdownToSafeHTML(
   // parse() runs walkTokens — where the local-image rewrite hook lives —
   // between lexing and parsing; replicate that when splitting the two phases.
   if (marked.defaults.walkTokens) marked.walkTokens(tokens, marked.defaults.walkTokens);
-  const html = DOMPurify.sanitize(marked.parser(tokens), SANITIZE_OPTS);
+  const root = DOMPurify.sanitize(marked.parser(tokens), {
+    ...SANITIZE_OPTS,
+    RETURN_DOM: true,
+  }) as HTMLElement;
+  linkifyCodeSpans(root, localhostLinks);
+  const html = root.innerHTML;
   if (out) out.endsInOpenFence = endsInOpenFence(tokens);
 
   if (cacheKey) {

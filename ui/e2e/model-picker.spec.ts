@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { testWorkingDirectory } from "./helpers";
 
 // The unified model + effort picker (ChatStatusContent -> ModelPicker.vue) is
 // built on PrimeVue <Select>. It renders on the new-conversation screen. Here
@@ -135,7 +136,7 @@ test.describe("Model picker (PrimeVue)", () => {
       data: {
         message: "echo recent model picker",
         model: "predictable",
-        cwd: "/tmp",
+        cwd: testWorkingDirectory(),
         conversation_options: { thinking_level: "high" },
       },
     });

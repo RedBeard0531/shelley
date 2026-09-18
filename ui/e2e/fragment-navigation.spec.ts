@@ -46,10 +46,22 @@ function scrolls(page: Page) {
   return page.evaluate(() => window.fragmentScrolls);
 }
 
+async function expectFollowingAtBottom(page: Page) {
+  // Leave a few pixels for fractional layout and scroll-anchor rounding.
+  await expect
+    .poll(() =>
+      page
+        .locator(".messages-container")
+        .evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop),
+    )
+    .toBeLessThan(5);
+  await expect(page.locator(".scroll-to-bottom-button")).toBeHidden();
+}
+
 async function append(page: Page, request: APIRequestContext, id: string) {
   const marker = "fragment regression append";
   const response = await request.post(`/api/conversation/${id}/chat`, {
-    data: { message: `echo: ${marker}`, model: "predictable", cwd: "/tmp" },
+    data: { message: `echo: ${marker}`, model: "predictable" },
   });
   expect(response.ok()).toBeTruthy();
   let lastId = "";
@@ -218,16 +230,16 @@ test("invalid anchors leave follow enabled; removing a fragment cancels retries"
   const conversation = await seed(request);
   await page.goto(`/c/${conversation.slug}`);
   await expect(page.locator(".toc-button")).toBeVisible();
-  await expect(page.locator(".scroll-to-bottom-button")).toBeHidden();
+  await expectFollowingAtBottom(page);
   for (const hash of ["m-", "t-", "unrelated", "m-%21", "m-deadbeef"]) {
     await setFragment(page, hash);
     await page.clock.runFor(1100);
     expect(await scrolls(page)).toEqual([]);
-    await expect(page.locator(".scroll-to-bottom-button")).toBeHidden();
+    await expectFollowingAtBottom(page);
   }
   // Follow must remain armed, not merely leave the current position unchanged.
   await append(page, request, conversation.id);
-  await expect(page.locator(".scroll-to-bottom-button")).toBeHidden();
+  await expectFollowingAtBottom(page);
   await expect
     .poll(() =>
       page
@@ -255,9 +267,15 @@ test("scroll-to-bottom button clears the current fragment", async ({ page, reque
   await page.goto(`/c/${conversation.slug}`);
   await expect(page.locator(".toc-button")).toBeVisible();
 
-  await page.locator(".messages-container").evaluate((element) => {
+  const container = page.locator(".messages-container");
+  await expectFollowingAtBottom(page);
+  // Release the production bottom pin as an upward wheel gesture would, then
+  // set the deterministic destination instead of relying on wheel hit-testing.
+  await container.dispatchEvent("wheel", { deltaY: -10000 });
+  await container.evaluate((element) => {
     element.scrollTop = 0;
   });
+  await expect.poll(() => container.evaluate((element) => element.scrollTop)).toBe(0);
   await expect(page.locator(".scroll-to-bottom-button")).toBeVisible();
   await page.evaluate(() => history.replaceState(null, "", `${window.location.pathname}#current`));
   await page.locator(".scroll-to-bottom-button").click();

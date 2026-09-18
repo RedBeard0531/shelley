@@ -1,11 +1,20 @@
 import { test, expect } from "@playwright/test";
-import { createConversationViaAPI } from "./helpers";
+import { testWorkingDirectory } from "./helpers";
+
+// / resumes the shared server's latest conversation. Always start our own,
+// and pin a real cwd rather than inheriting another spec's synthetic path.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(
+    (cwd) => localStorage.setItem("shelley_selected_cwd", cwd),
+    testWorkingDirectory(),
+  );
+});
 
 // Split out of conversation.spec.ts (see the note there). These cover how tool
-// calls are rendered and coalesced in the transcript; they drive the UI from /
+// calls are rendered and coalesced in the transcript; they drive the UI from /new
 // rather than seeding a conversation via the API.
 test("coalesces tool calls - shows tool result with details", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/new");
   await page.waitForLoadState("domcontentloaded");
 
   const messageInput = page.getByTestId("message-input");
@@ -28,7 +37,7 @@ test("coalesces tool calls - shows tool result with details", async ({ page }) =
 });
 
 test("coalesces tool calls - displays agent text and tool separately", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/new");
   await page.waitForLoadState("domcontentloaded");
 
   const messageInput = page.getByTestId("message-input");
@@ -52,7 +61,7 @@ test("coalesces tool calls - displays agent text and tool separately", async ({ 
 });
 
 test("handles sequential tool calls", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/new");
   await page.waitForLoadState("domcontentloaded");
 
   const messageInput = page.getByTestId("message-input");
@@ -82,8 +91,8 @@ test("handles sequential tool calls", async ({ page }) => {
 });
 
 test("displays LLM error message in UI", async ({ page }) => {
-  // Clear any existing data by navigating to root (which should show empty state)
-  await page.goto("/");
+  // Start a new conversation, not whichever conversation another test last used.
+  await page.goto("/new");
   await page.waitForLoadState("domcontentloaded");
 
   // Wait for the empty state or message input

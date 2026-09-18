@@ -669,7 +669,7 @@ func TestBuiltinSkills(t *testing.T) {
 		t.Fatalf("expected exactly 10 built-in skills, got %d: %v", len(builtins), skillNames(builtins))
 	}
 
-	wantSkills := []string{"commit-tour", "customizing-shelley", "excalidraw", "node-and-js-frameworks", "previous-conversations", "reflection-integration", "request-integration", "schedule", "shelley-hooks", "transcribing-audio"}
+	wantSkills := []string{"commit-tour", "customizing-shelley", "excalidraw", "node-and-js-frameworks", "previous-conversations", "reflection-integration", "schedule", "shelley-hooks", "suggesting-exe-dev-actions", "transcribing-audio"}
 	for _, wantName := range wantSkills {
 		found := skillByName(builtins, wantName)
 		if found == nil {
@@ -684,6 +684,28 @@ func TestBuiltinSkills(t *testing.T) {
 		if found.Path != "" {
 			t.Errorf("%s: built-in skill should have empty Path, got %q", wantName, found.Path)
 		}
+	}
+}
+
+func TestExeDevActionsBuiltinKeepsIntegrationsOptional(t *testing.T) {
+	actions := skillByName(BuiltinSkills(), "suggesting-exe-dev-actions")
+	if actions == nil {
+		t.Fatal("suggesting-exe-dev-actions built-in skill not found")
+	}
+	if !strings.Contains(actions.Description, "optional") {
+		t.Error("skill description must make action links optional")
+	}
+	for _, want := range []string{
+		"Integrations are optional", "user's preferred credential setup",
+		"local files or environment variables", "Prefer connection links",
+		"Keep credentials out of links",
+	} {
+		if !strings.Contains(actions.Body, want) {
+			t.Errorf("instructions missing %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(actions.Body), "never ask the user to paste") {
+		t.Error("instructions must not impose a blanket ban on the user's credential setup")
 	}
 }
 

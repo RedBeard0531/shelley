@@ -68,9 +68,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
-import { useToolExpanded } from "../../composables/toolDetail";
+
 import ToolChevron from "./ToolChevron.vue";
 import ToolStatusIcon from "./ToolStatusIcon.vue";
 import InlineText from "../InlineText.vue";
@@ -84,7 +84,7 @@ const props = defineProps<{
   executionTime?: string;
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const isFailed = (result: LLMContent) => (result.Text || "").startsWith("Error fetching ");
 

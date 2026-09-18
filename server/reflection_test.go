@@ -1,8 +1,12 @@
 package server
 
 import (
+	"context"
+	"html"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -66,9 +70,64 @@ func TestReflectionEmojiFallback(t *testing.T) {
 	}
 }
 
-func TestGenerateEmojiFaviconSVG(t *testing.T) {
-	svg := generateEmojiFaviconSVG("🐚&")
-	if !strings.Contains(svg, ">🐚&amp;</text>") {
-		t.Fatalf("emoji not safely embedded in SVG: %s", svg)
+func TestIndexUsesReflectionEmojiDespiteStaleFalseOverride(t *testing.T) {
+	srv, database, _ := newTestServer(t)
+	srv.reflectionEmoji = func(context.Context) string { return "🧪" }
+	if err := database.SetFeatureFlagOverride(t.Context(), "reflection-emoji-favicon", `false`); err != nil {
+		t.Fatal(err)
 	}
+
+	svg := indexFaviconSVG(t, srv)
+	if !strings.Contains(svg, ">🧪</text>") {
+		t.Fatalf("favicon does not use reflection emoji: %s", svg)
+	}
+}
+
+func TestIndexUsesShellEmojiWithoutReflectionMetadata(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	srv.reflectionEmoji = func(context.Context) string { return "" }
+
+	svg := indexFaviconSVG(t, srv)
+	if !strings.Contains(svg, ">🐚</text>") {
+		t.Fatalf("favicon does not default to shell emoji: %s", svg)
+	}
+}
+
+func TestIndexEmojiFaviconEscapesReflectionMetadata(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	srv.reflectionEmoji = func(context.Context) string { return "🐚&" }
+
+	svg := indexFaviconSVG(t, srv)
+	if !strings.Contains(svg, ">🐚&amp;</text>") {
+		t.Fatalf("reflection emoji not safely embedded in favicon: %s", svg)
+	}
+}
+
+func indexFaviconSVG(t *testing.T, srv *Server) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	const prefix = `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,`
+	body := w.Body.String()
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("favicon link missing from index")
+	}
+	encoded := body[start+len(prefix):]
+	end := strings.Index(encoded, `"/>`)
+	if end < 0 {
+		t.Fatal("favicon link is malformed")
+	}
+	encoded = html.UnescapeString(encoded[:end])
+	svg, err := url.PathUnescape(encoded)
+	if err != nil {
+		t.Fatalf("decode favicon: %v", err)
+	}
+	return svg
 }

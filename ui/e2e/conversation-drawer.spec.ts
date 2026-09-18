@@ -1,3 +1,4 @@
+import { clearConversationQuery } from "./helpers";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ConversationWithState } from "../src/types";
 
@@ -173,7 +174,8 @@ test.describe("conversation drawer startup and app bar", () => {
     await expect(queryToken(editor, "user")).toHaveCount(2);
     await expect(exactQueryToken(editor, "user", "user:third@example.com")).toBeVisible();
     await editor.fill("user:me@example.com ");
-    expect(await visibleIds()).toEqual(defaultOrder);
+    await expectQuery(editor, "user:me@example.com ");
+    await expect.poll(visibleIds).toEqual(defaultOrder);
 
     await searchToggle.click();
     await expect(queryEditor(page)).toHaveCount(0);
@@ -181,7 +183,7 @@ test.describe("conversation drawer startup and app bar", () => {
     await searchToggle.click();
     await expectQuery(editor, "user:me@example.com ");
 
-    await editor.fill("");
+    await clearConversationQuery(editor);
     await expect(page.locator('[data-conversation-id="other"]')).toBeVisible();
     await expect(page.locator('[data-conversation-id="draft"]')).toBeVisible();
     await expect(
@@ -200,7 +202,7 @@ test.describe("conversation drawer startup and app bar", () => {
     await userPanel.getByRole("option", { name: /me@example\.com/ }).click();
     await expectQuery(editor, "user:me@example.com ");
     await expect(page.locator('[data-conversation-id="other"]')).not.toBeVisible();
-    await editor.fill("");
+    await clearConversationQuery(editor);
     await searchToggle.click();
     await expect(queryEditor(page)).toHaveCount(0);
     await expect(searchToggle).not.toHaveClass(/search-toggle-active/);
@@ -214,12 +216,16 @@ test.describe("conversation drawer startup and app bar", () => {
 
     await page.goto("/new");
     await page.getByRole("button", { name: "Search conversations..." }).click();
+    const editor = queryEditor(page);
     const addUserFilter = page.getByRole("button", { name: "Add user filter" });
     const userPanel = page.getByTestId("user-filter-panel");
     await addUserFilter.click();
-    await page.keyboard.type("missing");
+    await expectQuery(editor, "user:me@example.com user:");
+    await editor.pressSequentially("missing");
+    await expectQuery(editor, "user:me@example.com user:missing");
     await expect(userPanel.getByText("No matching users")).toBeVisible();
-    await queryEditor(page).fill("user:me@example.com ");
+    await editor.fill("user:me@example.com ");
+    await expectQuery(editor, "user:me@example.com ");
     await addUserFilter.click();
     await userPanel.getByRole("option", { name: /other@example\.com/ }).click();
     await expect(addUserFilter).toBeDisabled();

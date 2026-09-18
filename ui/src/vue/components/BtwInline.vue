@@ -34,7 +34,7 @@
           </div>
         </header>
         <div v-if="turnIsPending(turn)" class="btw-inline-answer btw-inline-pending" role="status">
-          <span class="tool-pill-spinner" aria-hidden="true" /> Working…
+          <span class="btw-inline-spinner" aria-hidden="true" /> Working…
         </div>
         <div
           v-else-if="turn.answer"

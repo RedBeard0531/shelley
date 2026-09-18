@@ -1,6 +1,6 @@
 // lastLine.ts — "what is happening right now" projection of a blob of
 // streamed output: its last non-blank line, ANSI-stripped and truncated.
-// Shared by the subagent activity strip and the running tool pills.
+// Used by the subagent activity strip.
 import { stripAnsi } from "./ansi";
 
 // Truncation bound. Every caller renders into a single clipped line, so this
@@ -17,8 +17,8 @@ const PARTIAL_SEQ = /(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*$|\x1b[\]PX^_][^\x07
 
 // A line that only looks like whitespace. trim() and \s cover Unicode spaces
 // (including U+FEFF), but not the zero-width formatting characters below, and
-// callers read "" as "nothing to show" (a tool pill falls back to its
-// headline), so such a line must not count as content. Tested rather than
+// callers read "" as "nothing to show", so such a line must not count as
+// content. Tested rather than
 // stripped, because U+200D is meaningful mid-line -- it joins emoji sequences
 // (\u{1F469}\u200D\u{1F4BB}), which stripping would break.
 const BLANK = /^[\s\u200b-\u200d\u2060]*$/;

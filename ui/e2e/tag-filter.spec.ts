@@ -1,5 +1,10 @@
+import { dirname } from "node:path";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { createConversationViaAPIWithDetails } from "./helpers";
+import {
+  clearConversationQuery,
+  createConversationViaAPIWithDetails,
+  testWorkingDirectory,
+} from "./helpers";
 
 async function setTags(
   request: APIRequestContext,
@@ -80,18 +85,17 @@ test.describe("Tag filter", () => {
     // alpha: tf-alpha, tf-shared   beta: tf-beta, tf-shared   gamma: tf-gamma
     // tf-alpha and tf-beta never co-occur, so tf-beta must not be offered
     // once tf-alpha is selected.
-    const alpha = await createConversationViaAPIWithDetails(request, "tag filter alpha", {
-      cwd: "/tmp",
-    });
-    const beta = await createConversationViaAPIWithDetails(request, "tag filter beta", {
-      cwd: "/tmp",
-    });
-    const gamma = await createConversationViaAPIWithDetails(request, "tag filter gamma", {
-      cwd: "/tmp",
-    });
-    await setTags(request, alpha.conversationId, ["tf-alpha", "tf-shared"]);
-    await setTags(request, beta.conversationId, ["tf-beta", "tf-shared"]);
-    await setTags(request, gamma.conversationId, ["tf-gamma"]);
+    const alpha = await createConversationViaAPIWithDetails(request, "tag filter alpha");
+    const beta = await createConversationViaAPIWithDetails(request, "tag filter beta");
+    const gamma = await createConversationViaAPIWithDetails(request, "tag filter gamma");
+    const suffix = alpha.conversationId;
+    const alphaTag = `tf-alpha-${suffix}`;
+    const betaTag = `tf-beta-${suffix}`;
+    const gammaTag = `tf-gamma-${suffix}`;
+    const sharedTag = `tf-shared-${suffix}`;
+    await setTags(request, alpha.conversationId, [alphaTag, sharedTag]);
+    await setTags(request, beta.conversationId, [betaTag, sharedTag]);
+    await setTags(request, gamma.conversationId, [gammaTag]);
 
     await page.goto(`/c/${gamma.slug}`);
     await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
@@ -106,20 +110,21 @@ test.describe("Tag filter", () => {
     await expect(search.locator('[data-conversation-query-token="tag"]')).toHaveCount(0);
     await expect(panel(page)).toBeVisible();
     // Counts are the size of the result set each tag would produce.
-    await expect(option(page, "tf-shared")).toContainText("2");
-    await expect(option(page, "tf-alpha")).toContainText("1");
+    await expect(option(page, sharedTag).locator(".tag-filter-option-count")).toHaveText("2");
+    await expect(option(page, alphaTag).locator(".tag-filter-option-count")).toHaveText("1");
 
-    // Typing after the prefix narrows the dropdown by substring...
-    await search.fill("tag:sha");
-    await expect(option(page, "tf-shared")).toBeVisible();
-    await expect(option(page, "tf-alpha")).toHaveCount(0);
+    // Typing a run-specific substring narrows the dropdown to this test's tag;
+    // retries and repeated runs share the server database.
+    await search.fill(`tag:${sharedTag.slice(3)}`);
+    await expect(option(page, sharedTag)).toBeVisible();
+    await expect(option(page, alphaTag)).toHaveCount(0);
 
     // ...and Space accepts the highlighted match, leaving a trailing space so
     // the next keystroke starts fresh.
     await search.press("Space");
-    await expectQuery(search, "tag:tf-shared ");
+    await expectQuery(search, `tag:${sharedTag} `);
     await expect(
-      search.locator('[data-conversation-query-token="tag"][data-query-raw="tag:tf-shared"]'),
+      search.locator(`[data-conversation-query-token="tag"][data-query-raw="tag:${sharedTag}"]`),
     ).toBeVisible();
 
     // The list is filtered.
@@ -130,25 +135,25 @@ test.describe("Tag filter", () => {
     // A second tag ANDs, and the offers narrow: tf-gamma never co-occurs with
     // tf-shared, so it is not on offer.
     await page.getByRole("button", { name: "Add tag filter" }).click();
-    await expectQuery(search, "tag:tf-shared tag:");
+    await expectQuery(search, `tag:${sharedTag} tag:`);
     await expect(panel(page)).toBeVisible();
-    await expect(option(page, "tf-gamma")).toHaveCount(0);
-    await expect(option(page, "tf-shared")).toHaveCount(0); // already selected
-    await expect(option(page, "tf-alpha")).toBeVisible();
+    await expect(option(page, gammaTag)).toHaveCount(0);
+    await expect(option(page, sharedTag)).toHaveCount(0); // already selected
+    await expect(option(page, alphaTag)).toBeVisible();
 
-    await option(page, "tf-alpha").click();
-    await expectQuery(search, "tag:tf-shared tag:tf-alpha ");
+    await option(page, alphaTag).click();
+    await expectQuery(search, `tag:${sharedTag} tag:${alphaTag} `);
     await expect(search.locator('[data-conversation-query-token="tag"]')).toHaveCount(2);
     await expect(row(page, alpha.conversationId)).toBeVisible();
     await expect(row(page, beta.conversationId)).not.toBeVisible();
 
     // Escape clears free text while retaining structured terms.
     await search.pressSequentially("temporary text");
-    await expectQuery(search, "tag:tf-shared tag:tf-alpha temporary text");
+    await expectQuery(search, `tag:${sharedTag} tag:${alphaTag} temporary text`);
     await search.press("Escape");
-    await expectQuery(search, "tag:tf-shared tag:tf-alpha ");
+    await expectQuery(search, `tag:${sharedTag} tag:${alphaTag} `);
     await expect(row(page, beta.conversationId)).not.toBeVisible();
-    await search.fill("");
+    await clearConversationQuery(search);
     await expect(row(page, alpha.conversationId)).toBeVisible();
     await expect(row(page, beta.conversationId)).toBeVisible();
     await expect(row(page, gamma.conversationId)).toBeVisible();
@@ -158,9 +163,7 @@ test.describe("Tag filter", () => {
     page,
     request,
   }) => {
-    const kb = await createConversationViaAPIWithDetails(request, "keyboard tag conversation", {
-      cwd: "/tmp",
-    });
+    const kb = await createConversationViaAPIWithDetails(request, "keyboard tag conversation");
     await setTags(request, kb.conversationId, ["kb-only"]);
 
     await page.goto(`/c/${kb.slug}`);
@@ -194,12 +197,8 @@ test.describe("Tag filter", () => {
   });
 
   test("tag terms and free text are independent predicates", async ({ page, request }) => {
-    const hit = await createConversationViaAPIWithDetails(request, "searchable kumquat marker", {
-      cwd: "/tmp",
-    });
-    const other = await createConversationViaAPIWithDetails(request, "searchable kumquat other", {
-      cwd: "/tmp",
-    });
+    const hit = await createConversationViaAPIWithDetails(request, "searchable kumquat marker");
+    const other = await createConversationViaAPIWithDetails(request, "searchable kumquat other");
     await setTags(request, hit.conversationId, ["sf-keep"]);
     await setTags(request, other.conversationId, ["sf-drop"]);
 
@@ -238,13 +237,10 @@ test.describe("Tag filter", () => {
   });
 
   test("conversation row actions open from one menu button", async ({ page, request }) => {
-    const conversation = await createConversationViaAPIWithDetails(request, "row actions menu", {
-      cwd: "/tmp",
-    });
+    const conversation = await createConversationViaAPIWithDetails(request, "row actions menu");
     const inactiveConversation = await createConversationViaAPIWithDetails(
       request,
       "inactive row actions menu",
-      { cwd: "/tmp" },
     );
 
     await page.goto(`/c/${conversation.slug}`);
@@ -338,9 +334,7 @@ test.describe("Tag filter", () => {
   });
 
   test("renaming a search hit refetches its FTS membership", async ({ page, request }) => {
-    const conversation = await createConversationViaAPIWithDetails(request, "rename search hit", {
-      cwd: "/tmp",
-    });
+    const conversation = await createConversationViaAPIWithDetails(request, "rename search hit");
     const suffix = conversation.conversationId.slice(0, 8);
     const oldSlug = `fts-old-${suffix}`;
     const newSlug = `fts-new-${suffix}`;
@@ -374,7 +368,7 @@ test.describe("Tag filter", () => {
       cwd: gitRoot,
     });
     const outOfRepo = await createConversationViaAPIWithDetails(request, "chip filter elsewhere", {
-      cwd: "/tmp",
+      cwd: dirname(testWorkingDirectory()),
     });
     await setTags(request, inRepo.conversationId, ["chip-tag"]);
     await setTags(request, outOfRepo.conversationId, ["chip-other"]);
@@ -416,12 +410,8 @@ test.describe("Tag filter", () => {
   test("a tag containing a space is quoted, and round-trips", async ({ page, request }) => {
     // The server's normalizeTags allows spaces, so `tag:in progress` unquoted
     // would parse as the tag `in` plus the word `progress`.
-    const spaced = await createConversationViaAPIWithDetails(request, "spaced tag conversation", {
-      cwd: "/tmp",
-    });
-    const plain = await createConversationViaAPIWithDetails(request, "spaced tag other", {
-      cwd: "/tmp",
-    });
+    const spaced = await createConversationViaAPIWithDetails(request, "spaced tag conversation");
+    const plain = await createConversationViaAPIWithDetails(request, "spaced tag other");
     await setTags(request, spaced.conversationId, ["sp tag"]);
     await setTags(request, plain.conversationId, ["sp-plain"]);
 
@@ -456,7 +446,7 @@ test.describe("Tag filter", () => {
     // through its chip the same way.
     const quoted = 'sp" quote';
     await setTags(request, spaced.conversationId, ["sp tag", quoted]);
-    await search.fill("");
+    await clearConversationQuery(search);
     const quoteChip = row(page, spaced.conversationId).locator(
       `[data-testid="conversation-tag-chip"][data-tag='${quoted}']`,
     );
@@ -469,16 +459,10 @@ test.describe("Tag filter", () => {
   });
 
   test("is:untagged filters to untagged, in its own namespace", async ({ page, request }) => {
-    const tagged = await createConversationViaAPIWithDetails(request, "untagged probe tagged", {
-      cwd: "/tmp",
-    });
-    const bare = await createConversationViaAPIWithDetails(request, "untagged probe bare", {
-      cwd: "/tmp",
-    });
+    const tagged = await createConversationViaAPIWithDetails(request, "untagged probe tagged");
+    const bare = await createConversationViaAPIWithDetails(request, "untagged probe bare");
     // A tag literally named "untagged" — the collision that `is:` avoids.
-    const literal = await createConversationViaAPIWithDetails(request, "untagged probe literal", {
-      cwd: "/tmp",
-    });
+    const literal = await createConversationViaAPIWithDetails(request, "untagged probe literal");
     await setTags(request, tagged.conversationId, ["ut-real"]);
     await setTags(request, bare.conversationId, []);
     await setTags(request, literal.conversationId, ["untagged"]);
@@ -520,10 +504,10 @@ test.describe("Tag filter", () => {
     // The four sets from the ordering rule: `#gо-a #gо-b`, `#gо-b`,
     // `#gо-b #gо-c`, `#gо-d`-style. Created in a deliberately wrong order so
     // the assertion cannot pass by accident of creation time.
-    const bd = await createConversationViaAPIWithDetails(request, "order tags bd", { cwd: "/tmp" });
-    const b = await createConversationViaAPIWithDetails(request, "order tags b", { cwd: "/tmp" });
-    const ab = await createConversationViaAPIWithDetails(request, "order tags ab", { cwd: "/tmp" });
-    const bc = await createConversationViaAPIWithDetails(request, "order tags bc", { cwd: "/tmp" });
+    const bd = await createConversationViaAPIWithDetails(request, "order tags bd");
+    const b = await createConversationViaAPIWithDetails(request, "order tags b");
+    const ab = await createConversationViaAPIWithDetails(request, "order tags ab");
+    const bc = await createConversationViaAPIWithDetails(request, "order tags bc");
     await setTags(request, bd.conversationId, ["ord-b", "ord-d"]);
     await setTags(request, b.conversationId, ["ord-b"]);
     await setTags(request, ab.conversationId, ["ord-a", "ord-b"]);
@@ -546,18 +530,10 @@ test.describe("Tag filter", () => {
   });
 
   test("group by tag buckets whole tag sets, with untagged last", async ({ page, request }) => {
-    const both = await createConversationViaAPIWithDetails(request, "group tags both", {
-      cwd: "/tmp",
-    });
-    const bothAgain = await createConversationViaAPIWithDetails(request, "group tags both again", {
-      cwd: "/tmp",
-    });
-    const single = await createConversationViaAPIWithDetails(request, "group tags single", {
-      cwd: "/tmp",
-    });
-    const none = await createConversationViaAPIWithDetails(request, "group tags none", {
-      cwd: "/tmp",
-    });
+    const both = await createConversationViaAPIWithDetails(request, "group tags both");
+    const bothAgain = await createConversationViaAPIWithDetails(request, "group tags both again");
+    const single = await createConversationViaAPIWithDetails(request, "group tags single");
+    const none = await createConversationViaAPIWithDetails(request, "group tags none");
     // Same set, opposite order: these must land in ONE group.
     await setTags(request, both.conversationId, ["gt-red", "gt-blue"]);
     await setTags(request, bothAgain.conversationId, ["gt-blue", "gt-red"]);
@@ -622,7 +598,7 @@ test.describe("Tag filter", () => {
     // not bump updated_at), and "Re-sort now" restores the plain order.
     const created = await Promise.all(
       ["one", "two", "three"].map((n) =>
-        createConversationViaAPIWithDetails(request, `group order ${n}`, { cwd: "/tmp" }),
+        createConversationViaAPIWithDetails(request, `group order ${n}`),
       ),
     );
     // Within one recency bucket rows sort by id descending, so the smallest
@@ -681,15 +657,9 @@ test.describe("Tag filter", () => {
     // `ac-terminal-work` and `workbench` exist on donors; typing `work` on
     // target should offer both (substring match), ranked prefix-first, with
     // Enter committing the highlighted offer.
-    const donor = await createConversationViaAPIWithDetails(request, "autocomplete donor", {
-      cwd: "/tmp",
-    });
-    const donor2 = await createConversationViaAPIWithDetails(request, "autocomplete donor 2", {
-      cwd: "/tmp",
-    });
-    const target = await createConversationViaAPIWithDetails(request, "autocomplete target", {
-      cwd: "/tmp",
-    });
+    const donor = await createConversationViaAPIWithDetails(request, "autocomplete donor");
+    const donor2 = await createConversationViaAPIWithDetails(request, "autocomplete donor 2");
+    const target = await createConversationViaAPIWithDetails(request, "autocomplete target");
     await setTags(request, donor.conversationId, ["ac-terminal-work", "workbench"]);
     // `spare-tag` is never added to target, so its offer keeps the dropdown
     // openable at the end of the test.
@@ -761,9 +731,7 @@ test.describe("Tag filter", () => {
     // A tag longer than the chip's max-width used to push the remove button
     // into the chip's hidden overflow, where it could not be clicked.
     const long = "overlong-" + "x".repeat(120);
-    const conv = await createConversationViaAPIWithDetails(request, "overlong tag removal", {
-      cwd: "/tmp",
-    });
+    const conv = await createConversationViaAPIWithDetails(request, "overlong tag removal");
     await setTags(request, conv.conversationId, [long]);
 
     await page.goto(`/c/${conv.slug}`);

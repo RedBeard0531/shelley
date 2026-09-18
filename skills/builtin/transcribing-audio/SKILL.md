@@ -58,4 +58,3 @@ when: exe.dev
 
 - `402`: LLM credits exhausted; https://exe.dev/user/shelley.
 - Transcription requires managed OpenAI or OpenAI BYOK; ChatGPT subscriptions return `400` on this path.
-- For a recognized routing rejection, try the next gateway and surface its error if it fails. For any other error, stop immediately. If the error reports a missing integration, use `request-integration` to provide the connect link and stop. Never ask the user to paste a secret.

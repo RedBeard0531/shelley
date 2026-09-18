@@ -1,6 +1,4 @@
-// Shared coalescing logic + types for ChatInterface.vue, extracted from the
-// React ChatInterface.tsx so the SFC and ToolPillsRow can share the
-// CoalescedItem type. Mirrors the original coalescedItems useMemo body.
+// Shared message/tool coalescing logic and types for the conversation render model.
 import {
   type Message,
   type LLMContent,

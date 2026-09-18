@@ -194,11 +194,14 @@ type ConversationManager struct {
 	// without waiting out its own turn.
 	pendingBatches []pendingBatch
 
-	// draining is true while a drainPendingMessages goroutine is in flight
-	// for this conversation. It ensures at most one drainer runs at a time
-	// so concurrent enqueues don't race to start parallel drainers (which
-	// would interleave each other's batches into the loop and history).
-	draining bool
+	// draining is true while a drainPendingMessages owner is in flight. A
+	// concurrent caller records drainRequested and returns the owner's drainDone
+	// token; the owner makes another pass before publishing completion. This
+	// prevents a ready transcription or turn-end wakeup from being lost while an
+	// older drainer is returning after observing a blocked queue.
+	draining       bool
+	drainRequested bool
+	drainDone      chan struct{}
 
 	// modelSettingsMu serializes model/reasoning changes with manual resume.
 	// Both operations rebuild the loop, and model changes persist before that
@@ -1706,11 +1709,8 @@ func (cm *ConversationManager) takeInjectableSubagentDone(ctx context.Context, g
 }
 
 // enqueueBatch appends a batch to the pending queue and, if the agent is
-// idle, kicks off a drain goroutine. drainPendingMessages itself acquires
-// the draining flag under cm.mu, so concurrent enqueueBatch calls can both
-// safely spawn drain goroutines — only the first will own the drain; the
-// others will see draining=true and exit, having already appended their
-// batches for the winning drainer to pick up.
+// idle, kicks off a drain goroutine. Concurrent drain calls coalesce a wakeup
+// onto the active owner, which makes another pass before publishing completion.
 func (cm *ConversationManager) enqueueBatch(s *Server, b pendingBatch) {
 	cm.mu.Lock()
 	if cm.cancelling && !cm.preservePendingOnCancel {
@@ -1955,27 +1955,55 @@ func (s *Server) generateSlugAsync(conversationID, source, modelID string) {
 // Each batch is fed atomically to the loop via loop.QueueMessages, so paired
 // sequences (assistant tool_use + user tool_result) cannot interleave with
 // other batches. Batches are processed in FIFO order.
-func (cm *ConversationManager) drainPendingMessages(s *Server) {
-	// Take exclusive draining ownership. Other callers (turn end,
-	// post-distillation defer, concurrent enqueues) bail out and let the
-	// in-flight drainer pick up their batches before exiting.
+func (cm *ConversationManager) drainPendingMessages(s *Server) <-chan struct{} {
+	owner, done := cm.beginPendingDrain()
+	if !owner {
+		return done
+	}
+	for {
+		cm.drainPendingMessagesOwned(s)
+		if !cm.finishPendingDrainPass(done) {
+			return done
+		}
+	}
+}
+
+// beginPendingDrain claims draining ownership or coalesces a wakeup onto the
+// active owner. The returned channel closes after all coalesced passes finish.
+func (cm *ConversationManager) beginPendingDrain() (bool, chan struct{}) {
 	cm.mu.Lock()
+	defer cm.mu.Unlock()
 	if cm.draining {
-		cm.mu.Unlock()
-		return
+		cm.drainRequested = true
+		return false, cm.drainDone
 	}
 	if len(cm.pendingBatches) == 0 {
-		cm.mu.Unlock()
-		return
+		done := make(chan struct{})
+		close(done)
+		return false, done
 	}
 	cm.draining = true
-	cm.mu.Unlock()
-	defer func() {
-		cm.mu.Lock()
-		cm.draining = false
-		cm.mu.Unlock()
-	}()
+	cm.drainDone = make(chan struct{})
+	return true, cm.drainDone
+}
 
+// finishPendingDrainPass returns true when a concurrent wakeup requested
+// another pass. Completion is published only after no coalesced wakeup remains.
+func (cm *ConversationManager) finishPendingDrainPass(done chan struct{}) bool {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.drainRequested {
+		cm.drainRequested = false
+		return true
+	}
+	cm.draining = false
+	cm.drainDone = nil
+	close(done)
+	return false
+}
+
+// drainPendingMessagesOwned performs one drain pass. The caller owns draining.
+func (cm *ConversationManager) drainPendingMessagesOwned(s *Server) {
 	ctx := context.Background()
 
 	// Feeding a batch is a lifecycle publication: cancellation/reset must not

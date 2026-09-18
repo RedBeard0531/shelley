@@ -1193,6 +1193,35 @@ func (db *DB) UpdateConversationSlug(ctx context.Context, conversationID, slug s
 	return &conversation, err
 }
 
+// SetConversationSlugIfUnset installs slug only while the conversation remains
+// unnamed. The read and write share one write transaction so a manual rename or
+// hook assignment that wins while async slug generation is in flight cannot be
+// overwritten afterward.
+func (db *DB) SetConversationSlugIfUnset(ctx context.Context, conversationID, slug string) (*generated.Conversation, bool, error) {
+	var conversation generated.Conversation
+	updated := false
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		current, err := q.GetConversation(ctx, conversationID)
+		if err != nil {
+			return err
+		}
+		if current.Slug != nil && *current.Slug != "" {
+			conversation = current
+			return nil
+		}
+		conversation, err = q.UpdateConversationSlug(ctx, generated.UpdateConversationSlugParams{
+			Slug:           &slug,
+			ConversationID: conversationID,
+		})
+		if err == nil {
+			updated = true
+		}
+		return err
+	})
+	return &conversation, updated, err
+}
+
 // UpdateConversationTags replaces a conversation's tag list. Tags are stored
 // as a JSON array of strings; callers are responsible for normalizing/
 // deduplicating entries.

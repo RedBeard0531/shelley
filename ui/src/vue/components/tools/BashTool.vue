@@ -89,7 +89,6 @@ import { computed, nextTick, ref, watch } from "vue";
 import type { LLMContent } from "../../../types";
 import HighlightedCode from "../HighlightedCode.vue";
 import AnsiText from "./AnsiText.vue";
-import { useToolExpanded, useInToolDetail } from "../../composables/toolDetail";
 import ToolChevron from "./ToolChevron.vue";
 import ToolStatusIcon from "./ToolStatusIcon.vue";
 import { isCancelledToolResult } from "../../utils/toolStatus";
@@ -111,19 +110,18 @@ const props = defineProps<{
 /** Max lines shown in the streaming preview before "Show more" is needed. */
 const PREVIEW_LINES = 5;
 
-// Details panel — collapsed by default (expanded inside the detail modal).
-const isExpanded = useToolExpanded();
+// Details panel — collapsed by default.
+const isExpanded = ref(false);
 // Streaming preview — expanded to show full streaming output.
 const previewExpanded = ref(false);
 const previewRef = ref<InstanceType<typeof AnsiText> | null>(null);
 const expandedStreamRef = ref<InstanceType<typeof AnsiText> | null>(null);
-const inToolDetail = useInToolDetail();
 
-// Collapse details when the tool completes (skip inside the detail modal).
+// Collapse details when the tool completes.
 watch(
   () => props.isRunning,
   (running, prevRunning) => {
-    if (prevRunning && !running && !inToolDetail) {
+    if (prevRunning && !running) {
       isExpanded.value = false;
       previewExpanded.value = false;
     }

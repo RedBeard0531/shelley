@@ -3,7 +3,7 @@ import { gunzipSync } from 'zlib';
 import { readFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { createConversationViaAPI, setPageFeatureFlag } from './helpers';
+import { createConversationViaAPI } from './helpers';
 
 // The whole e2e suite runs with reducedMotion: 'reduce' (see playwright.config.ts),
 // which is what keeps modal open/close fast. These tests protect the two halves
@@ -148,12 +148,9 @@ test.describe('reduced motion', () => {
   });
 
   test('modal open/close is not animated, and spinners still spin', async ({ page, request }) => {
-    await setPageFeatureFlag(page, 'tool-pills', true);
-    // A command that actually exists: `bash: hello` makes the agent try (and
-    // fail) to run a missing binary, which trips shelley's tool auto-installer
-    // and a real model call. This test only needs a conversation with one tool
-    // pill in it.
-    const slug = await createConversationViaAPI(request, 'bash: echo hello');
+    // Any conversation will do; the Feature flags modal (opened from the
+    // command palette) is the cheapest consumer of the shared Modal.
+    const slug = await createConversationViaAPI(request, 'echo: reduced motion');
     await page.goto(`/c/${slug}`);
     await page.waitForLoadState('domcontentloaded');
 
@@ -166,8 +163,12 @@ test.describe('reduced motion', () => {
       'prefers-reduced-motion is not being emulated; check contextOptions in playwright.config.ts',
     ).toBe(true);
 
-    await page.locator('.tool-pill').first().click();
-    await expect(page.locator('.tool-pill-expanded')).toBeVisible();
+    await page.keyboard.press('ControlOrMeta+k');
+    const search = page.locator('.command-palette-input');
+    await expect(search).toBeVisible();
+    await search.fill('feature');
+    await page.locator('.command-palette-item').first().click();
+    await expect(page.locator('.modal-title')).toHaveText('Feature flags');
 
     // The dialog and its mask must not be running a 0.3s entrance: that is the
     // animation Playwright waits out on every click.
@@ -185,7 +186,7 @@ test.describe('reduced motion', () => {
     // .p-dialog-leave-active through. Sample while the leave is in flight.
     const leaveDurations = await page.evaluate(async () => {
       const closeBtn = document.querySelector(
-        '.tool-detail-modal .modal-header .btn-icon',
+        '.modal-header .btn-icon',
       ) as HTMLElement | null;
       closeBtn?.click();
       await new Promise((r) => requestAnimationFrame(() => r(null)));
@@ -197,7 +198,7 @@ test.describe('reduced motion', () => {
     for (const { cls, dur } of leaveDurations) {
       expect(parseFloat(dur), `leaving element still animates: ${cls}`).toBeLessThan(0.05);
     }
-    await expect(page.locator('.tool-detail-modal')).toHaveCount(0);
+    await expect(page.locator('.modal')).toHaveCount(0);
 
     // A spinner injected with a known exempt class must still animate.
     const spinnerDuration = await page.evaluate(() => {

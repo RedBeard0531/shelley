@@ -1,5 +1,3 @@
-import { isAutoExpandTool } from "../../utils/toolMeta";
-
 export type ToolCardPlaceholderKind = "bash" | "generic" | "media" | "output-iframe" | "patch";
 
 export function toolCardPlaceholderKind(
@@ -19,9 +17,23 @@ export function toolCardPlaceholderKind(
       toolInput !== null &&
       "action" in toolInput &&
       (toolInput as { action?: unknown }).action === "screenshot") ||
-    (toolName === "llm_one_shot" && isAutoExpandTool(toolName, toolInput, display))
+    (toolName === "llm_one_shot" && hasImageOutput(display))
   ) {
     return "media";
   }
   return "generic";
+}
+
+function hasImageOutput(display: unknown): boolean {
+  if (typeof display !== "object" || display === null) return false;
+  const images = (display as { images?: unknown }).images;
+  return (
+    Array.isArray(images) &&
+    images.some(
+      (image) =>
+        typeof image === "object" &&
+        image !== null &&
+        typeof (image as { url?: unknown }).url === "string",
+    )
+  );
 }

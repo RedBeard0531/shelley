@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { createConversationViaAPI } from "./helpers";
+import { createConversationViaAPI, testWorkingDirectory } from "./helpers";
 
 // The top-right overflow ("kebab") menu is built from PrimeVue Popover/Select
 // plus compact native icon buttons. See components/ChatOverflowMenu.vue. The
@@ -34,8 +34,11 @@ test.describe("Overflow menu (PrimeVue)", () => {
     await expect(directory.locator("xpath=preceding-sibling::*[1]")).toHaveAccessibleName(
       /^Terminal\b/,
     );
-    await expect(directory.locator(".overflow-menu-cwd")).toHaveText("/tmp");
-    await expect(directory.locator(".overflow-menu-cwd")).toHaveAttribute("title", "/tmp");
+    await expect(directory.locator(".overflow-menu-cwd")).toHaveText(testWorkingDirectory());
+    await expect(directory.locator(".overflow-menu-cwd")).toHaveAttribute(
+      "title",
+      testWorkingDirectory(),
+    );
     await directory.tap();
 
     await expect(picker).toBeVisible();
