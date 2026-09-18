@@ -10751,7 +10751,14 @@ kbd {
   font-size: 0.75rem;
   color: var(--text-secondary);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  max-width: calc(100vw - 1rem);
+  /* Definite width. The graphs inside size as width: 280px / max-width: 100%,
+     a cyclic constraint while this box shrinks to fit its content: Firefox
+     resolves the cycle degenerately and can collapse the popup to its
+     smallest child (~the controls row), leaving the legend's fixed column
+     floors overflowing and the flex labels crushed to zero width. Sizing
+     this box from the viewport instead gives the percentages something
+     definite to resolve against. */
+  width: min(302px, calc(100vw - 1rem));
 }
 .chat-context-popup.p-popover:before,
 .chat-context-popup.p-popover:after {
