@@ -111,12 +111,10 @@ sleeps then calls the Shelley client. Use double quotes so THIS shell expands
 $SHELLEY_CONVERSATION_ID (tmux's server env may be stale):
   tmux new-session -d "sleep 3600 && shelley client chat -c $SHELLEY_CONVERSATION_ID -p 'Resume: <what next>'"
 
-MUST set slow_ok=true for potentially slow commands: builds, downloads,
-installs, tests, or any other substantive operation.
+Set slow_ok=true for potentially slow commands (increases timeout).
 
-Avoid overly destructive cleanup commands. Commands that could delete .git
-directories, home directories, or use broad wildcards require explicit paths.
-Confirm with the user before running destructive operations.
+Destructive commands (deleting .git, home directories, broad wildcards, etc) require
+explicit paths and user confirmation.
 
 Use the change_dir tool instead of 'cd <path> && ...'; 'cd' does not persist across calls.
 

@@ -80,8 +80,8 @@ explicit paths and user confirmation.
 
 Keep commands under 60k tokens; for complex scripts, write a file and run it.
 
-Don't pipe to head/tail/sed -n just to truncate output; the tool already tails
-on yield and otherwise returns it in full. Filter only when targeting a
+Don't pipe to head/tail/sed just to shorten output; this already tails
+on yield and otherwise returns output in full. Filter only when targeting a
 specific pattern (e.g. grep).
 `
 
