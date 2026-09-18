@@ -138,7 +138,7 @@ func (s *SubagentTool) subagentInputSchema() string {
     },
     "prompt": {
       "type": "string",
-      "description": "The message to send to the subagent"
+      "description": "The message to send to the subagent. If it is still working, the message is queued until its current turn finishes; it does not interrupt."
     },
     "timeout_seconds": {
       "type": "integer",
@@ -146,7 +146,7 @@ func (s *SubagentTool) subagentInputSchema() string {
     },
     "wait": {
       "type": "boolean",
-      "description": "Whether to wait for completion (default: true). If false, returns immediately; when the subagent eventually finishes, its response is delivered asynchronously. If wait=true and the subagent completes before timeout, no later asynchronous duplicate is delivered. Sending a new message to a subagent that is still working does NOT interrupt it: the message is queued and delivered after the current turn finishes."
+      "description": "Whether to wait for completion (default: true). If false, returns immediately; when the subagent eventually finishes, its response is delivered asynchronously. If wait=true and the subagent completes before timeout, no later asynchronous duplicate is delivered."
     }%s%s
   }
 }`, modelProp, reasoningProp)
