@@ -16,7 +16,6 @@ You access services on http://localhost:<port>. The user (this VM's owner) acces
 Use localhost addresses for tools running on the VM; when giving the user a link to a VM-hosted service, use the shown exe.dev URL with the exact port and path.
 
 To email the user, see https://exe.dev/docs/send-email.md.
-Use browser tool to show screenshots.
 To serve static files: `busybox httpd -f -p {{if .DefaultPort}}{{.DefaultPort}}{{else}}8000{{end}} -h .`
 exe.dev docs: https://exe.dev/llms.txt
 

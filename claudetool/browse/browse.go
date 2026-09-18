@@ -677,74 +677,34 @@ func (b *BrowseTools) GetTools() []*llm.Tool {
 
 // CombinedTool returns a single tool that handles all browser actions via an "action" field.
 func (b *BrowseTools) CombinedTool() *llm.Tool {
-	description := `Browser automation tool. Use the "action" field to select an operation:
+	description := `Automate the browser by setting action and its named JSON fields below.
+Signatures show accepted parameters; ? marks optional fields. Types and defaults
+are in the schema.
 
-- action: "navigate"
-  Navigate the browser to a specific URL and wait for page to load.
-  Parameters: url (string, required), timeout (string, optional)
+- navigate(url, timeout?): load a page and wait for it.
+- eval(expression, await?, timeout?): run JavaScript in the page, e.g. to click,
+  type, read, scroll, or wait for selectors.
+- resize(width, height, timeout?): set viewport size.
+- screenshot(selector?, timeout?): capture the page or an element; shows the image to the user.
+- console_logs(limit?): read captured console logs.
+- clear_console_logs(): clear captured console logs.
+- screencast_start(format?, quality?, max_width?, max_height?, every_nth_frame?):
+  record an MP4; auto-stops after 30 minutes or 10000 frames.
+- screencast_stop(): stop recording; return the MP4 path and frame count.
+- screencast_status(): check recording progress.
 
-- action: "eval"
-  Evaluate JavaScript in the browser context. Your go-to for interacting with content: clicking buttons, typing, getting content, scrolling, waiting for content/selector to be ready, etc.
-  Parameters: expression (string, required), timeout (string, optional), await (boolean, default true)
-
-- action: "resize"
-  Resize the browser viewport to a specific width and height.
-  Parameters: width (integer, required), height (integer, required), timeout (string, optional)
-
-- action: "screenshot"
-  Take a screenshot of the page or a specific element.
-  Parameters: selector (string, optional), timeout (string, optional)
-
-- action: "console_logs"
-  Get recent browser console logs.
-  Parameters: limit (integer, optional, default 100)
-
-- action: "clear_console_logs"
-  Clear all captured browser console logs.
-  No additional parameters.
-
-- action: "screencast_start"
-  Start recording a screencast. Frames are piped directly into ffmpeg to produce an MP4 file.
-  Auto-stops after 30 minutes or 10000 frames. Requires ffmpeg to be installed.
-  Parameters: format (string, "jpeg" or "png", default "jpeg"), quality (integer, 0-100, default 60), max_width (integer, default 1280), max_height (integer, default 720), every_nth_frame (integer, default 1)
-
-- action: "screencast_stop"
-  Stop the screencast recording. Returns the output MP4 file path and frame count.
-  No additional parameters.
-
-- action: "screencast_status"
-  Check if a screencast is active and how many frames have been captured.
-  No additional parameters.
-
-Device & display emulation (emulate_* actions):
-- action: "emulate_help" — Show emulation help and the list of device presets.
-- action: "emulate_device" — Emulate a device preset. Parameters: device (string).
-- action: "emulate_custom" — Custom viewport. Parameters: width, height, device_scale_factor, mobile, touch.
-- action: "emulate_reset" — Clear all emulation overrides.
-- action: "emulate_dark_mode" — Toggle prefers-color-scheme: dark. Parameters: enabled (bool, default true).
-- action: "emulate_media" — Emulate a CSS media type. Parameters: media (e.g. "print").
-
-Network monitoring (network_* actions):
-- action: "network_help" — Show network help.
-- action: "network_enable" — Start capturing network requests.
-- action: "network_disable" — Stop capturing network requests.
-- action: "network_get_log" — Return captured requests. Parameters: limit (int, default 50), filter (URL substring).
-- action: "network_clear" — Clear the captured request log.
-- action: "network_cookies" — List cookies for the current page.
-- action: "network_clear_cache" — Clear the browser cache.
-
-Accessibility tree inspection (accessibility_* actions):
-- action: "accessibility_help" — Show accessibility help.
-- action: "accessibility_tree" — Dump the accessibility tree. Parameters: depth (int, 0=unlimited).
-- action: "accessibility_query" — Find nodes by name/role. Parameters: name, role.
-- action: "accessibility_node" — Inspect the node for a CSS selector. Parameters: selector.
-
-Performance profiling (profile_* actions):
-- action: "profile_help" — Show profiling help.
-- action: "profile_metrics" — Snapshot performance metrics.
-- action: "profile_cpu_start" / "profile_cpu_stop" — CPU profiling.
-- action: "profile_trace_start" / "profile_trace_stop" — Tracing. trace_start accepts categories (comma-separated).
-- action: "profile_coverage_start" / "profile_coverage_stop" — JS/CSS coverage.`
+Device/display emulation, network monitoring, accessibility, and profiling:
+- emulate_device(device)
+- emulate_custom(width, height, device_scale_factor?, mobile?, touch?)
+- emulate_dark_mode(enabled?)
+- emulate_media(media?)
+- network_get_log(limit?, filter?)
+- accessibility_tree(depth?)
+- accessibility_query(name?, role?): at least one of name or role is required.
+- accessibility_node(selector)
+- profile_trace_start(categories?)
+Other actions in these families take no additional parameters. For details and
+examples as needed, use emulate_help, network_help, accessibility_help, or profile_help.`
 
 	schema := `{
 		"type": "object",
@@ -768,19 +728,19 @@ Performance profiling (profile_* actions):
 			},
 			"width": {
 				"type": "integer",
-				"description": "Viewport width in pixels (resize action)"
+				"description": "Viewport width in pixels (resize, emulate_custom)"
 			},
 			"height": {
 				"type": "integer",
-				"description": "Viewport height in pixels (resize action)"
+				"description": "Viewport height in pixels (resize, emulate_custom)"
 			},
 			"limit": {
 				"type": "integer",
-				"description": "Max log entries to return (console_logs action, default 100)"
+				"description": "Max entries to return (console_logs: default 100; network_get_log: default 50)"
 			},
 			"selector": {
 				"type": "string",
-				"description": "CSS selector for element to screenshot (screenshot action)"
+				"description": "CSS selector (screenshot: optional element; accessibility_node: required target)"
 			},
 			"timeout": {
 				"type": "string",
