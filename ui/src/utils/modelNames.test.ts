@@ -1,6 +1,6 @@
 // Unit tests for prettyModelName / prettyModelLabels.
 // Run with: tsx src/utils/modelNames.test.ts
-import { prettyModelName, prettyModelLabels } from "./modelNames";
+import { findModelByName, prettyModelName, prettyModelLabels } from "./modelNames";
 
 let passed = 0;
 let failed = 0;
@@ -82,6 +82,37 @@ eq("llama-guard-3", "llama-guard-3");
   } else {
     failed++;
     failures.push(`✗ collision guard: got ${a} / ${b}`);
+  }
+}
+
+// findModelByName resolves a recorded usage model name against the list.
+{
+  const models = [
+    { id: "glm-5.3-flash-fireworks", api_model_name: "accounts/fireworks/models/glm-5p3-flash" },
+    { id: "claude-opus-4.8", api_model_name: "claude-opus-4-8" },
+    { id: "gpt-5.4" },
+  ];
+  const cases: [string | null, string | undefined][] = [
+    // Wire name -> Shelley id.
+    ["accounts/fireworks/models/glm-5p3-flash", "glm-5.3-flash-fireworks"],
+    // Shelley id, and the dot/dash variant.
+    ["glm-5.3-flash-fireworks", "glm-5.3-flash-fireworks"],
+    ["claude-opus-4-8", "claude-opus-4.8"],
+    ["claude-opus-4.8", "claude-opus-4.8"],
+    // api_model_name wins over a dot/dash id match only when it comes first;
+    // here both spellings name the same entry either way.
+    ["gpt-5.4", "gpt-5.4"],
+    ["accounts/fireworks/models/kimi-k3", undefined],
+    [null, undefined],
+  ];
+  for (const [want, expected] of cases) {
+    const got = findModelByName(models, want)?.id;
+    if (got === expected) {
+      passed++;
+    } else {
+      failed++;
+      failures.push(`✗ findModelByName(${want}) = ${got}, want ${expected}`);
+    }
   }
 }
 

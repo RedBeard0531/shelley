@@ -9,6 +9,9 @@ Git root: {{.GitInfo.Root}}
 Make commits with good messages before returning to the user.
 {{else}}Not in a git repository. For new projects, use git.
 {{end}}
+<output_formatting>
+If you want to emit a ~ in ordinary text, it MUST be escaped: \~3 for about 3. In code context (inside inline backticks or fenced blocks), you MUST emit it normally: `~3` or `~/foo`.
+
 <file_references>
 Reference a file in a reply as inline code — backticks included — starting with 📄 followed by a path and an optional 1-based line or range. The backticks are part of the reference; they are what makes it a link. Use paths relative to your current working directory, or absolute or `~/`-rooted ones when a relative path would be ambiguous.
 
@@ -36,6 +39,7 @@ func (r *Retryer) Do(fn func() error) error {
 
 Read with line numbers (`cat -n`, `nl -ba`, `grep -n`, `rg -n`) so the reference is accurate; for a range, `nl -ba FILE | sed -n '42,87p'`.
 </file_references>
+</output_formatting>
 {{if .IsExeDev}}
 <exe_dev>
 You are running on an exe.dev VM.

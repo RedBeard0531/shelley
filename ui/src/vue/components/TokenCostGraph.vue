@@ -147,6 +147,7 @@
         v-for="model in modelComparison"
         :key="model.model"
         :model="model"
+        :label="modelLabel(model.model)"
         :show-subagents="hasSubagents"
       />
       <tbody
@@ -280,6 +281,7 @@ import {
   type ModelCostDTO,
   type SubagentUsageDTO,
 } from "../../services/api";
+import { findModelByName, prettyModelLabels } from "../../utils/modelNames";
 import {
   buildCostSummary,
   buildModelCostComparison,
@@ -305,11 +307,21 @@ import {
 
 const props = defineProps<{
   entries: UsageEntry[];
+  // Model list, for turning the upstream wire names recorded in usage data
+  // (e.g. "accounts/fireworks/models/glm-5p3-flash") into display names.
   models: Model[];
   otherUsageRows?: OtherUsageRow[];
   conversationId?: string | null;
   active?: boolean;
 }>();
+
+// The legend names each model the way the picker does; the raw usage name
+// stays on hover, and is what an unresolvable model shows.
+const labels = computed(() => prettyModelLabels(props.models ?? []));
+function modelLabel(name: string): string {
+  const m = findModelByName(props.models ?? [], name);
+  return (m && labels.value.get(m.id)) || name;
+}
 
 const W = 280;
 const H = 150;

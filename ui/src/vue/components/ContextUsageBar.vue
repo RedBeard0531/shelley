@@ -115,6 +115,8 @@ const props = defineProps<{
   maxContextTokens: number;
   conversationId?: string | null;
   usageEntries?: UsageEntry[];
+  // Model list, for labelling the usage names recorded in the data (see
+  // findModelByName).
   models: Model[];
   otherUsageRows?: OtherUsageRow[];
   messages?: Message[];

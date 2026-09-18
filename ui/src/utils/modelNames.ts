@@ -123,6 +123,10 @@ export function prettyModelName(id: string): string {
 export interface NamedModel {
   id: string;
   display_name?: string;
+  // The upstream wire name (e.g. "accounts/fireworks/models/glm-5p3-flash").
+  // Usage data records this rather than the Shelley id, so it is the second
+  // key a recorded name can be matched on.
+  api_model_name?: string;
 }
 
 // Display label for one model: an explicit, distinct display_name wins;
@@ -130,6 +134,26 @@ export interface NamedModel {
 function labelFor(m: NamedModel): string {
   if (m.display_name && m.display_name !== m.id) return m.display_name;
   return prettyModelName(m.id);
+}
+
+// Match a recorded model name against a model list. Usage data holds the
+// upstream wire name ("accounts/fireworks/models/glm-5p3-flash") while the list
+// is keyed by Shelley id ("glm-5.3-flash-fireworks"), so both the id and
+// api_model_name are candidates, and the dot/dash spelling difference between
+// e.g. "claude-opus-4.8" and "claude-opus-4-8" is tolerated. Returns undefined
+// when nothing matches.
+export function findModelByName<T extends NamedModel>(
+  models: T[],
+  want: string | null | undefined,
+): T | undefined {
+  if (!want) return undefined;
+  const norm = (s: string) => s.replace(/\./g, "-");
+  return (
+    models.find((m) => m.id === want) ||
+    models.find((m) => m.api_model_name === want) ||
+    models.find((m) => norm(m.id) === norm(want)) ||
+    models.find((m) => m.api_model_name && norm(m.api_model_name) === norm(want))
+  );
 }
 
 // Labels for a whole list, with the collision guard described above.
