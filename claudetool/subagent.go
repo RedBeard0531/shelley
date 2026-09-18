@@ -85,42 +85,19 @@ const (
 	subagentMaxTimeout = 60 * time.Minute
 )
 
-// subagentDescription builds the tool description, including model info when models are available.
-func (s *SubagentTool) subagentDescription() string {
-	base := `Spawn or interact with a subagent conversation.
+const subagentDescription = `Delegate tasks to independent conversations, including parallel or
+output-heavy work whose details should not fill your context.
 
-Subagents are independent conversations that can work on subtasks in parallel.
-Use subagents for:
-- Long-running tasks that you want to delegate
-- Token-intensive tasks that produce lots of output, little of which is needed
-- Parallel exploration of different approaches
-- Breaking down complex problems into independent pieces
+Use a new slug to start a subagent; reuse its slug to continue that conversation.
 
-Each subagent has its own slug identifier within this conversation.
-You can send messages to existing subagents by using the same slug.
-The tool returns the subagent's last response, or a status if the timeout is reached.
+The tool returns the subagent's response or a running status, according to wait
+and timeout_seconds.
 
-When writing prompts for subagents, convey intent, nuance, and operational
-details — not just prescriptive instructions. The subagent has no context
-beyond what you put in the prompt, so share the "why" alongside the "what".
-
-Use the "reasoning" parameter to set the subagent's thinking effort (off,
-minimal, low, medium, high, xhigh, max). If omitted, the subagent inherits the
-parent conversation's reasoning level.`
-
-	if len(s.AvailableModels) > 0 {
-		base += "\n\nAvailable models (use the \"model\" parameter to override the default):"
-		for _, m := range s.AvailableModels {
-			if m.DisplayName != "" && m.DisplayName != m.ID {
-				base += fmt.Sprintf("\n- %s (%s)", m.ID, m.DisplayName)
-			} else {
-				base += fmt.Sprintf("\n- %s", m.ID)
-			}
-		}
-	}
-
-	return base
-}
+Subagents do not inherit your conversation. When writing prompts for subagents,
+convey intent, nuance, and operational details — not just prescriptive instructions.
+Explain how the task serves the user's broader goals, the rationale and constraints,
+and what success looks like. Distinguish hard requirements from suggested approaches.
+Give subagents enough context and autonomy to make good decisions and adapt as they learn.`
 
 // subagentInputSchema builds the JSON schema, including model enum when models are available.
 func (s *SubagentTool) subagentInputSchema() string {
@@ -188,7 +165,7 @@ type subagentInput struct {
 func (s *SubagentTool) Tool() *llm.Tool {
 	return &llm.Tool{
 		Name:        subagentName,
-		Description: s.subagentDescription(),
+		Description: subagentDescription,
 		InputSchema: llm.MustSchema(s.subagentInputSchema()),
 		Run:         llm.RunJSON(s.run),
 	}

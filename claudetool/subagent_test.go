@@ -244,16 +244,13 @@ func TestSubagentTool_ModelOverride(t *testing.T) {
 		t.Errorf("expected schema to contain model enum, got %s", schemaStr)
 	}
 
-	// Verify the description includes available models
-	if !strings.Contains(llmTool.Description, "claude-haiku-4.5 (Claude Haiku 4.5)") {
-		t.Errorf("expected description to list model with display name, got %s", llmTool.Description)
-	}
-	if !strings.Contains(llmTool.Description, "claude-sonnet-4-6") {
-		t.Errorf("expected description to list model without display name suffix, got %s", llmTool.Description)
-	}
-	// sonnet has no display name, so it should NOT have parentheses
-	if strings.Contains(llmTool.Description, "claude-sonnet-4-6 (") {
-		t.Errorf("expected no display name suffix for sonnet, got %s", llmTool.Description)
+	for _, model := range tool.AvailableModels {
+		if !strings.Contains(schemaStr, model.ID) {
+			t.Errorf("model %q missing from schema", model.ID)
+		}
+		if strings.Contains(llmTool.Description, model.ID) {
+			t.Errorf("description duplicates model %q from schema", model.ID)
+		}
 	}
 
 	// Override model

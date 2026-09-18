@@ -408,34 +408,34 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 		},
 	}
 
-	findSubagent := func(ts *ToolSet) string {
+	findSubagentSchema := func(ts *ToolSet) string {
 		for _, tool := range ts.Tools() {
 			if tool.Name == "subagent" {
-				return tool.Description
+				return string(tool.InputSchema)
 			}
 		}
 		return ""
 	}
 
 	ts1 := NewToolSet(t.Context(), cfg)
-	desc1 := findSubagent(ts1)
-	if desc1 == "" {
+	schema1 := findSubagentSchema(ts1)
+	if schema1 == "" {
 		t.Fatal("expected subagent tool in first ToolSet")
 	}
-	if !strings.Contains(desc1, "model-a") {
-		t.Errorf("expected first description to mention model-a, got: %s", desc1)
+	if !strings.Contains(schema1, "model-a") {
+		t.Errorf("expected first schema to include model-a, got: %s", schema1)
 	}
 
 	// Simulate a custom model being added at runtime.
 	models = append(models, AvailableModel{ID: "model-b", DisplayName: "Model B"})
 
 	ts2 := NewToolSet(t.Context(), cfg)
-	desc2 := findSubagent(ts2)
-	if desc2 == "" {
+	schema2 := findSubagentSchema(ts2)
+	if schema2 == "" {
 		t.Fatal("expected subagent tool in second ToolSet")
 	}
-	if !strings.Contains(desc2, "model-b") {
-		t.Errorf("expected second description to pick up model-b, got: %s", desc2)
+	if !strings.Contains(schema2, "model-b") {
+		t.Errorf("expected second schema to include model-b, got: %s", schema2)
 	}
 	if calls != 2 {
 		t.Errorf("expected BuildAvailableModels to be invoked once per ToolSet, got %d calls", calls)
@@ -445,14 +445,12 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 	cfgNoBuilder := cfg
 	cfgNoBuilder.BuildAvailableModels = nil
 	ts3 := NewToolSet(t.Context(), cfgNoBuilder)
-	desc3 := findSubagent(ts3)
-	if desc3 == "" {
+	schema3 := findSubagentSchema(ts3)
+	if schema3 == "" {
 		t.Fatal("expected subagent tool when falling back to LLMProvider")
 	}
-	// mockLLMProvider.GetAvailableModels returns nothing useful by default,
-	// but the description should at least be non-empty and not panic.
-	if !strings.Contains(desc3, "subagent") {
-		t.Errorf("expected fallback description to mention subagents, got: %s", desc3)
+	if !strings.Contains(schema3, "test-model") {
+		t.Errorf("expected fallback schema to include the provider's model, got: %s", schema3)
 	}
 }
 
