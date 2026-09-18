@@ -19,7 +19,7 @@ sqlite3 "{{.ShelleyDBPath}}" "SELECT json_extract(llm_data, '$.Content[0].Text')
 {{end}}
 {{if .SkillsXML}}
 <skills>
-Skills extend your capabilities. When a task matches a skill's description, activate it.
+When a task matches a skill's description, run its activation command to read the instructions.
 {{.SkillsXML}}
 </skills>
 {{end}}

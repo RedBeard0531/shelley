@@ -805,8 +805,8 @@ This is a test skill.
 	if !strings.Contains(prompt, "A test skill for verification") {
 		t.Errorf("subagent prompt should contain the test skill description")
 	}
-	if !strings.Contains(prompt, "Skills extend your capabilities") {
-		t.Errorf("subagent prompt should contain skills introduction text")
+	if !strings.Contains(prompt, "run its activation command") {
+		t.Errorf("subagent prompt should explain how to load matching skills")
 	}
 }
 
