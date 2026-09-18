@@ -753,6 +753,8 @@ const models = ref<
   Array<{
     id: string;
     display_name?: string;
+    // Upstream wire name; usage data records this rather than the Shelley id.
+    api_model_name?: string;
     source?: string;
     ready: boolean;
     max_context_tokens?: number;

@@ -41,6 +41,7 @@ async function responseError(response: Response, prefix: string): Promise<ApiErr
 export interface AvailableModel {
   id: string;
   display_name?: string;
+  api_model_name?: string;
   source?: string;
   base_url?: string;
   api_type?: string;

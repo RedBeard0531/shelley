@@ -114,6 +114,9 @@ export interface LLMContent {
 export interface Model {
   id: string;
   display_name?: string;
+  // Upstream wire name (e.g. "accounts/fireworks/models/glm-5p3-flash"), which
+  // is what usage data records for a message's model.
+  api_model_name?: string;
   source?: string; // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
   base_url?: string;
   api_type?: string;

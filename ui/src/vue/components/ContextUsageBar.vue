@@ -29,6 +29,7 @@
             :entries="usageEntries || []"
             :other-usage-rows="otherUsageRows || []"
             :conversation-id="conversationId"
+            :models="models"
             :active="usageGraph === 'cost'"
           >
             <template #mode-controls>
@@ -98,7 +99,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from "vue";
 import Popover from "primevue/popover";
-import type { Message } from "../../types";
+import type { Message, Model } from "../../types";
 import { contextUsageLevel, contextUsageLevelLabel } from "../../utils/contextUsage";
 import { formatTokenCount } from "../../utils/tokenCostGraph";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
@@ -115,6 +116,9 @@ const props = defineProps<{
   usageEntries?: UsageEntry[];
   otherUsageRows?: OtherUsageRow[];
   messages?: Message[];
+  // Model list, for labelling the usage names recorded in the data (see
+  // findModelByName).
+  models?: Model[];
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration?: () => Promise<void> | void;
   /** Called just before the popup opens. The parent computes usageEntries /

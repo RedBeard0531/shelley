@@ -42,6 +42,7 @@
       :usage-entries="usageEntries"
       :other-usage-rows="otherUsageRows"
       :messages="messages"
+      :models="models"
       :on-distill-new-generation="onDistillNewGeneration"
       :on-start-new-generation="onStartNewGeneration"
       :on-usage-needed="onUsageNeeded"

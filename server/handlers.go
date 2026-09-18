@@ -2642,10 +2642,14 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 type ModelInfo struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name,omitempty"`
-	Source      string `json:"source,omitempty"`   // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
-	BaseURL     string `json:"base_url,omitempty"` // Upstream origin (e.g., "https://llm.int.exe.xyz")
-	APIType     string `json:"api_type,omitempty"` // Wire protocol (e.g., "anthropic-messages")
-	Ready       bool   `json:"ready"`
+	// APIModelName is the upstream wire name (e.g.
+	// "accounts/fireworks/models/glm-5p3-flash"). Usage data records this name
+	// rather than the Shelley id, so clients need it to label a recorded model.
+	APIModelName string `json:"api_model_name,omitempty"`
+	Source       string `json:"source,omitempty"`   // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
+	BaseURL      string `json:"base_url,omitempty"` // Upstream origin (e.g., "https://llm.int.exe.xyz")
+	APIType      string `json:"api_type,omitempty"` // Wire protocol (e.g., "anthropic-messages")
+	Ready        bool   `json:"ready"`
 	// MaxContextTokens is the models.dev context window (clamped to the
 	// pricing tier, see modelsdev.LookupContextLimit); 0 when unknown.
 	MaxContextTokens int  `json:"max_context_tokens,omitempty"`
@@ -2997,6 +3001,7 @@ func (s *Server) getModelList() []ModelInfo {
 			// Add display name and source from model info
 			if modelInfo := s.llmManager.GetModelInfo(id); modelInfo != nil {
 				info.DisplayName = modelInfo.DisplayName
+				info.APIModelName = modelInfo.APIModelName
 				info.Source = modelInfo.Source
 				info.BaseURL = modelInfo.BaseURL
 				info.APIType = modelInfo.APIType
