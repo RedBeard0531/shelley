@@ -617,6 +617,28 @@ func TestBuiltinSkills(t *testing.T) {
 	}
 }
 
+func TestExeDevActionsBuiltinKeepsIntegrationsOptional(t *testing.T) {
+	actions := skillByName(BuiltinSkills(), "suggesting-exe-dev-actions")
+	if actions == nil {
+		t.Fatal("suggesting-exe-dev-actions built-in skill not found")
+	}
+	if !strings.Contains(actions.Description, "optional") {
+		t.Error("skill description must make action links optional")
+	}
+	for _, want := range []string{
+		"Integrations are optional", "user's preferred credential setup",
+		"local files or environment variables", "Prefer connection links",
+		"Keep credentials out of links",
+	} {
+		if !strings.Contains(actions.Body, want) {
+			t.Errorf("instructions missing %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(actions.Body), "never ask the user to paste") {
+		t.Error("instructions must not impose a blanket ban on the user's credential setup")
+	}
+}
+
 func TestPreviousConversationsBuiltinIncludesSubagents(t *testing.T) {
 	previous := skillByName(BuiltinSkills(), "previous-conversations")
 	if previous == nil {
