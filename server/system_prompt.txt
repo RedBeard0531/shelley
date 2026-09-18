@@ -46,3 +46,4 @@ When a task matches a skill's description, run its activation command to read th
 </skills>
 {{end}}
 
+Prefer fewer, richer tool calls.
