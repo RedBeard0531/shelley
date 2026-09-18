@@ -13,6 +13,33 @@ import (
 	"shelley.exe.dev/skills"
 )
 
+func TestPendingDrainCoalescesWakeup(t *testing.T) {
+	manager := &ConversationManager{pendingBatches: []pendingBatch{{Kind: pendingBatchUser}}}
+	owner, done := manager.beginPendingDrain()
+	if !owner {
+		t.Fatal("first drain did not claim ownership")
+	}
+	secondOwner, secondDone := manager.beginPendingDrain()
+	if secondOwner {
+		t.Fatal("concurrent drain claimed duplicate ownership")
+	}
+	if secondDone != done {
+		t.Fatal("concurrent drain did not return the active completion token")
+	}
+	if !manager.finishPendingDrainPass(done) {
+		t.Fatal("concurrent wakeup did not request another drain pass")
+	}
+	select {
+	case <-done:
+		t.Fatal("drain completed before the coalesced pass")
+	default:
+	}
+	if manager.finishPendingDrainPass(done) {
+		t.Fatal("drain requested an extra pass without another wakeup")
+	}
+	<-done
+}
+
 func TestSystemPromptDisplayDataIncludesSourceMetadata(t *testing.T) {
 	t.Parallel()
 	displayData := systemPromptDisplayData(

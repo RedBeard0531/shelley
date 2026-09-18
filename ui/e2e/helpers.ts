@@ -3,6 +3,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Set by globalSetup for both managed and externally supplied test servers.
+// Do not default to /tmp: hydration would scan every other job's test files.
+export function testWorkingDirectory(): string {
+  const cwd = process.env.SHELLEY_TEST_CWD;
+  if (!cwd) throw new Error("Playwright globalSetup did not set SHELLEY_TEST_CWD");
+  return cwd;
+}
+
 export interface CreatedConversation {
   conversationId: string;
   slug: string;
@@ -97,7 +105,7 @@ export async function createConversationViaAPIWithDetails(
   message: string,
   opts: CreateConversationOptions = {},
 ): Promise<CreatedConversation> {
-  const { agentTimeout = 30000, cwd = "/tmp", model = "predictable" } = opts;
+  const { agentTimeout = 30000, cwd = testWorkingDirectory(), model = "predictable" } = opts;
   const newResp = await request.post("/api/conversations/new", {
     data: { message, model, cwd },
   });
@@ -170,4 +178,12 @@ export async function withTempDir(
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// Send a real editing transaction so Tiptap removes atomic filter chips too.
+export async function clearConversationQuery(search: Locator): Promise<void> {
+  await search.focus();
+  await search.press("ControlOrMeta+A");
+  await search.press("Backspace");
+  await expect(search).toHaveAttribute("data-query-value", "");
 }

@@ -680,7 +680,7 @@ func TestFailedTranscriptionBlocksUntilRetry(t *testing.T) {
 		t.Fatalf("retried queue = %#v", queued)
 	}
 	manager.SetAgentWorking(false)
-	manager.drainPendingMessages(server)
+	<-manager.drainPendingMessages(server)
 	if !userMessageRowExists(t, database, conversation.ConversationID, "held behind failure") {
 		t.Fatal("ordinary message did not drain after retry became ready")
 	}

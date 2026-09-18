@@ -2,8 +2,8 @@
 // The actual port is communicated via --port-file, then exported as
 // PLAYWRIGHT_TEST_BASE_URL so every worker's baseURL fixture picks it up.
 
-import { execSync, spawn, type ChildProcess } from 'child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { execFileSync, execSync, spawn, type ChildProcess } from 'child_process';
+import { mkdirSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -17,11 +17,42 @@ let serverProcess: ChildProcess | null = null;
 let tempDir: string | null = null;
 
 export default async function globalSetup() {
-  // If pointing at an external server, skip everything.
+  // Give every shard its own home and cwd. The tests edit user AGENTS.md,
+  // and prompt hydration scans cwd for guidance/skills: sharing the runner's
+  // HOME or walking all of /tmp makes unrelated builds interfere.
+  tempDir = mkdtempSync(path.join(tmpdir(), 'shelley-e2e-'));
+  const cwd = path.join(tempDir, 'cwd');
+  const home = path.join(tempDir, 'home');
+  mkdirSync(cwd);
+  mkdirSync(home);
+  process.env.SHELLEY_TEST_CWD = cwd;
+
+  const cleanup = () => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+    delete process.env.SHELLEY_TEST_CWD;
+  };
+
+  // External servers keep their own environment; API fixtures still get a
+  // small, real directory instead of the shared /tmp tree.
   if (process.env.TEST_SERVER_URL) {
     process.env.PLAYWRIGHT_TEST_BASE_URL = process.env.TEST_SERVER_URL;
-    return;
+    return cleanup;
   }
+
+  // Git-viewer specs need real history, not the runner's giant checkout.
+  const git = (...args: string[]) => execFileSync('git', [
+    '-C', cwd, '-c', 'user.name=Shelley Test', '-c', 'user.email=test@example.com',
+    '-c', 'commit.gpgsign=false', ...args,
+  ], { env: { ...process.env, HOME: home } });
+  git('init', '--quiet', '--initial-branch=main');
+  writeFileSync(path.join(cwd, 'example.txt'), 'before\n');
+  git('add', 'example.txt');
+  git('commit', '--quiet', '-m', 'Initial test fixture');
+  writeFileSync(path.join(cwd, 'example.txt'), 'after\n');
+  git('commit', '--quiet', '-am', 'Update test fixture');
 
   // Build shelley binary if it doesn't exist.
   if (!existsSync(binPath)) {
@@ -32,8 +63,7 @@ export default async function globalSetup() {
     });
   }
 
-  // Create temp dir for database and port file.
-  tempDir = mkdtempSync(path.join(tmpdir(), 'shelley-e2e-'));
+  // Database and port file stay outside the conversation working directory.
   const testDb = path.join(tempDir, 'test.db');
   const portFile = path.join(tempDir, 'port');
 
@@ -50,10 +80,12 @@ export default async function globalSetup() {
     '--port-file', portFile,
     '--socket', 'none',
   ], {
-    cwd: shelleyDir,
+    cwd,
     stdio: 'inherit',
     env: {
       ...process.env,
+      HOME: home,
+      PWD: cwd,
       PREDICTABLE_DELAY_MS: process.env.PREDICTABLE_DELAY_MS || '20',
     },
   });
@@ -101,15 +133,29 @@ export default async function globalSetup() {
   // Playwright's built-in baseURL fixture reads this env var.
   process.env.PLAYWRIGHT_TEST_BASE_URL = baseURL;
 
-  // Return teardown function.
+  // Reap the server before removing files it may still be writing.
   return async () => {
-    if (serverProcess) {
-      serverProcess.kill('SIGTERM');
+    const server = serverProcess!;
+    try {
+      if (server.exitCode !== null || server.signalCode !== null) {
+        throw new Error(`Shelley exited before teardown (code ${server.exitCode}, signal ${server.signalCode})`);
+      }
+      const exited = new Promise<void>((resolve) => server.once('exit', () => resolve()));
+      let timedOut = false;
+      const deadline = setTimeout(() => {
+        timedOut = true;
+        server.kill('SIGKILL');
+      }, 10_000);
+      try {
+        server.kill('SIGTERM');
+        await exited;
+        if (timedOut) throw new Error('Shelley did not exit within 10s of SIGTERM');
+      } finally {
+        clearTimeout(deadline);
+      }
+    } finally {
       serverProcess = null;
-    }
-    if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
-      tempDir = null;
+      cleanup();
     }
   };
 }

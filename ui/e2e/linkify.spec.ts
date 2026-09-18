@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { testWorkingDirectory } from "./helpers";
 
 // Test that URLs in agent responses are properly linkified.
 // With markdown enabled (default), agent messages render via Marked which
@@ -10,7 +11,10 @@ import { test, expect } from "@playwright/test";
 // not exist on the runner, and sending then fails validation before any message
 // renders. Pin a real cwd so this spec is order-independent.
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("shelley_selected_cwd", "/tmp"));
+  await page.addInitScript(
+    (cwd) => localStorage.setItem("shelley_selected_cwd", cwd),
+    testWorkingDirectory(),
+  );
 });
 
 test("URLs in agent responses are linked (markdown mode)", async ({ page }) => {

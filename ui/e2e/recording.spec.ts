@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
-import { createConversationViaAPIWithDetails } from "./helpers";
+import { createConversationViaAPIWithDetails, testWorkingDirectory } from "./helpers";
 
 async function installMediaMocks(page: Page, screenCapture = true) {
   await page.addInitScript((screenCaptureAvailable) => {
@@ -256,7 +256,7 @@ async function openQueuedConversation(
 
 async function createDraftViaAPI(request: APIRequestContext, draft: string): Promise<string> {
   const response = await request.post("/api/conversations/draft", {
-    data: { draft, model: "predictable", cwd: "/tmp" },
+    data: { draft, model: "predictable", cwd: testWorkingDirectory() },
   });
   expect(response.ok()).toBeTruthy();
   const conversation = (await response.json()) as { conversation_id: string };

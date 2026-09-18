@@ -121,7 +121,7 @@ test.describe("stream catch-up", () => {
     // unified stream should deliver B's events into messageStore even though
     // B isn't the focused conversation.
     const chatResp = await request.post(`/api/conversation/${convB.conversationId}/chat`, {
-      data: { message: "echo: surprise from background", model: "predictable", cwd: "/tmp" },
+      data: { message: "echo: surprise from background", model: "predictable" },
     });
     expect(chatResp.ok()).toBeTruthy();
 

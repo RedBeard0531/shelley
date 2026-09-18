@@ -62,20 +62,23 @@ func GenerateSlug(ctx context.Context, llmProvider LLMServiceProvider, database 
 		}
 	}
 
-	// Try to update with the base slug first, then with numeric suffixes if needed
+	// Install the generated slug only if the conversation is still unnamed.
+	// Each attempt uses one write transaction, so a rename that completed while
+	// the LLM was running wins atomically instead of being overwritten here.
 	slug := baseSlug
 	for attempt := 0; attempt < 100; attempt++ {
-		_, err = database.UpdateConversationSlug(ctx, conversationID, slug)
-		if err == nil {
-			// Success!
-			logger.Info("Generated slug for conversation", "conversationID", conversationID, "slug", slug)
-			return slug, marker, nil
+		conversation, updated, updateErr := database.SetConversationSlugIfUnset(ctx, conversationID, slug)
+		if updateErr == nil {
+			if updated {
+				logger.Info("Generated slug for conversation", "conversationID", conversationID, "slug", slug)
+			}
+			return *conversation.Slug, marker, nil
 		}
 
 		// Check if this is a unique constraint violation
-		if strings.Contains(strings.ToLower(err.Error()), "unique constraint failed") ||
-			strings.Contains(strings.ToLower(err.Error()), "unique constraint") ||
-			strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		if strings.Contains(strings.ToLower(updateErr.Error()), "unique constraint failed") ||
+			strings.Contains(strings.ToLower(updateErr.Error()), "unique constraint") ||
+			strings.Contains(strings.ToLower(updateErr.Error()), "duplicate") {
 			// Try with a numeric suffix
 			slug = fmt.Sprintf("%s-%d", baseSlug, attempt+1)
 			continue
@@ -83,7 +86,7 @@ func GenerateSlug(ctx context.Context, llmProvider LLMServiceProvider, database 
 
 		// Some other error occurred. The marker still comes back so the caller
 		// publishes it: the row exists and owns a sequence_id either way.
-		return "", marker, fmt.Errorf("failed to update conversation slug: %w", err)
+		return "", marker, fmt.Errorf("failed to update conversation slug: %w", updateErr)
 	}
 
 	// If we've tried 100 times and still failed, give up

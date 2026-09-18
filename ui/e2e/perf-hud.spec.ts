@@ -137,6 +137,11 @@ test.describe("Performance HUD", () => {
       timeout: 5000,
     });
 
+    // The expanded HUD overlays the drawer. Its height depends on how many
+    // counters earlier actions populated, so collapse it before navigating.
+    await hud.locator(".perf-hud-title").click();
+    await expect(hud).toHaveClass(/collapsed/);
+
     await page.evaluate(() => {
       const statuses = (
         window as unknown as {
@@ -182,6 +187,8 @@ test.describe("Performance HUD", () => {
       source: "memory",
       messages: expectedMessages,
     });
+    await hud.locator(".perf-hud-title").click();
+    await expect(hud.locator(".perf-hud-load").first()).toContainText("Memory");
   });
 
   test("flag shows the HUD with live counters", async ({ page, request }) => {

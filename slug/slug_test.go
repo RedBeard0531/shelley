@@ -120,7 +120,7 @@ func (m *MockLLMService) MaxImageBytes() int {
 
 // MockLLMProvider provides a mock LLM provider for testing
 type MockLLMProvider struct {
-	Service *MockLLMService
+	Service llm.Service
 }
 
 func (m *MockLLMProvider) GetWorkhorseService(string) (llm.Service, error) {
@@ -207,6 +207,70 @@ func TestGenerateSlug_DatabaseIntegration(t *testing.T) {
 
 	t.Logf("Successfully generated unique slugs: %q, %q, %q", slug1, slug2, slug3)
 }
+
+func TestGenerateSlug_PreservesConcurrentAssignment(t *testing.T) {
+	tempDB := t.TempDir() + "/slug_concurrent_preserve_test.db"
+	database, err := db.New(db.Config{DSN: tempDB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := t.Context()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider := &MockLLMProvider{Service: &blockingSlugService{started: started, release: release}}
+	result := make(chan string, 1)
+	errs := make(chan error, 1)
+	go func() {
+		slug, _, err := GenerateSlug(ctx, provider, database, slog.Default(), conv.ConversationID, "new title", "test-model")
+		result <- slug
+		errs <- err
+	}()
+	<-started
+
+	const assigned = "assigned-while-generating"
+	if _, err := database.UpdateConversationSlug(ctx, conv.ConversationID, assigned); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if got := <-result; got != assigned {
+		t.Fatalf("GenerateSlug returned %q, want concurrently assigned %q", got, assigned)
+	}
+	fresh, err := database.GetConversationByID(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Slug == nil || *fresh.Slug != assigned {
+		t.Fatalf("database slug = %v, want %q", fresh.Slug, assigned)
+	}
+}
+
+type blockingSlugService struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingSlugService) Do(context.Context, *llm.Request) (*llm.Response, error) {
+	close(s.started)
+	<-s.release
+	return &llm.Response{Content: []llm.Content{llm.StringContent("generated-title")}}, nil
+}
+
+func (s *blockingSlugService) Provider() string       { return "" }
+func (s *blockingSlugService) MaxImageDimension() int { return 0 }
+func (s *blockingSlugService) MaxImageBytes() int     { return 0 }
+func (s *blockingSlugService) SupportsImages() bool   { return false }
 
 // TestGenerateSlug_PreservesExisting tests that GenerateSlug does not overwrite
 // an existing slug. This matters for flows that look like "first message" but

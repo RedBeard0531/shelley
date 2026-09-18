@@ -1,7 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { createConversationViaAPI, createConversationViaAPIWithDetails } from "./helpers";
+import {
+  createConversationViaAPI,
+  createConversationViaAPIWithDetails,
+  testWorkingDirectory,
+} from "./helpers";
 
 // A small directory that is certain to exist on the machine running the suite,
 // for the cwd-change spec. The e2e folder itself: a handful of entries, so the
@@ -13,11 +17,6 @@ const e2eDir = dirname(fileURLToPath(import.meta.url));
 // popup (opened from the "<tokens> · <model>" status label). These specs pin
 // the DOM/ARIA contract (classes, labels, dismissal behavior) so it holds
 // across the hand-rolled and PrimeVue implementations.
-
-// A cwd for the readout tests. It has to exist on the machine running the suite
-// (the server rejects a missing one) and be long enough to put the readout under
-// width pressure at a narrow viewport, which is what the ellipsis test measures.
-const READOUT_CWD = "/tmp";
 
 test.describe("Conversation TOC popover", () => {
   test("opens from the nav button, lists entries, and dismisses", async ({ page, request }) => {
@@ -320,7 +319,7 @@ test.describe("Context usage popup", () => {
   }) => {
     test.setTimeout(60000);
     const slug = await createConversationViaAPI(request, "echo usage affordance", {
-      cwd: READOUT_CWD,
+      cwd: testWorkingDirectory(),
     });
     await page.goto(`/c/${slug}`);
     await page.waitForLoadState("domcontentloaded");
@@ -366,7 +365,9 @@ test.describe("Context usage popup", () => {
   // count), not the threshold arithmetic — utils/contextUsage.test.ts owns that.
   test("escalates the token count legibly in both themes", async ({ page, request }) => {
     test.setTimeout(60000);
-    const slug = await createConversationViaAPI(request, "echo usage ramp", { cwd: READOUT_CWD });
+    const slug = await createConversationViaAPI(request, "echo usage ramp", {
+      cwd: testWorkingDirectory(),
+    });
     await page.goto(`/c/${slug}`);
     const tokens = page.locator(".context-usage-label-tokens:visible").first();
     await expect(tokens).toBeVisible({ timeout: 30000 });
@@ -460,7 +461,7 @@ test.describe("Context usage popup", () => {
     test.setTimeout(60000);
     await page.setViewportSize({ width: 360, height: 760 });
     const slug = await createConversationViaAPI(request, "echo narrow readout", {
-      cwd: READOUT_CWD,
+      cwd: testWorkingDirectory(),
     });
     await page.goto(`/c/${slug}`);
     const input = page.getByTestId("message-input");
@@ -584,7 +585,7 @@ test.describe("Status readout controls", () => {
     test.setTimeout(60000);
     await page.setViewportSize({ width: 1280, height: 800 });
     const slug = await createConversationViaAPI(request, "echo readout affordances", {
-      cwd: READOUT_CWD,
+      cwd: testWorkingDirectory(),
     });
     await page.goto(`/c/${slug}`);
     await expect(page.locator(".context-usage-label")).toBeVisible({ timeout: 30000 });
@@ -620,13 +621,13 @@ test.describe("Status readout controls", () => {
     const { conversationId, slug } = await createConversationViaAPIWithDetails(
       request,
       "echo cwd control",
-      { cwd: READOUT_CWD },
+      { cwd: testWorkingDirectory() },
     );
     await page.goto(`/c/${slug}`);
 
     const cwdSegment = page.locator(".status-readout-cwd:visible").first();
     await expect(cwdSegment).toBeVisible({ timeout: 30000 });
-    await expect(cwdSegment).toHaveText(READOUT_CWD);
+    await expect(cwdSegment).toHaveText(testWorkingDirectory());
 
     // The readout opens the same picker the composer's cwd chip does.
     await cwdSegment.click();
@@ -715,7 +716,7 @@ test.describe("Status readout controls", () => {
     test.setTimeout(60000);
     await page.setViewportSize({ width: 360, height: 760 });
     const slug = await createConversationViaAPI(request, "echo narrow picker", {
-      cwd: READOUT_CWD,
+      cwd: testWorkingDirectory(),
     });
     await page.goto(`/c/${slug}`);
     const trigger = page.locator(".model-picker-inline .p-select-label");
@@ -802,7 +803,7 @@ test.describe("Status readout controls", () => {
     test.setTimeout(60000);
     await page.setViewportSize({ width: 1280, height: 800 });
     const slug = await createConversationViaAPI(request, "echo busy picker", {
-      cwd: READOUT_CWD,
+      cwd: testWorkingDirectory(),
     });
     await page.goto(`/c/${slug}`);
     const input = page.getByTestId("message-input");
@@ -901,13 +902,26 @@ test.describe("Advanced settings popover", () => {
       const popover = page.locator(".advanced-settings-popover");
       await expect(popover).toBeVisible();
 
+      const margin = 8;
+      await expect
+        .poll(async () => {
+          const box = await popover.boundingBox();
+          if (!box) return -Infinity;
+          return Math.min(
+            box.x - margin,
+            width - margin - box.x - box.width,
+            box.y - margin,
+            height - margin - box.y - box.height,
+          );
+        }, "popover runs outside the viewport")
+        .toBeGreaterThanOrEqual(0);
+
       const box = (await popover.boundingBox())!;
       expect(box, "popover has no box").not.toBeNull();
       // Not merely on-screen: inset by the margin the positioning code works
       // to. A popover flush against an edge is the shape of an off-by-a-few in
       // the clamp — `>= 0` waved through a version that sat 4px high because
       // it forgot the popover's own margin-bottom.
-      const margin = 8;
       expect(box.x, "popover runs off the left edge").toBeGreaterThanOrEqual(margin);
       expect(box.x + box.width, "popover runs off the right edge").toBeLessThanOrEqual(
         width - margin,
