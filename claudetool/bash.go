@@ -113,8 +113,8 @@ Set slow_ok=true for potentially slow commands (increases timeout).
 Destructive commands (deleting .git, home directories, broad wildcards, etc) require
 explicit paths and user confirmation.
 
-IMPORTANT: Keep commands concise. The command input must be less than 60k tokens.
-For complex scripts, write them to a file first and then execute the file.
+Keep commands under a dozen lines, excluding file contents. For complex scripts,
+write a file and run it; both can share one call.
 `
 	// If you modify this, update the termui template for prettier rendering.
 	bashInputSchema = `

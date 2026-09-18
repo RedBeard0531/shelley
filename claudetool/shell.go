@@ -75,7 +75,8 @@ For delayed wakeups or scheduled tasks, use the schedule skill.
 Destructive commands (deleting .git, home dirs, broad wildcards) require
 explicit paths and user confirmation.
 
-Keep commands under 60k tokens; for complex scripts, write a file and run it.
+Keep commands under a dozen lines, excluding file contents. For complex scripts,
+write a file and run it; both can share one call.
 
 Don't pipe to head/tail/sed just to shorten output; this already tails
 on yield and otherwise returns output in full. Filter only when targeting a
