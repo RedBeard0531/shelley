@@ -2592,12 +2592,14 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 
 // ModelInfo represents a model in the API response
 type ModelInfo struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name,omitempty"`
-	Source      string `json:"source,omitempty"`   // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
-	BaseURL     string `json:"base_url,omitempty"` // Upstream origin (e.g., "https://llm.int.exe.xyz")
-	APIType     string `json:"api_type,omitempty"` // Wire protocol (e.g., "anthropic-messages")
-	Ready       bool   `json:"ready"`
+	ID           string `json:"id"`
+	DisplayName  string `json:"display_name,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	Source       string `json:"source,omitempty"`   // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
+	BaseURL      string `json:"base_url,omitempty"` // Upstream origin (e.g., "https://llm.int.exe.xyz")
+	APIType      string `json:"api_type,omitempty"` // Wire protocol (e.g., "anthropic-messages")
+	APIModelName string `json:"api_model_name,omitempty"`
+	Ready        bool   `json:"ready"`
 	// MaxContextTokens is the models.dev context window (clamped to the
 	// pricing tier, see modelsdev.LookupContextLimit); 0 when unknown.
 	MaxContextTokens int  `json:"max_context_tokens,omitempty"`
@@ -2949,9 +2951,11 @@ func (s *Server) getModelList() []ModelInfo {
 			// Add display name and source from model info
 			if modelInfo := s.llmManager.GetModelInfo(id); modelInfo != nil {
 				info.DisplayName = modelInfo.DisplayName
+				info.Mode = modelInfo.Mode
 				info.Source = modelInfo.Source
 				info.BaseURL = modelInfo.BaseURL
 				info.APIType = modelInfo.APIType
+				info.APIModelName = modelInfo.APIModelName
 				info.MaxContextTokens, _ = modelsdev.LookupContextLimit(modelInfo.BaseURL, modelInfo.APIModelName)
 			}
 			modelList = append(modelList, info)

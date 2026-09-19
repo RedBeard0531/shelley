@@ -483,6 +483,7 @@ import Button from "primevue/button";
 import PvMessage from "primevue/message";
 import {
   type Message,
+  type Model,
   type Conversation,
   type ChatRequest,
   type BtwExchange,
@@ -744,17 +745,7 @@ async function dismissDiskSpaceNotice() {
     error.value = e instanceof Error ? e.message : String(e);
   }
 }
-const models = ref<
-  Array<{
-    id: string;
-    display_name?: string;
-    source?: string;
-    ready: boolean;
-    max_context_tokens?: number;
-    supports_reasoning?: boolean;
-    reasoning_levels?: Exclude<ThinkingLevel, "default">[];
-  }>
->(window.__SHELLEY_INIT__?.models || []);
+const models = ref<Model[]>(window.__SHELLEY_INIT__?.models || []);
 
 // Ready model ids, surfaced to MessageInput for /model argument autocomplete.
 const readyModelIds = computed(() => models.value.filter((m) => m.ready).map((m) => m.id));

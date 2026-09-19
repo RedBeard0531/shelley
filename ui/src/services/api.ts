@@ -42,8 +42,10 @@ export interface AvailableModel {
   id: string;
   display_name?: string;
   source?: string;
+  mode?: string;
   base_url?: string;
   api_type?: string;
+  api_model_name?: string;
   ready: boolean;
   max_context_tokens?: number;
   is_default?: boolean;

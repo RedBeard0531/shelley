@@ -27,6 +27,7 @@
         >
           <TokenCostGraph
             :entries="usageEntries || []"
+            :models="models"
             :other-usage-rows="otherUsageRows || []"
             :conversation-id="conversationId"
             :active="usageGraph === 'cost'"
@@ -98,7 +99,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from "vue";
 import Popover from "primevue/popover";
-import type { Message } from "../../types";
+import type { Message, Model } from "../../types";
 import { contextUsageLevel, contextUsageLevelLabel } from "../../utils/contextUsage";
 import { formatTokenCount } from "../../utils/tokenCostGraph";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
@@ -113,6 +114,7 @@ const props = defineProps<{
   maxContextTokens: number;
   conversationId?: string | null;
   usageEntries?: UsageEntry[];
+  models: Model[];
   otherUsageRows?: OtherUsageRow[];
   messages?: Message[];
   onDistillNewGeneration?: () => Promise<void> | void;

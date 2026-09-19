@@ -269,6 +269,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import type { Model } from "../../types";
 import {
   modelCostsApi,
   subagentUsageApi,
@@ -297,6 +298,7 @@ import {
 
 const props = defineProps<{
   entries: UsageEntry[];
+  models: Model[];
   otherUsageRows?: OtherUsageRow[];
   conversationId?: string | null;
   active?: boolean;
@@ -589,9 +591,33 @@ const hintText = computed(() => {
   return parts.join(" ");
 });
 
+// ChatGPT subscriptions report zero writes even when caching works.
+// Usage uses native model names, not picker IDs. A graph group can combine
+// endpoints; hide zero writes only when every contribution is subscription-backed.
+const subscriptionOnly = computed(() => {
+  const result = new Map<string, boolean>();
+  for (const usage of props.entries) {
+    if (!usage.model || result.get(usage.model) === false) continue;
+    const sources = props.models.filter(
+      (model) =>
+        model.api_model_name === usage.model &&
+        model.base_url &&
+        (usage.url === model.base_url || usage.url?.startsWith(`${model.base_url}/`)),
+    );
+    result.set(
+      usage.model,
+      sources.length > 0 && sources.every((model) => model.mode === "chatgpt"),
+    );
+  }
+  return result;
+});
+
 // Rows top-to-bottom mirror the band stacking order within the model.
 function rowsFor(mu: ModelUsage) {
-  return [...mu.rows].reverse();
+  const isSubscription = subscriptionOnly.value.get(mu.model) === true;
+  return mu.rows
+    .filter((row) => !(isSubscription && row.band.costKey === "cache_write" && row.tokens === 0))
+    .reverse();
 }
 
 /** "$50/M", "$12.50/M", "$0.008/M" — unit price per million tokens. */

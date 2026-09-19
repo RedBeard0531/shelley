@@ -199,6 +199,7 @@ func Build(catalog []models.Model, sources []Source, httpc *http.Client, logger 
 					ID:           id,
 					DisplayName:  id,
 					Provider:     models.Provider(m.Provider),
+					Mode:         m.ExeDev.Mode,
 					Source:       integrationSourceLabel(src.label, models.Provider(m.Provider)),
 					ReleaseDate:  modelReleaseDate(src.integration.URL, m.apiModelName()),
 					Service:      svc,
@@ -448,6 +449,11 @@ type IntegrationModel struct {
 	NativeID     string                       `json:"native_id,omitempty"`
 	APIs         []string                     `json:"apis,omitempty"`
 	Architecture IntegrationModelArchitecture `json:"architecture,omitempty"`
+	ExeDev       IntegrationModelExeDev       `json:"exe_dev"`
+}
+
+type IntegrationModelExeDev struct {
+	Mode string `json:"mode"`
 }
 
 type IntegrationModelArchitecture struct {

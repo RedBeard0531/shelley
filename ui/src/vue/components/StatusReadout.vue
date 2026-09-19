@@ -40,6 +40,7 @@
       :max-context-tokens="maxContextTokens"
       :conversation-id="conversationId"
       :usage-entries="usageEntries"
+      :models="models"
       :other-usage-rows="otherUsageRows"
       :messages="messages"
       :on-distill-new-generation="onDistillNewGeneration"

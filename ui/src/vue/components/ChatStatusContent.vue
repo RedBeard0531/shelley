@@ -210,7 +210,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted, nextTick } from "vue";
-import type { Conversation, Message } from "../../types";
+import type { Conversation, Message, Model } from "../../types";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
 import { tildifyPath } from "../../utils/tildify";
 import { useI18n } from "../composables/i18n";
@@ -219,16 +219,6 @@ import AnimatedWorkingStatus from "./AnimatedWorkingStatus.vue";
 import ModelPicker from "./ModelPicker.vue";
 import StatusReadout from "./StatusReadout.vue";
 
-type ModelInfo = {
-  id: string;
-  display_name?: string;
-  source?: string;
-  ready: boolean;
-  max_context_tokens?: number;
-  supports_reasoning?: boolean;
-  reasoning_levels?: Exclude<ThinkingLevel, "default">[];
-  default_reasoning_level?: string;
-};
 type ToolInfo = { name: string; summary: string; default_on: boolean };
 
 const props = defineProps<{
@@ -247,7 +237,7 @@ const props = defineProps<{
   otherUsageRows: OtherUsageRow[];
   messages: Message[];
   hostname: string;
-  models: ModelInfo[];
+  models: Model[];
   selectedModel: string;
   sending: boolean;
   refreshingModels: boolean;
