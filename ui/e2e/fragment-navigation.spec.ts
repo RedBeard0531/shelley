@@ -78,7 +78,6 @@ async function append(page: Page, request: APIRequestContext, id: string) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.clock.install();
   // Count every jump (including transient ones) and remove smooth-scroll timing
   // from assertions. Real scroll/layout and Vue mounting still run normally.
   await page.addInitScript(() => {
@@ -122,6 +121,7 @@ for (const navigation of ["URL", "TOC"] as const) {
 }
 
 test("changed fragments resolve and cancel the preceding retry", async ({ page, request }) => {
+  await page.clock.install();
   const conversation = await seed(request);
   await page.goto(`/c/${conversation.slug}`);
   await expect(page.locator(".toc-button")).toBeVisible();
@@ -149,6 +149,7 @@ for (const retry of ["pending", "exhausted"] as const) {
     page,
     request,
   }) => {
+    await page.clock.install();
     const conversation = await seed(request);
     await page.goto(`/c/${conversation.slug}`);
     await expect(page.locator(".toc-button")).toBeVisible();
@@ -176,6 +177,7 @@ test("conversation changes resolve after loading, even with the same fragment", 
   page,
   request,
 }) => {
+  await page.clock.install();
   const first = await seed(request);
   const second = await seed(request);
   // Give the second transcript the same target ID to isolate conversation
@@ -227,6 +229,7 @@ test("invalid anchors leave follow enabled; removing a fragment cancels retries"
   page,
   request,
 }) => {
+  await page.clock.install();
   const conversation = await seed(request);
   await page.goto(`/c/${conversation.slug}`);
   await expect(page.locator(".toc-button")).toBeVisible();
@@ -260,6 +263,40 @@ test("invalid anchors leave follow enabled; removing a fragment cancels retries"
   });
   await page.clock.runFor(1100);
   expect(await scrolls(page)).toEqual([]);
+});
+
+test("fresh conversation keeps bottom restoration through startup clamps", async ({
+  page,
+  request,
+}) => {
+  const conversation = await seed(request);
+  await page.goto(`/c/${conversation.slug}`);
+  await expect(page.locator(".toc-button")).toBeVisible();
+
+  const container = page.locator(".messages-container");
+  await expectFollowingAtBottom(page);
+  // A first visit still means "restore to bottom". Force a layout clamp's
+  // scroll event ahead of ResizeObserver without any wheel/touch gesture;
+  // the temporary pixel offset must not be persisted as user navigation.
+  const scrollKey = `shelley_scroll_${conversation.id}`;
+  const savedAfterStartupClamp = await container.evaluate(async (element, key) => {
+    const list = element.querySelector(".messages-list");
+    const sentinel = element.querySelector(".messages-bottom-sentinel");
+    if (!list || !sentinel) throw new Error("message list sentinel not found");
+    const spacer = document.createElement("div");
+    spacer.style.height = "600px";
+    list.insertBefore(spacer, sentinel);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    element.scrollTop = element.scrollHeight;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    spacer.remove();
+    void element.scrollTop;
+    element.dispatchEvent(new Event("scroll"));
+    window.dispatchEvent(new Event("beforeunload"));
+    return localStorage.getItem(key);
+  }, scrollKey);
+  expect(savedAfterStartupClamp).toBe("bottom");
+  await expectFollowingAtBottom(page);
 });
 
 test("scroll-to-bottom button clears the current fragment", async ({ page, request }) => {

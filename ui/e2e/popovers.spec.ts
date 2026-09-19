@@ -960,6 +960,46 @@ test.describe("Advanced settings popover", () => {
     });
   }
 
+  // Exercise fractional anchor positions and fractional panel widths separately:
+  // rounding the offset or measuring offsetWidth can each cross the margin.
+  for (const [panelWidth, anchorFraction] of [
+    [560, 0.125],
+    [560.375, 0.875],
+  ]) {
+    test(`keeps the viewport inset with a ${panelWidth}px panel and ${anchorFraction}px anchor`, async ({
+      page,
+    }) => {
+      const width = 900;
+      const margin = 8;
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/new");
+      await page.addStyleTag({
+        content: `.advanced-settings-popover { width: ${panelWidth}px; min-width: ${panelWidth}px; max-width: ${panelWidth}px; }`,
+      });
+
+      const trigger = page.locator(".advanced-settings-trigger");
+      await expect(trigger).toBeVisible({ timeout: 30000 });
+      const fraction = await page.locator(".advanced-settings-wrapper").evaluate((el, target) => {
+        const left = el.getBoundingClientRect().left;
+        const shift = (target - (left - Math.floor(left)) + 1) % 1;
+        (el as HTMLElement).style.left = `${shift}px`;
+        const shiftedLeft = el.getBoundingClientRect().left;
+        return shiftedLeft - Math.floor(shiftedLeft);
+      }, anchorFraction);
+      expect(fraction).toBeCloseTo(anchorFraction, 3);
+
+      await trigger.click();
+      const popover = page.locator(".advanced-settings-popover");
+      await expect(popover).toBeVisible();
+      await expect
+        .poll(async () => {
+          const box = await popover.boundingBox();
+          return box ? width - margin - box.x - box.width : -Infinity;
+        }, "fractional geometry put the popover past the right margin")
+        .toBeGreaterThanOrEqual(0);
+    });
+  }
+
   // Resizing while it is open has to re-run the same clamp, and it has to do so
   // against the post-resize layout. The status bar sits at the bottom of a flex
   // column, so the gear's position is only settled after the resize relayouts;

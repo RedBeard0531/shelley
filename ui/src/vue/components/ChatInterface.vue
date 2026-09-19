@@ -1473,7 +1473,9 @@ function loadScroll(): number | null {
   const key = scrollKey();
   if (!key) return null;
   const v = localStorage.getItem(key);
-  savedBottomRestoration = v === "bottom" ? "seeking" : null;
+  // A fresh visit needs the same protection from startup layout clamps as a
+  // saved bottom position; neither is released until the user navigates away.
+  savedBottomRestoration = v == null || v === "bottom" ? "seeking" : null;
   clearPendingRestorationScroll();
   // null (no value) and the "bottom" sentinel both mean "restore to bottom".
   if (v == null || v === "bottom") return null;
