@@ -176,9 +176,17 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if conversationID := ConversationIDFromContext(req.Context()); conversationID != "" {
 		req.Header.Set("Shelley-Conversation-Id", conversationID)
 
-		// Add x-session-affinity header for Fireworks to enable prompt caching
-		if ProviderFromContext(req.Context()) == "fireworks" {
+		// Provider-specific prompt-cache affinity keys.
+		switch ProviderFromContext(req.Context()) {
+		case "fireworks":
 			req.Header.Set("x-session-affinity", conversationID)
+		case "openai":
+			// The Responses request body also carries the conversation ID as
+			// prompt_cache_key, but the ChatGPT Codex backend (behind
+			// subscription proxies) ignores it and mints a random key per
+			// request unless session-id is set, which then becomes the cache
+			// key. Codex CLI does the same. api.openai.com ignores the header.
+			req.Header.Set("session-id", conversationID)
 		}
 	}
 

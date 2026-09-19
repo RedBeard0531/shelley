@@ -210,15 +210,10 @@ type responsesSummary struct {
 
 type responsesUsage struct {
 	InputTokens         int                           `json:"input_tokens"`
-	InputTokensDetails  *responsesInputTokensDetails  `json:"input_tokens_details,omitempty"`
+	InputTokensDetails  openAIInputTokensDetails      `json:"input_tokens_details"`
 	OutputTokens        int                           `json:"output_tokens"`
 	OutputTokensDetails *responsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
 	TotalTokens         int                           `json:"total_tokens"`
-}
-
-type responsesInputTokensDetails struct {
-	CachedTokens     int `json:"cached_tokens"`
-	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
 type responsesOutputTokensDetails struct {
@@ -511,26 +506,9 @@ func (s *ResponsesService) toLLMResponseFromResponses(resp *responsesResponse, h
 }
 
 // toLLMUsageFromResponses converts Responses API usage to llm.Usage.
-//
-// OpenAI's Responses API reports input_tokens as the total input (including cache
-// reads and writes), with the cache subsets in input_tokens_details.
-// Our Usage struct follows Anthropic's convention where InputTokens is the non-cached
-// portion and TotalInputTokens() = InputTokens + CacheCreationInputTokens + CacheReadInputTokens.
-// So we subtract both cache subsets from InputTokens and map them separately.
 func (s *ResponsesService) toLLMUsageFromResponses(usage responsesUsage, headers http.Header) llm.Usage {
-	totalIn := uint64(usage.InputTokens)
-	var cached, cacheWrite uint64
-	if usage.InputTokensDetails != nil {
-		cached = uint64(usage.InputTokensDetails.CachedTokens)
-		cacheWrite = uint64(usage.InputTokensDetails.CacheWriteTokens)
-	}
-	out := uint64(usage.OutputTokens)
-	u := llm.Usage{
-		InputTokens:              totalIn - cached - cacheWrite,
-		CacheCreationInputTokens: cacheWrite,
-		CacheReadInputTokens:     cached,
-		OutputTokens:             out,
-	}
+	u := splitOpenAIInputUsage(usage.InputTokens, usage.InputTokensDetails)
+	u.OutputTokens = uint64(usage.OutputTokens)
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
 }

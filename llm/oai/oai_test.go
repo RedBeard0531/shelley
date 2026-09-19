@@ -909,7 +909,7 @@ func TestToLLMUsage(t *testing.T) {
 		PromptTokens:     100,
 		CompletionTokens: 50,
 	}
-	usage := service.toLLMUsage(openaiUsage, nil)
+	usage := service.toLLMUsage(chatCompletionUsageFromOpenAI(openaiUsage), nil)
 	if usage.InputTokens != 100 {
 		t.Errorf("toLLMUsage().InputTokens = %d, expected 100", usage.InputTokens)
 	}
@@ -928,7 +928,7 @@ func TestToLLMUsage(t *testing.T) {
 			CachedTokens: 25,
 		},
 	}
-	usage = service.toLLMUsage(openaiUsageWithDetails, nil)
+	usage = service.toLLMUsage(chatCompletionUsageFromOpenAI(openaiUsageWithDetails), nil)
 	// InputTokens should be non-cached portion: 100 - 25 = 75
 	if usage.InputTokens != 75 {
 		t.Errorf("toLLMUsage().InputTokens = %d, expected 75", usage.InputTokens)
@@ -936,7 +936,7 @@ func TestToLLMUsage(t *testing.T) {
 	if usage.CacheReadInputTokens != 25 {
 		t.Errorf("toLLMUsage().CacheReadInputTokens = %d, expected 25", usage.CacheReadInputTokens)
 	}
-	// CacheCreationInputTokens should be 0 (OpenAI doesn't report this)
+	// CacheCreationInputTokens should be 0 (go-openai does not decode cache_write_tokens)
 	if usage.CacheCreationInputTokens != 0 {
 		t.Errorf("toLLMUsage().CacheCreationInputTokens = %d, expected 0", usage.CacheCreationInputTokens)
 	}
@@ -1354,6 +1354,41 @@ func TestServiceDo(t *testing.T) {
 	}
 	if resp.Usage.OutputTokens != 20 {
 		t.Errorf("resp.Usage.OutputTokens = %d, expected 20", resp.Usage.OutputTokens)
+	}
+}
+
+// TestServiceDoStreamUsageCacheWrite checks that a streamed Chat Completions
+// usage chunk carrying prompt_tokens_details.cache_write_tokens (GPT-5.6+)
+// lands in CacheCreationInputTokens rather than being billed as plain input.
+// Numbers are from a real gpt-5.6-sol call.
+func TestServiceDoStreamUsageCacheWrite(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"id":"c","model":"gpt-5.6-sol","choices":[{"index":0,"delta":{"role":"assistant","content":"bye"},"finish_reason":"stop"}]}`,
+			`{"id":"c","model":"gpt-5.6-sol","choices":[],"usage":{"prompt_tokens":3756,"completion_tokens":5,"total_tokens":3761,"prompt_tokens_details":{"cached_tokens":3746,"cache_write_tokens":7,"audio_tokens":0}}}`,
+		}
+		for _, event := range events {
+			fmt.Fprintf(w, "data: %s\n\n", event)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	svc := &Service{APIKey: "test-key", Model: modelForTest("gpt-5.6-sol"), ModelURL: server.URL}
+	resp, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(llm.StreamDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	u := resp.Usage
+	if u.InputTokens != 3 || u.CacheCreationInputTokens != 7 || u.CacheReadInputTokens != 3746 || u.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want in=3 write=7 read=3746 out=5", u)
+	}
+	if u.TotalInputTokens() != 3756 {
+		t.Fatalf("TotalInputTokens() = %d, want 3756", u.TotalInputTokens())
 	}
 }
 

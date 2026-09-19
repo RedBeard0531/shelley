@@ -93,40 +93,45 @@ func TestTransportAddsHeaders(t *testing.T) {
 	if got := receivedHeaders.Get("x-session-affinity"); got != "" {
 		t.Errorf("x-session-affinity = %q, want empty for non-fireworks", got)
 	}
+	if got := receivedHeaders.Get("session-id"); got != "" {
+		t.Errorf("session-id = %q, want empty for non-openai", got)
+	}
 }
 
-func TestTransportAddsSessionAffinityForFireworks(t *testing.T) {
-	// Create a test server that echoes request headers
+// TestTransportProviderCacheAffinityHeaders covers the per-provider prompt-cache
+// affinity headers: x-session-affinity for Fireworks, and session-id for the
+// ChatGPT Codex backend, which otherwise ignores the body's prompt_cache_key and
+// mints a fresh cache key per request.
+func TestTransportProviderCacheAffinityHeaders(t *testing.T) {
 	var receivedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedHeaders = r.Header.Clone()
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
 	}))
 	defer server.Close()
 
-	client := NewClient(nil)
-
-	// Make a request with conversation ID and provider=fireworks in context
-	ctx := t.Context()
-	ctx = WithConversationID(ctx, "test-conv-id")
-	ctx = WithProvider(ctx, "fireworks")
-	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("Request failed: %v", err)
+	tests := []struct {
+		provider, sessionAffinity, sessionID string
+	}{
+		{"fireworks", "test-conv-id", ""},
+		{"openai", "", "test-conv-id"},
+		{"anthropic", "", ""},
 	}
-	resp.Body.Close()
-
-	// Verify x-session-affinity header was added for fireworks
-	if got := receivedHeaders.Get("x-session-affinity"); got != "test-conv-id" {
-		t.Errorf("x-session-affinity = %q, want %q", got, "test-conv-id")
-	}
-
-	// Verify Shelley-Conversation-Id header was also added
-	if got := receivedHeaders.Get("Shelley-Conversation-Id"); got != "test-conv-id" {
-		t.Errorf("Shelley-Conversation-Id = %q, want %q", got, "test-conv-id")
+	for _, tt := range tests {
+		t.Run(tt.provider, func(t *testing.T) {
+			ctx := WithProvider(WithConversationID(t.Context(), "test-conv-id"), tt.provider)
+			req, _ := http.NewRequestWithContext(ctx, "POST", server.URL, nil)
+			resp, err := NewClient(nil).Do(req)
+			if err != nil {
+				t.Fatalf("Request failed: %v", err)
+			}
+			resp.Body.Close()
+			if got := receivedHeaders.Get("x-session-affinity"); got != tt.sessionAffinity {
+				t.Errorf("x-session-affinity = %q, want %q", got, tt.sessionAffinity)
+			}
+			if got := receivedHeaders.Get("session-id"); got != tt.sessionID {
+				t.Errorf("session-id = %q, want %q", got, tt.sessionID)
+			}
+		})
 	}
 }
 

@@ -1062,25 +1062,57 @@ func toLLMContents(msg openai.ChatCompletionMessage) []llm.Content {
 	return contents
 }
 
-// toLLMUsage converts usage information from OpenAI to llm.Usage.
-// OpenAI reports prompt_tokens as the total input (including cached),
-// with prompt_tokens_details.cached_tokens as the cached subset.
-// Our Usage struct follows Anthropic's convention where InputTokens is the non-cached
-// portion and TotalInputTokens() = InputTokens + CacheCreationInputTokens + CacheReadInputTokens.
-func (s *Service) toLLMUsage(au openai.Usage, headers http.Header) llm.Usage {
-	totalIn := uint64(au.PromptTokens)
-	var cached uint64
+// chatCompletionUsage is the Chat Completions usage object, decoded locally
+// because go-openai's PromptTokensDetails lacks cache_write_tokens.
+type chatCompletionUsage struct {
+	PromptTokens        int                      `json:"prompt_tokens"`
+	CompletionTokens    int                      `json:"completion_tokens"`
+	PromptTokensDetails openAIInputTokensDetails `json:"prompt_tokens_details"`
+}
+
+// openAIInputTokensDetails is prompt_tokens_details (Chat Completions) and
+// input_tokens_details (Responses): disjoint subsets of the total input.
+type openAIInputTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+	// CacheWriteTokens is reported by GPT-5.6 and later, which bill cache
+	// writes at 1.25x the uncached input rate. Earlier models report 0.
+	CacheWriteTokens int `json:"cache_write_tokens"`
+}
+
+// chatCompletionUsageFromOpenAI adapts go-openai's usage type, which the
+// non-streaming path still receives. go-openai does not decode
+// cache_write_tokens, so writes read 0 here; the agent loop always streams.
+//
+// TODO: make Service.Do always stream (discarding deltas when OnStream is
+// nil) and delete this adapter along with the non-streaming branch, or
+// upstream cache_write_tokens to go-openai's PromptTokensDetails.
+func chatCompletionUsageFromOpenAI(au openai.Usage) chatCompletionUsage {
+	u := chatCompletionUsage{PromptTokens: au.PromptTokens, CompletionTokens: au.CompletionTokens}
 	if au.PromptTokensDetails != nil {
-		cached = uint64(au.PromptTokensDetails.CachedTokens)
+		u.PromptTokensDetails.CachedTokens = au.PromptTokensDetails.CachedTokens
 	}
-	out := uint64(au.CompletionTokens)
-	u := llm.Usage{
-		InputTokens:          totalIn - cached,
-		CacheReadInputTokens: cached,
-		OutputTokens:         out,
-	}
+	return u
+}
+
+// toLLMUsage converts Chat Completions usage to llm.Usage.
+func (s *Service) toLLMUsage(au chatCompletionUsage, headers http.Header) llm.Usage {
+	u := splitOpenAIInputUsage(au.PromptTokens, au.PromptTokensDetails)
+	u.OutputTokens = uint64(au.CompletionTokens)
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
+}
+
+// splitOpenAIInputUsage maps OpenAI's input accounting (a total with cached and
+// cache-write subsets) onto Shelley's Anthropic-style Usage, where InputTokens
+// is only the portion neither read from nor written to the cache, so
+// TotalInputTokens() reproduces OpenAI's total. Cache writes must not be folded
+// into InputTokens: GPT-5.6 and later bill them at 1.25x.
+func splitOpenAIInputUsage(total int, d openAIInputTokensDetails) llm.Usage {
+	return llm.Usage{
+		InputTokens:              uint64(total - d.CachedTokens - d.CacheWriteTokens),
+		CacheCreationInputTokens: uint64(d.CacheWriteTokens),
+		CacheReadInputTokens:     uint64(d.CachedTokens),
+	}
 }
 
 // toLLMResponse converts the OpenAI response to llm.Response.
@@ -1096,7 +1128,7 @@ func (s *Service) toLLMResponse(r *openai.ChatCompletionResponse) *llm.Response 
 			ID:    r.ID,
 			Model: r.Model,
 			Role:  llm.MessageRoleAssistant,
-			Usage: s.toLLMUsage(r.Usage, r.Header()),
+			Usage: s.toLLMUsage(chatCompletionUsageFromOpenAI(r.Usage), r.Header()),
 		}
 	}
 
@@ -1109,7 +1141,7 @@ func (s *Service) toLLMResponse(r *openai.ChatCompletionResponse) *llm.Response 
 		Role:       toRoleFromString(choice.Message.Role),
 		Content:    toLLMContents(choice.Message),
 		StopReason: toStopReason(string(choice.FinishReason)),
-		Usage:      s.toLLMUsage(r.Usage, r.Header()),
+		Usage:      s.toLLMUsage(chatCompletionUsageFromOpenAI(r.Usage), r.Header()),
 	}
 }
 
@@ -1127,7 +1159,7 @@ type chatCompletionStreamResponse struct {
 		} `json:"delta"`
 		FinishReason openai.FinishReason `json:"finish_reason"`
 	} `json:"choices"`
-	Usage *openai.Usage `json:"usage"`
+	Usage *chatCompletionUsage `json:"usage"`
 }
 
 func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStream, onStream func(llm.StreamDelta)) (*llm.Response, error) {
@@ -1137,7 +1169,7 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 		id           string
 		model        string
 		finishReason openai.FinishReason
-		usage        openai.Usage
+		usage        chatCompletionUsage
 		started      bool
 	)
 

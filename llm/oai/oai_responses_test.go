@@ -1223,6 +1223,31 @@ func TestShouldRetryResponsesDecodeError(t *testing.T) {
 	}
 }
 
+// TestToLLMUsageFromResponses pins the split of OpenAI's input_tokens total
+// into Shelley's Anthropic-style fields. Numbers are from real gpt-5.6-sol and
+// gpt-6-astra calls: cached_tokens and cache_write_tokens are both subsets of
+// input_tokens, and GPT-5.6+ bills writes at 1.25x input.
+func TestToLLMUsageFromResponses(t *testing.T) {
+	svc := &ResponsesService{}
+	tests := []struct {
+		name                        string
+		details                     openAIInputTokensDetails
+		wantIn, wantWrite, wantRead uint64
+	}{
+		{"pre-5.6: reads only", openAIInputTokensDetails{CachedTokens: 2816}, 945, 0, 2816},
+		{"5.6+ cold call: nearly all writes", openAIInputTokensDetails{CacheWriteTokens: 3758}, 3, 3758, 0},
+		{"5.6+ follow-up: mostly reads", openAIInputTokensDetails{CachedTokens: 3751, CacheWriteTokens: 7}, 3, 7, 3751},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := svc.toLLMUsageFromResponses(responsesUsage{InputTokens: 3761, InputTokensDetails: tt.details, OutputTokens: 6}, nil)
+			if got.InputTokens != tt.wantIn || got.CacheCreationInputTokens != tt.wantWrite || got.CacheReadInputTokens != tt.wantRead || got.OutputTokens != 6 {
+				t.Errorf("usage = %+v, want in=%d write=%d read=%d out=6", got, tt.wantIn, tt.wantWrite, tt.wantRead)
+			}
+		})
+	}
+}
+
 func TestResponsesServiceDoWithCaching(t *testing.T) {
 	// Test that cached tokens are correctly mapped to Usage fields
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1240,7 +1265,7 @@ func TestResponsesServiceDoWithCaching(t *testing.T) {
 			},
 			Usage: responsesUsage{
 				InputTokens: 100,
-				InputTokensDetails: &responsesInputTokensDetails{
+				InputTokensDetails: openAIInputTokensDetails{
 					CachedTokens:     80,
 					CacheWriteTokens: 15,
 				},
