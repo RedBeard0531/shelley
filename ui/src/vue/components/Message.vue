@@ -603,6 +603,7 @@ function handleMessageClick(e: MouseEvent, key: string) {
     target.closest(".patch-tool-header") ||
     target.closest(".generic-tool-header") ||
     target.closest(".think-tool-header") ||
+    target.closest(".keyword-search-tool-header") ||
     target.closest(".change-dir-tool-header") ||
     target.closest(".browser-tool-header") ||
     target.closest(".screenshot-tool-header")

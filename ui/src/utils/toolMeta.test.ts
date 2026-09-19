@@ -142,4 +142,14 @@ run("umbrella browser tool picks per-family emoji for folded-in actions", () => 
   }
 });
 
+run("retired keyword_search keeps its historical icon and query headline", () => {
+  const input = { query: "find authentication handlers", search_terms: ["auth", "handler"] };
+  assert(toolEmoji("keyword_search") === "🔍", "keyword_search icon");
+  assert(toolHeadline("keyword_search", input) === input.query, "keyword_search query");
+  assert(
+    toolHeadline("keyword_search", undefined) === "keyword_search",
+    "keyword_search without input",
+  );
+});
+
 console.log("\ntoolMeta tests passed");

@@ -497,6 +497,7 @@ function toolAttribution(name: string | undefined, input?: unknown): Attribution
     switch (name) {
       case "browser":
       case "web_search":
+      case "keyword_search":
         key = "tool:browser/web";
         break;
       case "apply_patch":

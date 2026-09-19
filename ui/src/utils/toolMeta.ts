@@ -55,6 +55,8 @@ export function toolEmoji(name: string | undefined | null, input?: unknown): str
       return "⚡";
     case "subagent":
       return "⚡";
+    case "keyword_search":
+      return "🔍";
     case "browser_recent_console_logs":
     case "browser_clear_console_logs":
       return "📋";
@@ -327,6 +329,7 @@ export function toolHeadline(
     case "browser_take_screenshot":
     case "read_image":
     case "browser_navigate":
+    case "keyword_search":
       return summary || n;
     default: {
       if (!summary) return n;
@@ -363,6 +366,7 @@ function inputSummary(name: string | undefined | null, input: unknown): string {
       return pick("path", "url");
     case "browser_navigate":
       return pick("url");
+    case "keyword_search":
     case "web_search":
       return pick("query");
     case "subagent":
