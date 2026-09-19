@@ -4478,14 +4478,13 @@ function setupScrollObservers() {
       lastObservedScrollTop = container.scrollTop;
     }
   });
-  // (Re)attach the element observers whenever the list/sentinel nodes change.
-  // The v-if="loading" spinner tears down and recreates .messages-list on every
-  // conversation load, so observers bound to the old nodes go stale — which is
-  // what silently broke auto-scroll and the scroll-to-bottom button after a
-  // conversation finished loading. A reactive watch re-observes the live nodes.
+  // (Re)attach the element observers whenever the conversation or nodes change.
+  // Loading can recreate the list, but promoting /new to a draft reuses it.
+  // Re-observe even then: the reset bottom-restoration state needs a fresh
+  // intersection report when the sentinel has stayed in view throughout.
   watch(
-    [messagesListRef, bottomSentinelRef],
-    ([list, sentinel]) => {
+    [() => props.conversationId, messagesListRef, bottomSentinelRef],
+    ([, list, sentinel]) => {
       ro?.disconnect();
       bottomObserver?.disconnect();
       // Observe the container alongside the list: container resizes (composer
