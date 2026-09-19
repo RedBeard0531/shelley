@@ -195,12 +195,28 @@ func cmdChat(cc *clientConfig, args []string) {
 	convID := fs.String("c", "", "Conversation ID to continue (creates new if omitted)")
 	model := fs.String("model", "", "Model to use (server default if empty)")
 	cwd := fs.String("cwd", "", "Working directory for the conversation")
+	reasoning := fs.String("reasoning", "", "Reasoning level for a new conversation (off, minimal, low, medium, high, xhigh, max)")
+	var toolOverrides toolOverridesFlag
+	fs.Var(&toolOverrides, "tool", "Tool override for a new conversation (NAME=on|off, repeatable)")
+	noTools := fs.Bool("no-tools", false, "Disable all tools for a new conversation (-tool NAME=on can re-enable one)")
+	var tags multiFlag
+	fs.Var(&tags, "tag", "Tag to add to the conversation (repeatable)")
 	ephemeral := fs.Bool("ephemeral", false, "Wait for end of turn, then archive the conversation (for cron-style cleanup)")
 	noNotify := fs.Bool("disable-notifications", false, "Disable end-of-turn notifications for this conversation (new conversations only)")
 	fs.Parse(args)
 
 	if *prompt == "" {
 		fmt.Fprintf(os.Stderr, "Error: -p PROMPT is required\n")
+		os.Exit(1)
+	}
+
+	conversationOptions, err := buildConversationOptions(*reasoning, toolOverrides, *noTools, *noNotify)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := validateChatTarget(*convID, conversationOptions); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -221,11 +237,8 @@ func cmdChat(cc *clientConfig, args []string) {
 	}
 
 	reqBody := buildChatRequestBody(*prompt, *model, effectiveCwd, *noNotify, *convID)
-	// Conversation options are applied only at creation time, so
-	// -disable-notifications is meaningful only for new conversations (no -c).
-	if *noNotify && *convID != "" {
-		fmt.Fprintf(os.Stderr, "Error: -disable-notifications only applies to new conversations (omit -c)\n")
-		os.Exit(1)
+	if conversationOptions != nil {
+		reqBody["conversation_options"] = conversationOptions
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -256,12 +269,7 @@ func cmdChat(cc *clientConfig, args []string) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		var errBody map[string]any
-		if json.NewDecoder(resp.Body).Decode(&errBody) == nil {
-			fmt.Fprintf(os.Stderr, "Error (HTTP %d): %v\n", resp.StatusCode, errBody)
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: HTTP %d\n", resp.StatusCode)
-		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", httpResponseError(resp))
 		os.Exit(1)
 	}
 
@@ -275,18 +283,49 @@ func cmdChat(cc *clientConfig, args []string) {
 	if cid == nil {
 		cid = *convID // when continuing, the chat endpoint doesn't echo the ID back
 	}
+	cidStr, _ := cid.(string)
 	output := map[string]any{
 		"conversation_id": cid,
 	}
 	if slug, ok := respBody["slug"]; ok {
 		output["slug"] = slug
 	}
+	var postSendErr error
+	if len(tags) > 0 {
+		if cidStr == "" {
+			postSendErr = fmt.Errorf("Error: -tag could not determine conversation ID")
+		} else {
+			next := normalizeTagList(tags)
+			if *convID != "" {
+				current, err := fetchConversationTags(cc, client, baseURL, cidStr)
+				if err != nil {
+					postSendErr = fmt.Errorf("Error adding tags: %w", err)
+				} else {
+					next = mergeTags(current, next)
+				}
+			}
+			if postSendErr == nil {
+				updated, err := setConversationTags(cc, client, baseURL, cidStr, next)
+				if err != nil {
+					postSendErr = fmt.Errorf("Error adding tags: %w", err)
+				} else {
+					output["tags"] = updated
+				}
+			}
+		}
+	}
 
-	json.NewEncoder(os.Stdout).Encode(output)
+	if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing response: %v\n", err)
+		os.Exit(1)
+	}
+	if postSendErr != nil {
+		fmt.Fprintln(os.Stderr, postSendErr)
+		os.Exit(1)
+	}
 
 	if *ephemeral {
-		cidStr, ok := cid.(string)
-		if !ok || cidStr == "" {
+		if cidStr == "" {
 			fmt.Fprintf(os.Stderr, "Error: -ephemeral could not determine conversation ID\n")
 			os.Exit(1)
 		}
@@ -373,10 +412,16 @@ type streamEvent struct {
 func cmdRead(cc *clientConfig, args []string) {
 	fs := flag.NewFlagSet("client read", flag.ExitOnError)
 	wait := fs.Bool("wait", false, "Wait for agent turn to finish (stream new messages)")
+	full := fs.Bool("full", false, "Emit complete message records with parsed JSON payloads and conversation metadata")
+	usage := fs.Bool("usage", false, "Emit one aggregate usage object (including descendant conversations)")
 	fs.Parse(args)
 
 	if fs.NArg() == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: shelley client read [-wait] CONVERSATION_ID\n")
+		fmt.Fprintf(os.Stderr, "Usage: shelley client read [-wait] [-full | -usage] CONVERSATION_ID\n")
+		os.Exit(1)
+	}
+	if *usage && (*wait || *full) {
+		fmt.Fprintf(os.Stderr, "Error: -usage cannot be combined with -wait or -full\n")
 		os.Exit(1)
 	}
 	conversationID := fs.Arg(0)
@@ -387,36 +432,49 @@ func cmdRead(cc *clientConfig, args []string) {
 		os.Exit(1)
 	}
 
-	if *wait {
-		readStream(cc, client, baseURL, conversationID)
-	} else {
-		readSnapshot(cc, client, baseURL, conversationID)
+	switch {
+	case *usage:
+		summary, err := collectConversationUsage(cc, client, baseURL, conversationID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(summary); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing usage: %v\n", err)
+			os.Exit(1)
+		}
+	case *wait:
+		readStream(cc, client, baseURL, conversationID, *full)
+	default:
+		readSnapshot(cc, client, baseURL, conversationID, *full)
 	}
 }
 
-func readSnapshot(cc *clientConfig, client *http.Client, baseURL, conversationID string) {
-	req, err := cc.newRequest("GET", baseURL+"/api/conversation/"+conversationID, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating request: %v\n", err)
-		os.Exit(1)
-	}
-
-	resp, err := client.Do(req)
+func readSnapshot(cc *clientConfig, client *http.Client, baseURL, conversationID string, full bool) {
+	sr, err := fetchConversationSnapshot(cc, client, baseURL, conversationID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Error: HTTP %d\n", resp.StatusCode)
-		os.Exit(1)
-	}
-
-	var sr streamResponseWire
-	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
-		os.Exit(1)
+	if full {
+		conversation, err := decodeRawJSON(sr.Conversation)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing conversation metadata: %v\n", err)
+			os.Exit(1)
+		}
+		for _, msg := range sr.Messages {
+			record, err := fullMessage(msg, conversation)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+				os.Exit(1)
+			}
+			if err := json.NewEncoder(os.Stdout).Encode(record); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing response: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		return
 	}
 
 	for _, msg := range sr.Messages {
@@ -424,7 +482,7 @@ func readSnapshot(cc *clientConfig, client *http.Client, baseURL, conversationID
 	}
 }
 
-func readStream(cc *clientConfig, client *http.Client, baseURL, conversationID string) {
+func readStream(cc *clientConfig, client *http.Client, baseURL, conversationID string, full bool) {
 	req, err := cc.newRequest("GET", baseURL+"/api/conversation/"+conversationID+"/stream", nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating request: %v\n", err)
@@ -440,10 +498,11 @@ func readStream(cc *clientConfig, client *http.Client, baseURL, conversationID s
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Error: HTTP %d\n", resp.StatusCode)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", httpResponseError(resp))
 		os.Exit(1)
 	}
 
+	var conversation any
 	seenSeqIDs := make(map[int64]bool)
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -460,6 +519,13 @@ func readStream(cc *clientConfig, client *http.Client, baseURL, conversationID s
 			continue
 		}
 
+		if len(sr.Conversation) > 0 {
+			conversation, err = decodeRawJSON(sr.Conversation)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error parsing conversation metadata: %v\n", err)
+				os.Exit(1)
+			}
+		}
 		if sr.Heartbeat || len(sr.Messages) == 0 {
 			continue
 		}
@@ -469,6 +535,22 @@ func readStream(cc *clientConfig, client *http.Client, baseURL, conversationID s
 				continue
 			}
 			seenSeqIDs[msg.SequenceID] = true
+
+			if full {
+				record, err := fullMessage(msg, conversation)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+					os.Exit(1)
+				}
+				if err := json.NewEncoder(os.Stdout).Encode(record); err != nil {
+					fmt.Fprintf(os.Stderr, "Error writing response: %v\n", err)
+					os.Exit(1)
+				}
+				if (msg.Type == "agent" || msg.Type == "error") && record.EndOfTurn {
+					return
+				}
+				continue
+			}
 
 			event := simplifyMessage(msg)
 			json.NewEncoder(os.Stdout).Encode(event)
@@ -650,15 +732,28 @@ func cmdArchive(cc *clientConfig, args []string) {
 // --- Wire types for JSON parsing ---
 
 type streamResponseWire struct {
-	Messages  []messageWire `json:"messages"`
-	Heartbeat bool          `json:"heartbeat"`
+	Messages     []messageWire   `json:"messages"`
+	Conversation json.RawMessage `json:"conversation"`
+	Heartbeat    bool            `json:"heartbeat"`
 }
 
 type messageWire struct {
-	SequenceID int64   `json:"sequence_id"`
-	Type       string  `json:"type"`
-	LlmData    *string `json:"llm_data,omitempty"`
-	EndOfTurn  *bool   `json:"end_of_turn,omitempty"`
+	MessageID           string  `json:"message_id"`
+	ConversationID      string  `json:"conversation_id"`
+	SequenceID          int64   `json:"sequence_id"`
+	Type                string  `json:"type"`
+	LlmData             *string `json:"llm_data,omitempty"`
+	UserData            *string `json:"user_data,omitempty"`
+	UsageData           *string `json:"usage_data,omitempty"`
+	OtherUsageData      *string `json:"other_usage_data,omitempty"`
+	CreatedAt           string  `json:"created_at"`
+	DisplayData         *string `json:"display_data,omitempty"`
+	Generation          int64   `json:"generation"`
+	EndOfTurn           *bool   `json:"end_of_turn,omitempty"`
+	LLMAPIURL           *string `json:"llm_api_url,omitempty"`
+	ModelName           *string `json:"model_name,omitempty"`
+	ForkedFromMessageID *string `json:"forked_from_message_id,omitempty"`
+	UserEmail           *string `json:"user_email,omitempty"`
 }
 
 type llmMessageWire struct {
@@ -730,18 +825,32 @@ Flags:
   -H HEADER    Extra HTTP header "Name: Value" (can be repeated)
 
 Subcommands:
-  chat -p PROMPT [-c CONVERSATION_ID] [-model MODEL] [-cwd DIR] [-ephemeral] [-disable-notifications]
+  chat -p PROMPT [-c CONVERSATION_ID] [-model MODEL] [-cwd DIR]
+       [-reasoning LEVEL] [-tool NAME=on|off ...] [-no-tools]
+       [-tag TAG ...] [-ephemeral] [-disable-notifications]
       Send a message. Creates a new conversation unless -c is given.
       Prints JSON with conversation_id to stdout.
+      -reasoning accepts off, minimal, low, medium, high, xhigh, or max.
+      -tool is repeatable; unspecified tools keep their server defaults.
+      -no-tools disables every tool, while -tool NAME=on can re-enable one.
+      Reasoning and tool options apply to new conversations only.
+      -tag is repeatable and adds tags after the message is accepted; it also
+      works when continuing an existing conversation.
       With -ephemeral, waits for the agent turn to end and then archives
       the conversation (useful for cron-style invocations that clean up
       after themselves).
       With -disable-notifications, disables end-of-turn notifications (push,
       email, discord, ntfy) for the conversation. New conversations only.
 
-  read [-wait] CONVERSATION_ID
+  read [-wait] [-full | -usage] CONVERSATION_ID
       Read all messages in a conversation as JSON lines.
       With -wait, streams via SSE until the agent turn ends.
+      With -full, emits complete API message records with parsed llm_data,
+      content blocks, usage data, timestamps, model, and conversation metadata.
+      With -usage, emits one aggregate usage object for the conversation and
+      all descendant conversations, including per-model totals. input_tokens
+      includes cache-creation tokens; cached_input_tokens is cache-read input.
+      raw_input_tokens and both native cache fields are also included.
 
   list [-archived] [-limit N] [-q QUERY]
       List conversations as JSON lines.
@@ -772,9 +881,14 @@ Connecting over HTTP with auth headers:
   shelley client -url http://localhost:9999 -H "X-Exedev-Userid: user" list
 
 Examples:
-  # Start a conversation and wait for the agent
-  ID=$(shelley client chat -p "list files" | jq -r .conversation_id)
+  # Start a high-reasoning conversation without bash, tagged benchmark
+  ID=$(shelley client chat -model glm-5.2-fireworks -reasoning high \
+    -tool bash=off -tag benchmark -p "list files" | jq -r .conversation_id)
   shelley client read -wait "$ID"
+
+  # Read complete records or aggregate usage
+  shelley client read -full "$ID"
+  shelley client read -usage "$ID"
 
   # Continue a conversation
   shelley client chat -c "$ID" -p "now count them"

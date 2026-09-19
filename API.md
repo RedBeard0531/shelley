@@ -67,7 +67,24 @@ Unless noted, results exclude **archived** conversations.
   ```
 - `GET /api/conversations/archived` — archived list.
 - `POST /api/conversations/new` — create a conversation and post the
-  first user message.
+  first user message. The request accepts `message`, optional `model` and
+  `cwd`, and optional `conversation_options`:
+  ```json
+  {
+    "message": "run the tests",
+    "model": "glm-5.2-fireworks",
+    "conversation_options": {
+      "thinking_level": "high",
+      "tool_overrides": {"bash": "off"},
+      "disable_all_tools": false,
+      "disable_notifications": true
+    }
+  }
+  ```
+  `thinking_level` is one of `off`, `minimal`, `low`, `medium`, `high`,
+  `xhigh`, or `max`; the server also validates it against the selected model's
+  advertised levels. Tool override values are `on` or `off`. With
+  `disable_all_tools`, an explicit `on` override re-enables that tool.
 - `POST /api/conversations/distill-new-generation` — compact the current
   conversation into the next generation of the same conversation. The
   optional `method` field (`default` or `compact`) is accepted for
@@ -85,7 +102,16 @@ Unless noted, results exclude **archived** conversations.
 
 ### Single conversation
 
-- `GET /api/conversation/<id>` — full message history (compressed).
+- `GET /api/conversation/<id>` — full API message history (compressed) plus
+  conversation metadata. Message rows include `message_id`,
+  `conversation_id`, `sequence_id`, `type`, `llm_data`, `user_data`,
+  `usage_data`, `other_usage_data`, `created_at`, `display_data`, `generation`,
+  `end_of_turn`, `llm_api_url`, `model_name`, `forked_from_message_id`, and
+  `user_email`. The JSON-valued database columns (`llm_data`, `user_data`,
+  `usage_data`, `other_usage_data`, and `display_data`) are encoded as JSON
+  strings on the wire. `llm_data.Content` carries text, thinking, tool-use,
+  and tool-result blocks. Provider continuation secrets and inline image data
+  are removed before serving.
 - `GET /api/conversation/<id>/stream` — **legacy** SSE: messages, state,
   no list patches. Used by iOS, CLI, and Go tests; new clients should
   use `/api/stream2`. Query params:
@@ -115,6 +141,10 @@ Unless noted, results exclude **archived** conversations.
 - `POST /api/conversation/<id>/cancel` — interrupt the running loop.
 - `POST /api/conversation/<id>/archive` / `unarchive`.
 - `POST /api/conversation/<id>/hooks` — register an end-of-turn webhook.
+- `POST /api/conversation/<id>/tags` — replace the conversation's tag list.
+- `GET /api/conversation/<id>/subagents` — direct child conversations. Clients
+  can recurse through this endpoint when they need the complete descendant
+  tree (for example, aggregate usage reporting).
 - `GET /api/conversation-by-slug/<slug>` — lookup by slug.
 
 ### Unified stream
