@@ -22,6 +22,176 @@ func TestValidReasoningMapAcceptsMax(t *testing.T) {
 	}
 }
 
+func TestValidReasoningReplay(t *testing.T) {
+	for _, tt := range []struct {
+		in, want oai.ReasoningReplay
+		wantErr  bool
+	}{
+		{in: "", want: "auto"},
+		{in: "auto", want: "auto"},
+		{in: "none", want: "none"},
+		{in: "reasoning_content", want: "reasoning_content"},
+		{in: "reasoning_details", wantErr: true},
+	} {
+		got, err := validReasoningReplay(tt.in)
+		if (err != nil) != tt.wantErr || got != tt.want {
+			t.Fatalf("validReasoningReplay(%q) = (%q, %v), want (%q, err=%v)", tt.in, got, err, tt.want, tt.wantErr)
+		}
+	}
+}
+
+func TestCustomModelReasoningReplayLifecycle(t *testing.T) {
+	h := NewTestHarness(t)
+	createBody := []byte(`{
+		"display_name":"Replay model",
+		"provider_type":"openai",
+		"endpoint":"https://proxy.example/v1",
+		"api_key":"test-key",
+		"model_name":"custom-model",
+		"reasoning_replay":"reasoning_content"
+	}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/custom-models", bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	h.server.handleCreateModel(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created ModelAPI
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ReasoningReplay != "reasoning_content" || created.ResolvedReasoningReplay != "reasoning_content" {
+		t.Fatalf("created replay fields = (%q, %q)", created.ReasoningReplay, created.ResolvedReasoningReplay)
+	}
+	stored, err := h.db.GetModel(t.Context(), created.ModelID)
+	if err != nil || stored.ReasoningReplay != "reasoning_content" {
+		t.Fatalf("stored replay field = (%q, %v)", stored.ReasoningReplay, err)
+	}
+
+	preserveBody := []byte(`{
+		"display_name":"Replay model",
+		"provider_type":"openai",
+		"endpoint":"https://proxy.example/v1",
+		"model_name":"custom-model"
+	}`)
+	preserveReq := httptest.NewRequest(http.MethodPut, "/api/custom-models/"+created.ModelID, bytes.NewReader(preserveBody))
+	preserveRec := httptest.NewRecorder()
+	h.server.handleUpdateModel(preserveRec, preserveReq, created.ModelID)
+	if preserveRec.Code != http.StatusOK {
+		t.Fatalf("preserve status=%d body=%s", preserveRec.Code, preserveRec.Body.String())
+	}
+	var preserved ModelAPI
+	if err := json.Unmarshal(preserveRec.Body.Bytes(), &preserved); err != nil {
+		t.Fatal(err)
+	}
+	if preserved.ReasoningReplay != "reasoning_content" {
+		t.Fatalf("omitted update changed replay field to %q", preserved.ReasoningReplay)
+	}
+
+	duplicateRec := httptest.NewRecorder()
+	h.server.handleDuplicateModel(duplicateRec, httptest.NewRequest(http.MethodPost, "/api/custom-models/"+created.ModelID+"/duplicate", nil), created.ModelID)
+	if duplicateRec.Code != http.StatusCreated {
+		t.Fatalf("duplicate status=%d body=%s", duplicateRec.Code, duplicateRec.Body.String())
+	}
+	var duplicate ModelAPI
+	if err := json.Unmarshal(duplicateRec.Body.Bytes(), &duplicate); err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.ReasoningReplay != oai.ReasoningReplayContent {
+		t.Fatalf("duplicate replay = %q", duplicate.ReasoningReplay)
+	}
+
+	listRec := httptest.NewRecorder()
+	h.server.handleListModels(listRec, httptest.NewRequest(http.MethodGet, "/api/custom-models", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listed []ModelAPI
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, model := range listed {
+		if model.ModelID != created.ModelID {
+			continue
+		}
+		found = true
+		if model.ReasoningReplay != oai.ReasoningReplayContent {
+			t.Fatalf("listed replay = %q", model.ReasoningReplay)
+		}
+	}
+	if !found {
+		t.Fatal("created model missing from list")
+	}
+
+	updateBody := []byte(`{
+		"display_name":"Replay model",
+		"provider_type":"openai",
+		"endpoint":"https://proxy.example/v1",
+		"model_name":"custom-model",
+		"reasoning_replay":""
+	}`)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/custom-models/"+created.ModelID, bytes.NewReader(updateBody))
+	updateRec := httptest.NewRecorder()
+	h.server.handleUpdateModel(updateRec, updateReq, created.ModelID)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	var updated ModelAPI
+	if err := json.Unmarshal(updateRec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.ReasoningReplay != "auto" || updated.ResolvedReasoningReplay != "" {
+		t.Fatalf("updated replay fields = (%q, %q)", updated.ReasoningReplay, updated.ResolvedReasoningReplay)
+	}
+	stored, err = h.db.GetModel(t.Context(), created.ModelID)
+	if err != nil || stored.ReasoningReplay != "auto" {
+		t.Fatalf("reset replay field = (%q, %v)", stored.ReasoningReplay, err)
+	}
+}
+
+func TestCustomModelAutoInfersReasoningReplay(t *testing.T) {
+	h := NewTestHarness(t)
+	body := []byte(`{
+		"display_name":"GLM proxy",
+		"provider_type":"openai",
+		"endpoint":"https://proxy.example/v1",
+		"api_key":"test-key",
+		"model_name":"fireworks/glm-5p2"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/custom-models", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.server.handleCreateModel(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created ModelAPI
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ReasoningReplay != "auto" || created.ResolvedReasoningReplay != "reasoning_content" {
+		t.Fatalf("auto replay fields = (%q, %q)", created.ReasoningReplay, created.ResolvedReasoningReplay)
+	}
+	stored, err := h.db.GetModel(t.Context(), created.ModelID)
+	if err != nil || stored.ReasoningReplay != "auto" {
+		t.Fatalf("stored auto replay field = (%q, %v)", stored.ReasoningReplay, err)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/custom-models/"+created.ModelID, nil)
+	getRec := httptest.NewRecorder()
+	h.server.handleGetModel(getRec, getReq, created.ModelID)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var fetched ModelAPI
+	if err := json.Unmarshal(getRec.Body.Bytes(), &fetched); err != nil {
+		t.Fatal(err)
+	}
+	if fetched.ReasoningReplay != "auto" || fetched.ResolvedReasoningReplay != "reasoning_content" {
+		t.Fatalf("fetched auto replay fields = (%q, %q)", fetched.ReasoningReplay, fetched.ResolvedReasoningReplay)
+	}
+}
+
 func TestCustomModelAPIPersistsMaxOutputTokens(t *testing.T) {
 	h := NewTestHarness(t)
 	body := []byte(`{

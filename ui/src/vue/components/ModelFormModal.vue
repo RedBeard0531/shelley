@@ -180,6 +180,25 @@
           {{ t("reasoningSupportHelp") }}
         </div>
       </div>
+      <div
+        v-if="form.provider_type === 'openai' || form.provider_type === 'openai-responses'"
+        class="form-group"
+      >
+        <label>{{ t("reasoningReplay") }}</label>
+        <Select
+          v-model="form.reasoning_replay"
+          :options="reasoningReplayOptions"
+          option-label="label"
+          option-value="value"
+          fluid
+          :dt="selectFieldDt"
+        />
+        <div class="form-hint">{{ t("reasoningReplayHelp") }}</div>
+        <div v-if="editingReasoningReplayAuto" class="form-hint">
+          {{ t("reasoningReplayAutoResolved") }}
+          <code>{{ editingReasoningReplayAuto }}</code>
+        </div>
+      </div>
       <div v-if="form.reasoning_support !== 'no'" class="form-group">
         <label>{{ t("reasoningLevelMapping") }}</label>
         <div class="reasoning-map-grid">
@@ -311,6 +330,11 @@ const reasoningSupportOptions = computed(() => [
   { label: t("reasoningSupportYes"), value: "yes" },
   { label: t("reasoningSupportNo"), value: "no" },
 ]);
+const reasoningReplayOptions = computed(() => [
+  { label: t("reasoningReplayAuto"), value: "auto" },
+  { label: t("reasoningReplayNone"), value: "none" },
+  { label: "reasoning_content", value: "reasoning_content" },
+]);
 
 const form = reactive<FormData>({ ...emptyForm });
 
@@ -356,6 +380,19 @@ const editingResolvedAuto = computed(() => {
   };
 });
 
+const editingReasoningReplayAuto = computed(() => {
+  const saved = props.editModel;
+  if (
+    form.reasoning_replay !== "auto" ||
+    !saved ||
+    saved.reasoning_replay !== "auto" ||
+    form.endpoint !== saved.endpoint ||
+    form.model_name !== saved.model_name
+  )
+    return null;
+  return saved.resolved_reasoning_replay || t("reasoningReplayNone");
+});
+
 // Populate the form from editModel (or reset to blank for add) each time the
 // dialog opens, and clear any stale error/test state.
 watch(
@@ -376,6 +413,7 @@ watch(
         max_tokens: m.max_tokens,
         tags: m.tags,
         reasoning_effort: m.reasoning_effort || "",
+        reasoning_replay: m.reasoning_replay || "auto",
         reasoning_support: m.reasoning_support || "auto",
         reasoning_map: parseReasoningMap(m.reasoning_map),
         image_support: m.image_support ?? "auto",
@@ -423,6 +461,7 @@ async function handleTest() {
       model_name: form.model_name,
       max_tokens: form.max_tokens,
       reasoning_effort: form.reasoning_effort,
+      reasoning_replay: form.reasoning_replay,
       reasoning_support: form.reasoning_support,
       reasoning_map: serializeReasoningMap(),
     };
@@ -453,6 +492,7 @@ async function handleSave() {
       max_tokens: form.max_tokens,
       tags: form.tags,
       reasoning_effort: form.reasoning_effort,
+      reasoning_replay: form.reasoning_replay,
       reasoning_support: form.reasoning_support,
       reasoning_map: serializeReasoningMap(),
       image_support: form.image_support,

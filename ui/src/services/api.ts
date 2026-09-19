@@ -1020,6 +1020,8 @@ export interface CustomModel {
   max_tokens: number;
   tags: string; // Comma-separated tags (e.g., "slug" for slug generation)
   reasoning_effort: string; // Legacy provider-verbatim default
+  reasoning_replay: "auto" | "none" | "reasoning_content";
+  resolved_reasoning_replay?: "none" | "reasoning_content";
   reasoning_support: "auto" | "yes" | "no";
   reasoning_map: string;
   supports_reasoning: boolean;
@@ -1036,6 +1038,7 @@ export interface CreateCustomModelRequest {
   max_tokens: number;
   tags: string; // Comma-separated tags
   reasoning_effort: string; // Legacy provider-verbatim default
+  reasoning_replay: "auto" | "none" | "reasoning_content";
   reasoning_support: "auto" | "yes" | "no";
   reasoning_map: string;
   image_support: "auto" | "yes" | "no";
@@ -1049,6 +1052,7 @@ export interface TestCustomModelRequest {
   model_name: string;
   max_tokens?: number;
   reasoning_effort?: string;
+  reasoning_replay?: "auto" | "none" | "reasoning_content";
   reasoning_support?: "auto" | "yes" | "no";
   reasoning_map?: string;
 }

@@ -211,6 +211,11 @@ export interface TranslationKeys {
   reasoningSupportYes: string;
   reasoningSupportNo: string;
   reasoningSupportHelp: string;
+  reasoningReplay: string;
+  reasoningReplayAuto: string;
+  reasoningReplayNone: string;
+  reasoningReplayHelp: string;
+  reasoningReplayAutoResolved: string;
   reasoningLevelMapping: string;
   reasoningMappingUnsupported: string;
   reasoningMappingHelp: string;

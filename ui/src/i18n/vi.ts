@@ -214,6 +214,12 @@ export const vi: TranslationKeys = {
   reasoningSupportYes: "Supported",
   reasoningSupportNo: "Not supported",
   reasoningSupportHelp: "Auto uses the model catalog. Unknown custom models default to supported.",
+  reasoningReplay: "Reasoning replay",
+  reasoningReplayAuto: "Auto-detect",
+  reasoningReplayNone: "Disabled",
+  reasoningReplayHelp:
+    "Replay prior assistant reasoning during tool loops. Auto uses the model catalog; choose reasoning_content for compatible custom endpoints.",
+  reasoningReplayAutoResolved: "Auto currently resolves to:",
   reasoningLevelMapping: "Reasoning level mapping",
   reasoningMappingUnsupported: "Unsupported",
   reasoningMappingHelp:

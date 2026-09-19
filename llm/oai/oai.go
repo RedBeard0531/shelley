@@ -546,9 +546,51 @@ type Service struct {
 	// value (used by custom-model config to pass provider-specific values like
 	// "xhigh" or "none"). Overridden by Request.ThinkingLevel when set.
 	ReasoningEffort string
+
+	// ReasoningReplay controls persisted reasoning replay. The zero value and
+	// "auto" resolve from models.dev; "none" disables replay explicitly.
+	ReasoningReplay ReasoningReplay
 }
 
 var _ llm.Service = (*Service)(nil)
+
+func (s *Service) messageOrigin(model Model) llm.MessageOrigin {
+	return llm.MessageOrigin{
+		Provider:  cmp.Or(s.ProviderName, "openai"),
+		Transport: "openai-chat:" + oaiTransportIdentity(cmp.Or(s.ModelURL, model.URL, OpenAIURL)),
+		Model:     model.ModelName,
+	}
+}
+
+func oaiTransportIdentity(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return "unknown"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	return u.String()
+}
+
+func filterReasoningForOrigin(msg llm.Message, origin llm.MessageOrigin) llm.Message {
+	if msg.Role != llm.MessageRoleAssistant || !msg.Origin.Known() || msg.Origin.Matches(origin) {
+		return msg
+	}
+	content := make([]llm.Content, 0, len(msg.Content))
+	for _, item := range msg.Content {
+		if item.Type == llm.ContentTypeThinking || item.Type == llm.ContentTypeRedactedThinking {
+			continue
+		}
+		content = append(content, item)
+	}
+	msg.Content = content
+	return msg
+}
 
 // ModelsRegistry is a registry of all known models with their user-friendly names.
 // Declaration order is display order — keep current models at top, old models at bottom.
@@ -1392,33 +1434,30 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		allMessages = append(allMessages, sysMessages...)
 	}
 
-	// Add regular and tool messages
+	// Add regular and tool messages. Opaque reasoning is only valid for the
+	// provider, transport, and model that produced it; model switches retain the
+	// portable text and tool transcript but not another origin's reasoning.
+	origin := s.messageOrigin(model)
 	for _, msg := range ir.Messages {
+		msg = filterReasoningForOrigin(msg, origin)
 		msgs := fromLLMMessage(msg)
 		allMessages = append(allMessages, msgs...)
 	}
 
-	// reasoning_content is a DeepSeek-specific extension to the OpenAI chat
-	// completions API. Other providers (OpenAI, Fireworks, Together, etc.) do
-	// not recognize it and may reject or silently mishandle the field. So we
-	// only forward it when talking to DeepSeek. For DeepSeek with thinking
-	// mode (the default for deepseek-v4-pro), assistant messages that include
-	// tool_calls must carry a reasoning_content field on subsequent turns or
-	// the API returns HTTP 400. If we have a real thinking block we use it
-	// (so the model can continue its prior CoT). Otherwise — e.g. for
-	// assistant turns replayed from history persisted before this fix — we
-	// inject a single-space placeholder so the request remains well-formed.
-	// See https://api-docs.deepseek.com/guides/thinking_mode#tool-calls
-	if isDeepSeekBaseURL(baseURL) {
-		for i := range allMessages {
-			m := &allMessages[i]
-			if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ReasoningContent == "" {
-				m.ReasoningContent = " "
-			}
+	// Resolve auto lazily so built-in services stay zero-value configured while
+	// custom endpoints and model switches use the current endpoint/model pair.
+	// Direct DeepSeek keeps its legacy replay behavior for catalog-unknown models;
+	// explicit none remains a sentinel that suppresses real reasoning.
+	deepSeek := isDeepSeekBaseURL(baseURL)
+	resolvedReasoningReplay := ResolveReasoningReplay(baseURL, model.ModelName, s.ReasoningReplay)
+	replayReasoningContent := resolvedReasoningReplay == ReasoningReplayContent || deepSeek && resolvedReasoningReplay == ""
+	for i := range allMessages {
+		m := &allMessages[i]
+		if !replayReasoningContent {
+			m.ReasoningContent = ""
 		}
-	} else {
-		for i := range allMessages {
-			allMessages[i].ReasoningContent = ""
+		if (replayReasoningContent || deepSeek) && m.Role == "assistant" && len(m.ToolCalls) > 0 && m.ReasoningContent == "" {
+			m.ReasoningContent = " "
 		}
 	}
 
@@ -1570,6 +1609,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			// internally), so apply it here to avoid recording a
 			// relative "/chat/completions" path.
 			result.URL = cmp.Or(s.ModelURL, model.URL, OpenAIURL) + "/chat/completions"
+			result.Origin = &origin
 			return result, nil
 		}
 
@@ -1640,10 +1680,11 @@ func (s *Service) ConfigDetails() map[string]string {
 	model := cmp.Or(s.Model, DefaultModel)
 	baseURL := cmp.Or(s.ModelURL, model.URL, OpenAIURL)
 	return map[string]string{
-		"base_url":        baseURL,
-		"model_name":      model.ModelName,
-		"full_url":        baseURL + "/chat/completions",
-		"api_key_env":     model.APIKeyEnv,
-		"has_api_key_set": fmt.Sprintf("%v", s.APIKey != ""),
+		"base_url":         baseURL,
+		"model_name":       model.ModelName,
+		"full_url":         baseURL + "/chat/completions",
+		"api_key_env":      model.APIKeyEnv,
+		"has_api_key_set":  fmt.Sprintf("%v", s.APIKey != ""),
+		"reasoning_replay": string(s.ReasoningReplay),
 	}
 }

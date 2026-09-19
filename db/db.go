@@ -2541,6 +2541,9 @@ func (db *DB) GetModel(ctx context.Context, modelID string) (*generated.Model, e
 
 // CreateModel creates a new model
 func (db *DB) CreateModel(ctx context.Context, params generated.CreateModelParams) (*generated.Model, error) {
+	if params.ReasoningReplay == "" {
+		params.ReasoningReplay = "auto"
+	}
 	var model generated.Model
 	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
 		q := generated.New(tx.Conn())
@@ -2556,6 +2559,9 @@ func (db *DB) CreateModel(ctx context.Context, params generated.CreateModelParam
 
 // UpdateModel updates a model
 func (db *DB) UpdateModel(ctx context.Context, params generated.UpdateModelParams) (*generated.Model, error) {
+	if params.ReasoningReplay == "" {
+		params.ReasoningReplay = "auto"
+	}
 	var model generated.Model
 	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
 		q := generated.New(tx.Conn())

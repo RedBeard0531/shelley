@@ -103,7 +103,7 @@ func TestFromLLMMessageResponses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			items := fromLLMMessageResponses(tt.msg)
+			items := fromLLMMessageResponses(tt.msg, responsesReasoningReplayEncrypted)
 			if len(items) != tt.expected {
 				t.Errorf("expected %d items, got %d", tt.expected, len(items))
 			}
@@ -142,7 +142,7 @@ func TestFromLLMMessageResponsesWithImage(t *testing.T) {
 			{Type: llm.ContentTypeText, Text: "What is in this image?"},
 			{Type: llm.ContentTypeText, MediaType: "image/png", Data: "abc123"},
 		},
-	})
+	}, responsesReasoningReplayEncrypted)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -165,7 +165,7 @@ func TestFromLLMMessageResponsesWithImageOnlyAndMultipleImages(t *testing.T) {
 			{Type: llm.ContentTypeText, Text: "between"},
 			{Type: llm.ContentTypeText, MediaType: "image/jpeg", Data: "second"},
 		},
-	})
+	}, responsesReasoningReplayEncrypted)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -199,7 +199,7 @@ func TestFromLLMMessageResponsesWithToolResultImage(t *testing.T) {
 				{Type: llm.ContentTypeText, MediaType: "image/jpeg", Data: "xyz789"},
 			},
 		}},
-	})
+	}, responsesReasoningReplayEncrypted)
 	if len(items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(items))
 	}
@@ -227,7 +227,7 @@ func TestFromLLMMessageResponsesWithImageOnlyToolResultAndRegularContent(t *test
 			},
 			{Type: llm.ContentTypeText, Text: "regular text"},
 		},
-	})
+	}, responsesReasoningReplayEncrypted)
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %d: %+v", len(items), items)
 	}
@@ -1911,14 +1911,14 @@ func TestResponsesCustomToolCallConversion(t *testing.T) {
 		t.Fatalf("tool input = %s", got)
 	}
 
-	items := fromLLMMessageResponses(llm.Message{Role: llm.MessageRoleAssistant, Content: response.Content})
+	items := fromLLMMessageResponses(llm.Message{Role: llm.MessageRoleAssistant, Content: response.Content}, responsesReasoningReplayEncrypted)
 	if len(items) != 1 || items[0].Type != "custom_tool_call" || items[0].Input == "" {
 		t.Fatalf("replayed items = %+v", items)
 	}
 }
 
 func TestResponsesCustomToolResultUsesCustomOutput(t *testing.T) {
-	items := fromLLMMessageResponses(llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeToolResult, ToolName: "apply_patch", ToolUseID: "call_1", ToolResult: llm.TextContent("done")}}})
+	items := fromLLMMessageResponses(llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeToolResult, ToolName: "apply_patch", ToolUseID: "call_1", ToolResult: llm.TextContent("done")}}}, responsesReasoningReplayEncrypted)
 	if len(items) != 1 || items[0].Type != "custom_tool_call_output" {
 		t.Fatalf("items = %+v", items)
 	}

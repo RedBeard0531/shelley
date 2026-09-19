@@ -15,6 +15,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/oai"
 	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models/modelsdev"
 )
@@ -831,6 +832,44 @@ func TestGetTranscriptionModelsIncludesIntegrationAndCustomRoutes(t *testing.T) 
 }
 
 func (m *mockLLMService) SupportsImages() bool { return true }
+
+func TestManagerLoadsCustomReasoningReplayOverride(t *testing.T) {
+	testDB, err := db.New(db.Config{DSN: t.TempDir() + "/test.db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer testDB.Close()
+	if err := testDB.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.CreateModel(t.Context(), generated.CreateModelParams{
+		ModelID: "replay-model", DisplayName: "Replay model", ProviderType: "openai",
+		Endpoint: "https://proxy.example/v1", ApiKey: "key", ModelName: "custom-model",
+		ReasoningReplay: string(oai.ReasoningReplayContent),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewManager(&Config{DB: testDB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := manager.GetService("replay-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, ok := service.(*reasoningService)
+	if !ok {
+		t.Fatalf("service type = %T", service)
+	}
+	chat, ok := wrapped.Service.(*oai.Service)
+	if !ok {
+		t.Fatalf("inner service type = %T", wrapped.Service)
+	}
+	if chat.ReasoningReplay != oai.ReasoningReplayContent {
+		t.Fatalf("reasoning replay = %q", chat.ReasoningReplay)
+	}
+}
 
 func TestReasoningServiceMapping(t *testing.T) {
 	inner := &captureThinkingService{}

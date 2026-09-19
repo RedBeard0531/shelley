@@ -273,6 +273,9 @@ fresh reset event.
 - `GET /api/models` — available models.
 - `GET /api/tools` — registered tool definitions.
 - `GET/POST/PUT/DELETE /api/custom-models[/<id>]` — custom model CRUD.
+  OpenAI-compatible models accept `reasoning_replay` as `auto`,
+  `reasoning_content`, or `none`; responses include
+  `resolved_reasoning_replay` when catalog resolution is known.
 - `POST /api/custom-models-test` — test a custom model config.
 - `GET/POST/PUT/DELETE /api/notification-channels[/<id>]`,
   `GET /api/notification-channel-types` — notification CRUD.

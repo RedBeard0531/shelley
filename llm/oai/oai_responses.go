@@ -43,9 +43,21 @@ type ResponsesService struct {
 	// custom-model configurations to pass through provider-specific values
 	// (e.g. "xhigh", "none") without Shelley needing to know them.
 	ReasoningEffort string
+
+	// ReasoningReplay controls persisted reasoning replay. The zero value and
+	// "auto" resolve from models.dev; "none" disables replay explicitly.
+	ReasoningReplay ReasoningReplay
 }
 
 var _ llm.Service = (*ResponsesService)(nil)
+
+func (s *ResponsesService) messageOrigin(model Model) llm.MessageOrigin {
+	return llm.MessageOrigin{
+		Provider:  cmp.Or(s.ProviderName, "openai"),
+		Transport: "openai-responses:" + oaiTransportIdentity(cmp.Or(s.ModelURL, model.URL, OpenAIURL)),
+		Model:     model.ModelName,
+	}
+}
 
 const (
 	responsesImagePatchSize     = 32
@@ -298,8 +310,18 @@ func classifyResponsesError(apiErr *responsesError) (retryable, classified bool)
 	}
 }
 
-// fromLLMMessageResponses converts llm.Message to Responses API input items
-func fromLLMMessageResponses(msg llm.Message) []responsesInputItem {
+type responsesReasoningReplay uint8
+
+const (
+	responsesReasoningReplayNone responsesReasoningReplay = iota
+	responsesReasoningReplayEncrypted
+	responsesReasoningReplaySummary
+)
+
+// fromLLMMessageResponses converts llm.Message to Responses API input items.
+// Summary-only reasoning is display metadata for OpenAI, but Fireworks uses it
+// as the Responses representation of models.dev reasoning_content.
+func fromLLMMessageResponses(msg llm.Message, reasoningReplay responsesReasoningReplay) []responsesInputItem {
 	var items []responsesInputItem
 
 	// Separate tool results from regular content
@@ -404,7 +426,9 @@ func fromLLMMessageResponses(msg llm.Message) []responsesInputItem {
 				}
 			case llm.ContentTypeThinking:
 				metadata := c.OpenAIResponsesReasoning
-				if msg.Role != llm.MessageRoleAssistant || metadata == nil || metadata.EncryptedContent == "" {
+				encrypted := metadata != nil && metadata.EncryptedContent != "" && reasoningReplay == responsesReasoningReplayEncrypted
+				summaryOnly := metadata != nil && metadata.EncryptedContent == "" && reasoningReplay == responsesReasoningReplaySummary && metadata.ID != "" && len(metadata.Summary) > 0
+				if msg.Role != llm.MessageRoleAssistant || metadata == nil || (!encrypted && !summaryOnly) {
 					continue
 				}
 				flushMessage()
@@ -646,12 +670,19 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 	httpc := cmp.Or(s.HTTPC, http.DefaultClient)
 	model := cmp.Or(s.Model, DefaultModel)
 	openAIResponses := s.isOpenAIResponses()
+	reasoningReplay := responsesReasoningReplayNone
+	switch ResolveReasoningReplay(cmp.Or(s.ModelURL, model.URL), model.ModelName, s.ReasoningReplay) {
+	case ReasoningReplayContent:
+		reasoningReplay = responsesReasoningReplaySummary
+	case ReasoningReplayNone:
+	case "":
+		if openAIResponses {
+			reasoningReplay = responsesReasoningReplayEncrypted
+		}
+	}
 
 	var allInput []responsesInputItem
 	messages := ir.Messages
-	if !openAIResponses {
-		messages = withoutOpenAIResponsesReasoning(messages)
-	}
 	if openAIResponses {
 		fittedMessages, err := fitResponsesImagesToPatchLimit(messages, responsesImagePatchSize, responsesMaxImagePatchCount)
 		if err != nil {
@@ -659,13 +690,15 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		}
 		messages = fittedMessages
 	}
+	origin := s.messageOrigin(model)
 	for i, msg := range messages {
+		msg = filterReasoningForOrigin(msg, origin)
 		for j, c := range msg.Content {
 			if len(c.Citations) > 0 && c.Text == "" {
 				return nil, fmt.Errorf("openai-responses messages[%d].content[%d]: cannot replay citations on empty assistant text", i, j)
 			}
 		}
-		items := fromLLMMessageResponses(msg)
+		items := fromLLMMessageResponses(msg, reasoningReplay)
 		allInput = append(allInput, items...)
 	}
 
@@ -992,6 +1025,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 
 		result := s.toLLMResponseFromResponses(&resp, httpResp.Header)
 		result.URL = fullURL
+		result.Origin = &origin
 		return result, nil
 	}
 }
@@ -1007,21 +1041,6 @@ func (s *ResponsesService) isOpenAIResponses() bool {
 // stateless reasoning replay across tool turns).
 func (s *ResponsesService) supportsReasoningSummaries() bool {
 	return s.isOpenAIResponses() || s.ProviderName == "xai"
-}
-
-func withoutOpenAIResponsesReasoning(messages []llm.Message) []llm.Message {
-	filtered := make([]llm.Message, len(messages))
-	copy(filtered, messages)
-	for i, msg := range messages {
-		content := make([]llm.Content, 0, len(msg.Content))
-		for _, item := range msg.Content {
-			if item.OpenAIResponsesReasoning == nil {
-				content = append(content, item)
-			}
-		}
-		filtered[i].Content = content
-	}
-	return filtered
 }
 
 type responsesSSEEvent struct {
@@ -1279,10 +1298,11 @@ func (s *ResponsesService) ConfigDetails() map[string]string {
 	model := cmp.Or(s.Model, DefaultModel)
 	baseURL := cmp.Or(s.ModelURL, model.URL, OpenAIURL)
 	return map[string]string{
-		"base_url":        baseURL,
-		"model_name":      model.ModelName,
-		"full_url":        baseURL + "/responses",
-		"api_key_env":     model.APIKeyEnv,
-		"has_api_key_set": fmt.Sprintf("%v", s.APIKey != ""),
+		"base_url":         baseURL,
+		"model_name":       model.ModelName,
+		"full_url":         baseURL + "/responses",
+		"api_key_env":      model.APIKeyEnv,
+		"has_api_key_set":  fmt.Sprintf("%v", s.APIKey != ""),
+		"reasoning_replay": string(s.ReasoningReplay),
 	}
 }

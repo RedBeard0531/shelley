@@ -69,6 +69,7 @@ type Model struct {
 	ImageSupport     string    `json:"image_support"`
 	ReasoningSupport string    `json:"reasoning_support"`
 	ReasoningMap     string    `json:"reasoning_map"`
+	ReasoningReplay  string    `json:"reasoning_replay"`
 }
 
 type NotificationChannel struct {

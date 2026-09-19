@@ -1890,53 +1890,59 @@ func (r rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-func TestServiceDoDeepSeekRoundTripsReasoningContent(t *testing.T) {
-	// Round-trip scenario: user -> assistant(thinking + tool_call) -> tool_result.
-	// The outgoing request to DeepSeek must echo the prior assistant's
-	// reasoning_content (not a placeholder) so the model can continue its
-	// chain of thought.
-	var gotBody []byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		resp := openai.ChatCompletionResponse{
-			ID: "x", Model: "deepseek-v4-pro",
-			Choices: []openai.ChatCompletionChoice{{
-				Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
-				FinishReason: "stop",
-			}},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
+func TestServiceDoDeepSeekReasoningReplay(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		model  string
+		replay ReasoningReplay
+		want   string
+	}{
+		{name: "legacy chat model auto", model: "deepseek-chat", want: "stored reasoning"},
+		{name: "legacy reasoner model auto", model: "deepseek-reasoner", want: "stored reasoning"},
+		{name: "known snapshot model auto", model: "deepseek-v4-pro", want: "stored reasoning"},
+		{name: "explicit none uses schema placeholder", model: "deepseek-chat", replay: ReasoningReplayNone, want: " "},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got struct {
+				Messages []struct {
+					Role             string            `json:"role"`
+					ReasoningContent string            `json:"reasoning_content"`
+					ToolCalls        []openai.ToolCall `json:"tool_calls"`
+				} `json:"messages"`
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Fatal(err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(openai.ChatCompletionResponse{ID: "x", Model: tt.model, Choices: []openai.ChatCompletionChoice{{
+					Message: openai.ChatCompletionMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop",
+				}}})
+			}))
+			defer server.Close()
 
-	u, _ := url.Parse(server.URL)
-	httpc := &http.Client{Transport: rewriteHostTransport{addr: u.Host}}
-	svc := &Service{
-		APIKey:   "k",
-		Model:    modelForTest("deepseek-v4-pro"),
-		ModelURL: "https://api.deepseek.com",
-		HTTPC:    httpc,
-	}
-
-	req := &llm.Request{
-		Messages: []llm.Message{
-			{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "weather?"}}},
-			{Role: llm.MessageRoleAssistant, Content: []llm.Content{
-				{Type: llm.ContentTypeThinking, Thinking: "I should call the weather tool."},
-				{Type: llm.ContentTypeToolUse, ID: "call_1", ToolName: "get_weather", ToolInput: []byte(`{"city":"Paris"}`)},
-			}},
-			{Role: llm.MessageRoleUser, Content: []llm.Content{{
-				Type: llm.ContentTypeToolResult, ToolUseID: "call_1",
-				ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "sunny"}},
-			}}},
-		},
-	}
-	if _, err := svc.Do(t.Context(), req); err != nil {
-		t.Fatalf("Do() error = %v", err)
-	}
-	if !strings.Contains(string(gotBody), `"reasoning_content":"I should call the weather tool."`) {
-		t.Errorf("expected real reasoning_content in request body, got: %s", gotBody)
+			u, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := &Service{
+				APIKey: "k", Model: modelForTest(tt.model), ModelURL: "https://api.deepseek.com",
+				HTTPC: &http.Client{Transport: rewriteHostTransport{addr: u.Host}}, ReasoningReplay: tt.replay,
+			}
+			_, err = svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{{
+				Role: llm.MessageRoleAssistant,
+				Content: []llm.Content{
+					{Type: llm.ContentTypeThinking, Thinking: "stored reasoning"},
+					{Type: llm.ContentTypeToolUse, ID: "call_1", ToolName: "x", ToolInput: json.RawMessage(`{}`)},
+				},
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Messages) != 1 || len(got.Messages[0].ToolCalls) != 1 || got.Messages[0].ReasoningContent != tt.want {
+				t.Fatalf("messages = %+v, want reasoning_content %q", got.Messages, tt.want)
+			}
+		})
 	}
 }
 
@@ -1979,6 +1985,154 @@ func TestServiceDoDeepSeekPlaceholderWhenNoThinking(t *testing.T) {
 	}
 	if !strings.Contains(string(gotBody), `"reasoning_content"`) {
 		t.Errorf("expected reasoning_content placeholder in body, got: %s", gotBody)
+	}
+}
+
+func TestServiceDoReasoningContentResponseRoundTrip(t *testing.T) {
+	calls := 0
+	var secondBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 1 {
+			_ = json.NewEncoder(w).Encode(openai.ChatCompletionResponse{ID: "first", Choices: []openai.ChatCompletionChoice{{
+				Message: openai.ChatCompletionMessage{
+					Role: "assistant", ReasoningContent: "Inspect the result.",
+					ToolCalls: []openai.ToolCall{{
+						ID: "call_1", Type: openai.ToolTypeFunction,
+						Function: openai.FunctionCall{Name: "x", Arguments: `{}`},
+					}},
+				},
+				FinishReason: "tool_calls",
+			}}})
+			return
+		}
+		secondBody = body
+		_ = json.NewEncoder(w).Encode(openai.ChatCompletionResponse{ID: "second", Choices: []openai.ChatCompletionChoice{{
+			Message: openai.ChatCompletionMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop",
+		}}})
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey: "k", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		ReasoningReplay: "reasoning_content",
+	}
+	user := llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "use x"}}}
+	first, err := svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{user}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Content) != 2 || first.Content[0].Thinking != "Inspect the result." {
+		t.Fatalf("first response content = %+v", first.Content)
+	}
+	toolResult := llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{
+		Type: llm.ContentTypeToolResult, ToolUseID: "call_1",
+		ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "done"}},
+	}}}
+	if _, err := svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{user, first.ToMessage(), toolResult}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(secondBody), `"reasoning_content":"Inspect the result."`) {
+		t.Fatalf("second request did not replay response reasoning: %s", secondBody)
+	}
+}
+
+func TestServiceDoReplaysReasoningContent(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(openai.ChatCompletionResponse{ID: "x", Choices: []openai.ChatCompletionChoice{{
+			Message: openai.ChatCompletionMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop",
+		}}})
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey: "k", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		ReasoningReplay: "reasoning_content",
+	}
+	req := &llm.Request{Messages: []llm.Message{
+		{Role: llm.MessageRoleAssistant, Content: []llm.Content{
+			{Type: llm.ContentTypeThinking, Thinking: "I should call the tool."},
+			{Type: llm.ContentTypeToolUse, ID: "call_1", ToolName: "x", ToolInput: []byte(`{}`)},
+		}},
+		{Role: llm.MessageRoleUser, Content: []llm.Content{{
+			Type: llm.ContentTypeToolResult, ToolUseID: "call_1",
+			ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "r"}},
+		}}},
+	}}
+	if _, err := svc.Do(t.Context(), req); err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if !strings.Contains(string(gotBody), `"reasoning_content":"I should call the tool."`) {
+		t.Fatalf("reasoning_content not replayed: %s", gotBody)
+	}
+}
+
+func TestServiceDoReasoningContentReplayAddsToolCallPlaceholder(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(openai.ChatCompletionResponse{ID: "x", Choices: []openai.ChatCompletionChoice{{
+			Message: openai.ChatCompletionMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop",
+		}}})
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey: "k", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		ReasoningReplay: "reasoning_content",
+	}
+	req := &llm.Request{Messages: []llm.Message{
+		{Role: llm.MessageRoleAssistant, Content: []llm.Content{{
+			Type: llm.ContentTypeToolUse, ID: "call_1", ToolName: "x", ToolInput: []byte(`{}`),
+		}}},
+		{Role: llm.MessageRoleUser, Content: []llm.Content{{
+			Type: llm.ContentTypeToolResult, ToolUseID: "call_1",
+			ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "r"}},
+		}}},
+	}}
+	if _, err := svc.Do(t.Context(), req); err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if !strings.Contains(string(gotBody), `"reasoning_content":" "`) {
+		t.Fatalf("reasoning replay placeholder missing: %s", gotBody)
+	}
+}
+
+func TestServiceDoDisabledReasoningReplayDoesNotAddPlaceholder(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(openai.ChatCompletionResponse{ID: "x", Choices: []openai.ChatCompletionChoice{{
+			Message: openai.ChatCompletionMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop",
+		}}})
+	}))
+	defer server.Close()
+
+	svc := &Service{
+		APIKey: "k", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		ReasoningReplay: "none",
+	}
+	req := &llm.Request{Messages: []llm.Message{
+		{Role: llm.MessageRoleAssistant, Content: []llm.Content{{
+			Type: llm.ContentTypeToolUse, ID: "call_1", ToolName: "x", ToolInput: []byte(`{}`),
+		}}},
+		{Role: llm.MessageRoleUser, Content: []llm.Content{{
+			Type: llm.ContentTypeToolResult, ToolUseID: "call_1",
+			ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "r"}},
+		}}},
+	}}
+	if _, err := svc.Do(t.Context(), req); err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if strings.Contains(string(gotBody), `"reasoning_content"`) {
+		t.Fatalf("disabled replay added placeholder: %s", gotBody)
 	}
 }
 

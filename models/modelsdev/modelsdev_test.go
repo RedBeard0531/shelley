@@ -1,6 +1,7 @@
 package modelsdev
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -81,7 +82,9 @@ func TestBestProviderForPath(t *testing.T) {
 	// Mirror the real opencode collision: two providers on one host with
 	// different paths and different image support for the same model id.
 	zen := prov("https://opencode.ai/zen/v1", "m", true)
+	zen.ID = "opencode"
 	zenGo := prov("https://opencode.ai/zen/go/v1", "m", false)
+	zenGo.ID = "opencode-go"
 	providers := []providerEntry{zen, zenGo}
 
 	cases := []struct {
@@ -108,6 +111,20 @@ func TestBestProviderForPath(t *testing.T) {
 				t.Errorf("chose %q; want %q", p.API, c.wantAPI)
 			}
 		})
+	}
+}
+
+func TestBestProviderForPathTieIsDeterministic(t *testing.T) {
+	first := prov("https://gateway.example/v1", "m", true)
+	first.ID = "first"
+	second := prov("https://gateway.example/v1", "m", false)
+	second.ID = "second"
+
+	for i, providers := range [][]providerEntry{{second, first}, {first, second}} {
+		got, ok := bestProviderForPath(providers, pathSegments("https://gateway.example/v1"), "m")
+		if !ok || got.ID != first.ID {
+			t.Fatalf("order %d: bestProviderForPath() = (%q, %v), want (%q, true)", i, got.ID, ok, first.ID)
+		}
 	}
 }
 
@@ -212,6 +229,114 @@ func TestLookupReasoningCapabilities(t *testing.T) {
 				t.Fatalf("LookupReasoningCapabilities() = (%+v, %v), want (%+v, %v)", got, found, tt.want, tt.found)
 			}
 		})
+	}
+}
+
+func TestLookupInterleavedReasoningField(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		model    string
+		want     string
+		found    bool
+	}{
+		{
+			name:     "gateway native Fireworks name",
+			endpoint: "https://llm.int.exe.xyz/v1",
+			model:    "accounts/fireworks/models/glm-5p2",
+			want:     "reasoning_content",
+			found:    true,
+		},
+		{
+			name:     "gateway native Fireworks Kimi name",
+			endpoint: "https://llm.int.exe.xyz/v1",
+			model:    "accounts/fireworks/models/kimi-k3",
+			want:     "reasoning_content",
+			found:    true,
+		},
+		{
+			name:     "public Fireworks slug matches final segment",
+			endpoint: "https://proxy.example/v1",
+			model:    "fireworks/kimi-k3",
+			want:     "reasoning_content",
+			found:    true,
+		},
+		{
+			name:     "bare Fireworks name matches final segment",
+			endpoint: "https://proxy.example/v1",
+			model:    "glm-5p2",
+			want:     "reasoning_content",
+			found:    true,
+		},
+		{
+			name:     "qualified OpenRouter Kimi does not inherit Fireworks metadata",
+			endpoint: "https://proxy.example/v1",
+			model:    "moonshotai/kimi-k3",
+		},
+		{
+			name:     "case-insensitive OpenRouter Kimi does not inherit Fireworks metadata",
+			endpoint: "https://proxy.example/v1",
+			model:    "MOONSHOTAI/KIMI-K3",
+		},
+		{
+			name:     "qualified OpenRouter DeepSeek does not inherit Fireworks metadata",
+			endpoint: "https://proxy.example/v1",
+			model:    "deepseek/deepseek-v4-pro-0813",
+		},
+		{
+			name:     "ambiguous bare Kimi is unknown",
+			endpoint: "https://proxy.example/v1",
+			model:    "kimi-k3",
+		},
+		{
+			name:     "known model without named field",
+			endpoint: "https://llm.int.exe.xyz/v1",
+			model:    "accounts/fireworks/models/gpt-oss-120b",
+		},
+		{name: "unknown", endpoint: "https://made-up.example", model: "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found := LookupInterleavedReasoningField(tt.endpoint, tt.model)
+			if found != tt.found || got != tt.want {
+				t.Fatalf("LookupInterleavedReasoningField() = (%q, %v), want (%q, %v)", got, found, tt.want, tt.found)
+			}
+		})
+	}
+}
+
+func TestInterleavedMetadataUnmarshal(t *testing.T) {
+	tests := []struct {
+		json string
+		want interleavedMetadata
+	}{
+		{json: `true`, want: interleavedMetadata{Supported: true}},
+		{json: `false`},
+		{json: `null`},
+		{json: `{"field":"reasoning_content"}`, want: interleavedMetadata{Supported: true, Field: "reasoning_content"}},
+	}
+	for _, tt := range tests {
+		var got interleavedMetadata
+		if err := json.Unmarshal([]byte(tt.json), &got); err != nil {
+			t.Fatalf("Unmarshal(%s): %v", tt.json, err)
+		}
+		if got != tt.want {
+			t.Fatalf("Unmarshal(%s) = %+v, want %+v", tt.json, got, tt.want)
+		}
+	}
+}
+
+func TestLookupInProviderPrefersExactTailKey(t *testing.T) {
+	exact := modelEntry{ReleaseDate: "exact"}
+	nested := modelEntry{ReleaseDate: "nested"}
+	provider := providerEntry{Models: map[string]modelEntry{
+		"model":        exact,
+		"vendor/model": nested,
+	}}
+
+	got, found := lookupInProvider(provider, "provider/model")
+	if !found || got.ReleaseDate != exact.ReleaseDate {
+		t.Fatalf("lookupInProvider() = (%+v, %v), want exact tail key", got, found)
 	}
 }
 

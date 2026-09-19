@@ -183,7 +183,11 @@ func oaiResponsesSvc(model oai.Model) func(baseURL, apiKey string, httpc *http.C
 
 func oaiResponsesSvcNamed(model oai.Model, providerName string) func(baseURL, apiKey string, httpc *http.Client) llm.Service {
 	return func(baseURL, apiKey string, httpc *http.Client) llm.Service {
-		s := &oai.ResponsesService{Model: model, APIKey: apiKey, HTTPC: httpc, MaxTokens: outputLimit(baseURL, model.URL, model.ModelName), ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: providerName}
+		s := &oai.ResponsesService{
+			Model: model, APIKey: apiKey, HTTPC: httpc,
+			MaxTokens:     outputLimit(baseURL, model.URL, model.ModelName),
+			ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: providerName,
+		}
 		if baseURL != "" {
 			s.ModelURL = baseURL + "/v1"
 		}
@@ -193,7 +197,10 @@ func oaiResponsesSvcNamed(model oai.Model, providerName string) func(baseURL, ap
 
 func oaiChatSvc(model oai.Model, providerName string) func(baseURL, apiKey string, httpc *http.Client) llm.Service {
 	return func(baseURL, apiKey string, httpc *http.Client) llm.Service {
-		s := &oai.Service{Model: model, APIKey: apiKey, HTTPC: httpc, MaxTokens: outputLimit(baseURL, model.URL, model.ModelName), ProviderName: providerName}
+		s := &oai.Service{
+			Model: model, APIKey: apiKey, HTTPC: httpc,
+			MaxTokens: outputLimit(baseURL, model.URL, model.ModelName), ProviderName: providerName,
+		}
 		if baseURL != "" {
 			s.ModelURL = baseURL + "/v1"
 		}
@@ -928,6 +935,7 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 			HTTPC:           m.httpc,
 			ProviderName:    "openai",
 			ReasoningEffort: model.ReasoningEffort,
+			ReasoningReplay: oai.ReasoningReplay(model.ReasoningReplay),
 		}
 	case "openai-responses":
 		service = &oai.ResponsesService{
@@ -947,6 +955,7 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 			ThinkingLevel:   llm.ThinkingLevelMedium,
 			ReasoningEffort: model.ReasoningEffort,
 			ProviderName:    "openai",
+			ReasoningReplay: oai.ReasoningReplay(model.ReasoningReplay),
 		}
 	case "gemini":
 		service = &gem.Service{

@@ -85,7 +85,7 @@ func TestResponsesReasoningStateStatelessRoundTrip(t *testing.T) {
 	}
 
 	assistant := got.ToMessage()
-	items := fromLLMMessageResponses(assistant)
+	items := fromLLMMessageResponses(assistant, responsesReasoningReplayEncrypted)
 	if len(items) != 3 {
 		t.Fatalf("replayed items = %d, want 3: %+v", len(items), items)
 	}
@@ -127,7 +127,7 @@ func TestResponsesReasoningStateStatelessRoundTrip(t *testing.T) {
 			{Type: llm.ContentTypeThinking, Text: "legacy display summary"},
 			{Type: llm.ContentTypeToolUse, ID: "call_legacy", ToolName: "legacy", ToolInput: json.RawMessage(`{}`)},
 		},
-	})
+	}, responsesReasoningReplayEncrypted)
 	if len(legacy) != 1 || legacy[0].Type != "function_call" || legacy[0].CallID != "call_legacy" {
 		t.Fatalf("legacy bare reasoning was not safely omitted: %+v", legacy)
 	}
@@ -142,9 +142,166 @@ func TestResponsesReasoningStateStatelessRoundTrip(t *testing.T) {
 				Text: "sunny",
 			}},
 		}},
-	})
+	}, responsesReasoningReplayEncrypted)
 	if len(toolResults) != 1 || toolResults[0].Type != "function_call_output" || toolResults[0].CallID != "call_weather" {
 		t.Fatalf("tool continuation = %+v", toolResults)
+	}
+}
+
+func TestResponsesServiceReplaysFireworksSummaryReasoning(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		replay ReasoningReplay
+		want   bool
+	}{
+		{name: "explicit reasoning_content", replay: ReasoningReplayContent, want: true},
+		{name: "auto from models.dev", want: true},
+		{name: "disabled", replay: ReasoningReplayNone},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got responsesRequest
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(responsesResponse{
+					ID: "resp_ok", Status: "completed", Model: "glm-5p3",
+					Output: []responsesOutputItem{{
+						Type: "message", Role: "assistant",
+						Content: []responsesContent{{Type: "output_text", Text: "ok"}},
+					}},
+				})
+			}))
+			defer server.Close()
+
+			svc := &ResponsesService{
+				APIKey: "test-key", Model: modelForTest("accounts/fireworks/models/glm-5p3"), ModelURL: server.URL,
+				ProviderName: "fireworks", ReasoningReplay: tt.replay,
+			}
+			assistant := svc.toLLMResponseFromResponses(&responsesResponse{
+				ID: "resp_first", Status: "completed", Model: "glm-5p3",
+				Output: []responsesOutputItem{
+					{ID: "rs_1", Type: "reasoning", Summary: []responsesSummary{{Type: "summary_text", Text: "Call the tool."}}},
+					{Type: "function_call", CallID: "call_1", Name: "x", Arguments: `{}`},
+				},
+			}, nil).ToMessage()
+			_, err := svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{
+				assistant,
+				{Role: llm.MessageRoleUser, Content: []llm.Content{{
+					Type: llm.ContentTypeToolResult, ToolUseID: "call_1",
+					ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "done"}},
+				}}},
+			}})
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+
+			found := false
+			for _, item := range got.Input {
+				if item.Type == "reasoning" {
+					found = true
+					if item.ID != "rs_1" || item.Summary == nil || len(*item.Summary) != 1 || (*item.Summary)[0].Text != "Call the tool." {
+						t.Fatalf("reasoning input = %+v", item)
+					}
+				}
+			}
+			if found != tt.want {
+				t.Fatalf("reasoning item present = %v, want %v; input=%+v", found, tt.want, got.Input)
+			}
+		})
+	}
+}
+
+func TestResponsesServiceDoesNotReplayOpenAIEncryptedReasoningInReasoningContentMode(t *testing.T) {
+	for _, providerName := range []string{"fireworks", "openai"} {
+		t.Run(providerName, func(t *testing.T) {
+			var got responsesRequest
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Fatal(err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(responsesResponse{
+					ID: "resp_ok", Status: "completed", Model: "glm-5p3",
+					Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+				})
+			}))
+			defer server.Close()
+
+			svc := &ResponsesService{
+				APIKey: "test-key", Model: modelForTest("glm-5p3"), ModelURL: server.URL,
+				ProviderName: providerName, ReasoningReplay: "reasoning_content",
+			}
+			_, err := svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{{
+				Role: llm.MessageRoleAssistant,
+				Content: []llm.Content{
+					{
+						Type: llm.ContentTypeThinking,
+						OpenAIResponsesReasoning: &llm.OpenAIResponsesReasoningMetadata{
+							ID: "rs_openai", EncryptedContent: "private-openai-state",
+							Summary: []llm.OpenAIResponsesReasoningSummary{{Type: "summary_text", Text: "Private."}},
+						},
+					},
+					{
+						Type: llm.ContentTypeThinking,
+						OpenAIResponsesReasoning: &llm.OpenAIResponsesReasoningMetadata{
+							ID:      "rs_fireworks",
+							Summary: []llm.OpenAIResponsesReasoningSummary{{Type: "summary_text", Text: "Call the tool."}},
+						},
+					},
+				},
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reasoning []responsesInputItem
+			for _, item := range got.Input {
+				if item.Type == "reasoning" {
+					reasoning = append(reasoning, item)
+				}
+			}
+			if len(reasoning) != 1 || reasoning[0].ID != "rs_fireworks" || reasoning[0].EncryptedContent != "" {
+				t.Fatalf("reasoning replay = %+v, want reasoning_content summary only", reasoning)
+			}
+		})
+	}
+}
+
+func TestResponsesServiceExplicitDisableStripsOpenAIReasoning(t *testing.T) {
+	var got responsesRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(responsesResponse{
+			ID: "resp_ok", Status: "completed", Model: "gpt-5.4",
+			Output: []responsesOutputItem{{Type: "message", Role: "assistant", Content: []responsesContent{{Type: "output_text", Text: "ok"}}}},
+		})
+	}))
+	defer server.Close()
+
+	svc := &ResponsesService{
+		APIKey: "test-key", Model: GPT54, ModelURL: server.URL,
+		ProviderName: "openai", ReasoningReplay: "none",
+	}
+	_, err := svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{{
+		Role: llm.MessageRoleAssistant,
+		Content: []llm.Content{{
+			Type: llm.ContentTypeThinking,
+			OpenAIResponsesReasoning: &llm.OpenAIResponsesReasoningMetadata{
+				ID: "rs_private", EncryptedContent: "private-state",
+			},
+		}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range got.Input {
+		if item.Type == "reasoning" {
+			t.Fatalf("explicit disable replayed reasoning: %+v", item)
+		}
 	}
 }
 
@@ -234,7 +391,7 @@ func TestResponsesParallelToolCallContinuation(t *testing.T) {
 		t.Fatalf("parallel tool response = %+v", response)
 	}
 
-	assistantItems := fromLLMMessageResponses(response.ToMessage())
+	assistantItems := fromLLMMessageResponses(response.ToMessage(), responsesReasoningReplayEncrypted)
 	if len(assistantItems) != 2 || assistantItems[0].CallID != "call_1" || assistantItems[1].CallID != "call_2" {
 		t.Fatalf("parallel function calls = %+v", assistantItems)
 	}
@@ -244,7 +401,7 @@ func TestResponsesParallelToolCallContinuation(t *testing.T) {
 			{Type: llm.ContentTypeToolResult, ToolUseID: "call_1", ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "one"}}},
 			{Type: llm.ContentTypeToolResult, ToolUseID: "call_2", ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "two"}}},
 		},
-	})
+	}, responsesReasoningReplayEncrypted)
 	if len(resultItems) != 2 || resultItems[0].CallID != "call_1" || resultItems[1].CallID != "call_2" {
 		t.Fatalf("parallel function outputs = %+v", resultItems)
 	}

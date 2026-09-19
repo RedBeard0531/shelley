@@ -28,6 +28,9 @@ type ModelAPI struct {
 	MaxTokens       int64  `json:"max_tokens"`
 	Tags            string `json:"tags"` // Comma-separated tags (e.g., "slug" for slug generation)
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// ReasoningReplay is "auto", "none", or "reasoning_content".
+	ReasoningReplay         oai.ReasoningReplay `json:"reasoning_replay"`
+	ResolvedReasoningReplay oai.ReasoningReplay `json:"resolved_reasoning_replay,omitempty"`
 	// ImageSupport is one of "auto", "yes", or "no". "auto" is resolved
 	// automatically from the model's endpoint and name.
 	ImageSupport      string `json:"image_support"`
@@ -41,32 +44,34 @@ type ModelAPI struct {
 
 // CreateModelRequest is the request body for creating a model.
 type CreateModelRequest struct {
-	DisplayName      string `json:"display_name"`
-	ProviderType     string `json:"provider_type"`
-	Endpoint         string `json:"endpoint"`
-	APIKey           string `json:"api_key"`
-	ModelName        string `json:"model_name"`
-	MaxTokens        int64  `json:"max_tokens"`
-	Tags             string `json:"tags"` // Comma-separated tags
-	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
-	ImageSupport     string `json:"image_support"`     // "auto"|"yes"|"no"; empty = "auto"
-	ReasoningSupport string `json:"reasoning_support"` // "auto"|"yes"|"no"; empty = "auto"
-	ReasoningMap     string `json:"reasoning_map"`     // JSON map of Shelley level to provider-supported level
+	DisplayName      string              `json:"display_name"`
+	ProviderType     string              `json:"provider_type"`
+	Endpoint         string              `json:"endpoint"`
+	APIKey           string              `json:"api_key"`
+	ModelName        string              `json:"model_name"`
+	MaxTokens        int64               `json:"max_tokens"`
+	Tags             string              `json:"tags"` // Comma-separated tags
+	ReasoningEffort  string              `json:"reasoning_effort,omitempty"`
+	ReasoningReplay  oai.ReasoningReplay `json:"reasoning_replay,omitempty"`
+	ImageSupport     string              `json:"image_support"`     // "auto"|"yes"|"no"; empty = "auto"
+	ReasoningSupport string              `json:"reasoning_support"` // "auto"|"yes"|"no"; empty = "auto"
+	ReasoningMap     string              `json:"reasoning_map"`     // JSON map of Shelley level to provider-supported level
 }
 
 // UpdateModelRequest is the request body for updating a model.
 type UpdateModelRequest struct {
-	DisplayName      string  `json:"display_name"`
-	ProviderType     string  `json:"provider_type"`
-	Endpoint         string  `json:"endpoint"`
-	APIKey           string  `json:"api_key"` // Empty string means keep existing
-	ModelName        string  `json:"model_name"`
-	MaxTokens        *int64  `json:"max_tokens"`
-	Tags             string  `json:"tags"` // Comma-separated tags
-	ReasoningEffort  *string `json:"reasoning_effort,omitempty"`
-	ImageSupport     string  `json:"image_support"`     // "auto"|"yes"|"no"; empty preserves existing
-	ReasoningSupport string  `json:"reasoning_support"` // "auto"|"yes"|"no"; empty preserves existing
-	ReasoningMap     string  `json:"reasoning_map"`
+	DisplayName      string               `json:"display_name"`
+	ProviderType     string               `json:"provider_type"`
+	Endpoint         string               `json:"endpoint"`
+	APIKey           string               `json:"api_key"` // Empty string means keep existing
+	ModelName        string               `json:"model_name"`
+	MaxTokens        *int64               `json:"max_tokens"`
+	Tags             string               `json:"tags"` // Comma-separated tags
+	ReasoningEffort  *string              `json:"reasoning_effort,omitempty"`
+	ReasoningReplay  *oai.ReasoningReplay `json:"reasoning_replay,omitempty"`
+	ImageSupport     string               `json:"image_support"`     // "auto"|"yes"|"no"; empty preserves existing
+	ReasoningSupport string               `json:"reasoning_support"` // "auto"|"yes"|"no"; empty preserves existing
+	ReasoningMap     string               `json:"reasoning_map"`
 }
 
 // validImageSupport returns the canonical value or an error.
@@ -87,6 +92,17 @@ func validImageSupport(v string) (string, error) {
 
 func validReasoningSupport(v string) (string, error) {
 	return validSupportSetting("reasoning_support", v)
+}
+
+func validReasoningReplay(v oai.ReasoningReplay) (oai.ReasoningReplay, error) {
+	switch v {
+	case "", oai.ReasoningReplayAuto:
+		return oai.ReasoningReplayAuto, nil
+	case oai.ReasoningReplayNone, oai.ReasoningReplayContent:
+		return v, nil
+	default:
+		return "", fmt.Errorf("reasoning_replay must be one of 'auto', 'none', or 'reasoning_content'; got %q", v)
+	}
 }
 
 func validReasoningMap(raw string) error {
@@ -116,33 +132,37 @@ func customMaxTokens(v int64) (int64, error) {
 }
 
 type TestModelRequest struct {
-	ModelID          string  `json:"model_id,omitempty"` // If provided, use stored API key
-	ProviderType     string  `json:"provider_type"`
-	Endpoint         string  `json:"endpoint"`
-	APIKey           string  `json:"api_key"`
-	ModelName        string  `json:"model_name"`
-	MaxTokens        *int64  `json:"max_tokens"`
-	ReasoningSupport string  `json:"reasoning_support"`
-	ReasoningMap     string  `json:"reasoning_map"`
-	ReasoningEffort  *string `json:"reasoning_effort,omitempty"`
+	ModelID          string               `json:"model_id,omitempty"` // If provided, use stored API key
+	ProviderType     string               `json:"provider_type"`
+	Endpoint         string               `json:"endpoint"`
+	APIKey           string               `json:"api_key"`
+	ModelName        string               `json:"model_name"`
+	MaxTokens        *int64               `json:"max_tokens"`
+	ReasoningSupport string               `json:"reasoning_support"`
+	ReasoningMap     string               `json:"reasoning_map"`
+	ReasoningEffort  *string              `json:"reasoning_effort,omitempty"`
+	ReasoningReplay  *oai.ReasoningReplay `json:"reasoning_replay,omitempty"`
 }
 
 func toModelAPI(m generated.Model) ModelAPI {
+	reasoningReplay := oai.ReasoningReplay(m.ReasoningReplay)
 	return ModelAPI{
-		ModelID:           m.ModelID,
-		DisplayName:       m.DisplayName,
-		ProviderType:      m.ProviderType,
-		Endpoint:          m.Endpoint,
-		APIKey:            m.ApiKey,
-		ModelName:         m.ModelName,
-		MaxTokens:         m.MaxTokens,
-		Tags:              m.Tags,
-		ReasoningEffort:   m.ReasoningEffort,
-		ImageSupport:      m.ImageSupport,
-		ReasoningSupport:  m.ReasoningSupport,
-		ReasoningMap:      m.ReasoningMap,
-		SupportsReasoning: models.ResolveSupportsReasoning(m.Endpoint, m.ModelName, m.ReasoningSupport),
-		SupportsImages:    models.ResolveSupportsImages(m.Endpoint, m.ModelName, m.ImageSupport),
+		ModelID:                 m.ModelID,
+		DisplayName:             m.DisplayName,
+		ProviderType:            m.ProviderType,
+		Endpoint:                m.Endpoint,
+		APIKey:                  m.ApiKey,
+		ModelName:               m.ModelName,
+		MaxTokens:               m.MaxTokens,
+		Tags:                    m.Tags,
+		ReasoningEffort:         m.ReasoningEffort,
+		ReasoningReplay:         reasoningReplay,
+		ResolvedReasoningReplay: oai.ResolveReasoningReplay(m.Endpoint, m.ModelName, reasoningReplay),
+		ImageSupport:            m.ImageSupport,
+		ReasoningSupport:        m.ReasoningSupport,
+		ReasoningMap:            m.ReasoningMap,
+		SupportsReasoning:       models.ResolveSupportsReasoning(m.Endpoint, m.ModelName, m.ReasoningSupport),
+		SupportsImages:          models.ResolveSupportsImages(m.Endpoint, m.ModelName, m.ImageSupport),
 	}
 }
 
@@ -165,8 +185,8 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiModels := make([]ModelAPI, len(models))
-	for i, m := range models {
-		apiModels[i] = toModelAPI(m)
+	for i, model := range models {
+		apiModels[i] = toModelAPI(model)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -217,6 +237,11 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	reasoningReplay, err := validReasoningReplay(req.ReasoningReplay)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	model, err := s.db.CreateModel(r.Context(), generated.CreateModelParams{
 		ModelID:          modelID,
@@ -231,6 +256,7 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 		ImageSupport:     imageSupport,
 		ReasoningSupport: reasoningSupport,
 		ReasoningMap:     req.ReasoningMap,
+		ReasoningReplay:  string(reasoningReplay),
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create model: %v", err), http.StatusInternalServerError)
@@ -342,6 +368,14 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request, model
 	if req.ReasoningEffort != nil {
 		reasoningEffort = *req.ReasoningEffort
 	}
+	reasoningReplay := oai.ReasoningReplay(existing.ReasoningReplay)
+	if req.ReasoningReplay != nil {
+		reasoningReplay, err = validReasoningReplay(*req.ReasoningReplay)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	maxTokens := existing.MaxTokens
 	if req.MaxTokens != nil {
 		if maxTokens, err = customMaxTokens(*req.MaxTokens); err != nil {
@@ -362,6 +396,7 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request, model
 		ImageSupport:     imageSupport,
 		ReasoningSupport: reasoningSupport,
 		ReasoningMap:     req.ReasoningMap,
+		ReasoningReplay:  string(reasoningReplay),
 		ModelID:          modelID,
 	})
 	if err != nil {
@@ -426,7 +461,6 @@ func (s *Server) handleDuplicateModel(w http.ResponseWriter, r *http.Request, mo
 		displayName = source.DisplayName + " (copy)"
 	}
 
-	// Create the duplicate with the same API key
 	model, err := s.db.CreateModel(r.Context(), generated.CreateModelParams{
 		ModelID:          newModelID,
 		DisplayName:      displayName,
@@ -440,6 +474,7 @@ func (s *Server) handleDuplicateModel(w http.ResponseWriter, r *http.Request, mo
 		ImageSupport:     source.ImageSupport,
 		ReasoningSupport: source.ReasoningSupport,
 		ReasoningMap:     source.ReasoningMap,
+		ReasoningReplay:  source.ReasoningReplay,
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to duplicate model: %v", err), http.StatusInternalServerError)
@@ -486,6 +521,10 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 		if req.MaxTokens == nil {
 			req.MaxTokens = &model.MaxTokens
 		}
+		if req.ReasoningReplay == nil {
+			reasoningReplay := oai.ReasoningReplay(model.ReasoningReplay)
+			req.ReasoningReplay = &reasoningReplay
+		}
 	}
 
 	if req.ProviderType == "" || req.Endpoint == "" || req.APIKey == "" || req.ModelName == "" {
@@ -506,7 +545,14 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 	if req.ReasoningEffort != nil {
 		reasoningEffort = *req.ReasoningEffort
 	}
-
+	reasoningReplay := oai.ReasoningReplayAuto
+	if req.ReasoningReplay != nil {
+		reasoningReplay, err = validReasoningReplay(*req.ReasoningReplay)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	// Create the appropriate service based on provider type
 	var service llm.Service
 	switch req.ProviderType {
@@ -524,6 +570,7 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 			ModelURL:        req.Endpoint,
 			MaxTokens:       int(maxTokens),
 			ReasoningEffort: reasoningEffort,
+			ReasoningReplay: reasoningReplay,
 			Model: oai.Model{
 				UserName:         "",
 				ModelName:        req.ModelName,
@@ -559,6 +606,7 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 			// medium is the default when no explicit override is given.
 			ThinkingLevel:   llm.ThinkingLevelMedium,
 			ReasoningEffort: reasoningEffort,
+			ReasoningReplay: reasoningReplay,
 		}
 	default:
 		http.Error(w, "Invalid provider_type", http.StatusBadRequest)
