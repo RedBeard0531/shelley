@@ -26,7 +26,10 @@ test.describe("Markdown rendering", () => {
     await expect(agent.locator("code")).toContainText("code");
   });
 
-  test("highlights bundled languages and aliases without changing plain fences", async ({ page, request }) => {
+  test("highlights bundled languages and aliases without changing plain fences", async ({
+    page,
+    request,
+  }) => {
     const highlightedFences = [
       ["elixir", "answer = 42\n"],
       ["haskell", "answer :: Int\nanswer = 42\n"],
@@ -50,9 +53,27 @@ test.describe("Markdown rendering", () => {
     const blocks = page.locator(".message-agent").last().locator("pre > code");
     await expect(blocks).toHaveCount(highlightedFences.length + 2, { timeout: 30000 });
 
+    // Highlighting is deferred until a block enters the scrollport (see the
+    // next test). These nine fences no longer all fit on screen at once --
+    // each one now carries a language/copy header -- so the topmost ones sit
+    // above the fold and stay deliberately unhighlighted. Scroll each block
+    // in before asserting on it. The wheel gesture disarms auto-follow first,
+    // exactly as the deferral test does, or its rAF pin snaps back to the
+    // bottom.
+    const scrollTo = async (index: number) => {
+      await page.evaluate((i) => {
+        const container = document.querySelector(".messages-container");
+        container?.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
+        const agents = document.querySelectorAll(".message-agent");
+        const last = agents[agents.length - 1];
+        last?.querySelectorAll("pre > code")[i]?.scrollIntoView({ block: "center" });
+      }, index);
+    };
+
     for (const [index, [language, source]] of highlightedFences.entries()) {
       const block = blocks.nth(index);
       await expect(block).toHaveClass(`language-${language}`);
+      await scrollTo(index);
       const tokens = block.locator(".shelley-code-token");
       await expect(tokens.first()).toBeAttached({ timeout: 30000 });
       expect(await block.textContent()).toBe(source);
@@ -60,6 +81,10 @@ test.describe("Markdown rendering", () => {
 
     const unknown = blocks.nth(highlightedFences.length);
     const unlabeled = blocks.nth(highlightedFences.length + 1);
+    // Scroll these in too, so "no tokens" means the highlighter declined them
+    // rather than never having looked.
+    await scrollTo(highlightedFences.length);
+    await scrollTo(highlightedFences.length + 1);
     await expect(unknown).toHaveClass("language-unknown-language");
     expect(await unlabeled.getAttribute("class")).toBeNull();
     expect(await unknown.textContent()).toBe(unknownSource);
@@ -68,6 +93,8 @@ test.describe("Markdown rendering", () => {
     await expect(unlabeled.locator(".shelley-code-token")).toHaveCount(0);
 
     const tokens = blocks.nth(0).locator(".shelley-code-token");
+    await scrollTo(0);
+    await expect(tokens.first()).toBeAttached({ timeout: 30000 });
     const tokenCount = await tokens.count();
     const lightColor = await tokens.first().evaluate((token) => getComputedStyle(token).color);
     await page.locator("html").evaluate((root) => root.classList.toggle("dark", true));
