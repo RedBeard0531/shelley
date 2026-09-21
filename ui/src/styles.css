@@ -8455,7 +8455,7 @@ svg {
 }
 
 .command-palette-item-title {
-  font-size: 0.875rem;
+  font-size: 1rem;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
