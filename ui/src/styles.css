@@ -7300,6 +7300,98 @@ svg {
   min-width: 0;
 }
 
+.tour-file-heading {
+  margin-top: 0.125rem;
+}
+
+.diff-viewer-tour-contents-tree .tour-change-row {
+  gap: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  cursor: default;
+}
+
+.tour-visibility-control,
+.tour-change-link {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.tour-visibility-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  flex: 0 0 16px;
+  padding: 0 2px;
+}
+
+button.tour-visibility-control,
+.tour-change-link {
+  cursor: pointer;
+}
+
+button.tour-visibility-control:hover .tour-visibility-icon {
+  color: inherit;
+}
+
+button.tour-visibility-control:focus-visible,
+.tour-change-link:focus-visible {
+  outline: 1px solid var(--primary);
+  outline-offset: 1px;
+  border-radius: 0.125rem;
+}
+
+.tour-change-link {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.2rem 0 0.2rem 0.35rem;
+  text-align: left;
+}
+
+.tour-visibility-icon {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  color: var(--text-secondary);
+}
+
+.tour-change-row.active .tour-visibility-icon {
+  color: inherit;
+}
+
+.tour-change-row .tour-change-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: inherit;
+  color: inherit;
+}
+
+.tour-change-collapsed:not(.active) {
+  color: var(--text-secondary);
+}
+
+.tour-trivial-label {
+  flex-shrink: 0;
+  padding: 0.0625rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: inherit;
+  font-family: var(--font-sans, sans-serif);
+  font-size: 0.625rem;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
 .tour-file-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -7319,7 +7411,7 @@ svg {
 
 .diff-viewer-tour-contents-tree .diff-tree-decoration,
 .diff-viewer-tour-contents-tree .diff-tree-row.active .diff-tree-decoration {
-  font-size: 0.5625rem;
+  font-size: inherit;
   background: transparent;
 }
 
