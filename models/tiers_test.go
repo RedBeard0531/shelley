@@ -16,11 +16,32 @@ func TestAssignTiers(t *testing.T) {
 		}
 	})
 
-	t.Run("Astra and Sol remain peers", func(t *testing.T) {
-		tiers := AssignTiers([]string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"})
-		for _, id := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+	t.Run("GPT-6 variants shadow only their lineages", func(t *testing.T) {
+		ids := []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+		tiers := AssignTiers(ids)
+		for _, id := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-terra"} {
 			if tiers[id] != Tier1 {
 				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier1)
+			}
+		}
+		for _, id := range []string{"gpt-5.6-sol", "gpt-5.6-luna"} {
+			if tiers[id] != Tier2 {
+				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier2)
+			}
+		}
+	})
+
+	t.Run("GPT-6 variants directly shadow older models without intermediates", func(t *testing.T) {
+		ids := []string{"gpt-6-sol", "gpt-5.5", "gpt-5.4", "gpt-6-luna", "gpt-5.4-nano", "gpt-5.3-codex", "claude-haiku-4.5"}
+		tiers := AssignTiers(ids)
+		for _, id := range []string{"gpt-6-sol", "gpt-6-luna"} {
+			if tiers[id] != Tier1 {
+				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier1)
+			}
+		}
+		for _, id := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-nano", "gpt-5.3-codex", "claude-haiku-4.5"} {
+			if tiers[id] != Tier2 {
+				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier2)
 			}
 		}
 	})

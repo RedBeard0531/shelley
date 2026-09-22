@@ -249,6 +249,16 @@ func TestLookupReasoningCapabilities(t *testing.T) {
 		want     ReasoningCapabilities
 	}{
 		{
+			name:     "GPT-6 Sol effort levels",
+			endpoint: "https://gateway.example/openai/v1",
+			model:    "gpt-6-sol",
+			found:    true,
+			want: ReasoningCapabilities{Supported: true, Levels: []llm.ThinkingLevel{
+				llm.ThinkingLevelOff, llm.ThinkingLevelLow, llm.ThinkingLevelMedium,
+				llm.ThinkingLevelHigh, llm.ThinkingLevelXHigh, llm.ThinkingLevelMax,
+			}},
+		},
+		{
 			name:     "gateway model resolves by first-party name",
 			endpoint: "https://gateway.example/openai/v1",
 			model:    "gpt-5.6-sol",
@@ -409,6 +419,8 @@ func TestLookupReleaseDate(t *testing.T) {
 		want     string
 	}{
 		{"https://llm.int.exe.xyz/v1/messages", "claude-haiku-4-5", "2025-10-15"},
+		{"https://llm.int.exe.xyz/v1", "gpt-6-sol", "2026-09-22"},
+		{"https://llm.int.exe.xyz/v1", "gpt-6-luna", "2026-09-22"},
 		{"https://llm.int.exe.xyz/v1", "gpt-5.6-luna", "2026-07-09"},
 		{"https://llm.int.exe.xyz/v1", "accounts/fireworks/models/deepseek-v4-flash-0731", "2026-07-31"},
 	} {
@@ -435,6 +447,8 @@ func TestLookupCost(t *testing.T) {
 		{"openai dated", "https://llm.int.exe.xyz/v1/responses", "gpt-5.5-2026-04-23", true, Cost{Input: 5, Output: 30, CacheRead: 0.5}},
 		{"openai undated", "", "gpt-5.3-codex", true, Cost{Input: 1.75, Output: 14, CacheRead: 0.175}},
 		{"astra via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6-astra", true, Cost{Input: 10, Output: 50, CacheRead: 1, CacheWrite: 12.5}},
+		{"sol via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6-sol", true, Cost{Input: 2, Output: 10, CacheRead: 0.2, CacheWrite: 2.5}},
+		{"luna via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6-luna", true, Cost{Input: 0.1, Output: 0.5, CacheRead: 0.01, CacheWrite: 0.125}},
 		{"fireworks full path", "", "accounts/fireworks/models/kimi-k2p6", true, Cost{Input: 0.95, Output: 4, CacheRead: 0.16}},
 		{"fireworks glm-5p3", "", "accounts/fireworks/models/glm-5p3", true, Cost{Input: 1.4, Output: 4.4, CacheRead: 0.26}},
 		{"fireworks glm-5p3-flash", "", "accounts/fireworks/models/glm-5p3-flash", true, Cost{Input: 0.15, Output: 0.5, CacheRead: 0.03}},
@@ -489,6 +503,7 @@ func TestLookupOutputLimit(t *testing.T) {
 		found    bool
 	}{
 		{"OpenAI endpoint", "https://api.openai.com/v1", "gpt-5.4", 128000, true},
+		{"GPT-6 Luna", "https://api.openai.com/v1", "gpt-6-luna", 128000, true},
 		{"Google endpoint", "https://generativelanguage.googleapis.com/v1beta", "gemini-3-flash-preview", 65536, true},
 		{"Fireworks endpoint", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/gpt-oss-120b", 32768, true},
 		{"gateway falls back by model name", "https://llm.int.exe.xyz/v1", "gpt-5.4", 128000, true},
@@ -512,6 +527,7 @@ func TestLookupContextLimit(t *testing.T) {
 		want     int
 		found    bool
 	}{
+		{"OpenAI clamps GPT-6 to the context pricing tier", "https://api.openai.com/v1", "gpt-6-sol", 272000, true},
 		{"OpenAI clamps to the context pricing tier", "https://api.openai.com/v1", "gpt-5.6-sol", 272000, true},
 		{"Anthropic 1M has no tier", "https://api.anthropic.com", "claude-opus-5", 1000000, true},
 		{"Anthropic 200k", "https://api.anthropic.com", "claude-opus-4-5-20251101", 200000, true},
@@ -535,6 +551,13 @@ func TestLookupModalities(t *testing.T) {
 		want     Modalities
 		wantOK   bool
 	}{
+		{
+			name:     "GPT-6 Sol multimodal",
+			endpoint: "https://api.openai.com/v1",
+			model:    "gpt-6-sol",
+			want:     Modalities{Input: []string{"text", "image", "pdf"}, Output: []string{"text"}},
+			wantOK:   true,
+		},
 		{
 			name:     "openai multimodal",
 			endpoint: "https://api.openai.com/v1",

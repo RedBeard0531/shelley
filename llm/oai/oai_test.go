@@ -2180,6 +2180,8 @@ func TestServiceSupportedReasoningLevels(t *testing.T) {
 		want  string
 	}{
 		{name: "GPT-6 Astra", model: GPT6Astra, want: "low,medium,high,xhigh,max"},
+		{name: "GPT-6 Sol", model: GPT6Sol, want: "off,low,medium,high,xhigh,max"},
+		{name: "GPT-6 Luna", model: GPT6Luna, want: "off,low,medium,high,xhigh,max"},
 		{name: "GPT 5.6", model: GPT56Sol, want: "off,low,medium,high,xhigh,max"},
 		{name: "unknown", model: Model{ModelName: "totally-unknown-model"}, want: ""},
 	}
@@ -2227,6 +2229,8 @@ func TestServiceReasoningEffort(t *testing.T) {
 		{name: "svc high", svcLevel: llm.ThinkingLevelHigh, wantEffort: "high"},
 		{name: "svc xhigh clamped to high", svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
 		{name: "svc max clamped to high", svcLevel: llm.ThinkingLevelMax, wantEffort: "high"},
+		{name: "gpt-6 sol off sends none", model: GPT6Sol, reqLevel: llm.ThinkingLevelOff, wantEffort: "none"},
+		{name: "gpt-6 luna max verbatim", model: GPT6Luna, reqLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "gpt-5.6 minimal rounds to low", model: GPT56Sol, svcLevel: llm.ThinkingLevelMinimal, wantEffort: "low"},
 		{name: "gpt-5.6 off sends none", model: GPT56Sol, reqLevel: llm.ThinkingLevelOff, wantEffort: "none"},
 		{name: "GLM low rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelLow, wantEffort: "high"},

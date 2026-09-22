@@ -20,6 +20,8 @@ func TestModelCostsHandler(t *testing.T) {
 		`{"model":"claude-opus-4-6","url":"https://llm.int.exe.xyz/v1/messages"},` +
 		`{"model":"gpt-5.5-2026-04-23","url":"https://llm.int.exe.xyz/v1/responses"},` +
 		`{"model":"gpt-6-astra","url":"https://llm.int.exe.xyz/v1/responses"},` +
+		`{"model":"gpt-6-sol","url":"https://llm.int.exe.xyz/v1/responses"},` +
+		`{"model":"gpt-6-luna","url":"https://llm.int.exe.xyz/v1/responses"},` +
 		`{"model":"predictable-v1"}]}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/model-costs", strings.NewReader(body))
@@ -44,6 +46,14 @@ func TestModelCostsHandler(t *testing.T) {
 	astra := res.Costs["gpt-6-astra"]
 	if astra == nil || astra.Input != 10 || astra.Output != 50 || astra.CacheRead != 1 || astra.CacheWrite != 12.5 {
 		t.Errorf("gpt-6-astra = %+v, want 10/50/1/12.5", astra)
+	}
+	sol := res.Costs["gpt-6-sol"]
+	if sol == nil || sol.Input != 2 || sol.Output != 10 || sol.CacheRead != 0.2 || sol.CacheWrite != 2.5 {
+		t.Errorf("gpt-6-sol = %+v, want 2/10/0.2/2.5", sol)
+	}
+	luna := res.Costs["gpt-6-luna"]
+	if luna == nil || luna.Input != 0.1 || luna.Output != 0.5 || luna.CacheRead != 0.01 || luna.CacheWrite != 0.125 {
+		t.Errorf("gpt-6-luna = %+v, want 0.1/0.5/0.01/0.125", luna)
 	}
 	if got, ok := res.Costs["predictable-v1"]; !ok || got != nil {
 		t.Errorf("predictable-v1 = %+v (present %v), want explicit null", got, ok)
