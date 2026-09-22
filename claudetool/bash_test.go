@@ -237,87 +237,56 @@ func TestBashTool(t *testing.T) {
 	})
 }
 
-func TestChainedCdHint(t *testing.T) {
+func TestChainedCdLeavesDir(t *testing.T) {
+	const wd = "/work/project"
 	tests := []struct {
 		name  string
 		paths []string
-		wd    string
-		want  string
-		avoid string
+		want  bool
 	}{
-		{
-			name:  "current directory relative path",
-			paths: []string{"."},
-			wd:    "/work/project",
-			want:  "Drop the redundant `cd`",
-			avoid: "Prefer calling the change_dir tool",
-		},
-		{
-			name:  "current directory absolute path",
-			paths: []string{"/work/project"},
-			wd:    "/work/project",
-			want:  "Drop the redundant `cd`",
-			avoid: "Prefer calling the change_dir tool",
-		},
-		{
-			name:  "multiple directory changes",
-			paths: []string{".", "/tmp"},
-			wd:    "/work/project",
-			want:  "Prefer calling the change_dir tool",
-		},
+		{name: "no chained cd", paths: nil, want: false},
+		{name: "current directory relative path", paths: []string{"."}, want: false},
+		{name: "current directory absolute path", paths: []string{"/work/project"}, want: false},
+		{name: "different directory", paths: []string{"/tmp"}, want: true},
+		{name: "current then different", paths: []string{".", "/tmp"}, want: true},
+		{name: "non-literal path", paths: []string{""}, want: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := chainedCdHint(tc.paths, tc.wd)
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("hint %q does not contain %q", got, tc.want)
-			}
-			if tc.avoid != "" && strings.Contains(got, tc.avoid) {
-				t.Errorf("hint %q unexpectedly contains %q", got, tc.avoid)
+			if got := chainedCdLeavesDir(tc.paths, wd); got != tc.want {
+				t.Errorf("chainedCdLeavesDir(%q, %q) = %v, want %v", tc.paths, wd, got, tc.want)
 			}
 		})
 	}
 }
 
 func TestBashChainedCdHint(t *testing.T) {
-	tool := (&BashTool{WorkingDir: NewMutableWorkingDir(t.TempDir())}).Tool()
-
-	tests := []struct {
-		name         string
-		command      string
-		wantHintPart string
-		avoid        string
-	}{
-		{
-			name:         "current directory",
-			command:      "cd . && printf done",
-			wantHintPart: "Drop the redundant `cd`",
-			avoid:        "Prefer calling the change_dir tool",
-		},
-		{
-			name:         "different directory",
-			command:      "cd / && printf done",
-			wantHintPart: "Prefer calling the change_dir tool",
-		},
+	wd := t.TempDir()
+	tool := (&BashTool{WorkingDir: NewMutableWorkingDir(wd)}).Tool()
+	run := func(t *testing.T, command string) string {
+		t.Helper()
+		input, err := json.Marshal(bashInput{Command: command})
+		if err != nil {
+			t.Fatalf("marshal input: %v", err)
+		}
+		out := tool.Run(t.Context(), input)
+		if out.Error != nil {
+			t.Fatalf("run bash tool: %v", out.Error)
+		}
+		return out.LLMContent[0].Text
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			input, err := json.Marshal(bashInput{Command: tc.command})
-			if err != nil {
-				t.Fatalf("marshal input: %v", err)
-			}
-			out := tool.Run(t.Context(), input)
-			if out.Error != nil {
-				t.Fatalf("run bash tool: %v", out.Error)
-			}
-			got := out.LLMContent[0].Text
-			if !strings.Contains(got, tc.wantHintPart) {
-				t.Errorf("output %q does not contain %q", got, tc.wantHintPart)
-			}
-			if tc.avoid != "" && strings.Contains(got, tc.avoid) {
-				t.Errorf("output %q unexpectedly contains %q", got, tc.avoid)
-			}
-		})
+
+	if got := run(t, "cd . && printf done"); strings.Contains(got, "[shelley:") {
+		t.Errorf("cd to the current directory produced a hint: %q", got)
+	}
+	got := run(t, "cd / && printf done")
+	for _, want := range []string{"change_dir", wd} {
+		if !strings.Contains(got, want) {
+			t.Errorf("first chained cd output %q does not contain %q", got, want)
+		}
+	}
+	if got := run(t, "cd / && printf done"); strings.Contains(got, "[shelley:") {
+		t.Errorf("second chained cd repeated the hint: %q", got)
 	}
 }
 

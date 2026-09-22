@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -43,6 +44,11 @@ type BashTool struct {
 	// Env holds the conversation context exposed to invoked commands as
 	// SHELLEY_* environment variables.
 	Env ShelleyEnv
+
+	// cdHinted records that the chained-cd hint has been shown. The hint
+	// is shown at most once per BashTool, that is, once per conversation:
+	// repeating it does not change model behavior, it only adds noise.
+	cdHinted atomic.Bool
 }
 
 const (
@@ -207,17 +213,29 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 	}
 	exitCode := 0
 	display.ExitCode = &exitCode
-	if paths := bashkit.ChainedCdPaths(req.Command); len(paths) > 0 {
-		out = chainedCdHint(paths, wd) + "\n\n" + out
+	if chainedCdLeavesDir(bashkit.ChainedCdPaths(req.Command), wd) && b.cdHinted.CompareAndSwap(false, true) {
+		out = chainedCdHint(wd) + "\n\n" + out
 	}
 	return llm.ToolOut{LLMContent: llm.TextContent(out), Display: display}
 }
 
-func chainedCdHint(paths []string, workingDir string) string {
-	if len(paths) == 1 && paths[0] != "" && cdPathIsCurrentDir(paths[0], workingDir) {
-		return "[shelley hint: this command chained `cd <path>` with another command, but that path is already the current working directory. Drop the redundant `cd` and run the remaining command directly.]"
+// chainedCdLeavesDir reports whether any chained `cd <path>` in a command
+// (see bashkit.ChainedCdPaths) targets a directory other than workingDir.
+// A `cd` to the current directory is a harmless no-op and gets no hint.
+// A non-literal path (reported as "") is assumed to leave the directory.
+func chainedCdLeavesDir(paths []string, workingDir string) bool {
+	for _, p := range paths {
+		if p == "" || !cdPathIsCurrentDir(p, workingDir) {
+			return true
+		}
 	}
-	return "[shelley hint: this command chained `cd <path>` with another command. `cd` inside a bash invocation does not persist across tool calls. Prefer calling the change_dir tool once, then running subsequent commands directly.]"
+	return false
+}
+
+// chainedCdHint tells the model the one fact it can act on: the cwd it
+// will see on the next call, and how to change it.
+func chainedCdHint(workingDir string) string {
+	return "[shelley: `cd` inside a bash call does not persist; the working directory is still " + workingDir + ". Use change_dir to move.]"
 }
 
 func cdPathIsCurrentDir(path, workingDir string) bool {
