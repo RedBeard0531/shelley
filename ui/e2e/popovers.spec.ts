@@ -315,8 +315,8 @@ test.describe("Context usage popup", () => {
     await expect.poll(() => releaseSubagentRequest).toBeNull();
     await expect(subagentRow).toContainText("$60.00");
     const subagentModels = page
-      .getByRole("region", { name: "Sub-agents", exact: true })
-      .locator(".token-cost-model-breakdown");
+      .locator(".token-cost-model-breakdown")
+      .filter({ hasText: "review-model" });
     await expect(subagentModels).toContainText("review-model");
     await expect(subagentModels).toContainText("6.0M");
     await expect(subagentModels).toContainText("$60.00");

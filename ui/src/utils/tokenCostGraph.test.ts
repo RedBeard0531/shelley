@@ -1,6 +1,7 @@
 import {
   aggregateOtherUsage,
   buildCostSummary,
+  buildModelCostComparison,
   buildOtherUsageBreakdown,
   buildTokenCostStack,
   callXLayout,
@@ -9,6 +10,7 @@ import {
   formatTokenCount,
   formatUsd,
   generationStarts,
+  ModelUsage,
   OtherUsageRow,
   segmentColor,
   timeXLayout,
@@ -42,6 +44,124 @@ function entry(partial: Partial<UsageEntry>): UsageEntry {
     model: "claude-opus-4-6",
     ...partial,
   };
+}
+
+function modelUsage(
+  model: string,
+  priced: boolean,
+  rates: [number, number, number, number],
+  tokens: [number, number, number, number],
+  reportedUsd = 0,
+  colorPrefix = model,
+): ModelUsage {
+  const rows = TOKEN_BANDS.map((band, i) => ({
+    band,
+    tokens: tokens[i],
+    unitUsdPerMtok: rates[i],
+    cost: priced ? (tokens[i] * rates[i]) / 1e6 : 0,
+    color: `${colorPrefix}-${i}`,
+  }));
+  return {
+    model,
+    priced,
+    rows,
+    totalCost: rows.reduce((sum, row) => sum + row.cost, 0),
+    reportedUsd,
+  };
+}
+
+// One shared table row aligns the main conversation and sub-agent columns.
+{
+  const main = modelUsage("shared", true, [1, 2, 3, 4], [1_000_000, 0, 0, 0], 99, "main");
+  const sub = modelUsage("shared", true, [1, 2, 3, 4], [2_000_000, 0, 0, 0], 88, "sub");
+  const compared = buildModelCostComparison([main], [sub]);
+  assert(compared.length === 1 && compared[0].model === "shared", "comparison: shared model row");
+  assert(approx(compared[0].main!.knownUsd, 1), "comparison: main known cost");
+  assert(approx(compared[0].subagents!.knownUsd, 2), "comparison: sub-agent known cost");
+  assert(compared[0].main!.reportedUsd === 0, "comparison: priced report not double-counted");
+  assert(compared[0].main!.rows[0].unitUsdPerMtok === 1, "comparison: shared rate retained");
+  assert(compared[0].main!.rows[0].color === "main-0", "comparison: first main color retained");
+  assert(compared[0].subagents!.rows[0].color === "sub-0", "comparison: first sub color retained");
+}
+
+// Main models lead in first-seen order, followed by sub-agent-only models.
+{
+  const main = [
+    modelUsage("main-a", true, [1, 1, 1, 1], [1, 0, 0, 0]),
+    modelUsage("main-b", true, [1, 1, 1, 1], [1, 0, 0, 0]),
+  ];
+  const sub = [
+    modelUsage("main-b", true, [1, 1, 1, 1], [1, 0, 0, 0]),
+    modelUsage("sub-only", true, [1, 1, 1, 1], [1, 0, 0, 0]),
+  ];
+  const compared = buildModelCostComparison(main, sub);
+  assert(
+    compared.map((row) => row.model).join(",") === "main-a,main-b,sub-only",
+    "comparison: main order then sub-only",
+  );
+  assert(
+    compared[0].main !== undefined && compared[0].subagents === undefined,
+    "comparison: main-only scope",
+  );
+  assert(
+    compared[2].main === undefined && compared[2].subagents !== undefined,
+    "comparison: sub-only scope",
+  );
+}
+
+// Multiple endpoints for one model retain independent priced costs; only an
+// unpriced endpoint's provider report is used as fallback.
+{
+  const pricedA = modelUsage("multi", true, [5, 1, 1, 1], [1_000_000, 0, 0, 0], 50, "a");
+  const pricedB = modelUsage("multi", true, [7, 1, 1, 1], [2_000_000, 0, 0, 0], 60, "b");
+  const unpriced = modelUsage("multi", false, [0, 0, 0, 0], [3_000_000, 0, 0, 0], 4, "u");
+  const column = buildModelCostComparison([], [pricedA, pricedB, unpriced])[0].subagents!;
+  assert(approx(column.knownUsd, 23), "comparison: priced costs plus unpriced report once");
+  assert(approx(column.reportedUsd, 4), "comparison: only unpriced reports isolated");
+  assert(!column.priced, "comparison: partial pricing flagged");
+  assert(column.rows[0].tokens === 6_000_000, "comparison: endpoint tokens aggregated");
+  assert(approx(column.rows[0].cost, 19), "comparison: known row costs aggregated");
+  assert(
+    !column.rows[0].priced && column.rows[0].unitUsdPerMtok === null,
+    "comparison: partial row pricing has no rate",
+  );
+  assert(column.rows[0].color === "a-0", "comparison: first endpoint color retained");
+
+  const sameRate = buildModelCostComparison(
+    [],
+    [pricedA, modelUsage("multi", true, [5, 1, 1, 1], [2, 0, 0, 0])],
+  )[0].subagents!;
+  assert(sameRate.priced && sameRate.rows[0].priced, "comparison: fully priced endpoints");
+  assert(sameRate.rows[0].unitUsdPerMtok === 5, "comparison: identical endpoint rate retained");
+}
+
+// An unpriced endpoint with no output must not erase a known output rate.
+{
+  const priced = modelUsage("partial", true, [1, 2, 3, 4], [1_000_000, 0, 0, 2_000_000]);
+  const unpriced = modelUsage("partial", false, [0, 0, 0, 0], [1_000_000, 0, 0, 0]);
+  const column = buildModelCostComparison([], [priced, unpriced])[0].subagents!;
+  assert(
+    !column.priced && !column.rows[0].priced,
+    "comparison: unknown read usage remains partial",
+  );
+  assert(
+    column.rows[3].priced && column.rows[3].unitUsdPerMtok === 4,
+    "comparison: fully priced output keeps its rate",
+  );
+  assert(
+    approx(column.rows[3].cost, 8),
+    "comparison: fully priced output keeps its exact known cost",
+  );
+}
+
+// Empty inputs and purity.
+{
+  assert(buildModelCostComparison([], []).length === 0, "comparison: empty");
+  const main = [modelUsage("pure", true, [2, 3, 4, 5], [10, 20, 30, 40])];
+  const sub = [modelUsage("pure", false, [0, 0, 0, 0], [1, 2, 3, 4], 0.25)];
+  const before = JSON.stringify({ main, sub });
+  buildModelCostComparison(main, sub);
+  assert(JSON.stringify({ main, sub }) === before, "comparison: inputs not mutated");
 }
 
 // Weighted stacking: two calls, cumulative dollars.

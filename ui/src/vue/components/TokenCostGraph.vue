@@ -9,8 +9,8 @@
      summarization, LLM-backed tools, slug generation, … — are not part of the
      graph. Other-usage rows arrive via the otherUsageRows prop (aggregated
      client-side from message other_usage_data) and subagent cost is fetched
-     separately. Each scope has its own per-model breakdown and subtotal;
-     both are included in the combined total. -->
+     separately. One shared per-model table compares the main conversation
+     and sub-agents in aligned columns, with subtotals and a combined total. -->
 <template>
   <div class="token-cost-graph">
     <div v-if="loading" class="token-cost-graph-note">Loading pricing…</div>
@@ -116,90 +116,97 @@
       </div>
     </div>
     <div v-else-if="!loading" class="token-cost-graph-note">No direct usage data yet.</div>
-    <div
+    <table
       v-if="!loading && (stack || otherBreakdown || hasSubagents)"
-      class="token-cost-columns"
-      :class="{ 'token-cost-columns-with-subagents': hasSubagents }"
+      class="token-cost-table"
+      :class="{ 'token-cost-table-with-subagents': hasSubagents }"
+      aria-label="Spend by model"
     >
-      <section class="token-cost-column" aria-label="Main conversation">
-        <h3 class="token-cost-column-heading">Main conversation</h3>
-        <div class="token-cost-legend">
-          <ModelCostBreakdown
-            v-for="mu in stack?.perModel || []"
-            :key="mu.model"
-            :usage="mu"
-            :hide-zero-cache-write="subscriptionOnly.get(mu.model) === true"
-            show-colors
-          />
-          <template v-if="otherBreakdown && otherBreakdown.perPurpose.length > 0">
-            <div class="token-cost-model-row">
-              <span class="token-cost-model-name">Other (indirect)</span>
-              <span
-                v-if="otherKnownUsd > 0 || otherBreakdown.totals.unpricedCalls === 0"
-                class="token-cost-legend-cost"
-                >{{ formatUsd(otherKnownUsd) }}</span
-              >
-              <span v-else class="token-cost-legend-unit">no pricing</span>
-            </div>
-            <div
-              v-for="p in otherBreakdown.perPurpose"
-              :key="p.purpose"
-              class="token-cost-legend-row"
+      <colgroup>
+        <col class="token-cost-label-column" />
+        <col />
+        <col v-if="hasSubagents" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th scope="col">Model / tokens</th>
+          <th scope="col">Main conversation</th>
+          <th v-if="hasSubagents" scope="col">Sub-agents</th>
+        </tr>
+      </thead>
+      <ModelCostBreakdown
+        v-for="model in modelComparison"
+        :key="model.model"
+        :model="model"
+        :show-subagents="hasSubagents"
+        :hide-zero-cache-write="hideZeroCacheWrite(model.model)"
+      />
+      <tbody v-if="otherBreakdown && otherBreakdown.perPurpose.length > 0">
+        <tr class="token-cost-model-row">
+          <th scope="row"><span class="token-cost-model-name">Other (indirect)</span></th>
+          <td>
+            <span
+              v-if="otherKnownUsd > 0 || otherBreakdown.totals.unpricedCalls === 0"
+              class="token-cost-legend-cost"
+              >{{ formatUsd(otherKnownUsd) }}</span
             >
-              <span class="token-cost-legend-label">{{ p.purpose }}</span>
-              <span class="token-cost-legend-tokens"
+            <span v-else class="token-cost-legend-unit">no pricing</span>
+          </td>
+          <td v-if="hasSubagents" class="token-cost-empty">in model totals</td>
+        </tr>
+        <tr v-for="p in otherBreakdown.perPurpose" :key="p.purpose" class="token-cost-legend-row">
+          <th scope="row">
+            <span class="token-cost-legend-label">{{ p.purpose }}</span>
+          </th>
+          <td>
+            <div class="token-cost-cell">
+              <span class="token-cost-legend-tokens">{{ formatTokenCount(p.tokens) }}</span>
+              <span class="token-cost-legend-unit"
                 >{{ p.llmCalls }} {{ p.llmCalls === 1 ? "call" : "calls" }}</span
               >
-              <span class="token-cost-legend-tokens">{{ formatTokenCount(p.tokens) }}</span>
               <span v-if="otherPurposeKnownUsd(p) > 0 || p.priced" class="token-cost-legend-cost">{{
                 formatUsd(otherPurposeKnownUsd(p))
               }}</span>
-              <span v-else class="token-cost-legend-unit">no pricing</span>
+              <span v-else class="token-cost-empty">no pricing</span>
             </div>
-          </template>
-        </div>
-        <div
-          class="token-cost-model-row token-cost-subtotal-row"
-          data-testid="conversation-cost-subtotal"
+          </td>
+          <td v-if="hasSubagents" class="token-cost-empty">—</td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr class="token-cost-subtotal-row">
+          <th scope="row">Subtotal</th>
+          <td data-testid="conversation-cost-subtotal">
+            <span
+              v-if="mainKnownUsd > 0 || mainUnpricedCalls === 0"
+              class="token-cost-legend-cost"
+              >{{ formatUsd(mainKnownUsd) }}</span
+            >
+            <span v-else class="token-cost-legend-unit">no pricing</span>
+          </td>
+          <td v-if="hasSubagents" data-testid="subagent-cost-row">
+            <span
+              v-if="subagentKnownUsd > 0 || subagentUsage?.unpriced_calls === 0"
+              class="token-cost-legend-cost"
+              >{{ formatUsd(subagentKnownUsd) }}</span
+            >
+            <span v-else class="token-cost-legend-unit">no pricing</span>
+          </td>
+        </tr>
+        <tr
+          v-if="!subagentLoading && showCostSummary"
+          class="token-cost-total-row"
+          data-testid="token-cost-total"
         >
-          <span class="token-cost-model-name">Subtotal</span>
-          <span v-if="mainKnownUsd > 0 || mainUnpricedCalls === 0" class="token-cost-legend-cost">{{
-            formatUsd(mainKnownUsd)
-          }}</span>
-          <span v-else class="token-cost-legend-unit">no pricing</span>
-        </div>
-      </section>
-      <section v-if="hasSubagents" class="token-cost-column" aria-label="Sub-agents">
-        <h3 class="token-cost-column-heading">Sub-agents</h3>
-        <div class="token-cost-legend">
-          <ModelCostBreakdown
-            v-for="row in subagentModels"
-            :key="JSON.stringify([row.usage.model, row.url])"
-            :usage="row.usage"
-            :source="row.url"
-            :show-source="row.showSource"
-            :hide-zero-cache-write="isSubscriptionUsage(row.usage.model, row.url)"
-          />
-        </div>
-        <div class="token-cost-graph-note">Includes nested sub-agents and indirect usage.</div>
-        <div class="token-cost-model-row token-cost-subtotal-row" data-testid="subagent-cost-row">
-          <span class="token-cost-model-name">Subtotal</span>
-          <span
-            v-if="subagentKnownUsd > 0 || subagentUsage?.unpriced_calls === 0"
-            class="token-cost-legend-cost"
-            >{{ formatUsd(subagentKnownUsd) }}</span
-          >
-          <span v-else class="token-cost-legend-unit">no pricing</span>
-        </div>
-      </section>
-    </div>
-    <div
-      v-if="!loading && !subagentLoading && showCostSummary"
-      class="token-cost-model-row token-cost-total-row"
-      data-testid="token-cost-total"
-    >
-      <span class="token-cost-model-name">Total</span>
-      <span class="token-cost-legend-cost">≈{{ formatUsd(costSummary.totalUsd) }}</span>
+          <th scope="row" :colspan="hasSubagents ? 2 : 1">Total</th>
+          <td>
+            <span class="token-cost-legend-cost">≈{{ formatUsd(costSummary.totalUsd) }}</span>
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+    <div v-if="!loading && hasSubagents" class="token-cost-graph-note">
+      Sub-agent model totals include nested sub-agents and indirect usage.
     </div>
     <div v-if="!loading && subagentLoading" class="token-cost-graph-note">
       Loading total including subagents…
@@ -236,6 +243,7 @@ import {
 } from "../../services/api";
 import {
   buildCostSummary,
+  buildModelCostComparison,
   buildOtherUsageBreakdown,
   buildTokenCostStack,
   callXLayout,
@@ -430,28 +438,25 @@ const hasSubagents = computed(() => (subagentUsage.value?.llm_calls ?? 0) > 0);
 
 // Pricing travels with each (model, endpoint) aggregate so its token costs
 // reconcile with the server subtotal, including endpoint-specific pricing.
-const subagentModels = computed(() => {
-  const rows = subagentUsage.value?.per_model ?? [];
-  const modelCounts = new Map<string, number>();
-  for (const row of rows) modelCounts.set(row.model, (modelCounts.get(row.model) ?? 0) + 1);
-  return rows.map((row) => ({
-    url: row.url,
-    showSource: modelCounts.get(row.model)! > 1,
-    usage: {
-      model: row.model || "unknown model",
-      priced: row.cost !== null,
-      totalCost: row.estimated_usd,
-      reportedUsd: row.reported_usd,
-      rows: TOKEN_BANDS.map((band) => ({
-        band,
-        tokens: row[band.key],
-        unitUsdPerMtok: row.cost?.[band.costKey] ?? 0,
-        cost: (row[band.key] * (row.cost?.[band.costKey] ?? 0)) / 1e6,
-        color: "",
-      })),
-    } satisfies ModelUsage,
-  }));
-});
+const subagentModels = computed<ModelUsage[]>(() =>
+  (subagentUsage.value?.per_model ?? []).map((row) => ({
+    model: row.model || "unknown model",
+    priced: row.cost !== null,
+    totalCost: row.estimated_usd,
+    reportedUsd: row.reported_usd,
+    rows: TOKEN_BANDS.map((band) => ({
+      band,
+      tokens: row[band.key],
+      unitUsdPerMtok: row.cost?.[band.costKey] ?? 0,
+      cost: (row[band.key] * (row.cost?.[band.costKey] ?? 0)) / 1e6,
+      color: "",
+    })),
+  })),
+);
+
+const modelComparison = computed(() =>
+  buildModelCostComparison(stack.value?.perModel ?? [], subagentModels.value),
+);
 
 const otherBreakdown = computed<OtherUsageBreakdown | null>(() => {
   const rows = props.otherUsageRows;
@@ -612,6 +617,17 @@ const subscriptionOnly = computed(() => {
   }
   return result;
 });
+
+function hideZeroCacheWrite(name: string): boolean {
+  if (
+    stack.value?.perModel.some((model) => model.model === name) &&
+    !subscriptionOnly.value.get(name)
+  )
+    return false;
+  return (subagentUsage.value?.per_model ?? [])
+    .filter((row) => (row.model || "unknown model") === name)
+    .every((row) => isSubscriptionUsage(row.model, row.url));
+}
 
 function isSubscriptionUsage(name: string, url?: string): boolean {
   const sources = props.models.filter(

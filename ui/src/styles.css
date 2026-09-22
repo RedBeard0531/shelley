@@ -11060,65 +11060,118 @@ kbd {
   margin-inline: auto;
 }
 
-.token-cost-columns {
-  display: grid;
-  gap: 16px;
+.token-cost-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
   margin-top: 8px;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
 }
 
-.token-cost-column {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+.token-cost-label-column {
+  width: 30%;
 }
 
-.token-cost-column > .token-cost-legend {
-  flex: 1;
+.token-cost-table th,
+.token-cost-table td {
+  padding: 3px 0 3px 10px;
+  text-align: right;
+  vertical-align: top;
 }
 
-.token-cost-column-heading {
-  margin: 0 0 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.token-cost-model-breakdown + .token-cost-model-breakdown {
-  margin-top: 6px;
-}
-
-.token-cost-model-source {
-  font-size: 0.65rem;
-  color: var(--text-secondary);
+.token-cost-table th:first-child {
+  padding-left: 0;
+  text-align: left;
   overflow-wrap: anywhere;
 }
 
-.token-cost-subtotal-row {
-  margin-top: 8px;
-  padding-top: 5px;
+.token-cost-table thead th {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.token-cost-table .token-cost-model-row,
+.token-cost-table .token-cost-legend-row {
+  display: table-row;
+}
+
+.token-cost-table .token-cost-model-row > * {
+  padding-top: 9px;
+}
+
+.token-cost-table .token-cost-model-name {
+  white-space: normal;
+}
+
+.token-cost-table .token-cost-legend-row th {
+  font-weight: normal;
+}
+
+.token-cost-table .token-cost-chip {
+  display: inline-block;
+  margin-right: 5px;
+}
+
+.token-cost-table .token-cost-legend-cost,
+.token-cost-table .token-cost-legend-unit {
+  min-width: 0;
+}
+
+.token-cost-cell {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0 6px;
+  align-items: baseline;
+}
+
+.token-cost-cell > :last-child {
+  grid-column: 3;
+}
+
+.token-cost-empty {
+  color: var(--text-tertiary);
+}
+
+.token-cost-table tfoot > tr > * {
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.token-cost-total-row {
   border-top: 1px solid var(--border);
 }
 
 @media (min-width: 769px) {
-  .chat-context-popup.p-popover:has(.token-cost-columns-with-subagents) {
-    width: min(800px, calc(100vw - 1rem));
+  .chat-context-popup.p-popover:has(.token-cost-table-with-subagents) {
+    width: min(640px, calc(100vw - 1rem));
   }
 
-  .token-cost-columns-with-subagents {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 24px;
-  }
-
-  .chat-context-popup:has(.token-cost-columns-with-subagents) .context-composition-graph {
+  .chat-context-popup:has(.token-cost-table-with-subagents) .context-composition-graph {
     max-width: 420px;
     margin-inline: auto;
   }
 }
 
-.token-cost-total-row {
-  margin-top: 10px;
-  padding-top: 5px;
-  border-top: 1px solid var(--border);
+/* Keep the comparison columns side by side on phones; put rates below counts. */
+@media (max-width: 768px) {
+  .token-cost-table-with-subagents .token-cost-cell {
+    grid-template-columns: 1fr auto;
+    gap: 0 3px;
+  }
+
+  .token-cost-table-with-subagents .token-cost-cell > :last-child {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .token-cost-table-with-subagents .token-cost-cell > .token-cost-legend-unit {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    font-size: 0.6rem;
+  }
 }
 
 .token-cost-graph-note {

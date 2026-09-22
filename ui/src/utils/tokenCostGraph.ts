@@ -92,6 +92,82 @@ export interface ModelUsage {
   reportedUsd: number;
 }
 
+export interface ModelCostColumn {
+  knownUsd: number;
+  /** Provider-reported fallback from unpriced contributors only. */
+  reportedUsd: number;
+  priced: boolean;
+  rows: {
+    band: TokenBand;
+    tokens: number;
+    cost: number;
+    priced: boolean;
+    unitUsdPerMtok: number | null;
+    color: string;
+  }[];
+}
+
+export interface ModelCostComparison {
+  model: string;
+  main?: ModelCostColumn;
+  subagents?: ModelCostColumn;
+}
+
+function buildModelCostColumn(usages: ModelUsage[]): ModelCostColumn {
+  const priced = usages.every((usage) => usage.priced);
+  return {
+    knownUsd: usages.reduce(
+      (sum, usage) => sum + (usage.priced ? usage.totalCost : usage.reportedUsd),
+      0,
+    ),
+    reportedUsd: usages.reduce((sum, usage) => sum + (usage.priced ? 0 : usage.reportedUsd), 0),
+    priced,
+    rows: usages[0].rows.map((firstRow) => {
+      const rows = usages.map(
+        (usage) => usage.rows.find((row) => row.band.key === firstRow.band.key)!,
+      );
+      const contributing = rows.flatMap((row, index) => (row.tokens > 0 ? [index] : []));
+      // Empty bands retain their catalog rates; used bands only compare
+      // endpoints which contributed tokens of that type.
+      const indexes = contributing.length ? contributing : rows.map((_, index) => index);
+      const bandPriced = indexes.every((index) => usages[index].priced);
+      const rate = rows[indexes[0]].unitUsdPerMtok;
+      return {
+        band: firstRow.band,
+        tokens: rows.reduce((sum, row) => sum + row.tokens, 0),
+        cost: rows.reduce((sum, row, i) => sum + (usages[i].priced ? row.cost : 0), 0),
+        priced: bandPriced,
+        unitUsdPerMtok:
+          bandPriced && indexes.every((index) => rows[index].unitUsdPerMtok === rate) ? rate : null,
+        color: firstRow.color,
+      };
+    }),
+  };
+}
+
+/** Align main-conversation and sub-agent costs into one row per model. */
+export function buildModelCostComparison(
+  main: ModelUsage[],
+  subagents: ModelUsage[],
+): ModelCostComparison[] {
+  const byModel = new Map<string, { main: ModelUsage[]; subagents: ModelUsage[] }>();
+  for (const usage of main) {
+    const grouped = byModel.get(usage.model) || { main: [], subagents: [] };
+    grouped.main.push(usage);
+    byModel.set(usage.model, grouped);
+  }
+  for (const usage of subagents) {
+    const grouped = byModel.get(usage.model) || { main: [], subagents: [] };
+    grouped.subagents.push(usage);
+    byModel.set(usage.model, grouped);
+  }
+  return [...byModel].map(([model, grouped]) => ({
+    model,
+    ...(grouped.main.length && { main: buildModelCostColumn(grouped.main) }),
+    ...(grouped.subagents.length && { subagents: buildModelCostColumn(grouped.subagents) }),
+  }));
+}
+
 /** One stacked layer: a (model, band) pair with its own color. */
 export interface StackSegment {
   model: string;
