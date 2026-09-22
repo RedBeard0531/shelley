@@ -2,12 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!-- Resize the layout viewport with Android's keyboard so the full-height
-         app keeps the composer visible, rather than only panning the page. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
+    <script>
+      // Resize the layout viewport with Android's keyboard so the full-height
+      // app keeps the composer visible, rather than only panning the page.
+      // Skip Firefox: there this mode breaks the dynamic bottom toolbar —
+      // hiding the address bar by scrolling leaves a stale unpainted band
+      // over the composer (bugzilla 1673517, 1920019). Firefox instead keeps
+      // the composer visible via the visualViewport handler in
+      // MessageInput.vue.
+      if (!/firefox|fxios/i.test(navigator.userAgent)) {
+        const viewport = document.querySelector('meta[name="viewport"]');
+        viewport.setAttribute(
+          "content",
+          viewport.getAttribute("content") + ", interactive-widget=resizes-content",
+        );
+      }
+    </script>
     <meta name="theme-color" content="#1f2937" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
