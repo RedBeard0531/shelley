@@ -13297,6 +13297,29 @@ kbd {
   border-radius: 999px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
+
+/* The floating pill covers the top commit on mobile; make it a slim
+   full-width header bar instead. Lives after the base rule so it wins
+   the cascade. */
+@media (max-width: 768px) {
+  .git-graph-toolbar {
+    position: static;
+    margin: 0;
+    width: 100%;
+    justify-content: center;
+    padding: 0.125rem 0.5rem;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--border-color);
+    border-radius: 0;
+    box-shadow: none;
+  }
+  /* The list's top padding would add to the gap under the header bar,
+     making the bar look off-center; drop it. */
+  .git-graph-list {
+    padding-top: 0;
+  }
+}
 .git-graph-tool {
   width: 1.5rem;
   height: 1.5rem;
