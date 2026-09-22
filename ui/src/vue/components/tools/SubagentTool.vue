@@ -25,7 +25,7 @@
         <span class="tool-emoji" :class="{ running: isRunning }">⚡</span>
         <span class="tool-command subagent-tool-slug">{{ slug }}</span>
         <span v-if="model" class="tool-tag">{{ model }}</span>
-        <span class="tool-command" :title="prompt">{{ firstLine }}</span>
+        <span class="tool-command ellipsis-start" :title="prompt">{{ firstLine }}</span>
       </div>
       <button
         class="tool-toggle"

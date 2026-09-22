@@ -10,7 +10,7 @@
     <div class="tool-header" @click="isExpanded = !isExpanded">
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">🔍</span>
-        <span class="tool-command"
+        <span class="tool-command ellipsis-start"
           >Web Search{{ query ? ": " : "" }}<span v-if="query" class="web-search-query">{{
             query
           }}</span></span
