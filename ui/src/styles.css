@@ -14075,7 +14075,7 @@ kbd {
 
 /* =========================================================================
    ChatOverflowMenu.vue — the top-right kebab menu rebuilt on PrimeVue
-   (Popover + Select). Scoped under .overflow-menu-panel so it never touches
+   (Popover + language Modal). Scoped under .overflow-menu-panel so it never touches
    the legacy React menu, which still uses .overflow-menu and the
    hand-rolled .theme-toggle-* / .md-toggle-* / .language-dropdown-* classes.
    ========================================================================= */
@@ -14157,18 +14157,48 @@ kbd {
   margin: 0.25rem 0;
 }
 
-/* Row that holds the language Select control. */
-.overflow-menu-control {
-  padding: 0.5rem;
-}
-.overflow-menu-control .md-toggle-label {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.75rem;
+/* Keep the current language visible without a full-width form control. */
+.overflow-menu-language {
+  margin-left: auto;
+  padding-left: 1rem;
   color: var(--text-secondary);
-  margin-bottom: 0.375rem;
-  font-weight: 500;
+  font-size: 0.75rem;
+}
+
+.language-picker-modal {
+  max-width: 22rem;
+}
+.language-picker-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.language-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.75rem;
+  border: none;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.language-picker-option:hover,
+.language-picker-option[aria-pressed="true"] {
+  background: var(--bg-hover);
+}
+.language-picker-option:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.language-picker-check {
+  margin-left: auto;
+  font-size: 0.875rem;
 }
 
 /* One compact row of stateful controls. Every choice stays visible; the
@@ -14247,16 +14277,6 @@ kbd {
   stroke-width: 2.2;
 }
 
-/* The language Select fills the row. */
-.overflow-menu-control .overflow-language-select.p-select {
-  width: 100%;
-}
-.overflow-menu-control .language-dropdown-flag {
-  font-size: 1rem;
-  line-height: 1;
-  margin-right: 0.4rem;
-}
-
 /* =========================================================================
    Status-bar model picker (ModelPicker.vue) — one PrimeVue <Select> that
    carries both the model choice and the reasoning-effort pill row. PrimeVue
@@ -14266,7 +14286,7 @@ kbd {
    vars into PrimeVue's own token system. The only things hand-written here
    are the overlay's content-width behaviour and the bespoke option/footer
    markup. Scoped to the picker classes so nothing leaks to other PrimeVue
-   Selects (e.g. the overflow-menu language picker).
+   Selects.
    ========================================================================= */
 
 /* Trigger label: model name + quiet "· effort" suffix. */

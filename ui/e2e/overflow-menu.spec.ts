@@ -1,11 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { createConversationViaAPI, testWorkingDirectory } from "./helpers";
 
-// The top-right overflow ("kebab") menu is built from PrimeVue Popover/Select
-// plus compact native icon buttons. See components/ChatOverflowMenu.vue. The
+// The top-right overflow ("kebab") menu uses a PrimeVue Popover, compact
+// native icon buttons, and the shared Modal for language selection. The
 // DOM contract (.chat-overflow-menu-wrapper / .btn-icon / .overflow-menu-item)
-// is covered by other specs (agents-md-vim, diff-viewer-find); here we
-// exercise the PrimeVue-specific controls.
+// is covered by other specs (agents-md-vim, diff-viewer-find).
 test.describe("Overflow menu (PrimeVue)", () => {
   test("directory item opens the picker and closes the popover on mobile", async ({
     page,
@@ -54,7 +53,7 @@ test.describe("Overflow menu (PrimeVue)", () => {
     await expect(directory).toHaveCount(0);
   });
 
-  test("popover opens, compact controls and language Select work", async ({ page, request }) => {
+  test("popover opens and compact controls work", async ({ page, request }) => {
     test.setTimeout(60000);
     await page.addInitScript(() => {
       Object.defineProperty(window, "Notification", {
@@ -142,25 +141,112 @@ test.describe("Overflow menu (PrimeVue)", () => {
     await expect(page.locator("html")).toHaveClass(/dark/);
     expect(await page.evaluate(() => localStorage.getItem("shelley-theme"))).toBe("dark");
 
-    // --- Language Select: open and pick Japanese ---
-    const select = popover.locator(".overflow-language-select");
-    await select.click();
-    // The overlay renders inside the popover (appendTo="self"), so the popover
-    // must stay open while we pick.
-    const jpOption = page.locator(".p-select-option").filter({ hasText: /日本語/ });
-    await expect(jpOption).toBeVisible();
-    await jpOption.click();
-    expect(await page.evaluate(() => localStorage.getItem("shelley-locale"))).toBe("ja");
     await expect(popover).toBeVisible();
+  });
 
-    // The compact control labels re-translate live while the menu stays open.
-    await expect(themeOptions.getByRole("button", { name: "ダーク" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 393, height: 851 },
+    { width: 1280, height: 800 },
+  ]) {
+    test(`language action opens a compact picker at ${viewport.width}px`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/new");
+      const trigger = page.locator(".chat-overflow-menu-wrapper .btn-icon");
+      const popover = page.locator(".chat-overflow-popover");
+      const dialog = page
+        .getByRole("dialog")
+        .filter({ has: page.locator(".language-picker-modal") });
+      await trigger.click();
 
-    // Reset locale so we don't leak Japanese UI into sibling tests' assertions.
-    await page.evaluate(() => localStorage.setItem("shelley-locale", "en"));
+      const action = popover.getByRole("button", { name: /Change Language/ });
+      await expect(action).toHaveClass("overflow-menu-item");
+      await expect(action).toContainText("English");
+      await expect(popover.getByRole("combobox")).toHaveCount(0);
+      const rowHeight = await action.evaluate((el) => el.getBoundingClientRect().height);
+      expect(rowHeight).toBeLessThanOrEqual(48);
+      await action.click();
+
+      await expect(popover).toBeHidden();
+      await expect(dialog).toHaveAccessibleName("Change Language");
+      await expect(dialog.getByRole("button", { pressed: true })).toHaveAccessibleName("English");
+      const options = dialog
+        .getByRole("group", { name: "Language", exact: true })
+        .getByRole("button");
+      await expect(options).toHaveCount(9);
+      await options.last().scrollIntoViewIfNeeded();
+      await expect(options.last()).toBeInViewport();
+      const bounds = await dialog.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.y).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+
+      await dialog.getByRole("button", { name: "日本語", exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(trigger).toBeFocused();
+      expect(await page.evaluate(() => localStorage.getItem("shelley-locale"))).toBe("ja");
+      await trigger.click();
+      await expect(popover.getByText("外観", { exact: true })).toBeVisible();
+      await popover.getByRole("button", { name: /言語を切り替える/ }).click();
+      await expect(dialog.getByRole("button", { pressed: true })).toHaveAccessibleName("日本語");
+      await dialog.getByRole("button", { name: "English", exact: true }).click();
+      await page.reload();
+      await trigger.click();
+      await expect(popover.getByRole("button", { name: /Change Language/ })).toContainText(
+        "English",
+      );
+    });
+  }
+
+  test("language picker dismisses without changes and supports keyboard selection", async ({
+    page,
+  }) => {
+    await page.goto("/new");
+    const trigger = page.locator(".chat-overflow-menu-wrapper .btn-icon");
+    const popover = page.locator(".chat-overflow-popover");
+    const dialog = page.getByRole("dialog").filter({ has: page.locator(".language-picker-modal") });
+    const openPicker = async () => {
+      await trigger.click();
+      const action = popover.getByRole("button", { name: /Change Language/ });
+      await action.focus();
+      await page.keyboard.press("Enter");
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "English", exact: true })).toBeFocused();
+    };
+
+    await openPicker();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(trigger).toBeFocused();
+    await expect(popover).toBeHidden();
+
+    await openPicker();
+    await dialog.getByRole("button", { name: "Close modal" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(trigger).toBeFocused();
+
+    await openPicker();
+    await page.locator(".modal-overlay").click({ position: { x: 2, y: 2 } });
+    await expect(dialog).toBeHidden();
+    await expect(trigger).toBeFocused();
+    expect(await page.evaluate(() => localStorage.getItem("shelley-locale"))).toBeNull();
+
+    await openPicker();
+    await page.keyboard.press("Tab");
+    const japanese = dialog.getByRole("button", { name: "日本語", exact: true });
+    await expect(japanese).toBeFocused();
+    await expect(japanese).toHaveCSS("outline-style", "solid");
+    await expect(japanese).toHaveCSS("outline-width", "2px");
+    await page.keyboard.press("Enter");
+    await expect(dialog).toBeHidden();
+    await expect(trigger).toBeFocused();
+    expect(await page.evaluate(() => localStorage.getItem("shelley-locale"))).toBe("ja");
+    await page.reload();
+    await trigger.click();
+    await popover.getByRole("button", { name: /言語を切り替える/ }).click();
+    await expect(dialog.getByRole("button", { name: "日本語", exact: true })).toBeFocused();
   });
 
   test("can show only user, end-of-turn, and notification messages", async ({ page, request }) => {

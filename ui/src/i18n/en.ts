@@ -316,7 +316,7 @@ export const en: TranslationKeys = {
   // Language
   language: "Language",
   off: "Off",
-  switchLanguage: "Switch language",
+  switchLanguage: "Change Language",
   english: "English",
   japanese: "日本語",
   french: "Français",

@@ -9,7 +9,7 @@
     - <Popover> the dropdown surface (dismiss-on-outside-click + Esc + focus
                 trap come for free, so we delete the manual handlers)
     - Native icon groups for compact view / theme / notification choices
-    - <Select> the language picker
+    - <Modal> language choices, opened by a compact menu action
 
   The e2e DOM/ARIA contract is preserved so the shared Playwright specs keep
   passing in BOTH worlds:
@@ -27,6 +27,7 @@
 <template>
   <div class="chat-overflow-menu-wrapper">
     <Button
+      ref="triggerRef"
       class="btn-icon"
       text
       severity="secondary"
@@ -310,37 +311,51 @@
 
       <!-- Language -->
       <div class="overflow-menu-divider" />
-      <div class="overflow-menu-control">
-        <div class="md-toggle-label">{{ t("language") }}</div>
-        <Select
-          v-model="lang"
-          :options="languageOptions"
-          option-label="label"
-          option-value="locale"
-          :aria-label="t('switchLanguage')"
-          class="overflow-language-select"
-          append-to="self"
-          @update:model-value="onLangChange"
-        >
-          <template #value="{ value }">
-            <span class="language-dropdown-flag">{{ languageFor(value).flag }}</span>
-            <span>{{ languageFor(value).label }}</span>
-          </template>
-          <template #option="{ option }">
-            <span class="language-dropdown-flag">{{ option.flag }}</span>
-            <span>{{ option.label }}</span>
-          </template>
-        </Select>
-      </div>
+      <button class="overflow-menu-item" aria-haspopup="dialog" @click="onLanguagePicker">
+        <i class="pi pi-globe chat-menu-icon" aria-hidden="true" />
+        {{ t("switchLanguage") }}
+        <span class="overflow-menu-language">{{ currentLanguage.label }}</span>
+      </button>
     </Popover>
+
+    <Modal
+      :is-open="languagePickerOpen"
+      :title="t('switchLanguage')"
+      class-name="language-picker-modal"
+      @close="languagePickerOpen = false"
+    >
+      <div
+        ref="languageOptionsRef"
+        class="language-picker-options"
+        role="group"
+        :aria-label="t('language')"
+      >
+        <button
+          v-for="option in languageOptions"
+          :key="option.locale"
+          type="button"
+          class="language-picker-option"
+          :aria-pressed="locale === option.locale"
+          @click="onLangChange(option.locale)"
+        >
+          <span class="language-dropdown-flag" aria-hidden="true">{{ option.flag }}</span>
+          <span>{{ option.label }}</span>
+          <i
+            v-if="locale === option.locale"
+            class="pi pi-check language-picker-check"
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import Popover from "primevue/popover";
 import Button from "primevue/button";
-import Select from "primevue/select";
+import Modal from "./Modal.vue";
 import OverflowDotsIcon from "./OverflowDotsIcon.vue";
 import type { Link } from "../../types";
 import type { Locale } from "../../i18n/types";
@@ -390,6 +405,7 @@ const editFileShortcutTooltip = computed(() =>
   isFirefox ? t("editFileShortcutFirefox") : t("editFileShortcut"),
 );
 
+const triggerRef = ref<{ $el: HTMLButtonElement } | null>(null);
 const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
 const open = ref(false);
 
@@ -469,12 +485,20 @@ const languageOptions: LanguageOption[] = [
   { locale: "vi", flag: "\uD83C\uDDFB\uD83C\uDDF3", label: "Ti\u1EBFng Vi\u1EC7t" },
   { locale: "upgoer5", flag: "\uD83D\uDE80", label: "Up-Goer Five" },
 ];
-const lang = ref<Locale>(locale.value);
-function languageFor(l: Locale): LanguageOption {
-  return languageOptions.find((o) => o.locale === l) || languageOptions[0];
+const currentLanguage = computed(() => languageOptions.find((o) => o.locale === locale.value)!);
+const languagePickerOpen = ref(false);
+const languageOptionsRef = ref<HTMLDivElement | null>(null);
+
+async function onLanguagePicker() {
+  hide();
+  // The menu item disappears, so let the dialog restore focus to the menu trigger.
+  triggerRef.value?.$el.focus();
+  languagePickerOpen.value = true;
+  await nextTick();
+  languageOptionsRef.value?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus();
 }
 function onLangChange(l: Locale) {
-  lang.value = l;
   setLocale(l);
+  languagePickerOpen.value = false;
 }
 </script>
