@@ -243,10 +243,7 @@ func chainedCdHint(workingDir string) string {
 }
 
 func cdPathIsCurrentDir(path, workingDir string) bool {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workingDir, path)
-	}
-	return filepath.Clean(path) == filepath.Clean(workingDir)
+	return resolvePath(workingDir, path) == filepath.Clean(workingDir)
 }
 
 const (

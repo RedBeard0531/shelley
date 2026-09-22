@@ -423,10 +423,7 @@ func (p *PatchTool) runApplyPatch(ctx context.Context, text string) llm.ToolOut 
 			if path == "" {
 				continue
 			}
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(p.getWorkingDir(), path)
-			}
-			pathSet[filepath.Clean(path)] = struct{}{}
+			pathSet[resolvePath(p.getWorkingDir(), path)] = struct{}{}
 		}
 	}
 	paths := make([]string, 0, len(pathSet))
@@ -449,22 +446,14 @@ func (p *PatchTool) runApplyPatch(ctx context.Context, text string) llm.ToolOut 
 	mutations := make([]applyPatchMutation, 0, len(files))
 	var matchNotices []string
 	for _, file := range files {
-		path := file.path
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(p.getWorkingDir(), path)
-		}
-		path = filepath.Clean(path)
+		path := resolvePath(p.getWorkingDir(), file.path)
 		old, readErr := os.ReadFile(path)
 		mutation := applyPatchMutation{path: path, old: old, mode: 0o600}
 		if info, statErr := os.Stat(path); statErr == nil {
 			mutation.mode = info.Mode().Perm()
 		}
 		if file.movePath != "" {
-			movePath := file.movePath
-			if !filepath.IsAbs(movePath) {
-				movePath = filepath.Join(p.getWorkingDir(), movePath)
-			}
-			movePath = filepath.Clean(movePath)
+			movePath := resolvePath(p.getWorkingDir(), file.movePath)
 			if movePath != path {
 				mutation.movePath = movePath
 				mutation.moveMode = 0o600
@@ -925,10 +914,7 @@ func applyPatchHunkSelector(header string) (int, string, error) {
 }
 
 func (p *PatchTool) runInput(ctx context.Context, input PatchInput) llm.ToolOut {
-	if !filepath.IsAbs(input.Path) {
-		input.Path = filepath.Join(p.getWorkingDir(), input.Path)
-	}
-	input.Path = filepath.Clean(input.Path)
+	input.Path = resolvePath(p.getWorkingDir(), input.Path)
 	unlockClipboards := p.lockClipboards(input.Patches)
 	defer unlockClipboards()
 	unlockPath := p.lockPath(input.Path)
