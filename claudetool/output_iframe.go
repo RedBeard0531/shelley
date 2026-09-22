@@ -253,10 +253,7 @@ func (t *OutputIframeTool) run(ctx context.Context, input outputIframeInput) llm
 
 	// Resolve every relative path against one working-directory snapshot.
 	wd := t.WorkingDir.Get()
-	path := input.Path
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(wd, path)
-	}
+	path := resolvePath(wd, input.Path)
 
 	// Read the main HTML file
 	data, err := os.ReadFile(path)
@@ -278,9 +275,7 @@ func (t *OutputIframeTool) run(ctx context.Context, input outputIframeInput) llm
 	var embeddedFiles []EmbeddedFile
 	for name, filePath := range input.Files {
 		// Resolve relative paths
-		if !filepath.IsAbs(filePath) {
-			filePath = filepath.Join(wd, filePath)
-		}
+		filePath = resolvePath(wd, filePath)
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			return llm.ErrorfToolOut("failed to read file %q: %v", name, err)

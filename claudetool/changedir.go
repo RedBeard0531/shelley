@@ -20,6 +20,21 @@ func tildeReplace(path string) string {
 	return path
 }
 
+// resolvePath resolves path against wd: it expands a leading ~ to the home
+// directory, and joins relative paths onto wd. Use this wherever a tool
+// interprets a model-supplied path, so ~ works everywhere.
+func resolvePath(wd, path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+		}
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(wd, path)
+	}
+	return filepath.Clean(path)
+}
+
 // ChangeDirTool changes the working directory for bash commands.
 type ChangeDirTool struct {
 	// WorkingDir is the shared mutable working directory.
@@ -76,11 +91,7 @@ func (c *ChangeDirTool) run(ctx context.Context, req changeDirInput) llm.ToolOut
 	currentWD := c.WorkingDir.Get()
 
 	// Resolve the path
-	targetPath := req.Path
-	if !filepath.IsAbs(targetPath) {
-		targetPath = filepath.Join(currentWD, targetPath)
-	}
-	targetPath = filepath.Clean(targetPath)
+	targetPath := resolvePath(currentWD, req.Path)
 
 	// Validate the directory exists
 	info, err := os.Stat(targetPath)
