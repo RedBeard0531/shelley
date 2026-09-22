@@ -7,7 +7,7 @@
     <div class="tool-header" @click="isExpanded = !isExpanded">
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">📄</span>
-        <span class="tool-command"
+        <span class="tool-command ellipsis-start"
           >Web Fetch{{ headerSuffix ? ": " : "" }}<span class="web-search-query">{{
             headerSuffix
           }}</span></span
