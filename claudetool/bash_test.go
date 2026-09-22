@@ -439,27 +439,46 @@ func TestExecuteBash(t *testing.T) {
 		}
 	})
 
-	// Test timeout
-	t.Run("Command Timeout", func(t *testing.T) {
-		req := bashInput{
-			Command: "sleep 1 && echo 'Should not see this'",
-		}
+	for _, tc := range []struct {
+		name   string
+		slowOK bool
+		hint   string
+	}{
+		{"Command Timeout", false, "slow_ok: true"},
+		{"Slow Command Timeout", true, "tmux"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := bashInput{
+				Command: "echo 'Before timeout'; sleep 1 && echo 'Should not see this'",
+				SlowOK:  tc.slowOK,
+			}
 
-		start := time.Now()
-		_, err := bashTool.executeBash(ctx, req, 200*time.Millisecond)
-		elapsed := time.Since(start)
+			start := time.Now()
+			_, err := bashTool.executeBash(ctx, req, 200*time.Millisecond)
+			elapsed := time.Since(start)
 
-		// Command should time out after ~200ms, not wait for the full second.
-		if elapsed >= 1*time.Second {
-			t.Errorf("Command did not respect timeout, took %v", elapsed)
-		}
+			// Command should time out after ~200ms, not wait for the full second.
+			if elapsed >= 1*time.Second {
+				t.Errorf("Command did not respect timeout, took %v", elapsed)
+			}
 
-		if err == nil {
-			t.Errorf("Expected 200ms timeout error after %v, got none", elapsed)
-		} else if !strings.Contains(err.Error(), "timed out") {
-			t.Errorf("Expected 200ms timeout error after %v, got: %v", elapsed, err)
-		}
-	})
+			if err == nil {
+				t.Errorf("Expected 200ms timeout error after %v, got none", elapsed)
+			} else if !strings.Contains(err.Error(), "timed out") {
+				t.Errorf("Expected 200ms timeout error after %v, got: %v", elapsed, err)
+			}
+			if err != nil {
+				for _, want := range []string{tc.hint, "Before timeout"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("timeout error = %q, want %q", err, want)
+					}
+				}
+				if strings.Contains(err.Error(), "Should not see this") {
+					t.Errorf("command continued after timeout: %v", err)
+				}
+			}
+		})
+	}
 }
 
 func TestBashTimeout(t *testing.T) {

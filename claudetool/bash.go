@@ -420,7 +420,11 @@ func (b *BashTool) executeBashInDir(ctx context.Context, req bashInput, timeout 
 	}
 
 	if execCtx.Err() == context.DeadlineExceeded {
-		return "", fmt.Errorf("[command timed out after %s, showing output until timeout]\n%s", timeout, out)
+		hint := " For a longer timeout, set slow_ok: true."
+		if req.SlowOK {
+			hint = " To run longer, use tmux and write output to a log file."
+		}
+		return "", fmt.Errorf("[Command timed out after %s, showing output until timeout.%s]\n%s", timeout, hint, out)
 	}
 	if execCtx.Err() == context.Canceled {
 		// cmd.Wait commonly reports only "signal: killed" after CommandContext
