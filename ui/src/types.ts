@@ -268,6 +268,11 @@ export interface GitGraphCommit {
   hasTour?: boolean;
   // True if this commit is the merge-base with @{upstream}.
   isMergeBase?: boolean;
+  // Diffstat summary (from --shortstat); absent when the commit changes
+  // nothing (e.g. merges).
+  filesChanged?: number;
+  insertions?: number;
+  deletions?: number;
 }
 
 export interface GitGraphResponse {

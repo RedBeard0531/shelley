@@ -12646,18 +12646,33 @@ a.token-cost-legend-row:hover .token-cost-legend-label {
   width: 7ch;
 }
 
-/* Override the global svg sizing so each row's graph cell uses the
-   width/height we compute inline. */
-.git-graph-svg {
+/* Graph cell: a stretchable column whose width we compute per row. The
+   svg fills it absolutely so lane lines span the full row height (rows
+   are auto-height on mobile, fixed ROW_H on desktop). */
+.git-graph-svg-cell {
   flex: 0 0 auto;
+  align-self: stretch;
+  position: relative;
+}
+
+.git-graph-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
   pointer-events: none;
   display: block;
-  width: auto !important;
-  height: auto !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Content wrapper after the graph cell. Desktop: transparent — children
+   join the row's flex line directly. Mobile (below): a two-line grid. */
+.git-graph-content {
+  display: contents;
 }
 
 .git-graph-main {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -12741,12 +12756,39 @@ a.token-cost-legend-row:hover .token-cost-legend-label {
 
 .git-graph-author {
   flex: 0 0 auto;
+  margin-left: auto;
   color: var(--text-secondary);
   font-size: 0.74rem;
   max-width: 14ch;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-sans, inherit);
+}
+
+/* Compact diffstat after the subject: "(8 files +105 −34)". Dim parens,
+   muted ins/del, one notch smaller than the row text. */
+.git-graph-row-stat {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.git-graph-row-stat .git-graph-diffstat-ins {
+  color: #4d8f52;
+}
+
+.git-graph-row-stat .git-graph-diffstat-del {
+  color: #c25f5f;
+}
+
+.dark .git-graph-row-stat .git-graph-diffstat-ins {
+  color: #7cbd87;
+}
+
+.dark .git-graph-row-stat .git-graph-diffstat-del {
+  color: #d98d8d;
 }
 
 .git-graph-time {
@@ -13093,9 +13135,40 @@ a.token-cost-legend-row:hover .token-cost-legend-label {
 }
 
 @media (max-width: 768px) {
+  /* Two-line rows: title (refs + subject) on line 1, size + time on
+     line 2, so the subject gets the full width. */
+  .git-graph-row {
+    height: auto !important;
+    padding: 0 0.5rem;
+  }
+  /* Vertical padding lives on the content so the graph svg can stretch
+     across the full row height and the lanes stay connected. */
+  .git-graph-content {
+    display: grid;
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 4px 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-content: center;
+    column-gap: 0.5rem;
+  }
+  .git-graph-main {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .git-graph-row-stat {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .git-graph-time {
+    grid-column: 2;
+    grid-row: 2;
+  }
   .git-graph-author {
     display: none;
   }
+
   /* Hide SHAs on mobile to save horizontal space; the detail sheet
      surfaces the full hash when a row is tapped. */
   .git-graph-hash {

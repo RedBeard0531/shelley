@@ -1026,6 +1026,11 @@ type GitGraphCommit struct {
 	HasTour   bool     `json:"hasTour,omitempty"`
 	// IsMergeBase indicates the commit is the merge-base with @{upstream}.
 	IsMergeBase bool `json:"isMergeBase,omitempty"`
+	// Diffstat summary from --shortstat; omitted when the commit changes
+	// nothing (e.g. merges).
+	FilesChanged int `json:"filesChanged,omitempty"`
+	Insertions   int `json:"insertions,omitempty"`
+	Deletions    int `json:"deletions,omitempty"`
 }
 
 // handleGitGraph returns the commit DAG for the graph viewer.
@@ -1066,7 +1071,10 @@ func (s *Server) handleGitGraph(w http.ResponseWriter, r *http.Request) {
 	logArgs := []string{
 		"log",
 		"--date-order",
-		"--pretty=format:%H%x00%P%x00%s%x00%an%x00%ae%x00%at%x00%D",
+		// Each record starts with a NUL so the trailing --shortstat
+		// lines stay attached to their commit when we split below.
+		"--pretty=format:%x00%H%x00%P%x00%s%x00%an%x00%ae%x00%at%x00%D",
+		"--shortstat",
 		"-n", strconv.Itoa(limit),
 	}
 	if scope == "all" {
@@ -1093,12 +1101,11 @@ func (s *Server) handleGitGraph(w http.ResponseWriter, r *http.Request) {
 	tours, _ := committour.ListNotes(gitRoot)
 
 	var commits []GitGraphCommit
-	lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "\x00")
+	records := strings.Split(strings.TrimRight(string(output), "\n"), "\n\x00")
+	for _, rec := range records {
+		rec = strings.TrimPrefix(rec, "\x00")
+		lines := strings.Split(rec, "\n")
+		parts := strings.Split(lines[0], "\x00")
 		if len(parts) < 7 {
 			continue
 		}
@@ -1134,18 +1141,22 @@ func (s *Server) handleGitGraph(w http.ResponseWriter, r *http.Request) {
 		if len(short) > 7 {
 			short = short[:7]
 		}
+		files, ins, del := parseShortstat(strings.Join(lines[1:], " "))
 		commits = append(commits, GitGraphCommit{
-			Hash:        hash,
-			ShortHash:   short,
-			Parents:     parents,
-			Subject:     parts[2],
-			Author:      parts[3],
-			Email:       parts[4],
-			Timestamp:   ts,
-			Refs:        refs,
-			IsHead:      isHead,
-			HasTour:     tours[hash],
-			IsMergeBase: mergeBase != "" && hash == mergeBase,
+			Hash:         hash,
+			ShortHash:    short,
+			Parents:      parents,
+			Subject:      parts[2],
+			Author:       parts[3],
+			Email:        parts[4],
+			Timestamp:    ts,
+			Refs:         refs,
+			IsHead:       isHead,
+			HasTour:      tours[hash],
+			IsMergeBase:  mergeBase != "" && hash == mergeBase,
+			FilesChanged: files,
+			Insertions:   ins,
+			Deletions:    del,
 		})
 	}
 
@@ -1168,6 +1179,31 @@ func (s *Server) handleGitGraph(w http.ResponseWriter, r *http.Request) {
 		"currentBranch": currentBranch,
 		"githubBase":    githubBase,
 	})
+}
+
+// parseShortstat parses a `git log --shortstat` summary line like
+// " 8 files changed, 105 insertions(+), 34 deletions(-)" (singular forms
+// included). Missing or unparsable parts are 0.
+func parseShortstat(s string) (files, ins, del int) {
+	for _, part := range strings.Split(strings.TrimSpace(s), ", ") {
+		f := strings.Fields(part)
+		if len(f) < 2 {
+			continue
+		}
+		n, err := strconv.Atoi(f[0])
+		if err != nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(f[1], "file"):
+			files = n
+		case strings.HasPrefix(f[1], "insertion"):
+			ins = n
+		case strings.HasPrefix(f[1], "deletion"):
+			del = n
+		}
+	}
+	return files, ins, del
 }
 
 // githubBaseURL returns the https://github.com/owner/repo base URL for a
