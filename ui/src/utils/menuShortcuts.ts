@@ -15,6 +15,8 @@
 //     we preventDefault. Cmd/Ctrl+Shift+P is the one hard exception: Firefox
 //     reserves it for "New Private Window" and will not deliver it to the page,
 //     so Edit File's shortcut is inert in Firefox (use the palette instead).
+//     Chrome uses Cmd/Ctrl+Shift+A for tab search (overridable, but users
+//     rely on it), so Archive uses X instead.
 //   - We match on KeyboardEvent.code (physical key) so Shift-produced glyphs
 //     ("D", "<") and keyboard layouts don't matter.
 
@@ -48,7 +50,7 @@ export const MENU_COMBOS: Record<MenuActionId, Combo> = {
   diffs: { mod: "mod", shift: true, code: "KeyD", label: "D" },
   gitGraph: { mod: "mod", shift: true, code: "KeyG", label: "G" },
   terminal: { mod: "ctrl", shift: false, code: "Backquote", label: "`" },
-  archive: { mod: "mod", shift: true, code: "KeyA", label: "A" },
+  archive: { mod: "mod", shift: true, code: "KeyX", label: "X" },
   export: { mod: "mod", shift: true, code: "KeyE", label: "E" },
   editAgentsMd: { mod: "mod", shift: true, code: "Comma", label: "," },
   editFile: { mod: "mod", shift: true, code: "KeyP", label: "P" },

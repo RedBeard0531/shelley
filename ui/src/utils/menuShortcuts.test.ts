@@ -50,7 +50,7 @@ assert(menuShortcutLabel("commandPalette") === "Ctrl+K", "commandPalette label")
 assert(menuShortcutLabel("diffs") === "Ctrl+Shift+D", "diffs label");
 assert(menuShortcutLabel("gitGraph") === "Ctrl+Shift+G", "gitGraph label");
 assert(menuShortcutLabel("terminal") === "Ctrl+`", "terminal label (ctrl, no shift)");
-assert(menuShortcutLabel("archive") === "Ctrl+Shift+A", "archive label");
+assert(menuShortcutLabel("archive") === "Ctrl+Shift+X", "archive label");
 assert(menuShortcutLabel("export") === "Ctrl+Shift+E", "export label");
 assert(menuShortcutLabel("editAgentsMd") === "Ctrl+Shift+,", "editAgentsMd label");
 assert(menuShortcutLabel("editFile") === "Ctrl+Shift+P", "editFile label");
