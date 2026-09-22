@@ -35,6 +35,8 @@ func (r *Retryer) Do(fn func() error) error {
 - whole file: `📄src/app.ts`
 - one line: `📄src/app.ts:42`
 - a range: `📄src/app.ts:42-87`
+
+Reference a git commit the same way — inline code starting with ⎇ followed by the commit hash (abbreviated or full). The hash you show is what opens: `⎇a1b2c3d` pops open that commit's diff in the viewer. Use it when pointing at work that has already been committed, e.g. "Fixed in `⎇a1b2c3d`".
 ~~~
 
 Read with line numbers (`cat -n`, `nl -ba`, `grep -n`, `rg -n`) so the reference is accurate; for a range, `nl -ba FILE | sed -n '42,87p'`.
