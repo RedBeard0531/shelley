@@ -21,6 +21,27 @@ test("the app opts into keyboard-driven layout viewport resizing", async ({ page
   );
 });
 
+// Firefox Android misrenders the dynamic toolbar when the layout viewport
+// resizes with the keyboard (bugzilla 1673517, 1920019): hiding the address
+// bar by scrolling leaves a stale unpainted band over the composer. Firefox
+// relies on the visualViewport handler in MessageInput.vue instead.
+test("the app skips keyboard-driven resizing on Firefox", async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: portrait,
+    isMobile: true,
+    hasTouch: true,
+    userAgent:
+      "Mozilla/5.0 (Android 16; Mobile; rv:144.0) Gecko/144.0 Firefox/144.0",
+  });
+  const page = await context.newPage();
+  await page.goto("/new");
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute(
+    "content",
+    /^(?!.*interactive-widget)/,
+  );
+  await context.close();
+});
+
 async function expectComposerWithinViewport(page: Page) {
   await expect(async () => {
     const viewport = await page.evaluate(() => ({
