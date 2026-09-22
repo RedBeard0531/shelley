@@ -115,6 +115,25 @@ func TestChangeDirTool(t *testing.T) {
 			t.Errorf("expected callback dir %q, got %q", subDir, callbackDir)
 		}
 	})
+
+	t.Run("tilde path expands to home directory", func(t *testing.T) {
+		wd.Set(tmpDir)
+
+		input, _ := json.Marshal(changeDirInput{Path: "~"})
+		result := tool.Tool().Run(t.Context(), input)
+
+		if result.Error != nil {
+			t.Fatalf("unexpected error: %v", result.Error)
+		}
+
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home directory")
+		}
+		if wd.Get() != home {
+			t.Errorf("expected working dir %q, got %q", home, wd.Get())
+		}
+	})
 }
 
 func TestChangeDirWithBash(t *testing.T) {
