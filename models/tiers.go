@@ -38,6 +38,10 @@ type shadowPair struct {
 var shadowPairs = []shadowPair{
 	// Clear supersessions within a family.
 	{Better: "claude-fable-5.1", Worse: "claude-fable-5"},
+	{Better: "claude-opus-5.5", Worse: "claude-opus-5"},
+	{Better: "claude-opus-5.5", Worse: "claude-opus-4.8"},
+	{Better: "claude-opus-5.5", Worse: "claude-opus-4.7"},
+	{Better: "claude-opus-5.5", Worse: "claude-opus-4.6"},
 	{Better: "claude-opus-5", Worse: "claude-opus-4.8"},
 	{Better: "claude-opus-5", Worse: "claude-opus-4.7"},
 	{Better: "claude-opus-4.8", Worse: "claude-opus-4.7"},
@@ -66,6 +70,7 @@ var shadowPairs = []shadowPair{
 	// has no way to hand it a turn budget or a stopping criterion.
 	{Better: "claude-opus-4.8", Worse: "claude-sonnet-5"},
 	{Better: "claude-opus-5", Worse: "claude-sonnet-5"},              // in case opus-4.8 isn't served
+	{Better: "claude-opus-5.5", Worse: "claude-sonnet-5"},            // in case neither older Opus is served
 	{Better: "gpt-5.6-terra", Worse: "claude-sonnet-5"},              // cheaper and stronger, and it doesn't run away with fan-out work
 	{Better: "glm-5.2-fireworks", Worse: "kimi-k2.7-code-fireworks"}, // different families; glm costs a bit more; kimi-k3 costs far more, so it doesn't shadow glm
 	{Better: "glm-5.2-fireworks", Worse: "deepseek-v4-flash-0731-fireworks"},

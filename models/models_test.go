@@ -66,6 +66,7 @@ func TestByID(t *testing.T) {
 		{id: "glm-5.3-flash-fireworks", wantID: "glm-5.3-flash-fireworks"},
 		{id: "deepseek-v4.1-flash-fireworks", wantID: "deepseek-v4.1-flash-fireworks"},
 		{id: "gpt-5.3-codex", wantID: "gpt-5.3-codex"},
+		{id: "claude-opus-5.5", wantID: "claude-opus-5.5"},
 		{id: "claude-opus-5", wantID: "claude-opus-5"},
 		{id: "claude-sonnet-5", wantID: "claude-sonnet-5"},
 		{id: "claude-sonnet-4.5", wantID: "claude-sonnet-4.5"},
@@ -114,6 +115,37 @@ func TestGPT6AstraCatalogEntry(t *testing.T) {
 	}
 	if m.DefaultBaseURL != DefaultOpenAIBaseURL {
 		t.Errorf("DefaultBaseURL = %q, want %q", m.DefaultBaseURL, DefaultOpenAIBaseURL)
+	}
+}
+
+func TestOpus55CatalogEntry(t *testing.T) {
+	m := ByID("claude-opus-5.5")
+	if m == nil {
+		t.Fatal("ByID(claude-opus-5.5) = nil, want non-nil")
+	}
+	if m.Provider != ProviderAnthropic {
+		t.Errorf("Provider = %q, want %q", m.Provider, ProviderAnthropic)
+	}
+	if m.APIType != APITypeAnthropicMessages {
+		t.Errorf("APIType = %q, want %q", m.APIType, APITypeAnthropicMessages)
+	}
+	if m.APIModelName != "claude-opus-5-5" {
+		t.Errorf("APIModelName = %q, want claude-opus-5-5", m.APIModelName)
+	}
+	if m.DefaultBaseURL != DefaultAnthropicBaseURL {
+		t.Errorf("DefaultBaseURL = %q, want %q", m.DefaultBaseURL, DefaultAnthropicBaseURL)
+	}
+	var opus55, opus5 int
+	for i, model := range All() {
+		switch model.ID {
+		case "claude-opus-5.5":
+			opus55 = i
+		case "claude-opus-5":
+			opus5 = i
+		}
+	}
+	if opus55 >= opus5 {
+		t.Errorf("catalog positions = Opus 5.5 %d, Opus 5 %d; want Opus 5.5 first", opus55, opus5)
 	}
 }
 

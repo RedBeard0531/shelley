@@ -247,6 +247,12 @@ func gemSvc(modelName string) func(baseURL, apiKey string, httpc *http.Client) l
 func All() []Model {
 	return []Model{
 		{
+			ID: "claude-opus-5.5", Provider: ProviderAnthropic,
+			Description: "Claude Opus 5.5", APIModelName: ant.Claude55Opus,
+			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
+			Build: antSvc(ant.Claude55Opus),
+		},
+		{
 			ID: "claude-opus-5", Provider: ProviderAnthropic,
 			Description: "Claude Opus 5", APIModelName: ant.Claude5Opus,
 			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,

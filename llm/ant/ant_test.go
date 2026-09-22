@@ -596,6 +596,37 @@ func TestFromLLMToolChoice(t *testing.T) {
 	}
 }
 
+func TestAdaptiveThinkingOmitsForcedToolChoice(t *testing.T) {
+	tests := []struct {
+		name       string
+		level      llm.ThinkingLevel
+		choice     llm.ToolChoice
+		wantType   string
+		wantChoice bool
+	}{
+		{name: "auto remains", level: llm.ThinkingLevelMedium, choice: llm.ToolChoice{Type: llm.ToolChoiceTypeAuto}, wantType: "auto", wantChoice: true},
+		{name: "any omitted", level: llm.ThinkingLevelMedium, choice: llm.ToolChoice{Type: llm.ToolChoiceTypeAny}},
+		{name: "specific tool omitted", level: llm.ThinkingLevelMedium, choice: llm.ToolChoice{Type: llm.ToolChoiceTypeTool, Name: "bash"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := (&Service{Model: Claude55Opus, ThinkingLevel: tt.level}).fromLLMRequest(&llm.Request{
+				Messages:   []llm.Message{llm.UserStringMessage("hi")},
+				ToolChoice: &tt.choice,
+			})
+			if !tt.wantChoice {
+				if got.ToolChoice != nil {
+					t.Fatalf("ToolChoice = %+v, want nil", got.ToolChoice)
+				}
+				return
+			}
+			if got.ToolChoice == nil || got.ToolChoice.Type != tt.wantType {
+				t.Fatalf("ToolChoice = %+v, want type %q", got.ToolChoice, tt.wantType)
+			}
+		})
+	}
+}
+
 func TestFromLLMTool(t *testing.T) {
 	tool := &llm.Tool{
 		Name:        "bash",
@@ -894,19 +925,29 @@ func TestMaxOutputTokensCapping(t *testing.T) {
 	if got4.MaxTokens != 128000 {
 		t.Errorf("Sonnet 4.6 capped: MaxTokens = %d, want 128000", got4.MaxTokens)
 	}
-	// Fable 5.1 has a 128k limit and uses adaptive thinking.
-	s5 := &Service{Model: ClaudeFable51, MaxTokens: 200000, ThinkingLevel: llm.ThinkingLevelMedium}
+	// Opus 5.5 has a 128k limit and uses adaptive thinking.
+	s5 := &Service{Model: Claude55Opus, MaxTokens: 200000, ThinkingLevel: llm.ThinkingLevelMedium}
 	got5 := s5.fromLLMRequest(simpleReq)
 	if got5.MaxTokens != 128000 {
-		t.Errorf("Fable 5.1 capped: MaxTokens = %d, want 128000", got5.MaxTokens)
+		t.Errorf("Opus 5.5 capped: MaxTokens = %d, want 128000", got5.MaxTokens)
 	}
 	if got5.Thinking == nil || got5.Thinking.Type != "adaptive" {
-		t.Errorf("Fable 5.1 thinking = %+v, want adaptive", got5.Thinking)
+		t.Errorf("Opus 5.5 thinking = %+v, want adaptive", got5.Thinking)
+	}
+
+	// Fable 5.1 has a 128k limit and uses adaptive thinking.
+	s6 := &Service{Model: ClaudeFable51, MaxTokens: 200000, ThinkingLevel: llm.ThinkingLevelMedium}
+	got6 := s6.fromLLMRequest(simpleReq)
+	if got6.MaxTokens != 128000 {
+		t.Errorf("Fable 5.1 capped: MaxTokens = %d, want 128000", got6.MaxTokens)
+	}
+	if got6.Thinking == nil || got6.Thinking.Type != "adaptive" {
+		t.Errorf("Fable 5.1 thinking = %+v, want adaptive", got6.Thinking)
 	}
 
 	// The embedded snapshot, not a handwritten Claude table, sets Sonnet 5.
-	s6 := &Service{Model: Claude5Sonnet, MaxTokens: 200000}
-	if got := s6.fromLLMRequest(simpleReq); got.MaxTokens != 128000 {
+	s7 := &Service{Model: Claude5Sonnet, MaxTokens: 200000}
+	if got := s7.fromLLMRequest(simpleReq); got.MaxTokens != 128000 {
 		t.Errorf("Sonnet 5: MaxTokens = %d, want 128000", got.MaxTokens)
 	}
 }
@@ -2931,6 +2972,7 @@ func TestUseAdaptiveThinking(t *testing.T) {
 		model string
 		want  bool
 	}{
+		{Claude55Opus, true},
 		{Claude48Opus, true},
 		{Claude47Opus, true},
 		{Claude5Opus, true},
@@ -2976,6 +3018,7 @@ func TestSupportedReasoningLevels(t *testing.T) {
 		model string
 		want  string
 	}{
+		{Claude55Opus, "low,medium,high,xhigh,max"},
 		{Claude48Opus, "low,medium,high,xhigh,max"},
 		{ClaudeFable51, "low,medium,high,xhigh,max"},
 	}
@@ -3005,6 +3048,7 @@ func TestFromLLMRequestThinkingLevels(t *testing.T) {
 		wantEffort      string
 		wantBudgetGreat int // wantBudgetGreat: BudgetTokens must equal this when set
 	}{
+		{name: "adaptive opus 5.5 default medium", model: Claude55Opus, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive default medium", model: Claude47Opus, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive fable 5.1 default medium", model: ClaudeFable51, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive req xhigh", model: Claude47Opus, svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelXHigh, wantType: "adaptive", wantEffort: "xhigh"},

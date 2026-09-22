@@ -16,6 +16,7 @@ function eq(input: string, want: string) {
 }
 
 // Anthropic
+eq("claude-opus-5.5", "Claude Opus 5.5");
 eq("claude-opus-4.8", "Claude Opus 4.8");
 eq("claude-opus-4-5", "Claude Opus 4.5");
 eq("claude-opus-4-1", "Claude Opus 4.1");

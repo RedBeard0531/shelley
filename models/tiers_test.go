@@ -3,6 +3,19 @@ package models
 import "testing"
 
 func TestAssignTiers(t *testing.T) {
+	t.Run("opus 5.5 shadows older Opus and Sonnet 5", func(t *testing.T) {
+		ids := []string{"claude-opus-5.5", "claude-opus-5", "claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-5"}
+		tiers := AssignTiers(ids)
+		if tiers["claude-opus-5.5"] != Tier1 {
+			t.Errorf("opus-5.5 tier = %d, want %d", tiers["claude-opus-5.5"], Tier1)
+		}
+		for _, id := range ids[1:] {
+			if tiers[id] != Tier2 {
+				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier2)
+			}
+		}
+	})
+
 	t.Run("Astra and Sol remain peers", func(t *testing.T) {
 		tiers := AssignTiers([]string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"})
 		for _, id := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {

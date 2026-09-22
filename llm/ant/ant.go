@@ -38,6 +38,7 @@ const (
 	Claude5Sonnet  = "claude-sonnet-5"
 	Claude47Opus   = "claude-opus-4-7"
 	Claude48Opus   = "claude-opus-4-8"
+	Claude55Opus   = "claude-opus-5-5"
 	Claude5Opus    = "claude-opus-5"
 	ClaudeFable51  = "claude-fable-5-1"
 	ClaudeFable5   = "claude-fable-5"
@@ -834,6 +835,13 @@ func (s *Service) buildRequest(r *llm.Request, stripThinking bool) *request {
 	}
 
 	applyAnthropicThinking(req, model, llm.EffectiveThinkingLevel(s.ThinkingLevel, r.ThinkingLevel), maxTokens, s.supportsThinkingBinding())
+	if req.Thinking != nil && req.Thinking.Type == "adaptive" && r.ToolChoice != nil {
+		switch r.ToolChoice.Type {
+		case llm.ToolChoiceTypeAny, llm.ToolChoiceTypeTool:
+			// Anthropic rejects forced tool choices with adaptive thinking.
+			req.ToolChoice = nil
+		}
+	}
 	return req
 }
 
