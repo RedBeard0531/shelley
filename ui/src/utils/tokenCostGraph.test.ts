@@ -4,6 +4,7 @@ import {
   buildOtherUsageBreakdown,
   buildTokenCostStack,
   callXLayout,
+  countConfirmedUnpricedCalls,
   formatDuration,
   formatTokenCount,
   formatUsd,
@@ -220,6 +221,43 @@ function entry(partial: Partial<UsageEntry>): UsageEntry {
   assert(
     pricedSubagentsOnly.conversationUnpricedCalls === 4,
     "summary: direct unpriced calls retained",
+  );
+}
+
+// A failed/new pricing lookup must not erase earlier confirmed unknowns or
+// count unavailable pricing as a confirmed unpriced model.
+{
+  const costs = { known: opusCost, unknown: null };
+  const entries = [
+    entry({ model: "known" }),
+    entry({ model: "unknown" }),
+    entry({ model: "new-model" }),
+  ];
+  assert(
+    countConfirmedUnpricedCalls(entries, costs) === 1,
+    "pricing failure preserves confirmed unknown model",
+  );
+  assert(
+    countConfirmedUnpricedCalls(entries, {}) === 0,
+    "failed initial lookup is not confirmed unpriced",
+  );
+  assert(
+    countConfirmedUnpricedCalls(
+      [
+        { model: "unknown", llm_calls: 4 },
+        { model: "new-model", llm_calls: 3 },
+      ],
+      costs,
+    ) === 4,
+    "indirect call counts preserve confirmed unknowns",
+  );
+  assert(
+    countConfirmedUnpricedCalls([{ model: "" }, {}], {}) === 2,
+    "missing model names cannot be priced",
+  );
+  assert(
+    countConfirmedUnpricedCalls([{ model: "unknown", llm_calls: 0 }], costs) === 0,
+    "zero calls stay zero",
   );
 }
 

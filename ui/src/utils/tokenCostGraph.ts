@@ -333,6 +333,18 @@ export function buildOtherUsageBreakdown(
   return { perPurpose: [...byPurpose.values()], totals };
 }
 
+/** Count only confirmed missing model prices, not pending/failed lookups.
+ * Aggregated indirect rows carry their call count; direct rows are one call. */
+export function countConfirmedUnpricedCalls(
+  rows: { model?: string; llm_calls?: number }[],
+  costs: Record<string, ModelCost | null | undefined>,
+): number {
+  return rows.reduce(
+    (sum, row) => sum + (!row.model || costs[row.model] === null ? (row.llm_calls ?? 1) : 0),
+    0,
+  );
+}
+
 export interface CostSummaryUsage {
   estimatedUsd: number;
   reportedUnpricedUsd: number;

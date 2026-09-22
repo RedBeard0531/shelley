@@ -240,6 +240,7 @@ test.describe("Context usage popup", () => {
       await route.fulfill({ json: { costs } });
     });
     let subagentRequests = 0;
+    let subagentUsd = 55.161;
     let blockSubagentRequest = false;
     let releaseSubagentRequest: (() => void) | null = null;
     await page.route("**/api/conversation/*/subagent-usage", async (route) => {
@@ -252,8 +253,22 @@ test.describe("Context usage popup", () => {
       }
       await route.fulfill({
         json: {
+          per_model: [
+            {
+              model: "review-model",
+              url: "https://review.test",
+              llm_calls: 9,
+              input_tokens: subagentUsd * 1e5,
+              output_tokens: 0,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              estimated_usd: subagentUsd,
+              reported_usd: 0,
+              cost: { input: 10, output: 10, cache_read: 10, cache_write: 10 },
+            },
+          ],
           llm_calls: 9,
-          estimated_usd: 55.161,
+          estimated_usd: subagentUsd,
           reported_usd: 0,
           unpriced_reported_usd: 0,
           unpriced_models: [],
@@ -267,7 +282,7 @@ test.describe("Context usage popup", () => {
     await page.goto(`/c/${slug}`);
     await page.locator(".context-usage-label").click();
 
-    const subagentRow = page.locator(".token-cost-model-row").filter({ hasText: "Subagents" });
+    const subagentRow = page.getByTestId("subagent-cost-row");
     await expect(subagentRow).toBeVisible({ timeout: 30000 });
     await expect(subagentRow).toContainText("$55.16");
 
@@ -292,11 +307,19 @@ test.describe("Context usage popup", () => {
     const requestsWithSlowPoll = subagentRequests;
     await page.clock.fastForward(15000);
     expect(subagentRequests).toBe(requestsWithSlowPoll);
+    subagentUsd = 60;
     blockSubagentRequest = false;
     const release = releaseSubagentRequest;
     expect(release).not.toBeNull();
     release?.();
     await expect.poll(() => releaseSubagentRequest).toBeNull();
+    await expect(subagentRow).toContainText("$60.00");
+    const subagentModels = page
+      .getByRole("region", { name: "Sub-agents", exact: true })
+      .locator(".token-cost-model-breakdown");
+    await expect(subagentModels).toContainText("review-model");
+    await expect(subagentModels).toContainText("6.0M");
+    await expect(subagentModels).toContainText("$60.00");
 
     const requestsBeforeReopen = subagentRequests;
     await page.locator(".context-usage-label").click();

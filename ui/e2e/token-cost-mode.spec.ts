@@ -89,22 +89,27 @@ for (const width of [393, 1280]) {
     await expect(popup.getByTestId("token-cost-total")).toContainText("≈$0.011");
 
     const breakdown = () =>
-      popup.locator(".token-cost-graph > .token-cost-legend").evaluate((legend) => {
-        const result: Record<string, { label: string; tokens: string }[]> = {};
-        let model = "";
-        for (const row of legend.children) {
-          if (row.matches(".token-cost-model-row")) {
-            model = row.querySelector(".token-cost-model-name")!.textContent!.trim();
-            result[model] = [];
-          } else if (row.matches(".token-cost-legend-row")) {
-            result[model].push({
-              label: row.querySelector(".token-cost-legend-label")!.textContent!.trim(),
-              tokens: row.querySelector(".token-cost-legend-tokens")!.textContent!.trim(),
-            });
+      popup
+        .getByRole("region", { name: "Main conversation", exact: true })
+        .locator(".token-cost-legend")
+        .evaluate((legend) => {
+          const result: Record<string, { label: string; tokens: string }[]> = {};
+          let model = "";
+          for (const row of legend.querySelectorAll(
+            ".token-cost-model-row, .token-cost-legend-row",
+          )) {
+            if (row.matches(".token-cost-model-row")) {
+              model = row.querySelector(".token-cost-model-name")!.textContent!.trim();
+              result[model] = [];
+            } else if (row.matches(".token-cost-legend-row")) {
+              result[model].push({
+                label: row.querySelector(".token-cost-legend-label")!.textContent!.trim(),
+                tokens: row.querySelector(".token-cost-legend-tokens")!.textContent!.trim(),
+              });
+            }
           }
-        }
-        return result;
-      });
+          return result;
+        });
     const rows = (writes: number | null, calls = 1) => [
       { label: "Output", tokens: String(100 * calls) },
       { label: "Input", tokens: `${calls}k` },

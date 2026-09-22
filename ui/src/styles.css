@@ -10795,14 +10795,14 @@ kbd {
 }
 .chat-context-popup .chat-context-popup-content {
   padding: 6px 10px;
-  max-height: min(42rem, calc(100dvh - 1rem));
+  max-height: min(42rem, var(--context-popup-available-height, calc(100dvh - 1rem)));
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 @media (max-width: 768px) {
   .chat-context-popup .chat-context-popup-content {
-    max-height: 70dvh;
+    max-height: min(70dvh, var(--context-popup-available-height, 70dvh));
   }
 }
 
@@ -11055,8 +11055,68 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+.token-cost-timeline {
+  max-width: 420px;
+  margin-inline: auto;
+}
+
+.token-cost-columns {
+  display: grid;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.token-cost-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.token-cost-column > .token-cost-legend {
+  flex: 1;
+}
+
+.token-cost-column-heading {
+  margin: 0 0 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.token-cost-model-breakdown + .token-cost-model-breakdown {
+  margin-top: 6px;
+}
+
+.token-cost-model-source {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.token-cost-subtotal-row {
+  margin-top: 8px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+}
+
+@media (min-width: 769px) {
+  .chat-context-popup.p-popover:has(.token-cost-columns-with-subagents) {
+    width: min(800px, calc(100vw - 1rem));
+  }
+
+  .token-cost-columns-with-subagents {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+  }
+
+  .chat-context-popup:has(.token-cost-columns-with-subagents) .context-composition-graph {
+    max-width: 420px;
+    margin-inline: auto;
+  }
+}
+
 .token-cost-total-row {
-  margin-top: 5px;
+  margin-top: 10px;
   padding-top: 5px;
   border-top: 1px solid var(--border);
 }

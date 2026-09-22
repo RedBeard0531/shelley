@@ -11,6 +11,7 @@
           class: 'chat-context-popup',
           id: popupId,
           'aria-label': 'Context usage',
+          style: { '--context-popup-available-height': popupAvailableHeight },
         },
         content: { class: 'chat-context-popup-content' },
       }"
@@ -130,6 +131,7 @@ const props = defineProps<{
 const distilling = ref(false);
 const usageGraph = ref<"cost" | "context">("cost");
 const popupOpen = ref(false);
+const popupAvailableHeight = ref<string>();
 const popupId = useId();
 const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
 const barRef = ref<HTMLElement | null>(null);
@@ -167,6 +169,11 @@ function openPopup(event: Event) {
 // event, including the programmatic auto-open below, so ask again here: the
 // hover/focus/click hints above are an optimization, this is the guarantee.
 function onPopupShow() {
+  // Keep a tall breakdown above its trigger, including on short viewports.
+  // Otherwise Popover clamps it to the viewport top and can cover the label.
+  if (barRef.value) {
+    popupAvailableHeight.value = `${Math.max(0, barRef.value.getBoundingClientRect().top - 16)}px`;
+  }
   popupOpen.value = true;
   props.onUsageNeeded?.();
 }

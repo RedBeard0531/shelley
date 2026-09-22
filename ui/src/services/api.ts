@@ -1031,8 +1031,23 @@ export const modelCostsApi = {
   },
 };
 
+// Descendant direct and indirect usage grouped by (model, endpoint).
+export interface SubagentModelUsageDTO {
+  model: string;
+  url: string;
+  llm_calls: number;
+  input_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  output_tokens: number;
+  estimated_usd: number;
+  reported_usd: number;
+  cost: ModelCostDTO | null;
+}
+
 // Aggregated LLM usage across a conversation's subagents (recursive).
 export interface SubagentUsageDTO {
+  per_model: SubagentModelUsageDTO[];
   llm_calls: number;
   estimated_usd: number;
   reported_usd: number;
