@@ -3,7 +3,10 @@ package claudetool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +120,46 @@ func TestBashSlowOk(t *testing.T) {
 			t.Errorf("Expected %q, got %q", expected, result[0].Text)
 		}
 	})
+}
+
+func TestBashCwd(t *testing.T) {
+	bashTool := &BashTool{WorkingDir: NewMutableWorkingDir("/")}
+	tool := bashTool.Tool()
+	dir := t.TempDir() // distinct from the shared working dir ("/")
+
+	input := json.RawMessage(fmt.Sprintf(`{"command":"pwd","cwd":%q}`, dir))
+	toolOut := tool.Run(t.Context(), input)
+	if toolOut.Error != nil {
+		t.Fatalf("Unexpected error: %v", toolOut.Error)
+	}
+	if !strings.Contains(toolOut.LLMContent[0].Text, dir) {
+		t.Errorf("Expected cwd %q in output, got %q", dir, toolOut.LLMContent[0].Text)
+	}
+	display := toolOut.Display.(BashDisplayData)
+	if display.WorkingDir != dir {
+		t.Errorf("Expected display WorkingDir %q, got %q", dir, display.WorkingDir)
+	}
+
+	// Relative cwd resolves against the shared working dir.
+	shared := t.TempDir()
+	bashTool.WorkingDir = NewMutableWorkingDir(shared)
+	if err := os.MkdirAll(filepath.Join(shared, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	input = json.RawMessage(`{"command":"pwd","cwd":"sub"}`)
+	toolOut = tool.Run(t.Context(), input)
+	if toolOut.Error != nil {
+		t.Fatalf("Unexpected error: %v", toolOut.Error)
+	}
+	if want := filepath.Join(shared, "sub"); !strings.Contains(toolOut.LLMContent[0].Text, want) {
+		t.Errorf("Expected %q in output, got %q", want, toolOut.LLMContent[0].Text)
+	}
+
+	// Nonexistent cwd is an error.
+	input = json.RawMessage(`{"command":"pwd","cwd":"/does/not/exist"}`)
+	if toolOut := tool.Run(t.Context(), input); toolOut.Error == nil {
+		t.Error("Expected error for nonexistent cwd, got nil")
+	}
 }
 
 func TestBashTool(t *testing.T) {

@@ -104,6 +104,10 @@ func (s *ShellTool) inputSchema() string {
       "description": "Seconds to wait synchronously before yielding control while the command continues running in the background. Default %d. Maximum %d.",
       "minimum": 1,
       "maximum": %d
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory for this command. Relative paths resolve against the current working directory. Default: the current working directory. Does not persist between calls; use change_dir for that."
     }
   }
 }`, def, maxs, maxs)
@@ -112,6 +116,7 @@ func (s *ShellTool) inputSchema() string {
 type shellInput struct {
 	Command          string `json:"command"`
 	YieldTimeSeconds int    `json:"yield_time_seconds,omitempty"`
+	Cwd              string `json:"cwd,omitempty"`
 }
 
 // ShellDisplayData is the display data sent to the UI for shell tool results.
@@ -180,12 +185,9 @@ func (s *ShellTool) Tool() *llm.Tool {
 }
 
 func (s *ShellTool) run(ctx context.Context, req shellInput) llm.ToolOut {
-	wd := s.WorkingDir.Get()
-	if _, err := os.Stat(wd); err != nil {
-		if os.IsNotExist(err) {
-			return llm.ErrorfToolOut("working directory does not exist: %s (use change_dir to switch to a valid directory)", wd)
-		}
-		return llm.ErrorfToolOut("cannot access working directory %s: %w", wd, err)
+	wd, errOut := resolveWorkingDir(s.WorkingDir.Get(), req.Cwd)
+	if errOut != nil {
+		return *errOut
 	}
 
 	if err := bashkit.Check(req.Command); err != nil {

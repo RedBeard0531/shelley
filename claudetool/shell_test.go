@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -42,6 +44,41 @@ func newTestShell(t *testing.T) *ShellTool {
 		DefaultYield:  2 * time.Second,
 		MaxYield:      10 * time.Second,
 		TempDir:       td,
+	}
+}
+
+func TestShellCwd(t *testing.T) {
+	s := newTestShell(t)
+	dir := t.TempDir() // distinct from the shared working dir ("/")
+
+	out, disp, err := runShell(t, s, fmt.Sprintf(`{"command":"pwd","cwd":%q}`, dir), 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, dir) {
+		t.Errorf("expected cwd %q in output, got %q", dir, out)
+	}
+	if disp == nil || disp.WorkingDir != dir {
+		t.Errorf("expected display working dir %q, got %+v", dir, disp)
+	}
+
+	// Relative cwd resolves against the shared working dir.
+	shared := t.TempDir()
+	s.WorkingDir = NewMutableWorkingDir(shared)
+	if err := os.MkdirAll(filepath.Join(shared, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = runShell(t, s, `{"command":"pwd","cwd":"sub"}`, 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := filepath.Join(shared, "sub"); !strings.Contains(out, want) {
+		t.Errorf("expected %q in output, got %q", want, out)
+	}
+
+	// Nonexistent cwd is an error.
+	if _, _, err := runShell(t, s, `{"command":"pwd","cwd":"/does/not/exist"}`, 5*time.Second); err == nil {
+		t.Error("expected error for nonexistent cwd, got nil")
 	}
 }
 

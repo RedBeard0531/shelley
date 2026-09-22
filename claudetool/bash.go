@@ -138,6 +138,10 @@ write a file and run it; both can share one call.
     "slow_ok": {
       "type": "boolean",
       "description": "Use extended timeout"
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory for this command. Relative paths resolve against the current working directory. Default: the current working directory. Does not persist between calls; use change_dir for that."
     }
   }
 }
@@ -147,6 +151,27 @@ write a file and run it; both can share one call.
 type bashInput struct {
 	Command string `json:"command"`
 	SlowOK  bool   `json:"slow_ok,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+}
+
+// resolveWorkingDir returns the directory to run a command in: the per-call
+// cwd (resolved against the shared working directory if relative) if set,
+// otherwise the shared working directory. The second return value is a
+// non-nil error ToolOut if the directory does not exist.
+func resolveWorkingDir(shared, reqCwd string) (string, *llm.ToolOut) {
+	wd := shared
+	if reqCwd != "" {
+		wd = resolvePath(shared, reqCwd)
+	}
+	if _, err := os.Stat(wd); err != nil {
+		if os.IsNotExist(err) {
+			out := llm.ErrorfToolOut("working directory does not exist: %s (use change_dir to switch to a valid directory)", wd)
+			return "", &out
+		}
+		out := llm.ErrorfToolOut("cannot access working directory %s: %w", wd, err)
+		return "", &out
+	}
+	return wd, nil
 }
 
 // BashDisplayData is the display data sent to the UI for bash tool results.
@@ -164,12 +189,9 @@ func (i *bashInput) timeout(t *Timeouts) time.Duration {
 
 func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 	// Check that the working directory exists
-	wd := b.getWorkingDir()
-	if _, err := os.Stat(wd); err != nil {
-		if os.IsNotExist(err) {
-			return llm.ErrorfToolOut("working directory does not exist: %s (use change_dir to switch to a valid directory)", wd)
-		}
-		return llm.ErrorfToolOut("cannot access working directory %s: %w", wd, err)
+	wd, errOut := resolveWorkingDir(b.getWorkingDir(), req.Cwd)
+	if errOut != nil {
+		return *errOut
 	}
 
 	// do a quick permissions check (NOT a security barrier)

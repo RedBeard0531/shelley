@@ -2244,6 +2244,9 @@ body {
   gap: 0.5rem;
   flex: 1;
   min-width: 0;
+  /* Container query context so the cwd suffix can hide itself when the
+     row is too narrow to show the command plus it. */
+  container-type: inline-size;
 }
 
 .bash-tool-emoji {
@@ -2284,6 +2287,15 @@ body {
   text-overflow: ellipsis;
   flex-shrink: 0;
   max-width: 30%;
+}
+
+/* When the summary row is narrow (e.g. folded phones, split panes), drop
+   the cwd suffix entirely rather than squeezing the command. Width-based
+   via container query, so it adapts to actual room, not device class. */
+@container (max-width: 28rem) {
+  .bash-tool-cwd {
+    display: none;
+  }
 }
 
 .bash-tool-running {
