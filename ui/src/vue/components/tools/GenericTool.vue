@@ -5,9 +5,12 @@
 <template>
   <div class="tool" :data-testid="isComplete ? 'tool-call-completed' : 'tool-call-running'">
     <div class="tool-header" @click="isExpanded = !isExpanded">
-      <div class="tool-summary">
+      <div :class="['tool-summary', { 'generic-tool-summary--complete': isComplete }]">
         <span class="tool-emoji" :class="{ running: isRunning }">⚙️</span>
-        <span class="tool-command">{{ toolName }}</span>
+        <span class="generic-tool-copy">
+          <span class="tool-command">{{ toolName }}</span>
+          <GenericToolWarning v-if="isComplete" :tool-name="toolName" />
+        </span>
       </div>
       <button
         class="tool-toggle"
@@ -43,6 +46,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
+import GenericToolWarning from "./GenericToolWarning.vue";
 import ToolChevron from "./ToolChevron.vue";
 
 const props = defineProps<{

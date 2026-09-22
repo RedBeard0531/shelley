@@ -1,5 +1,5 @@
 import { test, expect, type Locator } from '@playwright/test';
-import { createConversationViaAPI, mountAllToolCards } from './helpers';
+import { createConversationViaAPI, createConversationViaAPIWithDetails, mountAllToolCards } from './helpers';
 
 test.describe('Tool Component Verification', () => {
   // Shared smorgasbord conversation (created once, reused by multiple tests).
@@ -101,6 +101,229 @@ test.describe('Tool Component Verification', () => {
     await expect(page.locator('.tool-emoji').filter({ hasText: '⚙️' })).toHaveCount(0);
   });
 
+  test('audio transcription has a dedicated card and generic fallbacks identify themselves', async ({ page, request }) => {
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(
+      request,
+      'echo: tool card fixture',
+    );
+    const response = await request.get(`/api/conversation/${conversationId}`);
+    expect(response.ok()).toBeTruthy();
+    const body = await response.json();
+    body.conversation.agent_working = false;
+    body.messages = [
+      {
+        message_id: 'tool-card-calls',
+        conversation_id: conversationId,
+        sequence_id: 1,
+        type: 'agent',
+        llm_data: JSON.stringify({
+          Role: 1,
+          Content: [
+            {
+              ID: 'audio-transcription',
+              Type: 5,
+              ToolName: 'openai_audio_transcription',
+              ToolInput: {
+                file: '/tmp/shelley-uploads/planning-session.webm',
+                model: 'gpt-transcribe',
+                response_format: 'json',
+                prompt_chars: 1234,
+              },
+            },
+            {
+              ID: 'audio-transcription-error',
+              Type: 5,
+              ToolName: 'openai_audio_transcription',
+              ToolInput: {
+                file: '/tmp/shelley-uploads/broken-recording.webm',
+                model: 'gpt-transcribe',
+                prompt_chars: 0,
+              },
+            },
+            {
+              ID: 'unknown-tool',
+              Type: 5,
+              ToolName: 'custom_tool_missing_ui_&_#_%_雪_with_a_very_long_name',
+              ToolInput: { value: 42 },
+            },
+            {
+              ID: 'unknown-browser-action',
+              Type: 5,
+              ToolName: 'browser',
+              ToolInput: { action: 'future_action_&_#_%_雪_without_a_dedicated_component_name' },
+            },
+          ],
+          EndOfTurn: false,
+        }),
+        created_at: '2026-09-22T12:00:00Z',
+        generation: 1,
+      },
+      {
+        message_id: 'tool-card-results',
+        conversation_id: conversationId,
+        sequence_id: 2,
+        type: 'user',
+        llm_data: JSON.stringify({
+          Role: 0,
+          Content: [
+            {
+              Type: 6,
+              ToolUseID: 'audio-transcription',
+              ToolResult: [
+                {
+                  Type: 2,
+                  Text: JSON.stringify({
+                    duration_ms: 5573,
+                    model: 'gpt-transcribe',
+                    text: 'We should ship the polished transcription card this week.',
+                    timestamps_model: 'whisper-1',
+                    timestamps_path:
+                      '/tmp/shelley-uploads/planning-session.webm.transcript-timestamps.json',
+                  }),
+                },
+              ],
+              ToolUseStartTime: '2026-09-22T12:00:00Z',
+              ToolUseEndTime: '2026-09-22T12:00:05.573Z',
+            },
+            {
+              Type: 6,
+              ToolUseID: 'audio-transcription-error',
+              ToolError: true,
+              ToolResult: [
+                {
+                  Type: 2,
+                  Text: JSON.stringify({
+                    duration_ms: 931,
+                    error: 'The recording could not be transcribed.',
+                    model: 'gpt-transcribe',
+                  }),
+                },
+              ],
+              ToolUseStartTime: '2026-09-22T12:00:05.600Z',
+              ToolUseEndTime: '2026-09-22T12:00:06.531Z',
+            },
+            {
+              Type: 6,
+              ToolUseID: 'unknown-tool',
+              ToolResult: [{ Type: 2, Text: 'unknown tool output' }],
+              ToolUseStartTime: '2026-09-22T12:00:06Z',
+              ToolUseEndTime: '2026-09-22T12:00:06.100Z',
+            },
+            {
+              Type: 6,
+              ToolUseID: 'unknown-browser-action',
+              ToolResult: [{ Type: 2, Text: 'unknown browser action output' }],
+              ToolUseStartTime: '2026-09-22T12:00:07Z',
+              ToolUseEndTime: '2026-09-22T12:00:07.100Z',
+            },
+          ],
+          EndOfTurn: false,
+        }),
+        created_at: '2026-09-22T12:00:08Z',
+        generation: 1,
+      },
+    ];
+
+    await page.route('**/api/stream2*', (route) => route.abort());
+    await page.route(`**/api/conversation/${conversationId}`, (route) =>
+      route.fulfill({ json: body }),
+    );
+    await page.goto(`/c/${slug}`);
+
+    const transcriptions = page.locator('.audio-transcription-tool');
+    await expect(transcriptions).toHaveCount(2);
+    const transcription = transcriptions.filter({ hasText: 'planning-session.webm' });
+    await expect(transcription).toBeVisible();
+    await expect(transcription).toHaveAttribute('data-testid', 'tool-call-completed');
+    await expect(transcription).toContainText('Audio transcription');
+    await expect(transcription).toContainText('planning-session.webm');
+    await expect(transcription).toContainText('gpt-transcribe');
+    await expect(transcription).toContainText('5.6s');
+    await expect(transcription).not.toContainText('duration_ms');
+    await expect(transcription).not.toContainText(
+      'We should ship the polished transcription card this week.',
+    );
+    expect(
+      await transcription
+        .locator('.tool-header')
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
+
+    await transcription.locator('.tool-header').click();
+    await expect(transcription).toContainText(
+      'We should ship the polished transcription card this week.',
+    );
+    await expect(transcription).toContainText('1,234 prompt characters');
+    await expect(transcription).toContainText('whisper-1');
+    await expect(transcription).toContainText('planning-session.webm.transcript-timestamps.json');
+    expect(
+      await transcription.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
+
+    const failedTranscription = transcriptions.filter({ hasText: 'broken-recording.webm' });
+    await expect(failedTranscription).toContainText('failed');
+    await failedTranscription.locator('.tool-header').click();
+    await expect(failedTranscription).toContainText('Error:');
+    await expect(failedTranscription).toContainText('The recording could not be transcribed.');
+    await expect(failedTranscription).not.toContainText('Transcript:');
+
+    const rawGenericSummary = page.locator('.tool-result-summary');
+    expect(
+      await rawGenericSummary.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
+    const browserGeneric = page
+      .locator('.tool')
+      .filter({ hasText: 'browser (future_action_&_#_%_雪_without_a_dedicated_component_name)' });
+    expect(
+      await browserGeneric
+        .locator('.tool-header')
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    ).toBe(true);
+
+    const rawWarning = rawGenericSummary.locator('a.generic-tool-warning');
+    const browserWarning = browserGeneric.locator('a.generic-tool-warning');
+    for (const [link, toolName] of [
+      [rawWarning, 'custom_tool_missing_ui_&_#_%_雪_with_a_very_long_name'],
+      [browserWarning, 'browser (future_action_&_#_%_雪_without_a_dedicated_component_name)'],
+    ] as const) {
+      await expect(link).toHaveAttribute(
+        'aria-label',
+        `GENERIC TOOL RESULT (Please report a bug) — missing UI for ${toolName} (opens in new tab)`,
+      );
+      await expect(link).toHaveAttribute('target', '_blank');
+      await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+      const href = await link.getAttribute('href');
+      expect(href).toBeTruthy();
+      const url = new URL(href!);
+      expect(`${url.origin}${url.pathname}`).toBe(
+        'https://github.com/boldsoftware/shelley/issues/new',
+      );
+      expect(url.searchParams.get('labels')).toBe('bug');
+      expect(url.searchParams.get('title')).toBe(`Missing tool UI: ${toolName}`);
+      expect(url.searchParams.get('body')).toContain(`**Tool:** \`${toolName}\``);
+    }
+
+    const rawDetails = rawGenericSummary.locator('xpath=ancestor::details');
+    await expect(rawDetails).not.toHaveAttribute('open', '');
+    const rawPopupPromise = page.waitForEvent('popup');
+    await rawWarning.click({ noWaitAfter: true });
+    (await rawPopupPromise).close();
+    await expect(rawDetails).not.toHaveAttribute('open', '');
+    await rawWarning.focus();
+    await rawWarning.press('Space');
+    await expect(rawDetails).not.toHaveAttribute('open', '');
+
+    const browserPopupPromise = page.waitForEvent('popup');
+    await browserWarning.click({ noWaitAfter: true });
+    (await browserPopupPromise).close();
+    await expect(browserGeneric.locator('.tool-details')).toBeHidden();
+
+    const warnings = page.getByText('GENERIC TOOL RESULT (Please report a bug)', { exact: true });
+    await expect(warnings).toHaveCount(2);
+    await expect(warnings.first()).toBeVisible();
+    await expect(warnings.last()).toBeVisible();
+  });
+
   test('generic tool audit stays inside its card on mobile', async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 800 });
     await page.goto('/new');
@@ -110,14 +333,26 @@ test.describe('Tool Component Verification', () => {
           <details class="tool-result-details">
             <summary class="tool-result-summary">
               <div class="tool-result-meta">
-                <div class="tool-result-primary flex items-center space-x-2">
+                <div class="tool-result-primary flex space-x-2">
                   <svg class="chat-tool-icon"></svg>
-                  <span class="tool-result-name text-sm font-medium text-blue">
-                    openai_audio_transcription
-                  </span>
-                  <span class="tool-result-status text-xs">
-                    {"duration_ms":1731,"model":"gpt-transcribe"}...
-                  </span>
+                  <div class="generic-tool-result-summary">
+                    <div class="generic-tool-result-heading">
+                      <span class="tool-result-name text-sm font-medium text-blue">
+                        custom_tool_missing_ui
+                      </span>
+                      <a
+                        class="generic-tool-warning"
+                        href="https://github.com/boldsoftware/shelley/issues/new"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        GENERIC TOOL RESULT (Please report a bug)
+                      </a>
+                    </div>
+                    <span class="tool-result-status text-xs">
+                      unknown tool output that must remain inside the card
+                    </span>
+                  </div>
                 </div>
                 <div class="tool-result-time"></div>
               </div>
@@ -130,15 +365,19 @@ test.describe('Tool Component Verification', () => {
     const card = page.locator('.tool-result-details');
     const summary = page.locator('.tool-result-summary');
     const status = page.locator('.tool-result-status');
+    const warning = page.locator('.generic-tool-warning');
     await expect(card).toBeVisible();
+    await expect(warning).toBeVisible();
     expect(await summary.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
       true,
     );
-    const statusBox = await status.boundingBox();
-    const summaryBox = await summary.boundingBox();
-    expect((statusBox?.x ?? 0) + (statusBox?.width ?? 0)).toBeLessThanOrEqual(
-      (summaryBox?.x ?? 0) + (summaryBox?.width ?? 0),
-    );
+    for (const element of [status, warning]) {
+      const elementBox = await element.boundingBox();
+      const summaryBox = await summary.boundingBox();
+      expect((elementBox?.x ?? 0) + (elementBox?.width ?? 0)).toBeLessThanOrEqual(
+        (summaryBox?.x ?? 0) + (summaryBox?.width ?? 0),
+      );
+    }
   });
 
   test('bash tool shows command in header', async ({ page, request }) => {

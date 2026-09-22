@@ -1783,6 +1783,11 @@ body {
 
 .tool-result-primary {
   min-width: 0;
+  align-items: flex-start;
+}
+
+.tool-result-primary .chat-tool-icon {
+  margin-top: 0.1rem;
 }
 
 .tool-result-name,
@@ -1806,10 +1811,6 @@ body {
     display: grid;
     flex: 1 1 auto;
     grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .tool-result-primary .tool-result-status {
-    grid-column: 2;
   }
 }
 
@@ -1870,6 +1871,7 @@ body {
   --tool-card-placeholder-outer-size: 68px;
 }
 
+.tool-card-mount-placeholder--audio,
 .tool-card-mount-placeholder--output-iframe {
   --tool-card-placeholder-outer-size: 84px;
 }
@@ -1958,6 +1960,136 @@ body {
   color: var(--text-secondary);
   font-weight: 500;
   white-space: nowrap;
+}
+
+.generic-tool-result-summary {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+.generic-tool-result-heading {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.generic-tool-summary--complete {
+  align-items: flex-start;
+}
+
+.generic-tool-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+.generic-tool-warning {
+  display: inline-flex;
+  max-width: 100%;
+  border: 1px solid var(--error-border);
+  border-radius: 0.25rem;
+  padding: 0.15rem 0.4rem;
+  background: var(--error-bg);
+  color: var(--error-text);
+  font-family: var(--font-sans);
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+  align-self: flex-start;
+}
+
+.generic-tool-warning:hover {
+  text-decoration: underline;
+}
+
+.generic-tool-warning:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.audio-transcription-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.audio-transcription-title-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.audio-transcription-title-row .tool-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audio-transcription-title {
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.audio-transcription-filename {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-transcription-controls {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.audio-transcription-error-status {
+  color: var(--error-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.audio-transcription-request {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.audio-transcription-transcript {
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.audio-transcription-transcript--error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
 }
 
 .subagent-model-badge {

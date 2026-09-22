@@ -39,6 +39,8 @@ export function toolEmoji(name: string | undefined | null, input?: unknown): str
     if (action.startsWith("profile")) return "📊";
   }
   switch (name) {
+    case "openai_audio_transcription":
+      return "🎙️";
     case "bash":
     case "shell":
       return "🛠️";
@@ -322,6 +324,7 @@ export function toolHeadline(
     case "shell":
       return bashHeadline(summary, maxLen);
     case "patch":
+    case "openai_audio_transcription":
       return summary ? basename(summary) : n;
     case "change_dir":
       return summary || n;
@@ -364,6 +367,8 @@ function inputSummary(name: string | undefined | null, input: unknown): string {
       return pick("selector", "url");
     case "read_image":
       return pick("path", "url");
+    case "openai_audio_transcription":
+      return pick("file");
     case "browser_navigate":
       return pick("url");
     case "keyword_search":

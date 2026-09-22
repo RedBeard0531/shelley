@@ -127,6 +127,15 @@ run("emoji unchanged for shell", () => {
   assert(toolEmoji("bash") === "\u{1F6E0}\uFE0F", "wrench");
 });
 
+run("audio transcription uses its microphone icon and recording filename", () => {
+  const input = { file: "/tmp/shelley-uploads/meeting.webm" };
+  assert(toolEmoji("openai_audio_transcription") === "🎙️", "transcription icon");
+  assert(
+    toolHeadline("openai_audio_transcription", input) === "meeting.webm",
+    "transcription filename",
+  );
+});
+
 run("umbrella browser tool picks per-family emoji for folded-in actions", () => {
   const cases: Array<[string, string]> = [
     ["emulate_device", "\u{1F4F1}"],
