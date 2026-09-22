@@ -3,7 +3,7 @@
 //   - ChatInterface.vue     -> matches keydown events and invokes the same
 //                              handler the menu click would
 //
-// Command Palette (Cmd/Ctrl+K) and Edit File (Cmd/Ctrl+Shift+P) are matched in
+// Command Palette (Cmd/Ctrl+K) and Edit File (Cmd/Ctrl+P) are matched in
 // App.vue, which owns those two modals. Recording shortcuts also live in App.vue.
 // Their display labels live here too so menus can render consistent hints.
 //
@@ -12,13 +12,15 @@
 //     Cmd+W close, Cmd+N new window, ...) and never deliver them to the page,
 //     so we cannot use them. Cmd/Ctrl+Shift+<letter> is mostly available; a few
 //     have overridable browser defaults (bookmark-all, find-previous, ...) that
-//     we preventDefault. Cmd/Ctrl+Shift+P is the one hard exception: Firefox
-//     reserves it for "New Private Window" and will not deliver it to the page,
-//     so Edit File's shortcut is inert in Firefox (use the palette instead).
-//     Chrome uses Cmd/Ctrl+Shift+A for tab search (overridable, but users
-//     rely on it), so Archive uses X instead.
+//     we preventDefault. The hard exceptions we avoid: Firefox reserves
+//     Cmd/Ctrl+Shift+P for "New Private Window" and never delivers it (so
+//     Edit File uses Cmd/Ctrl+P instead), and Chrome's Cmd/Ctrl+Shift+A is
+//     tab search that users rely on (so Archive uses X).
 //   - We match on KeyboardEvent.code (physical key) so Shift-produced glyphs
 //     ("D", "<") and keyboard layouts don't matter.
+//
+// Edit File uses Cmd/Ctrl+P (the browser's print shortcut, which is
+// overridable via preventDefault in all major browsers, including Firefox).
 
 export const isMac =
   typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC");
@@ -53,7 +55,7 @@ export const MENU_COMBOS: Record<MenuActionId, Combo> = {
   archive: { mod: "mod", shift: true, code: "KeyX", label: "X" },
   export: { mod: "mod", shift: true, code: "KeyE", label: "E" },
   editAgentsMd: { mod: "mod", shift: true, code: "Comma", label: "," },
-  editFile: { mod: "mod", shift: true, code: "KeyP", label: "P" },
+  editFile: { mod: "mod", shift: false, code: "KeyP", label: "P" },
   checkVersion: { mod: "mod", shift: true, code: "KeyU", label: "U" },
   recordAudio: { mod: "mod", shift: true, code: "KeyM", label: "M" },
   recordScreen: { mod: "mod", alt: true, shift: true, code: "KeyM", label: "M" },
@@ -106,6 +108,3 @@ export function matchChatInterfaceAction(e: KeyboardEvent): MenuActionId | null 
   return null;
 }
 
-/** Firefox reserves Cmd/Ctrl+Shift+P; the Edit File shortcut is inert there. */
-export const isFirefox =
-  typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("firefox");

@@ -299,7 +299,6 @@ export interface TranslationKeys {
   editUserAgentsMd: string;
   editFile: string;
   editFileShortcut: string;
-  editFileShortcutFirefox: string;
 
   // Sidebar buttons
   openConversations: string;

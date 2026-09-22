@@ -53,7 +53,7 @@ assert(menuShortcutLabel("terminal") === "Ctrl+`", "terminal label (ctrl, no shi
 assert(menuShortcutLabel("archive") === "Ctrl+Shift+X", "archive label");
 assert(menuShortcutLabel("export") === "Ctrl+Shift+E", "export label");
 assert(menuShortcutLabel("editAgentsMd") === "Ctrl+Shift+,", "editAgentsMd label");
-assert(menuShortcutLabel("editFile") === "Ctrl+Shift+P", "editFile label");
+assert(menuShortcutLabel("editFile") === "Ctrl+P", "editFile label");
 assert(menuShortcutLabel("checkVersion") === "Ctrl+Shift+U", "checkVersion label");
 
 assert(menuShortcutLabel("recordAudio") === "Ctrl+Shift+M", "audio recording label");

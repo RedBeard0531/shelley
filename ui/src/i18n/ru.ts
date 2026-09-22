@@ -307,8 +307,6 @@ export const ru: TranslationKeys = {
   editFile: "Редактировать файл…",
 
   editFileShortcut: "Открыть поиск файлов",
-  editFileShortcutFirefox:
-    "Firefox резервирует это сочетание для приватного окна — используйте палитру команд (Cmd/Ctrl+K)",
   openConversations: "Открыть диалоги",
   commandMenu: "Меню команд",
   expandSidebar: "Развернуть боковую панель",
