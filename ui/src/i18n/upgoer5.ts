@@ -306,8 +306,6 @@ export const upgoer5: TranslationKeys = {
   editFile: "Change a words file…",
 
   editFileShortcut: "Open the box that finds files",
-  editFileShortcutFirefox:
-    "This computer program keeps this key press for its own hidden window — use the big command box (Cmd/Ctrl+K) instead",
   openConversations: "Open talks",
   commandMenu: "Do-stuff box",
   expandSidebar: "Make side bigger",

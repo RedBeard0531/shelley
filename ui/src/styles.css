@@ -8653,12 +8653,6 @@ button.tour-visibility-control:focus-visible,
   white-space: nowrap;
 }
 
-/* Edit File's shortcut is inert in Firefox (reserved for private window). */
-.overflow-menu-shortcut-inert kbd {
-  opacity: 0.5;
-  text-decoration: line-through;
-}
-
 .command-palette-footer {
   display: flex;
   gap: 1rem;

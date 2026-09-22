@@ -343,7 +343,7 @@ const terminalTrigger = ref(0);
 const modelsModalOpen = ref(false);
 const notificationsModalOpen = ref(false);
 const featureFlagsModalOpen = ref(false);
-// Fuzzy file finder (Cmd/Ctrl+Shift+P) + the generic editor it opens.
+// Fuzzy file finder (Cmd/Ctrl+P) + the generic editor it opens.
 const fileFinderOpen = ref(false);
 const editorFilePath = ref<string | null>(null);
 // Comment submitted from the file editor's comment mode, to be injected into
@@ -837,9 +837,9 @@ function handleKeyDown(e: KeyboardEvent) {
     return;
   }
 
-  // Cmd/Ctrl+Shift+P opens the fuzzy file finder. `e.key` is "P" (uppercase)
-  // when Shift is held; also accept "p" defensively across layouts.
-  if (modifierPressed && e.shiftKey && (e.key === "p" || e.key === "P")) {
+  // Cmd/Ctrl+P opens the fuzzy file finder (overrides the browser's print
+  // shortcut, which all major browsers let us preventDefault).
+  if (modifierPressed && !e.shiftKey && e.key === "p") {
     e.preventDefault();
     fileFinderOpen.value = true;
     return;

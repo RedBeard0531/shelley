@@ -307,8 +307,6 @@ export const en: TranslationKeys = {
   editFile: "Edit File…",
 
   editFileShortcut: "Open the file finder",
-  editFileShortcutFirefox:
-    "Firefox reserves this shortcut for a private window — use the command palette (Cmd/Ctrl+K) instead",
   openConversations: "Open conversations",
   commandMenu: "Command menu",
   expandSidebar: "Expand sidebar",

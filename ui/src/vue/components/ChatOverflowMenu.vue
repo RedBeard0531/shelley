@@ -182,10 +182,7 @@
       <button class="overflow-menu-item" @click="onEditFile">
         <i class="pi pi-file-edit chat-menu-icon" aria-hidden="true" />
         {{ t("editFile") }}
-        <span
-          v-tooltip.bottom="editFileShortcutTooltip"
-          class="overflow-menu-shortcut"
-          :class="{ 'overflow-menu-shortcut-inert': isFirefox }"
+        <span class="overflow-menu-shortcut" v-tooltip.bottom="t('editFileShortcut')"
           ><kbd>{{ menuShortcutLabel("editFile") }}</kbd></span
         >
       </button>
@@ -361,7 +358,7 @@ import type { Link } from "../../types";
 import type { Locale } from "../../i18n/types";
 import { useI18n } from "../composables/i18n";
 import { useConversationView } from "../composables/conversationView";
-import { menuShortcutLabel, isFirefox } from "../../utils/menuShortcuts";
+import { menuShortcutLabel } from "../../utils/menuShortcuts";
 import { tildifyPath } from "../../utils/tildify";
 import { type ThemeMode, getStoredTheme, setStoredTheme, applyTheme } from "../../services/theme";
 import {
@@ -397,13 +394,6 @@ const emit = defineEmits<{
 
 const { t, locale, setLocale } = useI18n();
 const { conversationViewMode, setConversationViewMode } = useConversationView();
-
-// Edit File uses Cmd/Ctrl+Shift+P (VS Code parity). Firefox reserves that combo
-// for "New Private Window" and never delivers it to the page, so the shortcut
-// is inert there; explain that on hover rather than silently misleading users.
-const editFileShortcutTooltip = computed(() =>
-  isFirefox ? t("editFileShortcutFirefox") : t("editFileShortcut"),
-);
 
 const triggerRef = ref<{ $el: HTMLButtonElement } | null>(null);
 const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
