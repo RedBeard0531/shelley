@@ -66,6 +66,34 @@ export function parseFileRef(text: string): FileRef | null {
   return { path, line, endLine };
 }
 
+// A commit reference: an inline-code span marked with ⎇ followed by a git
+// commit hash — abbreviated (6 hex chars, the shortest git's own output is
+// allowed to be without ambiguity) or full (64, the SHA-256 object format;
+// SHA-1's 40 sits inside the same range). The marker is the same move
+// as 📄: hex runs are common, so only the author's mark makes one a commit,
+// and the mark is what makes the grammar an allowlist rather than a puzzle.
+export interface CommitRef {
+  hash: string;
+}
+
+const COMMIT_MARKER = "⎇";
+const COMMIT_MARKER_RE = /^⎇\uFE0F?/;
+
+// Case-insensitive: git accepts and prints hashes in either case, and the chip
+// displays what was written. Up to 64 hex chars, so a full SHA-256 hash parses;
+// the server resolves whatever length arrives against the repo's own format.
+const HASH_RE = /^([0-9a-f]{6,64})$/i;
+
+// parseCommitRef mirrors parseFileRef: it reads a marked span or the text of a
+// rendered chip — the same string, so what a chip displays and what it opens
+// cannot disagree. Anything that is not marker-plus-hash (a branch name, HEAD~1,
+// a longer-than-64-hex-char run) is not a reference.
+export function parseCommitRef(text: string): CommitRef | null {
+  if (!COMMIT_MARKER_RE.test(text)) return null;
+  const m = HASH_RE.exec(text.replace(COMMIT_MARKER_RE, "").trim());
+  return m ? { hash: m[1] } : null;
+}
+
 // refText is the text of a reference: the marker, the path, and the line or
 // range in canonical form, so `:007` displays as `:7` and a reversed range in
 // the order it opens.
@@ -118,6 +146,13 @@ function fileRefAnchor(ref: FileRef): string {
   return `<a href="#" class="file-ref">${refText(ref)}</a>`;
 }
 
+// commitRefAnchor renders a commit reference as a chip, by the same contract as
+// fileRefAnchor: the hash lives in the chip's own text, and the click handler
+// re-parses the label.
+function commitRefAnchor(ref: CommitRef): string {
+  return `<a href="#" class="commit-ref">${COMMIT_MARKER}${ref.hash}</a>`;
+}
+
 // buildMarked returns a Marked instance that rewrites local-path image tokens
 // to the per-message file endpoint. Remote images are left with their original
 // href (and later stripped by the sanitizer); data images are passed through.
@@ -154,16 +189,18 @@ function buildMarked(
       }
     },
     renderer: {
-      // Marked file references (`📄path:line` inline code) render as chips.
-      // References are a feature of agent replies: a host rendering text the
-      // agent didn't write (tool output, a fetched page, the export preview)
-      // leaves them as plain code, and anything else falls through to the
-      // default <code> rendering (marked's object-renderer contract: return
-      // false for the default).
+      // Marked file references (`📄path:line` inline code) and commit
+      // references (`⎇hash`) render as chips. References are a feature of
+      // agent replies: a host rendering text the agent didn't write (tool
+      // output, a fetched page, the export preview) leaves them as plain code,
+      // and anything else falls through to the default <code> rendering
+      // (marked's object-renderer contract: return false for the default).
       codespan(span) {
         if (!refs) return false;
-        const ref = parseFileRef(span.text);
-        return ref ? fileRefAnchor(ref) : false;
+        const file = parseFileRef(span.text);
+        if (file) return fileRefAnchor(file);
+        const commit = parseCommitRef(span.text);
+        return commit ? commitRefAnchor(commit) : false;
       },
     },
   });
@@ -200,12 +237,13 @@ function linkifyCodeSpans(root: HTMLElement, localhostLinks?: LocalhostLinkOptio
 // Make all links open in new tabs, and restrict <input> to checkboxes only.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
-    // A file-reference chip opens the in-app editor via MarkdownContent's
-    // delegated click handler and never navigates, so its href stays inert and
-    // it gets no new-tab target. Such a chip carries its reference in its own
-    // text (see fileRefAnchor), which is what makes a forged one harmless: the
-    // handler reads the label, so it can only ever open what it displays.
-    if (node.classList.contains("file-ref")) {
+    // A file-reference or commit-reference chip opens the in-app editor /
+    // commit viewer via MarkdownContent's delegated click handler and never
+    // navigates, so its href stays inert and it gets no new-tab target. Such a
+    // chip carries its reference in its own text (see fileRefAnchor and
+    // commitRefAnchor), which is what makes a forged one harmless: the handler
+    // reads the label, so it can only ever open what it displays.
+    if (node.classList.contains("file-ref") || node.classList.contains("commit-ref")) {
       node.setAttribute("href", "#");
       node.removeAttribute("target");
       node.removeAttribute("rel");

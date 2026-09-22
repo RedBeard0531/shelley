@@ -191,7 +191,7 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 		// Clickable `path:line`/`path:start-end` references, including the
 		// reference-then-fenced-block pattern the system prompt teaches. Paths
 		// are relative so they resolve against the conversation cwd.
-		return s.makeResponse(fileReferencesMarkdown, inputTokens), nil
+		return s.makeResponse(fileReferencesMarkdown+"\n\n"+commitReferencesMarkdown, inputTokens), nil
 
 	case "web search", "citations":
 		// Reproduce the Anthropic server-side web-search shape: a server_tool_use
@@ -1196,3 +1196,15 @@ func Farewell(name string) string {
 ` + "```" + `
 
 And unmarked spans that must stay plain code: ` + "`server/system_prompt.txt:1-3`" + ` and ` + "`127.0.0.1:8080`" + `.`
+
+// commitReferencesMarkdown exercises the clickable commit-reference format:
+// inline code marked with ⎇ plus a hash that opens the commit in the diff
+// viewer. Short and full hashes both parse; the unmarked spans are the
+// regression guard (an unmarked hash, a branch name, HEAD~1, and hashes too
+// short or too long to be a git hash must all stay plain code).
+const commitReferencesMarkdown = `Here are some commit references to test:
+
+A short hash: ` + "`⎇a1b2c3d`" + ` and a full one: ` + "`⎇a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0`" + ` — both open the commit viewer.
+
+Unmarked spans that must stay plain code: ` + "`a1b2c3d`" + `, ` + "`⎇main`" + `, ` + "`⎇HEAD~1`" + `, ` + "`⎇a1b2c`" + `, and ` + "`⎇a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c`" + `.`
+

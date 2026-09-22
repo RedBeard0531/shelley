@@ -31,6 +31,7 @@ import { applyHighlightTokens } from "../../utils/codeHighlight";
 import { COMMENT_ICON } from "../../utils/icons";
 import { localhostLinkOptionsFromInit } from "../../utils/linkify";
 import {
+  parseCommitRef,
   parseFileRef,
   renderMarkdownToSafeHTML,
   type MarkdownRenderInfo,
@@ -38,6 +39,7 @@ import {
 import { perfWrap } from "../../utils/perf";
 import { handleImageCommentClick, openImageComment } from "../composables/imageComment";
 import { OpenFileEditorKey } from "../composables/fileEditor";
+import { OpenCommitViewerKey } from "../composables/commitViewer";
 import { whenNearViewport } from "../composables/nearViewport";
 
 const props = defineProps<{
@@ -67,9 +69,10 @@ const props = defineProps<{
   // it rather than the conversation's current cwd; without it the opener
   // falls back to the current cwd.
   cwd?: string;
-  // Render file references (`📄path:line`) as chips that open the editor. Off
+  // Render file references (`📄path:line`) and commit references (`⎇hash`) as
+  // chips that open the editor / commit viewer. Off
   // by default: references are a feature of agent replies, so only the hosts
-  // rendering those ask for it (a host with no editor to open passes nothing).
+  // rendering those ask for it (a host with no opener to call passes nothing).
   fileRefs?: boolean;
   // Live-streaming text (the chat streaming preview): the trailing fenced
   // block's fence may still be open, so its highlighting must wait for the
@@ -81,11 +84,15 @@ const props = defineProps<{
 
 const containerRef = ref<HTMLDivElement | null>(null);
 
-// Host for file-reference clicks (message views are under App, which provides
-// the editor opener). A reference is only rendered when a host both says its
-// text is the agent's and has somewhere to open it.
+// Hosts for file-reference and commit-reference clicks (message views are under
+// ChatInterface, which provides the commit-viewer opener, and under App, which
+// provides the editor opener). A reference is only rendered when a host both
+// says its text is the agent's and has somewhere to open it.
 const fileOpener = inject(OpenFileEditorKey, null);
-const renderFileRefs = computed(() => props.fileRefs === true && fileOpener !== null);
+const commitOpener = inject(OpenCommitViewerKey, null);
+const renderFileRefs = computed(
+  () => props.fileRefs === true && fileOpener !== null && commitOpener !== null,
+);
 
 // Highlighting swaps a block's single text node for one span per token —
 // measured at 22% of all DOM elements in a large conversation when done
@@ -296,16 +303,17 @@ async function copyCodeBlock(button: HTMLButtonElement): Promise<void> {
   }
 }
 
-// Activate a file-reference chip: open the editor at the line it names,
-// selecting the range when it carries one (a reference without a line opens at
-// line 1). The reference is read back out of the chip's own text, so a chip
-// cannot open something other than what it displays. Returns whether the event
-// targeted a reference.
-function onFileRefActivate(e: MouseEvent | KeyboardEvent): boolean {
-  const anchor = (e.target as HTMLElement | null)?.closest?.("a.file-ref");
+// Activate a reference chip: a file reference opens the editor at the line it
+// names, selecting the range when it carries one (a reference without a line
+// opens at line 1); a commit reference opens the commit viewer at that commit.
+// The reference is read back out of the chip's own text, so a chip cannot open
+// something other than what it displays. Returns whether the event targeted a
+// reference.
+function onRefActivate(e: MouseEvent | KeyboardEvent): boolean {
+  const anchor = (e.target as HTMLElement | null)?.closest?.("a.file-ref, a.commit-ref");
   // A chip is only live where this host renders references (text the agent
-  // wrote, and an editor to open). HTML claiming the class anywhere else — a
-  // fetched page, tool output, a tour annotation — is inert rather than a way
+  // wrote, and an opener to activate). HTML claiming the class anywhere else —
+  // a fetched page, tool output, a tour annotation — is inert rather than a way
   // into the editor.
   if (!anchor || !renderFileRefs.value) return false;
   // Claim the event before any refusal, so an inert href cannot act as a jump.
@@ -313,7 +321,7 @@ function onFileRefActivate(e: MouseEvent | KeyboardEvent): boolean {
   // One text node: a child element can be styled away, which would let a label
   // show one path while contributing a different one to textContent.
   if (anchor.children.length > 0) return true;
-  // A chip the reader cannot see must not open a file: CSS can hide it (a
+  // A chip the reader cannot see must not open anything: CSS can hide it (a
   // clipping class, a wrapper) and it is still in the tab order, so Enter on an
   // invisible chip would otherwise open something nobody can read. Require the
   // label to fit inside the box the anchor paints. Not airtight — a wrapper can
@@ -327,10 +335,16 @@ function onFileRefActivate(e: MouseEvent | KeyboardEvent): boolean {
   // Layout is not paint: a class can make the chip fully transparent, which the
   // rect check above cannot see.
   if (!anchor.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return true;
-  const ref = parseFileRef(anchor.textContent ?? "");
-  // Autorepeat must not reopen the editor for every repeat.
-  if (ref && fileOpener && !(e instanceof KeyboardEvent && e.repeat)) {
-    fileOpener(ref.path, { line: ref.line ?? 1, endLine: ref.endLine, baseDir: props.cwd || undefined });
+  // Autorepeat must not reopen the viewer for every repeat.
+  if (e instanceof KeyboardEvent && e.repeat) return true;
+  if (anchor.classList.contains("commit-ref")) {
+    const ref = parseCommitRef(anchor.textContent ?? "");
+    if (ref && commitOpener) commitOpener(ref.hash);
+  } else {
+    const ref = parseFileRef(anchor.textContent ?? "");
+    if (ref && fileOpener) {
+      fileOpener(ref.path, { line: ref.line ?? 1, endLine: ref.endLine, baseDir: props.cwd || undefined });
+    }
   }
   return true;
 }
@@ -339,7 +353,7 @@ function onFileRefActivate(e: MouseEvent | KeyboardEvent): boolean {
 // href and open a second copy of the app in a new tab; the editor is the only
 // destination a reference has.
 function onAuxActivate(e: MouseEvent) {
-  if ((e.target as HTMLElement | null)?.closest?.("a.file-ref")) e.preventDefault();
+  if ((e.target as HTMLElement | null)?.closest?.("a.file-ref, a.commit-ref")) e.preventDefault();
 }
 
 function onActivate(e: MouseEvent | KeyboardEvent) {
@@ -358,8 +372,8 @@ function onActivate(e: MouseEvent | KeyboardEvent) {
     // activate links, and either key would otherwise also trigger the
     // href="#" default jump. Handle both explicitly; preventDefault stops
     // the default so no synthetic click follows.
-    if (!e.repeat && (e.key === "Enter" || e.key === " ") && onFileRefActivate(e)) return;
-  } else if (onFileRefActivate(e)) {
+    if (!e.repeat && (e.key === "Enter" || e.key === " ") && onRefActivate(e)) return;
+  } else if (onRefActivate(e)) {
     return;
   }
   const img = e.target;

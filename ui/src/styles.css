@@ -10259,12 +10259,13 @@ kbd {
   text-decoration: none;
 }
 
-/* File references (`📄path:line` inline code rendered as a chip): monospace
-   with a link affordance, so they read as code but invite a click. The gate is
-   the host — `markdown-refs` is how one says it renders references — but this is
-   only decoration: raw HTML can claim any class, which is why what makes a chip
-   live is host state, not this selector. */
-.markdown-content.markdown-refs a.file-ref {
+/* Reference chips (`📄path:line` file refs and `⎇hash` commit refs, rendered
+   as inline code chips): monospace with a link affordance, so they read as code
+   but invite a click. The gate is the host — `markdown-refs` is how one says it
+   renders references — but this is only decoration: raw HTML can claim any
+   class, which is why what makes a chip live is host state, not this selector. */
+.markdown-content.markdown-refs a.file-ref,
+.markdown-content.markdown-refs a.commit-ref {
   font-family: var(--font-mono);
   font-size: 0.875rem;
   background: var(--code-bg);
@@ -10275,7 +10276,8 @@ kbd {
   cursor: pointer;
 }
 
-.markdown-content.markdown-refs a.file-ref:hover {
+.markdown-content.markdown-refs a.file-ref:hover,
+.markdown-content.markdown-refs a.commit-ref:hover {
   text-decoration: underline;
 }
 

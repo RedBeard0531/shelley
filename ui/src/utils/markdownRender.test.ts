@@ -15,7 +15,7 @@ g.document = dom.window.document;
 const purify = DOMPurify(dom.window as any);
 Object.assign(DOMPurify, purify);
 
-const { renderMarkdownToSafeHTML, parseFileRef } = await import("./markdownRender");
+const { renderMarkdownToSafeHTML, parseFileRef, parseCommitRef } = await import("./markdownRender");
 
 let passed = 0;
 let failed = 0;
@@ -476,6 +476,38 @@ const render = (text: string) =>
   assert(!forged.includes('target="_blank"'), "and it gets no new-tab target");
   const linked = render(`[\`${M}src/app.ts:5\`](https://example.com)`);
   assert(!/<a[^>]*><\/a>/.test(linked), "a link whose label was a reference leaves no empty anchor");
+}
+
+{
+  // parseCommitRef: marker plus hash, abbreviated or full, either case.
+  assert(parseCommitRef(`⎇a1b2c3d`)?.hash === "a1b2c3d", "short hash parses");
+  const full40 = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0";
+  assert(full40.length === 40 && parseCommitRef(`⎇${full40}`)?.hash === full40, "full sha1 hash parses");
+  const full64 = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0a1b2c3d4e5f6a7b8c9d0e1f2";
+  assert(full64.length === 64 && parseCommitRef(`⎇${full64}`)?.hash === full64, "full sha256 hash parses");
+  assert(parseCommitRef(`⎇A1B2C3D`)?.hash === "A1B2C3D", "uppercase hash parses as written");
+
+  // Rejections: the marker is permission, so everything else stays code.
+  assert(parseCommitRef(`a1b2c3d`) === null, "unmarked hash is not a reference");
+  assert(parseCommitRef(`⎇`) === null, "a bare marker is not a reference");
+  assert(parseCommitRef(`⎇a1b2c`) === null, "a 5-char hash is too short to be one");
+  assert(parseCommitRef(`⎇${full64}a`) === null, "a 65-char run is not a hash");
+  assert(parseCommitRef(`⎇main`) === null, "a branch name is not a reference");
+  assert(parseCommitRef(`⎇HEAD~1`) === null, "a symbolic ref is not a reference");
+  assert(parseCommitRef(`⎇a1b2c3g`) === null, "a non-hex character is not a hash");
+  assert(parseCommitRef(` ⎇a1b2c3d`) === null, "the marker must open the span");
+  assert(parseCommitRef(`⎇ a1b2c3d`)?.hash === "a1b2c3d", "space after the marker is tolerated");
+
+  // Rendering: same chip contract as file refs — the label is the target.
+  const html = render(`Fixed in \`⎇a1b2c3d\` today.`);
+  assert(html.includes('class="commit-ref"'), "commit reference renders as a chip");
+  assert(html.includes(`>⎇a1b2c3d</a>`), "the chip carries the hash in its own text");
+  assert(html.includes('href="#"') && !html.includes('target="_blank"'), "the chip href is inert");
+
+  // Without refs, a marked hash stays plain code, like an unmarked file ref.
+  const noRefs = renderMarkdownToSafeHTML("`⎇a1b2c3d`");
+  assert(!noRefs.includes("commit-ref") && noRefs.includes("<code>⎇a1b2c3d</code>"),
+    "without refs, a marked hash stays plain code");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
