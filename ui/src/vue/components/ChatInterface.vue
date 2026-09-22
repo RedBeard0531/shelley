@@ -670,6 +670,7 @@ import { useDraftAutosave } from "../composables/draftAutosave";
 import { useFeatureFlag } from "../composables/featureFlags";
 import { useVersionChecker } from "../composables/versionChecker";
 import { provideToolProgress } from "../composables/toolProgress";
+import { provideOpenCommitViewer } from "../composables/commitViewer";
 import { closeImageComment, useImageCommentTarget } from "../composables/imageComment";
 import { closeMarkdownDoc, useMarkdownDoc } from "../composables/markdownDoc";
 import { isImeComposing } from "../../utils/imeComposing";
@@ -1289,6 +1290,11 @@ const diffViewerInitialCommit = ref<string | undefined>(undefined);
 const diffViewerCwd = ref<string | undefined>(undefined);
 const diffViewerInitialFile = ref<string | undefined>(undefined);
 const diffViewerOpenOnFiles = ref(false);
+// Commit-reference chips (`⎇hash` in agent markdown) open the diff viewer at
+// that commit; the opener goes through the same handler as the git graph's
+// open-diff, so the cwd stays whatever the viewer last used or the
+// conversation's current one.
+provideOpenCommitViewer((hash: string) => handleOpenDiffViewer(hash));
 const diffCommentText = ref("");
 // The image being annotated, if any (module state so any image in the message
 // tree can open the view without prop drilling).
