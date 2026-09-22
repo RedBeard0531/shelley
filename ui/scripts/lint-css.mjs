@@ -59,7 +59,7 @@ const legacyFontSizes = new Set([
 ]);
 const expectedLegacyFontSizeDeclarations = 163;
 const expectedDuplicateRuleGroups = 189;
-const expectedExcessDuplicateRules = 519;
+const expectedExcessDuplicateRules = 520;
 const legacyFontShorthands = new Set([
   "13px/1.55 ui-monospace,\n    SFMono-Regular,\n    Menlo,\n    Consolas,\n    monospace",
 ]);

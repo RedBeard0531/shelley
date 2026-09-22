@@ -82,39 +82,37 @@
               :key="c.hash"
               :ref="(el) => setRowRef(el, c.hash)"
               :class="`git-graph-row${c.hash === selected ? ' git-graph-row-selected' : ''}`"
-              :style="{ height: `${ROW_H}px` }"
+              :style="isDesktop ? { height: `${ROW_H}px` } : undefined"
               @click="selectCommit(c.hash)"
               @dblclick="canOpenDiff && emit('open-diff', c.hash, cwd)"
             >
               <span class="git-graph-hash">{{ c.shortHash }}</span>
-              <svg
-                class="git-graph-svg"
-                :width="rowWidth(i)"
-                :height="ROW_H"
-                :style="{ width: `${rowWidth(i)}px`, height: `${ROW_H}px` }"
-              >
-                <line
-                  v-for="(ln, idx) in layout.rows[i].lines"
-                  :key="idx"
-                  :x1="colX(ln.from)"
-                  :y1="ln.upper ? 0 : ROW_H"
-                  :x2="colX(ln.to)"
-                  :y2="ROW_H / 2"
-                  :stroke="laneColor(ln.colorIndex)"
-                  :stroke-width="1.8"
-                  stroke-linecap="round"
-                />
-                <circle
-                  :cx="colX(layout.rows[i].col)"
-                  :cy="ROW_H / 2"
-                  :r="DOT_R"
-                  :fill="laneColor(layout.rows[i].colorIndex)"
-                  :stroke="c.isHead ? 'var(--text-primary)' : 'none'"
-                  :stroke-width="c.isHead ? 1.5 : 0"
-                >
-                  <title>{{ c.shortHash }}</title>
-                </circle>
-              </svg>
+              <span class="git-graph-svg-cell" :style="{ width: `${rowWidth(i)}px` }">
+                <svg class="git-graph-svg">
+                  <line
+                    v-for="(ln, idx) in layout.rows[i].lines"
+                    :key="idx"
+                    :x1="colX(ln.from)"
+                    :y1="ln.upper ? '0%' : '100%'"
+                    :x2="colX(ln.to)"
+                    y2="50%"
+                    :stroke="laneColor(ln.colorIndex)"
+                    :stroke-width="1.8"
+                    stroke-linecap="round"
+                  />
+                  <circle
+                    :cx="colX(layout.rows[i].col)"
+                    cy="50%"
+                    :r="DOT_R"
+                    :fill="laneColor(layout.rows[i].colorIndex)"
+                    :stroke="c.isHead ? 'var(--text-primary)' : 'none'"
+                    :stroke-width="c.isHead ? 1.5 : 0"
+                  >
+                    <title>{{ c.shortHash }}</title>
+                  </circle>
+                </svg>
+              </span>
+              <div class="git-graph-content">
               <span class="git-graph-main">
                 <span
                   v-if="
@@ -146,9 +144,19 @@
                 </a>
                 <span class="git-graph-subject">{{ c.subject }}</span>
               </span>
+              <span v-if="c.filesChanged" class="git-graph-row-stat"
+                >({{ c.filesChanged }} file{{ c.filesChanged === 1 ? "" : "s" }}<span
+                  v-if="(c.insertions ?? 0) > 0"
+                  class="git-graph-diffstat-ins"
+                  > +{{ c.insertions }}</span
+                ><span v-if="(c.deletions ?? 0) > 0" class="git-graph-diffstat-del"
+                  > −{{ c.deletions }}</span
+                >)</span
+              >
               <span class="git-graph-author">{{ c.author }}</span>
               <span class="git-graph-time">{{ formatRelative(c.timestamp) }}</span>
-            </div>
+              </div>
+              </div>
             <LoadMoreRow
               :limit="limit"
               :commits-loaded="commits.length"
