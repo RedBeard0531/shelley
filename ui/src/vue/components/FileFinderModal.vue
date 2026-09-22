@@ -40,7 +40,7 @@
             d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
           />
         </svg>
-        <span class="ff-dir-path">{{ displayDir }}</span>
+        <PathText class="ff-dir-path" :text="displayDir" :title="dir" />
       </button>
     </template>
 
@@ -59,7 +59,10 @@
       <!-- Shown only when the query re-rooted the search, so it's clear the
            paths below aren't relative to the directory in the header chip. -->
       <div v-if="scopeDir" class="ff-scope">
-        Searching <code class="ff-scope-path">{{ tildifyPath(scopeDir) }}</code>
+        Searching
+        <code class="ff-scope-path"
+          ><PathText :text="tildifyPath(scopeDir)" :title="scopeDir"
+        /></code>
       </div>
 
       <div v-if="error" class="grp-error">{{ error }}</div>
@@ -89,9 +92,11 @@
             />
           </svg>
           <span class="grp-main">
-            <span class="grp-path" :title="hit.path">
-              <HighlightedText :text="hit.path" :positions="hit.matched_indexes" />
-            </span>
+            <PathText
+              class="grp-path"
+              :text="hit.path"
+              :segments="highlightSegments(hit.path, hit.matched_indexes)"
+            />
             <!-- Content match: the grep excerpt that earned this file its row
                  (or bolstered a name match), with the matched term marked. -->
             <span v-if="hit.snippet" class="ff-snippet" :title="hit.snippet">
@@ -125,12 +130,13 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "./PathText.vue";
 import { computed, nextTick, ref, watch } from "vue";
 import Modal from "./Modal.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
 import { api } from "../../services/api";
 import { isImeComposing } from "../../utils/imeComposing";
-import { mergeContentMatches } from "../../utils/fileSearch";
+import { highlightSegments, mergeContentMatches } from "../../utils/fileSearch";
 import HighlightedText from "./HighlightedText.vue";
 import { tildifyPath } from "../../utils/tildify";
 

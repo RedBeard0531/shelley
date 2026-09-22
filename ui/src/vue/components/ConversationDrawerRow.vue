@@ -198,13 +198,12 @@
 
       <div class="conversation-meta">
         <span class="conversation-date">{{ ctx.formatDate(conversation.updated_at) }}</span>
-        <span
+        <PathText
           v-if="conversation.cwd && ctx.groupBy.value !== 'cwd'"
           class="conversation-cwd"
+          :text="ctx.formatCwdForDisplay(conversation.cwd)"
           :title="conversation.cwd"
-        >
-          {{ ctx.formatCwdForDisplay(conversation.cwd) }}
-        </span>
+        />
         <!-- Terminal count. Only shown when the conversation has more than
              one terminal pinned to it: a single terminal is the ordinary
              case and not worth a badge. -->
@@ -425,6 +424,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "./PathText.vue";
 import {
   computed,
   defineComponent,

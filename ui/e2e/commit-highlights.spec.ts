@@ -89,6 +89,8 @@ test.describe("Commit highlights", () => {
         "README.md",
         "alpha.ts",
       ]);
+      await expect(files.first().locator(".ellipsis-start")).toHaveCount(0);
+      await expect(files.nth(1).locator(".ellipsis-start")).toHaveCount(1);
       await expect(files.nth(1).locator(".diff-tree-detail")).toHaveText("src");
 
       // Files show how many highlights they carry, not the comments.

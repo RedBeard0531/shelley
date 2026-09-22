@@ -23,7 +23,7 @@
         <div class="diff-viewer-header">
           <div class="diff-viewer-header-row">
             <span class="agents-md-header-title">{{ title || "Edit file" }}</span>
-            <code class="agents-md-header-path">{{ resolvedPath }}</code>
+            <code class="agents-md-header-path"><PathText :text="resolvedPath" /></code>
             <span
               v-if="saveStatus !== 'idle'"
               :class="`agents-md-save-status agents-md-save-${saveStatus}`"
@@ -190,6 +190,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "./PathText.vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import type * as Monaco from "monaco-editor";
 import { loadMonaco } from "../../services/monaco";

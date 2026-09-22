@@ -14,7 +14,13 @@
     <div class="screenshot-tool-header" @click="isExpanded = !isExpanded">
       <div class="screenshot-tool-summary">
         <span class="screenshot-tool-emoji" :class="{ running: isRunning }">🖼️</span>
-        <span class="screenshot-tool-filename" :title="filename">{{ filename }}</span>
+        <PathText
+          v-if="getStringField(toolInput, 'path')"
+          class="screenshot-tool-filename"
+          :text="filename"
+          :title="imagePath || filename"
+        />
+        <span v-else class="screenshot-tool-filename" :title="filename">{{ filename }}</span>
       </div>
       <button
         class="screenshot-tool-toggle"
@@ -64,6 +70,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "../PathText.vue";
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import CommentableImage from "../CommentableImage.vue";

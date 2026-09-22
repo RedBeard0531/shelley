@@ -36,6 +36,7 @@ import {
   buildTree,
   flatten,
   isCommitMessageEntry,
+  COMMIT_MESSAGES_DIR,
   matchTreePaths,
   normalizeSearch,
   statusLetter,
@@ -148,6 +149,7 @@ const renderedRows = computed<RenderedRow[]>(() => {
           depth,
           isOpen,
           label: displayName,
+          isPath: child.name !== COMMIT_MESSAGES_DIR,
           pathsCovered,
         });
         if (isOpen) walk(effective, depth + 1);
@@ -185,6 +187,7 @@ function pushFile(
     depth,
     isSelected: entry.realPath === props.selectedRealPath,
     label,
+    isPath: !isCommitMessageEntry(entry),
     detail,
     realPath: entry.realPath,
     decoration: entry.decoration,

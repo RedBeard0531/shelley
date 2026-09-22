@@ -20,7 +20,8 @@
       @click="emit('toggle', row.pathsCovered)"
     >
       <span class="diff-tree-icon" v-html="row.isOpen ? CHEVRON_OPEN : CHEVRON_CLOSED" />
-      <span class="diff-tree-label">{{ row.label }}</span>
+      <PathText v-if="row.isPath" class="diff-tree-label" :text="row.label" />
+      <span v-else class="diff-tree-label">{{ row.label }}</span>
     </button>
     <button
       v-else
@@ -34,7 +35,13 @@
       @click="emit('select', row.realPath)"
     >
       <span class="diff-tree-icon" v-html="FILE_ICON" />
-      <span :class="['diff-tree-label', { 'has-detail': row.detail }]">{{ row.label }}</span>
+      <PathText
+        v-if="row.isPath"
+        :class="['diff-tree-label', { 'has-detail': row.detail }]"
+        :text="row.label"
+        :title="row.realPath"
+      />
+      <span v-else class="diff-tree-label">{{ row.label }}</span>
       <span v-if="row.detail" class="diff-tree-detail">{{ row.detail }}</span>
       <span v-if="row.decoration" class="diff-tree-decoration" :title="row.decorationTitle">{{
         row.decoration
@@ -69,6 +76,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "./PathText.vue";
 import type { ComponentPublicInstance } from "vue";
 import type { RenderedRow } from "./diffFileTree";
 

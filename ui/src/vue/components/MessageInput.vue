@@ -190,9 +190,11 @@
                 />
               </svg>
               <span class="grp-main">
-                <span class="grp-path">
-                  <HighlightedText :text="item.path" :positions="item.matched_indexes" />
-                </span>
+                <PathText
+                  class="grp-path"
+                  :text="item.path"
+                  :segments="highlightSegments(item.path, item.matched_indexes)"
+                />
                 <span v-if="item.snippet" class="ff-snippet" :title="item.snippet">
                   <span class="ff-snippet-line">{{ item.line }}:</span>
                   <HighlightedText :text="item.snippet" :positions="item.snippet_matched_indexes" />
@@ -411,11 +413,13 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "./PathText.vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowReactive, shallowRef, useId, watch } from "vue";
 import { useFileCompletion } from "../composables/fileCompletion";
 import { useI18n } from "../composables/i18n";
 import { pickPlaceholderHint } from "../../utils/placeholderHints";
 import HighlightedText from "./HighlightedText.vue";
+import { highlightSegments } from "../../utils/fileSearch";
 import { SLASH_COMMANDS, slashCommandsForConversation } from "../../utils/slashCommands";
 import { composerDispatch, composerSessionID, guardComposerClear } from "./composerDispatch";
 import { isImeComposing } from "../../utils/imeComposing";

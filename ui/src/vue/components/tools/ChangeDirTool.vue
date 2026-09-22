@@ -7,7 +7,7 @@
     <div class="tool-header" @click="isExpanded = !isExpanded">
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">📂</span>
-        <span class="tool-command">cd {{ path || "..." }}</span>
+        <span class="tool-command change-dir-command">cd <PathText :text="path || '...'" /></span>
       </div>
       <button
         class="tool-toggle"
@@ -36,6 +36,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "../PathText.vue";
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import ToolChevron from "./ToolChevron.vue";

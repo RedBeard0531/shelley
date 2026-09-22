@@ -214,6 +214,7 @@ export type RenderedRow =
       kind: "dir";
       key: string;
       depth: number;
+      isPath: boolean;
       isOpen: boolean;
       label: string;
       pathsCovered: string[];
@@ -222,6 +223,7 @@ export type RenderedRow =
       kind: "file";
       key: string;
       depth: number;
+      isPath: boolean;
       isSelected: boolean;
       label: string;
       // Shown dimmed after the label: the directory in ordered (flat) lists.

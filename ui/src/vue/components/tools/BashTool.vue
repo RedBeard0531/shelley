@@ -27,7 +27,7 @@
           class="bash-tool-cwd"
           :title="displayData.workingDir"
         >
-          in {{ displayData.workingDir }}
+          in <PathText :text="displayData.workingDir" />
         </span>
         <span v-if="returnState" class="bash-tool-background" data-testid="bash-tool-finished-job">
           {{ returnLabels[returnState] }}
@@ -96,6 +96,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "../PathText.vue";
 import { computed, inject, nextTick, ref, watch } from "vue";
 import type { LLMContent } from "../../../types";
 import HighlightedCode from "../HighlightedCode.vue";

@@ -24,7 +24,12 @@
     <div class="patch-tool-header" @click="isExpanded = !isExpanded">
       <div class="patch-tool-summary">
         <span class="patch-tool-emoji" :class="{ running: isRunning }">🖋️</span>
-        <span class="patch-tool-filename" :title="filename">{{ filename }}</span>
+        <PathText
+          v-if="patchFiles.length <= 1 && (displayData?.path || path)"
+          class="patch-tool-filename"
+          :text="filename"
+        />
+        <span v-else class="patch-tool-filename" :title="filename">{{ filename }}</span>
       </div>
       <div class="patch-tool-header-controls">
         <button
@@ -135,6 +140,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "../PathText.vue";
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import type { LLMContent } from "../../../types";
 import type {

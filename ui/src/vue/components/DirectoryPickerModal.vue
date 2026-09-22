@@ -76,7 +76,7 @@
             />
           </svg>
           <span>{{ shortcut.label }}</span>
-          <span class="directory-picker-shortcut-path">{{ shortcut.path }}</span>
+          <PathText class="directory-picker-shortcut-path" :text="shortcut.path" />
         </button>
       </div>
 
@@ -238,6 +238,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "./PathText.vue";
 import { computed, nextTick, ref, useId, watch } from "vue";
 import { api } from "../../services/api";
 import Button from "primevue/button";

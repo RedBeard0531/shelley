@@ -24,13 +24,15 @@
         type="button"
         class="status-readout-cwd status-readout-control hide-on-mobile"
         :disabled="agentWorking || !onChangeConversationCwd"
-        v-tooltip.top="cwdTooltip"
+        :title="cwdTooltip"
         :aria-label="cwdAriaLabel"
         @click="onChangeConversationCwd?.()"
       >
-        <span class="status-readout-cwd-path status-readout-affordance">{{
-          tildifyPath(cwd)
-        }}</span>
+        <PathText
+          class="status-readout-cwd-path status-readout-affordance"
+          :text="tildifyPath(cwd)"
+          :title="cwdTooltip"
+        />
         <span class="status-readout-cwd-leaf status-readout-affordance" aria-hidden="true">{{
           cwdLeaf
         }}</span>
@@ -93,6 +95,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "./PathText.vue";
 import { computed } from "vue";
 import type { Message, Model } from "../../types";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
@@ -145,7 +148,7 @@ const busyReason = computed(() => (props.agentWorking ? t("modelSwitchBusy") : u
 // The cwd segment says the full path (the visible text is tildified, and
 // ellipsized when the bar is tight) plus what a click does — or why it can't.
 const cwdTooltip = computed(() => {
-  if (props.agentWorking) return t("cwdChangeBusy");
+  if (props.agentWorking) return `${props.cwd} — ${t("cwdChangeBusy")}`;
   if (!props.onChangeConversationCwd) return props.cwd;
   return `${props.cwd} — ${t("cwdChangeHint")}`;
 });

@@ -267,6 +267,44 @@ body {
   white-space: nowrap;
 }
 
+/* Head-eliding paths and file names: when a path overflows, clip the leading
+   directories and keep the informative tail visible ("…/shelley/ui/src").
+   direction: rtl moves the ellipsis to the left; apply to the inner element
+   only — an rtl flex *container* would also flip the order of its children.
+   Do NOT add unicode-bidi: plaintext: it derives the line's base direction
+   from the content (LTR for paths), putting the ellipsis back on the right.
+   Plain rtl lets leading neutral characters ("/", "~") drift to the visual
+   right end, so ::before injects a U+200E left-to-right mark to keep them
+   ordered. Prose (previews, commit subjects) clips the tail instead and must
+   not use this class. */
+.ellipsis-start {
+  direction: rtl;
+  text-align: left;
+}
+
+.ellipsis-start::before {
+  content: "\200E";
+}
+
+.path-text {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.path-text-prefix {
+  flex-shrink: 0;
+  text-decoration: inherit;
+}
+
+.path-text-tail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: inherit;
+}
+
 .break-words {
   word-break: break-word;
 }
@@ -2379,6 +2417,11 @@ body {
   flex-shrink: 0;
 }
 
+.change-dir-command {
+  display: inline-flex;
+  gap: 0.5ch;
+}
+
 .tool-command {
   font-family: var(--font-mono);
   font-size: var(--font-size-14);
@@ -2688,6 +2731,8 @@ body {
 }
 
 .bash-tool-cwd {
+  display: inline-flex;
+  gap: 0.5ch;
   font-family: var(--font-mono);
   font-size: var(--font-size-12);
   color: var(--text-tertiary);
@@ -6608,17 +6653,12 @@ svg {
   text-decoration-line: none;
 }
 
-/* direction: rtl ellipsizes the root, keeping the leaf directory visible.
-   On the inner span, not the button: an rtl flex container would also flip the
-   order of its children. */
+/* PathText clips the inner text without reversing the button's children. */
 .status-readout-cwd-path {
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
-  unicode-bidi: plaintext;
 }
 
 .status-readout-cwd-leaf {

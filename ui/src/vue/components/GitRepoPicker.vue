@@ -52,18 +52,17 @@
             />
           </svg>
           <span class="grp-main">
-            <span class="grp-path" :title="hit.repo.path">
-              <template
-                v-for="(seg, si) in highlightSegments(
+            <PathText
+              class="grp-path"
+              :text="displayPath(hit.repo.path, home)"
+              :title="hit.repo.path"
+              :segments="
+                highlightSegments(
                   displayPath(hit.repo.path, home),
                   shiftPositions(hit.positions, hit.repo.path, home),
-                )"
-                :key="si"
-              >
-                <mark v-if="seg.hit" class="grp-hit">{{ seg.text }}</mark>
-                <template v-else>{{ seg.text }}</template>
-              </template>
-            </span>
+                )
+              "
+            />
             <span v-if="hit.repo.branch || hit.repo.last_activity" class="grp-meta">
               <span v-if="hit.repo.branch" class="grp-branch" title="Current branch">{{
                 hit.repo.branch
@@ -90,6 +89,7 @@
 </template>
 
 <script setup lang="ts">
+import PathText from "./PathText.vue";
 import { computed, nextTick, ref, watch } from "vue";
 import Modal from "./Modal.vue";
 import { isImeComposing } from "../../utils/imeComposing";
