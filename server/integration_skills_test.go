@@ -83,7 +83,7 @@ func TestDiscoverIntegrationSkills(t *testing.T) {
 	if shared.Description != "Later duplicate." {
 		t.Fatalf("shared metadata = %+v", shared)
 	}
-	if shared.Source != "https://z-personal.int.example.test/" || shared.Origin != "Integration" || shared.ActivationCommand() != "curl -fsS --max-time 5 -- https://z-personal.int.example.test/" {
+	if shared.Source != "https://z-personal.int.example.test/" || shared.Origin != "Integration" || shared.ActivationCommand() != "curl -s https://z-personal.int.example.test/" {
 		t.Fatalf("shared source metadata = %+v", shared)
 	}
 

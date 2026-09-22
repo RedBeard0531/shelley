@@ -254,6 +254,6 @@ func fetchIntegrationSkill(ctx context.Context, httpc *http.Client, url string) 
 	skill.Body = ""
 	skill.Source = url
 	skill.Origin = "Integration"
-	skill.Activate = "curl -fsS --max-time 5 -- " + url
+	skill.Activate = "curl -s " + url
 	return skill, nil
 }
