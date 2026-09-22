@@ -131,6 +131,19 @@
                     merge-base
                   </span>
                 </span>
+                <a
+                  v-if="c.hasTour"
+                  v-tooltip.top="'Open guided commit tour'"
+                  :class="`git-graph-tour-link${!canOpenDiff ? ' git-graph-tour-link-disabled' : ''}`"
+                  data-testid="git-graph-tour-link"
+                  :href="canOpenDiff ? diffHref(c.hash) : undefined"
+                  :aria-disabled="!canOpenDiff"
+                  :tabindex="canOpenDiff ? undefined : -1"
+                  :aria-label="`Tour: open guided tour for ${c.subject}`"
+                  @click.stop="onOpenCommitClick($event, c.hash)"
+                >
+                  tour
+                </a>
                 <span class="git-graph-subject">{{ c.subject }}</span>
               </span>
               <span class="git-graph-author">{{ c.author }}</span>
@@ -201,11 +214,12 @@
             <div class="git-graph-detail-actions">
               <a
                 :class="`git-graph-open-diff${!canOpenDiff ? ' git-graph-open-diff-disabled' : ''}`"
-                :href="openDiffHref"
+                :href="canOpenDiff ? openDiffHref : undefined"
                 :aria-disabled="!canOpenDiff"
-                @click="onOpenDiffClick"
+                :tabindex="canOpenDiff ? undefined : -1"
+                @click="onOpenCommitClick($event, selectedCommit.hash)"
               >
-                Open diff →
+                {{ selectedCommit.hasTour ? "Open tour →" : "Open diff →" }}
               </a>
               <a
                 v-if="data?.githubBase"
@@ -288,10 +302,7 @@
               <DiffstatList
                 :files="detail.files"
                 :file-href="(path) => diffHref(selectedCommit!.hash, path)"
-                @open="
-                  (path) =>
-                    canOpenDiff && emit('open-diff', selectedCommit!.hash, cwd, path)
-                "
+                @open="(path) => canOpenDiff && emit('open-diff', selectedCommit!.hash, cwd, path)"
               />
             </div>
             <div v-if="detailLoading && !detail" class="git-graph-detail-loading">Loading…</div>
@@ -580,7 +591,11 @@ watch(
 // Arrow/j/k/Enter navigation (React effect on
 // [isOpen, commits, selected, selectCommit, onOpenDiff, cwd]).
 function onNavKey(e: KeyboardEvent) {
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  const target = e.target;
+  if (target instanceof Element) {
+    if (target.closest("input, textarea, select")) return;
+    if (e.key === "Enter" && target.closest("a, button")) return;
+  }
   if (!commits.value.length) return;
   const idx = commits.value.findIndex((c) => c.hash === selected.value);
   if (e.key === "ArrowDown" || e.key === "j") {
@@ -597,10 +612,10 @@ function onNavKey(e: KeyboardEvent) {
   }
 }
 watch(
-  () => props.isOpen,
-  (open) => {
+  [() => props.isOpen, () => props.covered],
+  ([open, covered]) => {
     window.removeEventListener("keydown", onNavKey);
-    if (open) window.addEventListener("keydown", onNavKey);
+    if (open && !covered) window.addEventListener("keydown", onNavKey);
   },
   { immediate: true },
 );
@@ -637,16 +652,18 @@ const openDiffHref = computed(() =>
   selectedCommit.value ? diffHref(selectedCommit.value.hash) : "#",
 );
 
-function onOpenDiffClick(e: MouseEvent) {
+function onOpenCommitClick(e: MouseEvent, hash: string) {
   // Let the browser handle modifier/middle-click so users can open the diff
   // in a new tab/window.
   if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
     return;
   }
   e.preventDefault();
-  if (props.canOpenDiff && selectedCommit.value) {
-    emit("open-diff", selectedCommit.value.hash, cwd.value);
-  }
+  if (!props.canOpenDiff) return;
+  // Keep the graph selection in sync without opening the mobile detail sheet
+  // behind the diff viewer.
+  selected.value = hash;
+  emit("open-diff", hash, cwd.value);
 }
 
 function onGravatarError(e: Event) {

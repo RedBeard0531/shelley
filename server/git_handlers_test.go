@@ -1690,3 +1690,68 @@ func TestParseNumstatZ(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleGitGraphMarksTours(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	repo := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	run("git", "init")
+	run("git", "config", "user.name", "Tour Test")
+	run("git", "config", "user.email", "tour@example.com")
+	if err := os.WriteFile(filepath.Join(repo, "example.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", "example.txt")
+	run("git", "commit", "-m", "Base commit\n\nPrompt: graph tour base")
+	base := run("git", "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(repo, "example.txt"), []byte("tour\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", "example.txt")
+	run("git", "commit", "-m", "Tour commit\n\nPrompt: graph tour commit")
+	head := run("git", "rev-parse", "HEAD")
+	if err := committour.WriteNote(repo, head, []byte(`{"version":1,"chunks":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/git/graph?cwd="+repo, nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitGraph(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Commits []struct {
+			Hash    string `json:"hash"`
+			HasTour bool   `json:"hasTour"`
+		} `json:"commits"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(response.Commits) != 2 {
+		t.Fatalf("commits = %+v, want only the two source commits", response.Commits)
+	}
+	tours := make(map[string]bool, len(response.Commits))
+	for _, commit := range response.Commits {
+		tours[commit.Hash] = commit.HasTour
+	}
+	if !tours[head] {
+		t.Errorf("tour commit %s was not marked", head)
+	}
+	if tours[base] {
+		t.Errorf("base commit %s was marked as having a tour", base)
+	}
+}

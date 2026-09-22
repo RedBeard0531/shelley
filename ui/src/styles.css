@@ -6758,7 +6758,8 @@ svg {
   min-width: 0;
 }
 
-.commit-picker-tour-badge {
+.commit-picker-tour-badge,
+.git-graph-tour-link {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
@@ -6774,7 +6775,8 @@ svg {
   text-transform: uppercase;
 }
 
-.dark .commit-picker-tour-badge {
+.dark .commit-picker-tour-badge,
+.dark .git-graph-tour-link {
   color: #c4b5fd;
 }
 
@@ -12407,6 +12409,29 @@ kbd {
   display: inline-flex;
   gap: 0.2rem;
   flex: 0 0 auto;
+}
+
+.git-graph-tour-link {
+  min-height: 1.25rem;
+  padding-right: 0.45rem;
+  padding-left: 0.45rem;
+  text-decoration: none;
+}
+
+.git-graph-tour-link:hover {
+  border-color: rgba(139, 92, 246, 0.7);
+  background: rgba(139, 92, 246, 0.2);
+}
+
+.git-graph-tour-link-disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+.git-graph-tour-link:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 1px;
 }
 
 .git-graph-subject {

@@ -257,6 +257,8 @@ export interface GitGraphCommit {
   timestamp: number;
   refs: string[];
   isHead: boolean;
+  // True when this commit has a guided tour git note.
+  hasTour?: boolean;
   // True if this commit is the merge-base with @{upstream}.
   isMergeBase?: boolean;
 }

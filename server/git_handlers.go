@@ -1023,6 +1023,7 @@ type GitGraphCommit struct {
 	Timestamp int64    `json:"timestamp"`
 	Refs      []string `json:"refs"`
 	IsHead    bool     `json:"isHead"`
+	HasTour   bool     `json:"hasTour,omitempty"`
 	// IsMergeBase indicates the commit is the merge-base with @{upstream}.
 	IsMergeBase bool `json:"isMergeBase,omitempty"`
 }
@@ -1069,7 +1070,7 @@ func (s *Server) handleGitGraph(w http.ResponseWriter, r *http.Request) {
 		"-n", strconv.Itoa(limit),
 	}
 	if scope == "all" {
-		logArgs = append(logArgs, "--all")
+		logArgs = append(logArgs, "--exclude=refs/notes/*", "--all")
 	}
 	cmd := exec.Command("git", logArgs...)
 	cmd.Dir = gitRoot
@@ -1087,6 +1088,9 @@ func (s *Server) handleGitGraph(w http.ResponseWriter, r *http.Request) {
 	if out, err := mbCmd.Output(); err == nil {
 		mergeBase = strings.TrimSpace(string(out))
 	}
+
+	// Tour presence is decoration; a notes lookup failure must not break the graph.
+	tours, _ := committour.ListNotes(gitRoot)
 
 	var commits []GitGraphCommit
 	lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
@@ -1140,6 +1144,7 @@ func (s *Server) handleGitGraph(w http.ResponseWriter, r *http.Request) {
 			Timestamp:   ts,
 			Refs:        refs,
 			IsHead:      isHead,
+			HasTour:     tours[hash],
 			IsMergeBase: mergeBase != "" && hash == mergeBase,
 		})
 	}
