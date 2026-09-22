@@ -18,7 +18,7 @@
         <span v-if="summaryTruncated" class="bash-tool-summary-ellipsis">...</span>
         <span
           v-if="displayData?.workingDir && !background"
-          class="bash-tool-cwd"
+          class="bash-tool-cwd ellipsis-start"
           :title="displayData.workingDir"
         >
           in {{ displayData.workingDir }}
