@@ -1,5 +1,7 @@
 # Shelley Makefile
 
+PNPM = npx --yes $(shell node -p "require('./ui/package.json').packageManager") --dir ui
+
 .PHONY: build build-custom build-linux-aarch64 build-linux-x86 test test-go test-e2e ui serve clean help templates demo exe-scroll exe-scroll-all
 
 # Default target
@@ -78,27 +80,27 @@ build-linux-x86: ui templates
 
 # Build UI
 ui:
-	@cd ui && pnpm install --frozen-lockfile --silent && pnpm run --silent build
+	@$(PNPM) install --frozen-lockfile --silent && $(PNPM) run --silent build
 
 # Run Go tests
-test-go: exe-scroll ui
+test-go: exe-scroll ui templates
 	@echo "Running Go tests..."
 	go test -v ./...
 
 # Run end-to-end tests
 test-e2e: ui
 	@echo "Running E2E tests..."
-	cd ui && pnpm run test:e2e
+	$(PNPM) run test:e2e
 
 # Run E2E tests in headed mode (with visible browser)
 test-e2e-headed: ui
 	@echo "Running E2E tests (headed)..."
-	cd ui && pnpm run test:e2e:headed
+	$(PNPM) run test:e2e:headed
 
 # Run E2E tests in UI mode
 test-e2e-ui: ui
 	@echo "Opening E2E test UI..."
-	cd ui && pnpm run test:e2e:ui
+	$(PNPM) run test:e2e:ui
 
 # Run all tests
 test: test-go test-e2e
@@ -148,4 +150,3 @@ help:
 	@echo "  clean         Clean build artifacts"
 	@echo "  demo          Build and (re)start the demo server"
 	@echo "  help          Show this help"
-
