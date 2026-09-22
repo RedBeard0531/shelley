@@ -40,6 +40,34 @@ func TestMessageUserReactionWithoutReplyToRefused(t *testing.T) {
 	}
 }
 
+func TestMessageUserAttachmentResolvesPaths(t *testing.T) {
+	home, first, second := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	for _, dir := range []string{home, first, second} {
+		if err := os.WriteFile(filepath.Join(dir, "report.txt"), []byte("report"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		cwd, path, want string
+	}{
+		{first, "report.txt", filepath.Join(first, "report.txt")},
+		{second, "report.txt", filepath.Join(second, "report.txt")},
+		{first, "~/report.txt", filepath.Join(home, "report.txt")},
+		{second, "~/report.txt", filepath.Join(home, "report.txt")},
+		{second, filepath.Join(first, "report.txt"), filepath.Join(first, "report.txt")},
+	} {
+		out := runMessageUser(t.Context(), noMessages{}, nil, tc.cwd, MessageUserInput{Attachments: []string{tc.path}})
+		if out.Error != nil {
+			t.Fatal(out.Error)
+		}
+		display := out.Display.(MessageUserDisplay)
+		if len(display.Attachments) != 1 || display.Attachments[0].Path != tc.want {
+			t.Fatalf("attachment %q under %q: %+v, want %q", tc.path, tc.cwd, display.Attachments, tc.want)
+		}
+	}
+}
+
 // fakeChat records what it is sent, refusing messages with sendErr and
 // reactions with reactErr.
 type fakeChat struct {
