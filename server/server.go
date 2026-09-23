@@ -253,6 +253,9 @@ func llmDataForAPI(llmData *string, msgType, messageID string) (*string, *bool) 
 			msg.Content[i].OpenAIResponsesReasoning = nil
 			changed = true
 		}
+		if addBashDisplayForms(&msg.Content[i]) {
+			changed = true
+		}
 	}
 	if !changed {
 		return llmData, endOfTurnPtr

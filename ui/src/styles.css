@@ -2276,6 +2276,27 @@ body {
 .bash-tool-emoji.running {
 }
 
+.bash-tool-formatted-toggle {
+  display: inline-flex;
+  align-items: center;
+  /* The parent label is already flex with a 0.5rem gap; no extra margin.
+     margin: 0 kills the global `label { margin-bottom: 0.5rem }` rule, whose
+     margin box made the toggle ride above the label text. */
+  margin: 0;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: normal;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.bash-tool-formatted-toggle input[type="checkbox"] {
+  width: 0.85rem;
+  height: 0.85rem;
+  cursor: pointer;
+  margin: 0;
+}
+
 .bash-tool-command {
   font-family: var(--font-mono);
   font-size: 0.875rem;

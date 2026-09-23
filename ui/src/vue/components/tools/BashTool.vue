@@ -46,11 +46,17 @@
         <pre class="bash-tool-code bash-tool-code-cwd">{{ displayData.workingDir }}</pre>
       </div>
       <div class="bash-tool-section">
-        <div class="bash-tool-label">Command:</div>
+        <div class="bash-tool-label">
+          Command:
+          <label v-if="formattedCommand" class="bash-tool-formatted-toggle">
+            <input v-model="showFormatted" type="checkbox" />
+            Formatted
+          </label>
+        </div>
         <HighlightedCode
           tag="pre"
           class="bash-tool-code"
-          :source="command"
+          :source="expandedSource"
           language="shellscript"
         />
       </div>
@@ -148,18 +154,24 @@ const displayData = computed<BashDisplayData | null>(() => {
   return null;
 });
 
-const command = computed(() => {
+const command = computed(() => stringField("command"));
+// Server-provided display forms (see server/bashformat.go). Absent for
+// unparseable commands and when identical to the raw command.
+const formattedCommand = computed(() => stringField("formattedCommand"));
+const foldedCommand = computed(() => stringField("foldedCommand"));
+
+function stringField(key: string): string {
   const ti = props.toolInput;
   if (
     typeof ti === "object" &&
     ti !== null &&
-    "command" in ti &&
-    typeof (ti as { command: unknown }).command === "string"
+    key in ti &&
+    typeof (ti as Record<string, unknown>)[key] === "string"
   ) {
-    return (ti as { command: string }).command;
+    return (ti as Record<string, unknown>)[key] as string;
   }
-  return typeof ti === "string" ? ti : "";
-});
+  return "";
+}
 
 const output = computed(() =>
   props.toolResult && props.toolResult.length > 0 && props.toolResult[0].Text
@@ -179,12 +191,33 @@ const outputLabel = computed(() => {
 // The header summary truncates long commands. The ellipsis is plain text
 // rendered OUTSIDE the highlighted source, so it is never tokenized as bash
 // code while the visible text stays identical to the old displayCommand.
+//
+// SUMMARY_MAX_LEN is in UTF-16 code units (String.substring semantics).
+// If you change it, foldMaxBytes in server/bashformat.go (which truncates
+// the server-sent folded form further out) must change with it.
 const SUMMARY_MAX_LEN = 300;
-const summarySource = computed(() => {
-  const cmd = command.value;
-  return cmd.length <= SUMMARY_MAX_LEN ? cmd : cmd.substring(0, SUMMARY_MAX_LEN);
-});
-const summaryTruncated = computed(() => command.value.length > SUMMARY_MAX_LEN);
+// The folded view prefers the server's folded form (the whole command
+// compacted to one line); raw otherwise.
+const foldSource = computed(() => foldedCommand.value || command.value);
+const summarySource = computed(() =>
+  foldSource.value.length <= SUMMARY_MAX_LEN
+    ? foldSource.value
+    : foldSource.value.substring(0, SUMMARY_MAX_LEN),
+);
+const summaryTruncated = computed(
+  () =>
+    command.value.length > SUMMARY_MAX_LEN ||
+    (foldedCommand.value !== "" && foldedCommand.value.length > SUMMARY_MAX_LEN),
+);
+
+// Expanded view: raw command by default when no formatted form was sent;
+// otherwise the formatted form, toggleable via the checkbox.
+const showFormatted = ref(true);
+const expandedSource = computed(() =>
+  showFormatted.value && formattedCommand.value
+    ? formattedCommand.value
+    : command.value,
+);
 
 const isComplete = computed(() => !props.isRunning && props.toolResult !== undefined);
 
