@@ -21,7 +21,7 @@
         <div class="diff-viewer-header">
           <div class="diff-viewer-header-row">
             <span class="agents-md-header-title">{{ title || "Edit file" }}</span>
-            <code class="agents-md-header-path">{{ path }}</code>
+            <code class="agents-md-header-path">{{ resolvedPath }}</code>
             <span
               v-if="saveStatus !== 'idle'"
               :class="`agents-md-save-status agents-md-save-${saveStatus}`"
@@ -61,7 +61,7 @@
         </div>
         <div ref="contentRef" class="diff-viewer-content">
           <div v-if="loadStatus === 'error'" class="diff-viewer-loading">
-            <span>Failed to load {{ path }}. Editing is disabled.</span>
+            <span>Failed to load {{ resolvedPath }}. Editing is disabled.</span>
           </div>
           <template v-else>
             <div v-if="!monacoLoaded || loadStatus !== 'loaded'" class="diff-viewer-loading">
@@ -149,6 +149,11 @@ const saveStatus = ref<SaveStatus>("idle");
 // Interaction mode. Commentable modals open in edit mode (matching the plain
 // editor behavior); the toggle switches to read-only click-to-comment.
 const mode = ref<"comment" | "edit">("edit");
+// The path actually saved to and displayed. Equals props.path except when a
+// loadUrl response reports its own path: /api/user-agents-md resolves the
+// AGENTS.md Shelley is actually using, which may differ from the page-load
+// snapshot in init data (e.g. created at a non-default location after load).
+const resolvedPath = ref(props.path);
 
 // Monaco editor instances must NOT be deeply reactive: a plain ref() proxies
 // the editor's huge internal object graph, so vim mode (which drives the editor
@@ -186,7 +191,7 @@ const {
   mode: () => mode.value,
   isMobile: () => !isDesktop.value,
   promptHost: () => contentRef.value,
-  fileRef: () => tildifyPath(props.path),
+  fileRef: () => tildifyPath(resolvedPath.value),
   onSubmit: (block) => emit("comment", block),
 });
 let commentsCleanup: (() => void) | null = null;
@@ -216,16 +221,25 @@ watch(
     if (!props.isOpen) return;
     let cancelled = false;
     loadStatus.value = "loading";
+    // Assume the prop path until (or unless) the load response reports the
+    // real one; see resolvedPath.
+    resolvedPath.value = props.path;
     (async () => {
       try {
         const response = await fetch(
           props.loadUrl || `/api/read?path=${encodeURIComponent(props.path)}`,
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const text = props.loadUrl
-          ? ((await response.json()) as { content: string }).content
-          : await response.text();
+        let json: { path?: string; content: string } | null = null;
+        let text: string;
+        if (props.loadUrl) {
+          json = (await response.json()) as { path?: string; content: string };
+          text = json.content;
+        } else {
+          text = await response.text();
+        }
         if (cancelled) return;
+        if (json?.path) resolvedPath.value = json.path;
         content.value = text ?? "";
         loadStatus.value = "loaded";
       } catch (err) {
@@ -259,14 +273,14 @@ watch(
 );
 
 async function saveContent(text: string) {
-  if (!props.path) return;
+  if (!resolvedPath.value) return;
   if (statusTimeout) clearTimeout(statusTimeout);
   try {
     saveStatus.value = "saving";
     const response = await fetch("/api/write-file", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: props.path, content: text }),
+      body: JSON.stringify({ path: resolvedPath.value, content: text }),
     });
     if (response.ok) {
       emit("saved", text);
@@ -354,7 +368,7 @@ watch(
     const monaco = monacoMod;
     const nextEditor = monaco.editor.create(containerRef.value, {
       value: content.value,
-      language: resolveLanguage(monaco, props.path),
+      language: resolveLanguage(monaco, resolvedPath.value),
       theme: isDarkModeActive() ? "vs-dark" : "vs",
       minimap: { enabled: false },
       wordWrap: "on",

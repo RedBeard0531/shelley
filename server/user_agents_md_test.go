@@ -45,6 +45,57 @@ func TestUserAgentsMdPathIsStable(t *testing.T) {
 	}
 }
 
+// TestUserAgentsMdPathPrefersExistingFile verifies that userAgentsMdPath
+// resolves to an existing AGENTS.md at any candidate location, in precedence
+// order, instead of the preferred default path.
+func TestUserAgentsMdPathPrefersExistingFile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	// No file anywhere: falls back to the preferred default path.
+	p, err := userAgentsMdPath()
+	if err != nil {
+		t.Fatalf("userAgentsMdPath: %v", err)
+	}
+	if want := filepath.Join(tmp, ".config", "shelley", "AGENTS.md"); p != want {
+		t.Fatalf("no file: path = %q, want default %q", p, want)
+	}
+
+	// Create a lower-precedence file: it wins over the default.
+	agentsDir := filepath.Join(tmp, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentsPath := filepath.Join(agentsDir, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err = userAgentsMdPath()
+	if err != nil {
+		t.Fatalf("userAgentsMdPath: %v", err)
+	}
+	if p != agentsPath {
+		t.Fatalf("path = %q, want %q", p, agentsPath)
+	}
+
+	// Create a higher-precedence file: it wins over .agents.
+	configDir := filepath.Join(tmp, ".config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "AGENTS.md")
+	if err := os.WriteFile(configPath, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err = userAgentsMdPath()
+	if err != nil {
+		t.Fatalf("userAgentsMdPath: %v", err)
+	}
+	if p != configPath {
+		t.Fatalf("path = %q, want %q", p, configPath)
+	}
+}
+
 // TestHandleWriteFileAutoCommits verifies that POST /api/write-file to the
 // user AGENTS.md path produces a new git commit in the dedicated gitdir,
 // while leaving ~/.config/shelley/ otherwise untouched.

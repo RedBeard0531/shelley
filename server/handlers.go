@@ -255,15 +255,6 @@ func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"path": clean, "content": string(b)})
 }
 
-// userAgentsMdPath returns the path to ~/.config/shelley/AGENTS.md
-func userAgentsMdPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
-	}
-	return filepath.Join(home, ".config", "shelley", "AGENTS.md"), nil
-}
-
 const maxUploadBytes = 1 << 30 // 1 GiB
 
 type uploadErrorResponse struct {
