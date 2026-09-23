@@ -46,9 +46,27 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   await bashTool.locator(".bash-tool-header").click();
   const details = bashTool.locator(".bash-tool-details");
   await expect(details).toBeVisible();
-  const expandedCommand = details.locator(".bash-tool-code").filter({ hasText: command });
-  await expect(expandedCommand).toHaveText(command);
+
+  // The server sent a formatted form (the raw command contains a statement
+  // separator), so the expanded view defaults to it and a toggle switches
+  // back to the raw command.
+  const toggle = details.locator(".bash-tool-formatted-toggle input");
+  await expect(toggle).toBeChecked();
+  const formattedCommand = 'value=$(printf bash-output-plain)\necho "outer $(printf inner) tail"';
+  const expandedCommand = details
+    .locator(".bash-tool-code")
+    .filter({ hasText: formattedCommand })
+    .first();
+  await expect(expandedCommand).toHaveText(formattedCommand);
   await expect(expandedCommand.locator(".shelley-code-token").first()).toBeAttached();
+
+  await toggle.uncheck();
+  const rawCommand = details
+    .locator(".bash-tool-code")
+    .filter({ hasText: command })
+    .first();
+  await expect(rawCommand).toHaveText(command);
+  await expect(rawCommand.locator(".shelley-code-token").first()).toBeAttached();
 
   const output = details.locator(".bash-tool-code").last();
   await expect(output).toHaveText("outer inner tail\n");
