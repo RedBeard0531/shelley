@@ -10,6 +10,7 @@ const {
   menuShortcutLabel,
   comboMatches,
   matchChatInterfaceAction,
+  isInsideTerminal,
   isMac,
 } = await import("./menuShortcuts");
 
@@ -165,6 +166,23 @@ assert(
 assert(!CHAT_INTERFACE_ACTIONS.includes("commandPalette"), "list excludes commandPalette");
 assert(!CHAT_INTERFACE_ACTIONS.includes("editFile"), "list excludes editFile");
 assert(CHAT_INTERFACE_ACTIONS.length === 7, "seven ChatInterface-owned actions");
+
+// isInsideTerminal: events whose target lives inside a terminal view are owned
+// by the shell; everything else (including text fields) is fair game.
+function evInTarget(target: unknown): KeyboardEvent {
+  const e = ev({ code: "KeyK", ctrlKey: true });
+  Object.defineProperty(e, "target", { value: target });
+  return e;
+}
+const terminalRoot = {
+  closest: (sel: string) => (sel === ".terminal-host" ? {} : null),
+} as unknown as EventTarget;
+assert(
+  isInsideTerminal(evInTarget(terminalRoot)),
+  "target inside a terminal view is inside terminal",
+);
+assert(!isInsideTerminal(evInTarget({ closest: () => null })), "plain element is not");
+assert(!isInsideTerminal(evInTarget(null)), "null target is not");
 
 if (failed > 0) {
   console.error(`\n${failed} assertion(s) failed, ${passed} passed`);

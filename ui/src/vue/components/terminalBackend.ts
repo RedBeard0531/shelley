@@ -67,6 +67,8 @@ export async function openTerminalView(
   opts: TerminalViewOptions,
 ): Promise<TerminalView> {
   const host = document.createElement("div");
+  // Both renderers draw inside this element; keyboard shortcuts key off it.
+  host.className = "terminal-host";
   host.style.height = "100%";
   container.appendChild(host);
   try {
