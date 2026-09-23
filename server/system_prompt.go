@@ -751,30 +751,23 @@ func collectCodebaseInfo(wd string, gitInfo *GitInfo) (*CodebaseInfo, error) {
 	seenFiles := make(map[string]bool)
 	seenContents := make(map[string]bool)
 
-	// Check for user-level agent instructions in ~/.config/AGENTS.md,
-	// ~/.config/shelley/AGENTS.md, ~/.agents/AGENTS.md, and ~/.shelley/AGENTS.md
-	if home, err := os.UserHomeDir(); err == nil {
-		userAgentsFiles := []string{
-			filepath.Join(home, ".config", "AGENTS.md"),
-			filepath.Join(home, ".config", "shelley", "AGENTS.md"),
-			filepath.Join(home, ".agents", "AGENTS.md"),
-			filepath.Join(home, ".shelley", "AGENTS.md"),
+	// Check for user-level agent instructions at the candidate user-level
+	// AGENTS.md locations (see userAgentsMdCandidates); nil if there is no
+	// home directory, in which case the loop simply doesn't run.
+	for _, f := range userAgentsMdCandidates() {
+		canonical := resolveAndNormalize(f)
+		if seenFiles[canonical] {
+			continue
 		}
-		for _, f := range userAgentsFiles {
-			canonical := resolveAndNormalize(f)
-			if seenFiles[canonical] {
+		if content, err := os.ReadFile(f); err == nil && len(content) > 0 {
+			contentKey := string(content)
+			if seenContents[contentKey] {
 				continue
 			}
-			if content, err := os.ReadFile(f); err == nil && len(content) > 0 {
-				contentKey := string(content)
-				if seenContents[contentKey] {
-					continue
-				}
-				info.InjectFiles = append(info.InjectFiles, f)
-				info.InjectFileContents[f] = contentKey
-				seenFiles[canonical] = true
-				seenContents[contentKey] = true
-			}
+			info.InjectFiles = append(info.InjectFiles, f)
+			info.InjectFileContents[f] = contentKey
+			seenFiles[canonical] = true
+			seenContents[contentKey] = true
 		}
 	}
 

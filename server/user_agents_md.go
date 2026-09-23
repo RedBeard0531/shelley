@@ -11,9 +11,9 @@ import (
 // record a new commit every time the file is edited through the web (or iOS)
 // UI. Two constraints shape the layout:
 //
-//  1. The file itself must stay at its historical path,
-//     ~/.config/shelley/AGENTS.md, so nothing that already reads from there
-//     (tooling, hooks, etc.) breaks.
+//  1. The file must be the one Shelley actually uses. Shelley reads
+//     user-level instructions from several locations in precedence order
+//     (see userAgentsMdCandidates); we version whichever file exists.
 //  2. ~/.config/shelley/ contains volatile state we must never accidentally
 //     commit: shelley.db (~100 MB SQLite, churns constantly), shelley.db-wal,
 //     unix sockets, per-terminal scratch dirs, etc.
@@ -30,6 +30,39 @@ import (
 // recover older versions inspect the repo on disk.
 
 const userAgentsMdFilename = "AGENTS.md"
+
+// userAgentsMdCandidates lists the user-level AGENTS.md locations Shelley
+// reads, in precedence order. system_prompt.go and the editor modal both
+// derive from this list so they always agree on which file is in use.
+func userAgentsMdCandidates() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, ".config", userAgentsMdFilename),
+		filepath.Join(home, ".config", "shelley", userAgentsMdFilename),
+		filepath.Join(home, ".agents", userAgentsMdFilename),
+		filepath.Join(home, ".shelley", userAgentsMdFilename),
+	}
+}
+
+// userAgentsMdPath returns the path of the user-level AGENTS.md that Shelley
+// is actually using: the first candidate location that exists. When none
+// exists yet, it returns the preferred (historical) path so the editor opens
+// the right place once the file is created.
+func userAgentsMdPath() (string, error) {
+	candidates := userAgentsMdCandidates()
+	if candidates == nil {
+		return "", fmt.Errorf("cannot determine home directory")
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return candidates[1], nil
+}
 
 // userAgentsMdGitDir returns the path of the gitdir that versions the
 // user-level AGENTS.md. It is intentionally outside the work-tree it tracks.
