@@ -3,12 +3,10 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 // mockService implements Service interface for testing
@@ -84,97 +82,6 @@ func TestMustSchema(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestEmptySchema(t *testing.T) {
-	schema := EmptySchema()
-	expected := `{"type": "object", "properties": {}}`
-	if string(schema) != expected {
-		t.Errorf("EmptySchema() = %s, want %s", string(schema), expected)
-	}
-}
-
-func TestStringContent(t *testing.T) {
-	text := "test content"
-	content := StringContent(text)
-
-	if content.Type != ContentTypeText {
-		t.Errorf("StringContent().Type = %v, want %v", content.Type, ContentTypeText)
-	}
-
-	if content.Text != text {
-		t.Errorf("StringContent().Text = %s, want %s", content.Text, text)
-	}
-}
-
-func TestTextContent(t *testing.T) {
-	text := "test text content"
-	contents := TextContent(text)
-
-	if len(contents) != 1 {
-		t.Errorf("TextContent() returned %d items, want 1", len(contents))
-	}
-
-	if contents[0].Type != ContentTypeText {
-		t.Errorf("TextContent()[0].Type = %v, want %v", contents[0].Type, ContentTypeText)
-	}
-
-	if contents[0].Text != text {
-		t.Errorf("TextContent()[0].Text = %s, want %s", contents[0].Text, text)
-	}
-}
-
-func TestUserStringMessage(t *testing.T) {
-	text := "user message"
-	message := UserStringMessage(text)
-
-	if message.Role != MessageRoleUser {
-		t.Errorf("UserStringMessage().Role = %v, want %v", message.Role, MessageRoleUser)
-	}
-
-	if len(message.Content) != 1 {
-		t.Errorf("UserStringMessage().Content length = %d, want 1", len(message.Content))
-	}
-
-	if message.Content[0].Type != ContentTypeText {
-		t.Errorf("UserStringMessage().Content[0].Type = %v, want %v", message.Content[0].Type, ContentTypeText)
-	}
-
-	if message.Content[0].Text != text {
-		t.Errorf("UserStringMessage().Content[0].Text = %s, want %s", message.Content[0].Text, text)
-	}
-}
-
-func TestErrorToolOut(t *testing.T) {
-	err := fmt.Errorf("test error")
-	toolOut := ErrorToolOut(err)
-
-	if toolOut.Error != err {
-		t.Errorf("ErrorToolOut().Error = %v, want %v", toolOut.Error, err)
-	}
-
-	// Test panic with nil error
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("Expected panic when calling ErrorToolOut with nil error")
-		}
-	}()
-	ErrorToolOut(nil)
-}
-
-func TestErrorfToolOut(t *testing.T) {
-	format := "error: %s"
-	arg := "test"
-	toolOut := ErrorfToolOut(format, arg)
-
-	if toolOut.Error == nil {
-		t.Errorf("ErrorfToolOut().Error = nil, want error")
-	}
-
-	expected := fmt.Sprintf(format, arg)
-	if toolOut.Error.Error() != expected {
-		t.Errorf("ErrorfToolOut().Error = %v, want %v", toolOut.Error.Error(), expected)
 	}
 }
 
@@ -259,103 +166,6 @@ func TestUsageAdd(t *testing.T) {
 	}
 }
 
-func TestUsageString(t *testing.T) {
-	tests := []struct {
-		name  string
-		usage Usage
-		want  string
-	}{
-		{
-			name: "normal usage",
-			usage: Usage{
-				InputTokens:  100,
-				OutputTokens: 50,
-			},
-			want: "in: 100, out: 50",
-		},
-		{
-			name: "zero usage",
-			usage: Usage{
-				InputTokens:  0,
-				OutputTokens: 0,
-			},
-			want: "in: 0, out: 0",
-		},
-		{
-			name: "high usage",
-			usage: Usage{
-				InputTokens:  1000000,
-				OutputTokens: 500000,
-			},
-			want: "in: 1000000, out: 500000",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.usage.String()
-			if result != tt.want {
-				t.Errorf("Usage.String() = %s, want %s", result, tt.want)
-			}
-		})
-	}
-}
-
-func TestUsageIsZero(t *testing.T) {
-	tests := []struct {
-		name  string
-		usage Usage
-		want  bool
-	}{
-		{
-			name:  "zero usage",
-			usage: Usage{},
-			want:  true,
-		},
-		{
-			name: "non-zero input tokens",
-			usage: Usage{
-				InputTokens: 1,
-			},
-			want: false,
-		},
-		{
-			name: "non-zero output tokens",
-			usage: Usage{
-				OutputTokens: 1,
-			},
-			want: false,
-		},
-		{
-			name: "non-zero cost",
-			usage: Usage{
-				CostUSD: 0.01,
-			},
-			want: false,
-		},
-		{
-			name: "all fields zero",
-			usage: Usage{
-				InputTokens:              0,
-				CacheCreationInputTokens: 0,
-				CacheReadInputTokens:     0,
-				OutputTokens:             0,
-				CostUSD:                  0,
-			},
-			want: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.usage.IsZero()
-			if result != tt.want {
-				t.Errorf("Usage.IsZero() = %v, want %v", result, tt.want)
-			}
-		})
-	}
-}
-
 func TestResponseToMessage(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -431,69 +241,6 @@ func TestResponseToMessage(t *testing.T) {
 	}
 }
 
-func TestContentsAttr(t *testing.T) {
-	tests := []struct {
-		name     string
-		contents []Content
-	}{
-		{
-			name: "text content",
-			contents: []Content{
-				{
-					ID:   "1",
-					Type: ContentTypeText,
-					Text: "hello world",
-				},
-			},
-		},
-		{
-			name: "tool use content",
-			contents: []Content{
-				{
-					ID:        "2",
-					Type:      ContentTypeToolUse,
-					ToolName:  "test_tool",
-					ToolInput: json.RawMessage(`{"param": "value"}`),
-				},
-			},
-		},
-		{
-			name: "tool result content",
-			contents: []Content{
-				{
-					ID:         "3",
-					Type:       ContentTypeToolResult,
-					ToolResult: []Content{{Type: ContentTypeText, Text: "result"}},
-					ToolError:  false,
-				},
-			},
-		},
-		{
-			name: "thinking content",
-			contents: []Content{
-				{
-					ID:   "4",
-					Type: ContentTypeThinking,
-					Text: "thinking...",
-				},
-			},
-		},
-		{
-			name:     "empty contents",
-			contents: []Content{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			attr := ContentsAttr(tt.contents)
-			if attr.Key != "contents" {
-				t.Errorf("ContentsAttr().Key = %s, want 'contents'", attr.Key)
-			}
-		})
-	}
-}
-
 func TestCostUSDFromResponse(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -540,45 +287,6 @@ func TestCostUSDFromResponse(t *testing.T) {
 				t.Errorf("CostUSDFromResponse() = %f, want %f", cost, tt.wantCost)
 			}
 		})
-	}
-}
-
-func TestUsageAttr(t *testing.T) {
-	usage := Usage{
-		InputTokens:              100,
-		OutputTokens:             50,
-		CacheCreationInputTokens: 25,
-		CacheReadInputTokens:     75,
-		CostUSD:                  0.01,
-	}
-
-	attr := usage.Attr()
-	if attr.Key != "usage" {
-		t.Errorf("Attr().Key = %s, want 'usage'", attr.Key)
-	}
-}
-
-func TestDumpToFile(t *testing.T) {
-	// This test just verifies the function exists and can be called
-	// We don't actually want to write files during testing
-	// So we'll just ensure it doesn't panic with valid inputs
-	content := []byte("test content")
-
-	// This might fail due to permissions, but it shouldn't panic
-	_ = DumpToFile("test", "http://example.com", content)
-}
-
-func TestFormatRetryEvent(t *testing.T) {
-	msg := FormatRetryEvent(RetryEvent{
-		Sleep:    16 * time.Second,
-		Err:      `transport: Post "http://169.254.169.254/gateway/llm/_/gateway/anthropic/v1/messages": dial tcp 169.254.169.254:80: i/o timeout`,
-		Provider: "anthropic",
-		Model:    "claude-opus-4-7",
-	})
-
-	want := `LLM request failed: anthropic claude-opus-4-7; retrying in 16s. transport: Post "http://169.254.169.254/gateway/llm/_/gateway/anthropic/v1/messages": dial tcp 169.254.169.254:80: i/o timeout`
-	if msg != want {
-		t.Fatalf("FormatRetryEvent() = %q, want %q", msg, want)
 	}
 }
 

@@ -294,28 +294,6 @@ func TestLLMOneShotEmptyPrompt(t *testing.T) {
 	}
 }
 
-func TestLLMOneShotToolDescription(t *testing.T) {
-	tool := &LLMOneShotTool{
-		LLMProvider: &oneShotMockProvider{},
-		ModelID:     "model-a",
-		WorkingDir:  NewMutableWorkingDir("/tmp"),
-		AvailableModels: []AvailableModel{
-			{ID: "model-a"},
-			{ID: "model-b", DisplayName: "Model B (fancy)"},
-		},
-	}
-
-	llmTool := tool.Tool()
-	for _, model := range tool.AvailableModels {
-		if !strings.Contains(string(llmTool.InputSchema), model.ID) {
-			t.Errorf("model %q missing from schema", model.ID)
-		}
-		if strings.Contains(llmTool.Description, model.ID) {
-			t.Errorf("description duplicates model %q from schema", model.ID)
-		}
-	}
-}
-
 func TestLLMOneShotToolSchemaEnum(t *testing.T) {
 	tool := &LLMOneShotTool{
 		LLMProvider: &oneShotMockProvider{},

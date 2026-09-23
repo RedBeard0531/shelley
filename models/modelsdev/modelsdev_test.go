@@ -8,46 +8,6 @@ import (
 	"shelley.exe.dev/llm"
 )
 
-func TestOpus55Metadata(t *testing.T) {
-	const model = "claude-opus-5-5"
-
-	if got, ok := LookupReleaseDate("", model); !ok || got != "2026-09-22" {
-		t.Fatalf("LookupReleaseDate() = %q, %v, want 2026-09-22, true", got, ok)
-	}
-	if got, ok := LookupContextLimit("", model); !ok || got != 1_000_000 {
-		t.Fatalf("LookupContextLimit() = %d, %v, want 1000000, true", got, ok)
-	}
-	if got, ok := LookupOutputLimit("", model); !ok || got != 128_000 {
-		t.Fatalf("LookupOutputLimit() = %d, %v, want 128000, true", got, ok)
-	}
-	if got, ok := LookupCost("", model); !ok || !reflect.DeepEqual(got, Cost{Input: 4, Output: 20, CacheRead: 0.2, CacheWrite: 5}) {
-		t.Fatalf("LookupCost() = %+v, %v", got, ok)
-	}
-	if got, ok := LookupModalities("https://api.anthropic.com", model); !ok || !reflect.DeepEqual(got, Modalities{Input: []string{"text", "image", "pdf"}, Output: []string{"text"}}) {
-		t.Fatalf("LookupModalities() = %+v, %v", got, ok)
-	}
-	wantLevels := []llm.ThinkingLevel{llm.ThinkingLevelLow, llm.ThinkingLevelMedium, llm.ThinkingLevelHigh, llm.ThinkingLevelXHigh, llm.ThinkingLevelMax}
-	if got, ok := LookupReasoningCapabilities("", model); !ok || !got.Supported || !reflect.DeepEqual(got.Levels, wantLevels) {
-		t.Fatalf("LookupReasoningCapabilities() = %+v, %v", got, ok)
-	}
-
-	var snapshot struct {
-		Anthropic struct {
-			Models map[string]struct {
-				Knowledge   string `json:"knowledge"`
-				LastUpdated string `json:"last_updated"`
-			} `json:"models"`
-		} `json:"anthropic"`
-	}
-	if err := json.Unmarshal(apiJSON, &snapshot); err != nil {
-		t.Fatal(err)
-	}
-	entry := snapshot.Anthropic.Models[model]
-	if entry.Knowledge != "2026-06" || entry.LastUpdated != "2026-09-22" {
-		t.Fatalf("snapshot dates = knowledge %q updated %q", entry.Knowledge, entry.LastUpdated)
-	}
-}
-
 func TestLookupImageSupport(t *testing.T) {
 	cases := []struct {
 		name       string

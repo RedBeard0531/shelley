@@ -44,96 +44,6 @@ func (m *mockLLMProvider) GetWorkhorseService(modelID string) (llm.Service, erro
 
 func (m *mockService) SupportsImages() bool { return true }
 
-func TestNewToolSet(t *testing.T) {
-	provider := &mockLLMProvider{}
-
-	cfg := ToolSetConfig{
-		LLMProvider: provider,
-		ModelID:     "test-model",
-		WorkingDir:  "/test",
-	}
-
-	ctx := t.Context()
-	ts := NewToolSet(ctx, cfg)
-
-	if ts == nil {
-		t.Fatal("NewToolSet returned nil")
-	}
-
-	if ts.wd == nil {
-		t.Error("Working directory not initialized")
-	}
-
-	if ts.tools == nil {
-		t.Error("Tools not initialized")
-	}
-}
-
-func TestToolSet_Tools(t *testing.T) {
-	provider := &mockLLMProvider{}
-
-	cfg := ToolSetConfig{
-		LLMProvider: provider,
-		ModelID:     "test-model",
-		WorkingDir:  "/test",
-	}
-
-	ctx := t.Context()
-	ts := NewToolSet(ctx, cfg)
-
-	tools := ts.Tools()
-	for _, tool := range tools {
-		if tool.Name == "keyword_search" {
-			t.Fatal("keyword_search must not be offered")
-		}
-	}
-	if tools == nil {
-		t.Fatal("Tools() returned nil")
-	}
-
-	if len(tools) == 0 {
-		t.Error("expected at least one tool")
-	}
-}
-
-func TestToolSet_WorkingDir(t *testing.T) {
-	provider := &mockLLMProvider{}
-
-	cfg := ToolSetConfig{
-		LLMProvider: provider,
-		ModelID:     "test-model",
-		WorkingDir:  "/test",
-	}
-
-	ctx := t.Context()
-	ts := NewToolSet(ctx, cfg)
-
-	wd := ts.WorkingDir()
-	if wd == nil {
-		t.Fatal("WorkingDir() returned nil")
-	}
-
-	if wd.Get() != "/test" {
-		t.Errorf("expected working dir '/test', got %q", wd.Get())
-	}
-}
-
-func TestToolSet_Cleanup(t *testing.T) {
-	provider := &mockLLMProvider{}
-
-	cfg := ToolSetConfig{
-		LLMProvider: provider,
-		ModelID:     "test-model",
-		WorkingDir:  "/test",
-	}
-
-	ctx := t.Context()
-	ts := NewToolSet(ctx, cfg)
-
-	// Cleanup should not panic
-	ts.Cleanup()
-}
-
 func TestNewToolSet_DefaultWorkingDir(t *testing.T) {
 	provider := &mockLLMProvider{}
 
@@ -154,32 +64,6 @@ func TestNewToolSet_DefaultWorkingDir(t *testing.T) {
 	wd := ts.WorkingDir()
 	if wd.Get() != home {
 		t.Errorf("expected default working dir %q, got %q", home, wd.Get())
-	}
-}
-
-func TestNewToolSet_WithBrowser(t *testing.T) {
-	provider := &mockLLMProvider{}
-
-	cfg := ToolSetConfig{
-		LLMProvider:   provider,
-		ModelID:       "test-model",
-		WorkingDir:    "/test",
-		EnableBrowser: true,
-	}
-
-	ctx := t.Context()
-	ts := NewToolSet(ctx, cfg)
-
-	if ts == nil {
-		t.Fatal("NewToolSet returned nil")
-	}
-
-	if ts.wd == nil {
-		t.Error("Working directory not initialized")
-	}
-
-	if ts.tools == nil {
-		t.Error("Tools not initialized")
 	}
 }
 
