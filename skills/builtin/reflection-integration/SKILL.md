@@ -4,16 +4,18 @@ description: Use to discover external services and APIs available on this exe.de
 when: exe.dev
 ---
 
-Most exe.dev VMs have a `reflection` endpoint available.
+Integrations attached to this VM:
 
-Start with
+```
+curl https://reflection.int.exe.xyz/integrations
+```
+
+VM metadata:
 
 ```
 curl https://reflection.int.exe.xyz/
 ```
 
-and explore from there.
-
-If this fails, the VM may be old, or the user may have removed the reflection integration or given it an unusual name.
+If the reflection endpoint fails, the VM may be old, or the user may have removed the reflection integration or given it an unusual name.
 
 Integrations CRUD (user only): https://exe.dev/integrations.
