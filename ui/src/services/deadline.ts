@@ -56,6 +56,8 @@ export interface DeadlineOptions<T> {
 const inFlight = new Set<WaitRecord>();
 
 export interface PendingWait {
+  /** Unique per wait; several waits can share a label (two hydrates in flight). */
+  id: number;
   /** Operation label, e.g. "indexedDB.open". */
   what: string;
   /** Deadline it was given, in ms. */
@@ -65,17 +67,99 @@ export interface PendingWait {
 }
 
 interface WaitRecord {
+  id: number;
   what: string;
   deadlineMs: number;
   startedAt: number;
 }
 
+let nextWaitId = 1;
+
 /** Snapshot of the waits currently outstanding, longest-waiting first. */
 export function pendingWaits(): PendingWait[] {
   const now = Date.now();
   return [...inFlight]
-    .map((w) => ({ what: w.what, deadlineMs: w.deadlineMs, elapsedMs: now - w.startedAt }))
+    .map((w) => ({
+      id: w.id,
+      what: w.what,
+      deadlineMs: w.deadlineMs,
+      elapsedMs: now - w.startedAt,
+    }))
     .sort((a, b) => b.elapsedMs - a.elapsedMs);
+}
+
+/**
+ * Waits that missed their deadline, and what became of them.
+ *
+ * pendingWaits answers "what is this tab stuck on right now"; this answers
+ * "what has it given up on", which is the durable trace of lock contention.
+ * The cache is never *broken* in that scenario, only slow, so the interesting
+ * field is the outcome: an operation that completed late was healthy and was
+ * merely waiting on someone else's lock. In production Safari that someone
+ * was a throttled background tab holding IndexedDB, and the only visible
+ * symptom was conversations quietly loading from the network. The perf HUD
+ * turns this record into an alert so the next such regression is seen.
+ */
+export interface MissedDeadline {
+  /** The PendingWait.id this was while in flight. */
+  id: number;
+  /** Operation label, e.g. "indexedDB.open". */
+  what: string;
+  /** Deadline it was given, in ms. */
+  deadlineMs: number;
+  /** Date.now() when the caller gave up. */
+  at: number;
+  /**
+   * pending   — the operation has not come back yet.
+   * completed — it succeeded after we stopped waiting: slow, not broken.
+   * failed    — it errored after we stopped waiting.
+   * abandoned — the caller cancelled it itself after giving up (AbortError).
+   */
+  outcome: "pending" | "completed" | "failed" | "abandoned";
+  /** Time from the start of the wait until the operation settled. */
+  settledAfterMs?: number;
+  /** The late error, when outcome is "failed". */
+  error?: string;
+}
+
+export const MISSED_DEADLINE_BUFFER = 20;
+const missed: MissedDeadline[] = [];
+
+/** Missed deadlines, oldest first (last MISSED_DEADLINE_BUFFER). */
+export function missedDeadlines(): MissedDeadline[] {
+  return missed.map((m) => ({ ...m }));
+}
+
+export function resetMissedDeadlines(): void {
+  missed.length = 0;
+}
+
+/**
+ * Every bounded IndexedDB wait labels itself "indexedDB.…" (see messageStore),
+ * which is how observers tell cache lock contention from a stalled fetch or
+ * lock request.
+ */
+export function isIndexedDBWait(what: string): boolean {
+  return what.startsWith("indexedDB.");
+}
+
+function recordMiss(entry: WaitRecord): MissedDeadline {
+  const rec: MissedDeadline = {
+    id: entry.id,
+    what: entry.what,
+    deadlineMs: entry.deadlineMs,
+    at: Date.now(),
+    outcome: "pending",
+  };
+  missed.push(rec);
+  if (missed.length > MISSED_DEADLINE_BUFFER) missed.shift();
+  return rec;
+}
+
+/** True for the DOMException a caller raises by cancelling its own request
+ * (tx.abort(), AbortController) — a decision, not a failure. */
+export function isAbortError(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "name" in err && err.name === "AbortError";
 }
 
 /**
@@ -86,7 +170,12 @@ export function pendingWaits(): PendingWait[] {
 export function withDeadline<T>(p: Promise<T>, ms: number, opts: DeadlineOptions<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
-    const entry: WaitRecord = { what: opts.what, deadlineMs: ms, startedAt: Date.now() };
+    const entry: WaitRecord = {
+      id: nextWaitId++,
+      what: opts.what,
+      deadlineMs: ms,
+      startedAt: Date.now(),
+    };
     inFlight.add(entry);
     // Every exit path must deregister, or the diagnostic becomes a liar that
     // reports phantom waits outliving the code that started them.
@@ -94,14 +183,21 @@ export function withDeadline<T>(p: Promise<T>, ms: number, opts: DeadlineOptions
       settled = true;
       inFlight.delete(entry);
     };
+    // Set once the deadline fires; the late handlers fill in its outcome.
+    let miss: MissedDeadline | undefined;
     const timer = setTimeout(() => {
       if (settled) return;
       done();
+      miss = recordMiss(entry);
       reject(new DeadlineExceededError(opts.what, ms));
     }, ms);
     p.then(
       (v) => {
         if (settled) {
+          if (miss) {
+            miss.outcome = "completed";
+            miss.settledAfterMs = Date.now() - entry.startedAt;
+          }
           // Guarded: this runs in a promise chain nobody awaits, so a throwing
           // callback would surface as an unhandled rejection.
           try {
@@ -117,6 +213,15 @@ export function withDeadline<T>(p: Promise<T>, ms: number, opts: DeadlineOptions
       },
       (err) => {
         if (settled) {
+          if (miss) {
+            miss.settledAfterMs = Date.now() - entry.startedAt;
+            if (isAbortError(err)) {
+              miss.outcome = "abandoned";
+            } else {
+              miss.outcome = "failed";
+              miss.error = String(err);
+            }
+          }
           try {
             opts.onLateError?.(err);
           } catch (e) {

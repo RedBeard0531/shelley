@@ -2556,8 +2556,15 @@ async function loadMessages(focusedId: string) {
     !!cached &&
     cached.hasFullHistory &&
     (cached.maxSequenceIdKnown <= 0 || cached.maxSequenceId >= cached.maxSequenceIdKnown);
+  // Archived conversations are absent from the live list, so nothing seeds
+  // maxSequenceIdKnown for them and a cached prefix that fell behind (say,
+  // while every tab was hidden) would read as complete. Confirm the tail with
+  // the server; for a complete cache that is one cheap ?last_sequence_id= call.
+  const isArchived =
+    !!props.currentConversation?.archived &&
+    props.currentConversation.conversation_id === focusedId;
 
-  if (cacheIsComplete && !cached!.needsRefresh) {
+  if (cacheIsComplete && !cached!.needsRefresh && !isArchived) {
     cacheDiag("hit", "load.served_from_cache", {
       conversation_id: focusedId,
       messages: cached!.messages.length,

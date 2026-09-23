@@ -16,6 +16,7 @@ import type { ConversationCacheRecord } from "./messageStore";
 import type { Conversation, Message, StreamResponse } from "../types";
 import { CacheKeyHolder, type CacheKeyFetcher, type CacheKeyMaterial } from "./cryptoKey";
 import { cacheDiagEvents, cacheDiagReset, cacheDiagStats } from "./cacheDiag";
+import { isIndexedDBWait, missedDeadlines, resetMissedDeadlines } from "./deadline";
 
 // Node 20 lacks a global `crypto.subtle`; expose webcrypto so messageStore's
 // AES-GCM helpers work in tests.
@@ -100,6 +101,18 @@ const SHORT_TIMEOUT_MS = 80;
 /** Must match IDB_OPEN_COOLDOWN_MS's role: how long a timeout suppresses retries. */
 const SHORT_COOLDOWN_MS = 80;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Missed IndexedDB deadlines, as the perf HUD's contention alert sees them. */
+const idbStalls = () => missedDeadlines().filter((m) => isIndexedDBWait(m.what));
+
+/** Poll `cond` (short sleeps, bounded) instead of guessing a fixed delay. */
+async function waitFor(cond: () => boolean, message: string, timeoutMs = 2_000): Promise<void> {
+  const started = Date.now();
+  while (!cond()) {
+    if (Date.now() - started > timeoutMs) throw new Error(`Assertion failed: ${message}`);
+    await sleep(5);
+  }
+}
 
 let seq = 0;
 /**
@@ -310,124 +323,324 @@ async function main(): Promise<void> {
     visible = false;
     writer.setContextWindowSize(id, 200);
     await writer.settle();
-
-    const fresh = storeFor(fixture);
-    assert((await fresh.hydrate(id)) === null, "hidden metadata patch must invalidate disk");
-  });
-
-  await run("a hidden update cannot leave stale disk marked complete", async () => {
-    const fixture = freshFactory();
-    const id = "c-hidden-stale-complete";
-    let visible = true;
-    const writer = storeFor({ ...fixture, isPageVisible: () => visible });
-    writer.applyFullHistory(id, {
-      conversation: conv(id, false),
-      messages: [msg(id, 1)],
-      max_sequence_id: 1,
-      context_window_size: 100,
-    });
-    await writer.settle();
-
-    visible = false;
-    writer.upsertMessages(id, [msg(id, 2)]);
-    await writer.settle();
-
-    const repairer = storeFor(fixture);
-    assert(
-      (await repairer.hydrate(id)) === null,
-      "dirty marker must reject stale full-history disk",
-    );
-    repairer.applyFullHistory(id, {
-      conversation: conv(id, false),
-      messages: [msg(id, 1), msg(id, 2)],
-      max_sequence_id: 2,
-      context_window_size: 100,
-    });
-    await repairer.settle();
-
-    const repaired = storeFor(fixture);
-    const hydrated = await repaired.hydrate(id);
-    assert(hydrated?.messages.length === 2, "full REST persistence must clear its dirty marker");
-    assert(hydrated?.hasFullHistory === true, "repaired disk history is complete");
-  });
-
-  await run("a fenced repair discards its stale hot snapshot", async () => {
-    const fixture = freshFactory();
-    const id = "c-hidden-dirty-hot";
-    let visible = true;
-    const writer = storeFor({ ...fixture, isPageVisible: () => visible });
-    writer.applyFullHistory(id, {
-      conversation: conv(id, false),
-      messages: [msg(id, 1)],
-      max_sequence_id: 1,
-      context_window_size: 100,
-    });
-    await writer.settle();
-
-    visible = false;
-    writer.upsertMessages(id, [msg(id, 2)]);
-    await writer.settle();
-    const staleRepair = storeFor(fixture);
-    assert((await staleRepair.hydrate(id)) === null, "repair observes the first token");
-
-    writer.upsertMessages(id, [msg(id, 3)]);
-    await writer.settle();
-    staleRepair.applyFullHistory(id, {
-      conversation: conv(id, false),
-      messages: [msg(id, 1), msg(id, 2)],
-      max_sequence_id: 2,
-      context_window_size: 100,
-    });
-    await staleRepair.settle();
-
-    assert(staleRepair.peek(id) === null, "fenced repair must discard its stale hot snapshot");
-    assert((await staleRepair.hydrate(id)) === null, "new dirty token still requires REST repair");
-  });
-
-  await run("an older repair cannot overwrite a newer completed repair", async () => {
-    const fixture = freshFactory();
-    const id = "c-hidden-repair-race";
-    let visible = true;
-    const writer = storeFor({ ...fixture, isPageVisible: () => visible });
-    writer.applyFullHistory(id, {
-      conversation: conv(id, false),
-      messages: [msg(id, 1)],
-      max_sequence_id: 1,
-      context_window_size: 100,
-    });
-    await writer.settle();
-
-    visible = false;
-    writer.upsertMessages(id, [msg(id, 2)]);
-    await writer.settle();
-    const olderRepair = storeFor(fixture);
-    assert((await olderRepair.hydrate(id)) === null, "older repair observes the first token");
-
-    writer.upsertMessages(id, [msg(id, 3)]);
-    await writer.settle();
-    const newerRepair = storeFor(fixture);
-    assert((await newerRepair.hydrate(id)) === null, "newer repair observes the replacement token");
-    newerRepair.applyFullHistory(id, {
-      conversation: conv(id, false),
-      messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
-      max_sequence_id: 3,
-      context_window_size: 100,
-    });
-    await newerRepair.settle();
-
-    olderRepair.applyFullHistory(id, {
-      conversation: conv(id, false),
-      messages: [msg(id, 1), msg(id, 2)],
-      max_sequence_id: 2,
-      context_window_size: 100,
-    });
-    await olderRepair.settle();
-    assert(olderRepair.peek(id) === null, "fenced older repair must discard its hot snapshot");
+    assert(writer.peek(id)?.contextWindowSize === 200, "hidden tab keeps the patch in memory");
 
     const fresh = storeFor(fixture);
     const hydrated = await fresh.hydrate(id);
-    assert(hydrated?.messages.length === 3, "older repair must not replace newer disk history");
-    assert(hydrated?.maxSequenceId === 3, "newer repair remains authoritative");
+    assert(hydrated?.contextWindowSize === 100, "hidden metadata patch must not reach disk");
+    assert(hydrated?.hasFullHistory === true, "disk row is untouched and still complete");
+  });
+
+  await run("hidden tabs open no IndexedDB transactions at all", async () => {
+    // The whole point of skipping hidden writes is to keep hidden tabs off the
+    // origin-wide IDB locks. A "tiny" marker write would defeat that: Safari
+    // suspends background tabs mid-transaction, and one held lock on a shared
+    // store stalls every hydrate in the visible tab (observed at the full read
+    // deadline with four hidden tabs). So count transactions, not rows.
+    const fixture = freshFactory();
+    const id = "c-hidden-no-tx";
+    const proto = (globalThis as { IDBDatabase: { prototype: IDBDatabase } }).IDBDatabase.prototype;
+    const original = proto.transaction;
+    let opened = 0;
+    proto.transaction = function (this: IDBDatabase, ...args: unknown[]) {
+      opened++;
+      return (original as (...a: unknown[]) => IDBTransaction).apply(this, args);
+    } as typeof proto.transaction;
+    try {
+      const hidden = storeFor({ ...fixture, isPageVisible: () => false });
+      hidden.applyFullHistory(id, {
+        conversation: conv(id, false),
+        messages: [msg(id, 1)],
+        max_sequence_id: 1,
+        context_window_size: 100,
+      });
+      hidden.upsertMessages(id, [msg(id, 2)]);
+      hidden.setMaxSequenceIdKnown(id, 2);
+      hidden.setConversation(id, conv(id, true));
+      hidden.setContextWindowSize(id, 300);
+      await hidden.settle();
+      assert(hidden.peek(id)?.messages.length === 2, "hidden tab still tracks state in memory");
+      await hidden.delete("c-someone-elses-archive");
+      assert(opened === 0, `hidden tab opened ${opened} transaction(s); expected none`);
+
+      // Positive control: the counter does see transactions when a tab writes.
+      const visible = storeFor(fixture);
+      visible.upsertMessages(id, [msg(id, 1)]);
+      await visible.settle();
+      assert(opened > 0, "counter must observe a visible tab's transactions");
+    } finally {
+      proto.transaction = original;
+    }
+  });
+
+  await run("a hidden tab's full REST load is written once it appends while visible", async () => {
+    // Open-in-background-tab: the tab loads the whole conversation hidden
+    // (skipped), then the user switches to it and a message arrives. Writing
+    // only that message would leave a row repairable solely by a full reload,
+    // so the tab writes the complete history it already holds.
+    const fixture = freshFactory();
+    const id = "c-hidden-full-then-append";
+    let visible = false;
+    const tab = storeFor({ ...fixture, isPageVisible: () => visible });
+    tab.applyFullHistory(id, {
+      conversation: conv(id, false),
+      messages: [msg(id, 1), msg(id, 2)],
+      max_sequence_id: 2,
+      context_window_size: 100,
+    });
+    await tab.settle();
+
+    visible = true;
+    cacheDiagReset();
+    tab.upsertMessages(id, [msg(id, 3)]);
+    await tab.settle();
+    assert(cacheDiagStats()["persist.full_history_from_hot"] === 1, "whole history written");
+
+    const fresh = storeFor(fixture);
+    const hydrated = await fresh.hydrate(id);
+    assert(hydrated?.messages.length === 3, `disk has all rows (got ${hydrated?.messages.length})`);
+    assert(hydrated?.hasFullHistory === true, "disk history is complete");
+  });
+
+  await run("a hidden update leaves an honest prefix that a tail fetch repairs", async () => {
+    // Nothing was visible while seq 2 arrived, so no tab wrote it. The disk
+    // row must then read as a complete-but-short prefix: has_full_history
+    // stays true (a ?last_sequence_id= tail fetch can repair it) and
+    // max_sequence_id_local is truthful, so the list-seeded known max makes
+    // the UI ask the server for the tail rather than re-download everything.
+    const fixture = freshFactory();
+    const id = "c-hidden-prefix";
+    let visible = true;
+    const writer = storeFor({ ...fixture, isPageVisible: () => visible });
+    writer.applyFullHistory(id, {
+      conversation: conv(id, false),
+      messages: [msg(id, 1)],
+      max_sequence_id: 1,
+      context_window_size: 100,
+    });
+    await writer.settle();
+
+    visible = false;
+    writer.upsertMessages(id, [msg(id, 2)]);
+    await writer.settle();
+
+    const later = storeFor(fixture);
+    later.seedMaxSequenceIdsKnown([{ conversation_id: id, max_sequence_id: 2 }]);
+    const hydrated = await later.hydrate(id);
+    assert(hydrated?.messages.length === 1, "disk holds exactly what a visible tab wrote");
+    assert(hydrated?.hasFullHistory === true, "short prefix is still a complete prefix");
+    assert(needsBackfill(hydrated), "UI must ask the server (known max is ahead)");
+    assert(!needsFullReload(hydrated), "...but only for the tail, not a full reload");
+  });
+
+  await run("hydrate unions the hot tail a hidden tab kept in memory", async () => {
+    const fixture = freshFactory();
+    const id = "c-hidden-hot-union";
+    let visible = true;
+    const writer = storeFor({ ...fixture, isPageVisible: () => visible });
+    writer.applyFullHistory(id, {
+      conversation: conv(id, false),
+      messages: [msg(id, 1)],
+      max_sequence_id: 1,
+      context_window_size: 100,
+    });
+    await writer.settle();
+    await writer.close();
+
+    // Same browser, new tab: it receives seq 2 while hidden, then the user
+    // focuses the conversation.
+    visible = false;
+    const tab = storeFor({ ...fixture, isPageVisible: () => visible });
+    tab.upsertMessages(id, [msg(id, 2)]);
+    await tab.settle();
+    visible = true;
+    const hydrated = await tab.hydrate(id);
+    assert(hydrated?.messages.length === 2, "disk prefix + hot tail");
+    assert(hydrated?.hasFullHistory === true, "contiguous join keeps the history complete");
+    assert(!needsBackfill(hydrated), "nothing left to fetch");
+  });
+
+  await run("a visible append backfills messages that arrived while hidden", async () => {
+    // Disk: [1]. Hidden: 2 and 3 arrive (skipped). Visible again: 4 arrives.
+    // Without the backfill the write of 4 would trip the join check and mark
+    // the disk incomplete, forcing a full re-download at the next focus even
+    // though 2 and 3 are sitting in this tab's memory.
+    const fixture = freshFactory();
+    const id = "c-hidden-backfill";
+    let visible = true;
+    const writer = storeFor({ ...fixture, isPageVisible: () => visible });
+    writer.applyFullHistory(id, {
+      conversation: conv(id, false),
+      messages: [msg(id, 1)],
+      max_sequence_id: 1,
+      context_window_size: 100,
+    });
+    await writer.settle();
+
+    visible = false;
+    writer.upsertMessages(id, [msg(id, 2)]);
+    writer.upsertMessages(id, [msg(id, 3)]);
+    await writer.settle();
+
+    visible = true;
+    cacheDiagReset();
+    writer.upsertMessages(id, [msg(id, 4)]);
+    await writer.settle();
+    assert(cacheDiagStats()["persist.backfilled_from_hot"] === 1, "the gap was filled from memory");
+
+    const fresh = storeFor(fixture);
+    const hydrated = await fresh.hydrate(id);
+    assert(
+      hydrated?.messages.length === 4,
+      `disk has all four rows (got ${hydrated?.messages.length})`,
+    );
+    assert(hydrated?.hasFullHistory === true, "history stays complete on disk");
+    assert(hydrated?.maxSequenceId === 4, "tail advanced");
+  });
+
+  await run(
+    "a hidden REST repair of an incomplete row is written on the next visible append",
+    async () => {
+      // Disk holds an incomplete row (a lone live message cached before any
+      // full load). Hidden: the tab loads the full history (skipped). Visible:
+      // seq 4 arrives; the tab must replace the incomplete row with the
+      // complete history it holds rather than append to it.
+      const fixture = freshFactory();
+      const id = "c-hidden-repair-partial";
+      let visible = true;
+      const tab = storeFor({ ...fixture, isPageVisible: () => visible });
+      tab.upsertMessages(id, [msg(id, 3)]);
+      await tab.settle();
+      assert((await storeFor(fixture).hydrate(id))?.hasFullHistory === false, "row is incomplete");
+
+      visible = false;
+      tab.applyFullHistory(id, {
+        conversation: conv(id, false),
+        messages: [msg(id, 1), msg(id, 2), msg(id, 3)],
+        max_sequence_id: 3,
+        context_window_size: 100,
+      });
+      await tab.settle();
+
+      visible = true;
+      cacheDiagReset();
+      tab.upsertMessages(id, [msg(id, 4)]);
+      await tab.settle();
+      assert(cacheDiagStats()["persist.full_history_from_hot"] === 1, "whole history written");
+
+      const hydrated = await storeFor(fixture).hydrate(id);
+      assert(
+        hydrated?.messages.length === 4,
+        `disk has all rows (got ${hydrated?.messages.length})`,
+      );
+      assert(hydrated?.hasFullHistory === true, "disk history is complete");
+    },
+  );
+
+  await run(
+    "a lagging tab's full hot history cannot launder a hole past a sibling's row",
+    async () => {
+      // Sibling B never focused the conversation, so its live writes leave an
+      // incomplete row [6,7]. Tab A loaded [1..5] hidden and has seen 6 but not
+      // 7. A's full hot history must not replace B's longer row, and when A
+      // then misses 7 and receives 8, the disk must not end up claiming a
+      // complete [1..6,8].
+      const fixture = freshFactory();
+      const id = "c-hidden-lagging";
+      const sibling = storeFor(fixture);
+      sibling.upsertMessages(id, [msg(id, 6), msg(id, 7)]);
+      await sibling.settle();
+
+      let visible = false;
+      const tab = storeFor({ ...fixture, isPageVisible: () => visible });
+      tab.applyFullHistory(id, {
+        conversation: conv(id, false),
+        messages: Array.from({ length: 5 }, (_, i) => msg(id, i + 1)),
+        max_sequence_id: 5,
+        context_window_size: 100,
+      });
+      tab.upsertMessages(id, [msg(id, 6)]);
+      await tab.settle();
+
+      visible = true;
+      cacheDiagReset();
+      tab.upsertMessages(id, [msg(id, 6)]);
+      await tab.settle();
+      assert(!cacheDiagStats()["persist.full_history_from_hot"], "disk is ahead; no replace");
+      assert((await storeFor(fixture).hydrate(id))?.messages.length === 2, "sibling's rows intact");
+
+      tab.upsertMessages(id, [msg(id, 8)]);
+      await tab.settle();
+      const hydrated = await storeFor(fixture).hydrate(id);
+      assert(hydrated?.hasFullHistory === false, "hole at 7 must not read as complete");
+      assert(needsFullReload(hydrated), "next focus must re-download");
+    },
+  );
+
+  await run("backfill treats a regenerated turn as the append it is", async () => {
+    // Disk: [m1@1, m2@2]. Hidden: m2 is re-keyed to seq 3 (regenerated turn).
+    // Visible: m4 arrives. The move is the first thing past the disk tail, so
+    // the join must accept it and the backfill must carry it.
+    const fixture = freshFactory();
+    const id = "c-hidden-backfill-move";
+    let visible = true;
+    const writer = storeFor({ ...fixture, isPageVisible: () => visible });
+    writer.applyFullHistory(id, {
+      conversation: conv(id, false),
+      messages: [msg(id, 1), msg(id, 2)],
+      max_sequence_id: 2,
+      context_window_size: 100,
+    });
+    await writer.settle();
+
+    visible = false;
+    writer.upsertMessages(id, [msg(id, 3, `${id}-2`)]);
+    await writer.settle();
+    assert(writer.peek(id)?.hasFullHistory === true, "a move is not a gap in memory");
+
+    visible = true;
+    cacheDiagReset();
+    writer.upsertMessages(id, [msg(id, 4)]);
+    await writer.settle();
+    assert(cacheDiagStats()["persist.backfilled_from_hot"] === 1, "the move was backfilled");
+
+    const fresh = storeFor(fixture);
+    const hydrated = await fresh.hydrate(id);
+    const seqs = hydrated?.messages.map((m) => m.sequence_id).join(",");
+    assert(seqs === "1,3,4", `disk rows are [1,3,4] (got ${seqs})`);
+    assert(hydrated?.hasFullHistory === true, "history stays complete on disk");
+  });
+
+  await run("backfill refuses a gap this tab cannot close", async () => {
+    // Disk: [1]. This tab never saw 2 at all, then 3 arrives hidden and 4
+    // arrives visible. Memory cannot close 1→3, so the write of 4 must fall
+    // through to the join check and mark the disk incomplete.
+    const fixture = freshFactory();
+    const id = "c-hidden-backfill-gap";
+    let visible = true;
+    const writer = storeFor({ ...fixture, isPageVisible: () => visible });
+    writer.applyFullHistory(id, {
+      conversation: conv(id, false),
+      messages: [msg(id, 1)],
+      max_sequence_id: 1,
+      context_window_size: 100,
+    });
+    await writer.settle();
+
+    visible = false;
+    writer.upsertMessages(id, [msg(id, 3)]);
+    await writer.settle();
+
+    visible = true;
+    cacheDiagReset();
+    writer.upsertMessages(id, [msg(id, 4)]);
+    await writer.settle();
+    assert(!cacheDiagStats()["persist.backfilled_from_hot"], "no partial backfill");
+
+    const fresh = storeFor(fixture);
+    const hydrated = await fresh.hydrate(id);
+    assert(hydrated?.hasFullHistory === false, "hole on disk must clear has_full_history");
+    assert(needsFullReload(hydrated), "next focus must re-download");
   });
 
   await run("pruning stops when a tab becomes hidden after its scan", async () => {
@@ -2090,6 +2303,7 @@ async function main(): Promise<void> {
       openTimeoutMs: SHORT_TIMEOUT_MS,
       openCooldownMs: SHORT_COOLDOWN_MS,
     });
+    resetMissedDeadlines();
     try {
       const rec = await Promise.race([
         s.hydrate("c-blocked"),
@@ -2098,6 +2312,10 @@ async function main(): Promise<void> {
       assert(rec !== "hung", "hydrate must settle even while the upgrade is blocked");
       assert(rec === null, "and report a miss so the conversation still renders from REST");
       assert(!s.isHydrated("c-blocked"), "a give-up must not be recorded as hydrated");
+      assert(
+        idbStalls().some((m) => m.what === "indexedDB.open"),
+        `the blocked open is on record as IndexedDB contention: ${JSON.stringify(idbStalls())}`,
+      );
     } finally {
       held.close();
       await s.close();
@@ -2183,6 +2401,7 @@ async function main(): Promise<void> {
     })();
 
     const s2 = storeFor({ ...f, txTimeoutMs: SHORT_TIMEOUT_MS });
+    resetMissedDeadlines();
     try {
       // Must not hang: the deadline turns a blocked lock into a cache miss.
       const rec = await s2.hydrate("c1");
@@ -2190,6 +2409,22 @@ async function main(): Promise<void> {
       assert(
         cacheDiagStats()["idb.tx_timeout"] > 0,
         `the give-up must be reported: ${JSON.stringify(cacheDiagStats())}`,
+      );
+      const stall = idbStalls().find((m) => m.what === "indexedDB.startup transaction");
+      assert(!!stall, `the blocked startup tx is on record: ${JSON.stringify(idbStalls())}`);
+      assert(stall?.outcome === "pending", "still held: no outcome yet");
+
+      // The sibling lets go. The abandoned transaction now runs to completion,
+      // and the record must say so: "completed late" is what distinguishes
+      // contention (healthy cache, someone else's lock) from breakage.
+      holding = false;
+      held.abort();
+      await waitFor(
+        () =>
+          idbStalls().some(
+            (m) => m.what === "indexedDB.startup transaction" && m.outcome === "completed",
+          ),
+        `late completion recorded: ${JSON.stringify(idbStalls())}`,
       );
     } finally {
       holding = false;
@@ -2294,6 +2529,7 @@ async function main(): Promise<void> {
       txTimeoutMs: SHORT_TIMEOUT_MS * 20,
       readTimeoutMs: SHORT_TIMEOUT_MS,
     });
+    resetMissedDeadlines();
     try {
       // hydrate() goes on to read `messages`, which legitimately queues behind
       // the sibling's exclusive lock on that store - IDB working as specified,
@@ -2312,9 +2548,19 @@ async function main(): Promise<void> {
         .find((event) => event.event === "hydrate.idb_error");
       assert(
         String(readFailure?.detail?.error).includes(
-          `indexedDB.read keys_meta exceeded its ${SHORT_TIMEOUT_MS}ms deadline`,
+          `indexedDB.read conversation_meta exceeded its ${SHORT_TIMEOUT_MS}ms deadline`,
         ),
         `cache read must use readTimeoutMs: ${JSON.stringify(readFailure)}`,
+      );
+      // hydrate aborts its own tx after giving up; that self-inflicted
+      // AbortError must show in the contention record as "abandoned", not as
+      // a cache failure.
+      await waitFor(
+        () =>
+          idbStalls().some(
+            (m) => m.what === "indexedDB.read conversation_meta" && m.outcome === "abandoned",
+          ),
+        `the blocked read is on record as abandoned: ${JSON.stringify(idbStalls())}`,
       );
     } finally {
       holding = false;

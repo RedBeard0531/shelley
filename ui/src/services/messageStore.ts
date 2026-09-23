@@ -46,6 +46,20 @@
 // history. The one exception is an EMPTY snapshot with live rows grafted on
 // top, which establishes nothing — see applyFullHistory.
 //
+// Hidden tabs never write to IndexedDB (canPersist). IDB locks are
+// origin-wide and Safari throttles or suspends background tabs, so a hidden
+// tab holding even a one-row readwrite transaction stalls every read the
+// visible tab makes — measured at the full 250ms read deadline (and the 3s
+// startup deadline) once a handful of tabs were open. Skipping is safe
+// because every tab receives every /api/stream2 event: whenever some tab is
+// visible, that tab persists the same data. When no tab is visible the disk
+// merely lags as an honest prefix, which the existing catch-up paths repair
+// cheaply: the conversation list seeds max_sequence_id_known on every page
+// load (tail fetch), hydrate unions the disk row with this tab's hot messages
+// (mergeRecords), and a later visible append backfills the skipped messages
+// from memory before writing (_persistUpsert), so the join check below only
+// trips when this tab genuinely never saw the gap.
+//
 // At-rest encryption (v4): the sensitive payload of each row is AES-GCM
 // encrypted with a per-browser key derived server-side from a long-lived
 // secret + a session cookie (see services/cryptoKey.ts + server/cache_key.go).
@@ -81,7 +95,7 @@ import {
 } from "./cryptoKey";
 import { perfCount } from "../utils/perf";
 import { cacheDiag } from "./cacheDiag";
-import { withDeadline, isDeadlineExceeded } from "./deadline";
+import { withDeadline, isDeadlineExceeded, isAbortError } from "./deadline";
 
 // Cross-tab notification channel for key rotation. When one tab runs
 // wipeAndRotateKey() the others must drop their cached CryptoKey and
@@ -93,7 +107,6 @@ type RotateMsg = { type: "rotated" };
 
 const DEFAULT_DB_NAME = "shelley-messages";
 const DB_VERSION = 4;
-const DIRTY_CONVERSATION_PREFIX = "dirty:";
 
 /**
  * How long to wait for indexedDB.open() before giving up on the cache for
@@ -176,9 +189,7 @@ function readDeadlineOpts(store: string) {
       // hydrate aborts its own readonly transaction after the deadline so the
       // abandoned bulk read does not wake later and duplicate the REST work.
       // That expected AbortError is already represented by hydrate.idb_error.
-      if (typeof err === "object" && err !== null && "name" in err && err.name === "AbortError") {
-        return;
-      }
+      if (isAbortError(err)) return;
       cacheDiag("fail", "idb.read_late_error", { store, error: String(err) });
     },
   };
@@ -264,7 +275,7 @@ interface ConvMetaPayload {
   context_window_size: number;
 }
 
-/** Cache-key singleton plus per-conversation dirty markers in keys_meta. */
+/** Cache-key singleton in keys_meta, keyed "current". */
 interface KeyMetaRow {
   id: string;
   key_id: string;
@@ -376,7 +387,8 @@ function mergeRecords(
     minSequenceId: messages.length > 0 ? messages[0].sequence_id : 0,
     maxSequenceId: messages.length > 0 ? messages[messages.length - 1].sequence_id : -1,
     maxSequenceIdKnown: Math.max(disk.maxSequenceIdKnown, hot.maxSequenceIdKnown),
-    hasFullHistory: (disk.hasFullHistory || hot.hasFullHistory) && joinsUp(disk, hot),
+    hasFullHistory:
+      (disk.hasFullHistory || hot.hasFullHistory) && joinsUp(hot.messages, disk.maxSequenceId),
     needsRefresh: disk.needsRefresh || hot.needsRefresh,
     updatedAt: Math.max(disk.updatedAt, hot.updatedAt),
   };
@@ -394,17 +406,55 @@ function mergeRecords(
  *
  * Only the JOIN is checked, not the whole run: gaps inside the disk row
  * itself can be genuine (see ConvMetaRow.message_count). Live messages
- * append, so the first one past the disk tail must be exactly tail + 1.
+ * append, so the first one past the disk tail must be exactly tail + 1 —
+ * including a regenerated turn that re-keys a known message_id to a new
+ * sequence_id, which is an append at the new position like any other.
  */
-function joinsUp(disk: ConversationCacheRecord, hot: ConversationCacheRecord): boolean {
-  const known = new Set(disk.messages.map((m) => m.message_id));
-  let firstNew = Infinity;
-  for (const m of hot.messages) {
-    if (known.has(m.message_id)) continue;
-    if (m.sequence_id > disk.maxSequenceId && m.sequence_id < firstNew) firstNew = m.sequence_id;
+function joinsUp(messages: Message[], tail: number): boolean {
+  const first = firstPastTail(messages, tail);
+  return first === Infinity || first === (tail >= 0 ? tail + 1 : 1);
+}
+
+/** Smallest sequence_id in `messages` past `tail`, or Infinity if none is. */
+function firstPastTail(messages: Message[], tail: number): number {
+  let first = Infinity;
+  for (const m of messages) {
+    if (m.sequence_id > tail && m.sequence_id < first) first = m.sequence_id;
   }
-  if (firstNew === Infinity) return true;
-  return firstNew === (disk.messages.length > 0 ? disk.maxSequenceId + 1 : 1);
+  return first;
+}
+
+/**
+ * Extend a live batch with the hot messages that sit between the disk tail
+ * and the batch, so the disk row stays contiguous.
+ *
+ * Hidden tabs skip persistence (canPersist) but keep receiving stream events
+ * into `hot`. If no sibling tab was visible either, the disk row stops at some
+ * earlier tail; the next visible append would then skip past it and the
+ * transaction's join check would clear has_full_history — correct, but it
+ * turns a cheap tail fetch into a full re-download at the next focus. The
+ * messages needed to close the gap are usually right here in memory.
+ *
+ * The fill must cover the gap exactly (one message per sequence_id, since
+ * live appends are consecutive); anything less is left to the join check.
+ */
+function backfillFromHot(hot: Message[], incoming: Message[], diskMax: number): Message[] {
+  const firstIncoming = firstPastTail(incoming, diskMax);
+  if (diskMax < 0 || firstIncoming === Infinity || firstIncoming === diskMax + 1) return incoming;
+  const incomingIds = new Set(incoming.map((m) => m.message_id));
+  const bySeq = new Map(hot.map((m) => [m.sequence_id, m]));
+  const fill: Message[] = [];
+  for (let seq = diskMax + 1; seq < firstIncoming; seq++) {
+    const m = bySeq.get(seq);
+    if (!m || incomingIds.has(m.message_id)) return incoming;
+    fill.push(m);
+  }
+  cacheDiag("info", "persist.backfilled_from_hot", {
+    conversation_id: incoming[0].conversation_id,
+    from: diskMax + 1,
+    to: firstIncoming - 1,
+  });
+  return [...fill, ...incoming];
 }
 
 function convRange(id: string): IDBKeyRange {
@@ -454,8 +504,6 @@ export class MessageStore {
   private readonly txTimeoutMs: number;
   private readonly readTimeoutMs: number;
   private readonly isPageVisible: () => boolean;
-  /** Dirty markers this instance must repair with a full server snapshot. */
-  private dirtyRepairs = new Map<string, string>();
   private dbPromise: Promise<IDBPDatabase<ShelleyDB>> | null = null;
   /**
    * When indexedDB.open() last blew its deadline; 0 if it hasn't. Drives the
@@ -787,47 +835,16 @@ export class MessageStore {
     }
   }
 
-  private dirtyKey(id: string): string {
-    return `${DIRTY_CONVERSATION_PREFIX}${id}`;
-  }
-
-  private async markDirty(id: string): Promise<boolean> {
-    try {
-      const db = await this.db();
-      await db.put("keys_meta", {
-        id: this.dirtyKey(id),
-        key_id: `${Date.now()}:${Math.random().toString(36).slice(2)}`,
-      });
-      return true;
-    } catch (err) {
-      cacheDiag("fail", "persist.dirty_marker_failed", {
-        conversation_id: id,
-        error: String(err),
-      });
-      return false;
-    }
-  }
-
   /**
-   * Hidden tabs keep their in-memory cache current but do not bulk-write it to
-   * IndexedDB. Safari can suspend a background tab in the middle of a large
-   * transaction while retaining its origin-wide object-store lock, freezing
-   * reads in the foreground tab. Before dropping a write, persist a tiny dirty
-   * marker in keys_meta. That transaction does not overlap the message/meta
-   * stores, and a later hydration treats the marker as a mandatory REST repair.
+   * Hidden tabs keep their in-memory cache current but never write to
+   * IndexedDB; see the file header for why that is both necessary and safe.
+   * Called both before the (slow, async) encryption and again right before
+   * the transaction opens, so a tab hidden mid-flight still never writes.
    */
-  private async canPersist(id: string, operation: string): Promise<boolean> {
+  private canPersist(id: string, operation: string): boolean {
     if (this.isPageVisible()) return true;
-    const marked = await this.markDirty(id);
-    cacheDiag("info", "persist.hidden_tab_skipped", {
-      conversation_id: id,
-      operation,
-      dirty_marker: marked,
-    });
-    // If the marker failed, preserve the old correctness behavior and attempt
-    // the real write. It will normally fail for the same underlying IDB error,
-    // but must not be silently reported as a safely-skipped persistence.
-    return !marked;
+    cacheDiag("info", "persist.hidden_tab_skipped", { conversation_id: id, operation });
+    return false;
   }
 
   /** Wait until all write-behind operations have completed. */
@@ -1008,20 +1025,23 @@ export class MessageStore {
         return this.hot.get(id) ?? null;
       }
       const db = await this.db();
-      // Acquire the marker, metadata and message scopes together, but issue
-      // only the one-row marker request until we know the disk history is
-      // usable. Its deadline bounds lock acquisition; the later bulk getAll
-      // remains unbounded so a large healthy cache can finish copying.
-      const readTx = db.transaction(["keys_meta", "conversation_meta", "messages"], "readonly");
-      let dirty: KeyMetaRow | undefined;
+      // Issue both reads in one turn; IDB serves a transaction's requests in
+      // order, so the deadline on the one-row meta lookup bounds only lock
+      // acquisition while the bulk getAll stays unbounded and a large healthy
+      // cache can finish copying.
+      const readTx = db.transaction(["conversation_meta", "messages"], "readonly");
+      const metaRead = readTx.objectStore("conversation_meta").get(id);
+      const rowsRead = readTx.objectStore("messages").getAll(convRange(id));
+      let meta: ConvMetaRow | undefined;
       try {
-        dirty = await withDeadline(
-          readTx.objectStore("keys_meta").get(this.dirtyKey(id)),
+        meta = await withDeadline(
+          metaRead,
           this.readTimeoutMs,
-          readDeadlineOpts("keys_meta"),
+          readDeadlineOpts("conversation_meta"),
         );
       } catch (err) {
         void readTx.done.catch(() => {});
+        void rowsRead.catch(() => {});
         try {
           readTx.abort();
         } catch {
@@ -1029,21 +1049,7 @@ export class MessageStore {
         }
         throw err;
       }
-      if (dirty) {
-        await readTx.done;
-        this.dirtyRepairs.set(id, dirty.key_id);
-        this.hydrated.add(id);
-        const hot = this.hot.get(id) ?? null;
-        if (hot) {
-          hot.hasFullHistory = false;
-          hot.needsRefresh = true;
-        }
-        cacheDiag("info", "hydrate.dirty_disk", { conversation_id: id });
-        return hot;
-      }
-      const metaRead = readTx.objectStore("conversation_meta").get(id);
-      const rowsRead = readTx.objectStore("messages").getAll(convRange(id));
-      const [meta, rows] = await Promise.all([metaRead, rowsRead, readTx.done]);
+      const [rows] = await Promise.all([rowsRead, readTx.done]);
       if (meta) {
         const payload = await this.decryptMetaRow(material.key, meta);
         if (payload) {
@@ -1202,22 +1208,12 @@ export class MessageStore {
     // hasFullHistory forces the next focus into a FULL reload — a
     // ?last_sequence_id= tail fetch can never recover a missing middle.
     const prevMax = rec.maxSequenceId;
-    let firstNewSeq = Infinity;
-    for (const m of incoming) {
-      if (!byMsgId.has(m.message_id) && m.sequence_id > prevMax && m.sequence_id < firstNewSeq) {
-        firstNewSeq = m.sequence_id;
-      }
-    }
-    if (
-      rec.hasFullHistory &&
-      firstNewSeq !== Infinity &&
-      firstNewSeq !== (rec.messages.length > 0 ? prevMax + 1 : 1)
-    ) {
+    if (rec.hasFullHistory && !joinsUp(incoming, prevMax)) {
       rec.hasFullHistory = false;
       cacheDiag(
         "fail",
         "upsert.sequence_skip",
-        { conversation_id: id, cached_max: prevMax, first_new: firstNewSeq },
+        { conversation_id: id, cached_max: prevMax, first_new: firstPastTail(incoming, prevMax) },
         id,
       );
     }
@@ -1257,14 +1253,43 @@ export class MessageStore {
     convHint: Conversation | null,
     ctxHint: number,
   ): Promise<void> {
-    if (!(await this.canPersist(id, "upsert"))) return;
+    if (!this.canPersist(id, "upsert")) return;
     const material = await this.getKey();
     if (!material) return;
+    const db = await this.db();
+    // Snapshot the existing meta row in its own readonly tx (crypto.subtle
+    // awaits would auto-commit a readwrite one). Its payload supplies the
+    // `conversation` / `context_window_size` defaults, which are not
+    // ratcheted: overwriting a concurrent writer's fresher copy is acceptable,
+    // as in v3. Its plaintext tail drives the backfill below.
+    const existingRow = await db.get("conversation_meta", id);
+    const diskMax = existingRow?.max_sequence_id_local ?? -1;
+    const hot = this.hot.get(id);
+    // The disk has nothing, or an incomplete row, yet this tab holds the
+    // complete history: a REST load it skipped persisting while hidden.
+    // Writing just the live batch would leave a row that can only ever be
+    // repaired by a full reload, so write the whole history instead — unless
+    // the disk is AHEAD of us: a sibling may have written live rows past our
+    // tail that we have not received yet, and replacing its longer row with
+    // our shorter one would discard them. Once we catch up, a later append
+    // takes this path.
+    if (
+      !existingRow?.has_full_history &&
+      hot?.hasFullHistory &&
+      hot.messages.length > 0 &&
+      diskMax <= hot.maxSequenceId
+    ) {
+      cacheDiag("info", "persist.full_history_from_hot", {
+        conversation_id: id,
+        messages: hot.messages.length,
+      });
+      await this._persistFullHistory(id, { ...hot });
+      return;
+    }
+    incoming = backfillFromHot(hot?.messages ?? [], incoming, diskMax);
     // Encrypt OUTSIDE the IDB tx — crypto.subtle returns promises and
-    // awaiting non-IDB promises inside a tx invalidates it. The encrypted
-    // payload for the meta row depends on the *existing* row; we read it
-    // in its own RX tx first (snapshot), encrypt, then do a single RW tx
-    // that does the true RMW of the plaintext ratchet fields.
+    // awaiting non-IDB promises inside a tx invalidates it. Then do a single
+    // RW tx that does the true RMW of the plaintext ratchet fields.
     const encRows: MessageRow[] = [];
     for (let i = 0; i < incoming.length; i += CRYPTO_BATCH) {
       encRows.push(
@@ -1273,12 +1298,6 @@ export class MessageStore {
         )),
       );
     }
-    const db = await this.db();
-    // Snapshot existing meta payload for `conversation` and
-    // `context_window_size` defaults. These are not ratcheted; if a
-    // concurrent writer landed something fresher, our overwrite of the
-    // payload is acceptable (same loose semantics as v3).
-    const existingRow = await db.get("conversation_meta", id);
     const existingPayload = existingRow
       ? await this.decryptMetaRow(material.key, existingRow)
       : null;
@@ -1290,7 +1309,7 @@ export class MessageStore {
           : ctxHint,
     };
     const { iv, ct } = await wrapJSON(material.key, payload, this.metaAAD(id));
-    if (!(await this.canPersist(id, "upsert"))) return;
+    if (!this.canPersist(id, "upsert")) return;
 
     // Now a single RW tx — no non-IDB awaits inside.
     const tx = db.transaction(["messages", "conversation_meta", "keys_meta"], "readwrite");
@@ -1319,7 +1338,6 @@ export class MessageStore {
       }
     }
     let added = 0;
-    let firstNewSeq = Infinity;
     const idIdx = msgs.index("by_message_id");
     // Three phases instead of one interleaved loop, so the exclusive lock is
     // held across a handful of event-loop turns rather than one per message.
@@ -1338,12 +1356,12 @@ export class MessageStore {
       if (priorKey) {
         if (priorKey[0] !== m.conversation_id || priorKey[1] !== m.sequence_id) {
           // Same message re-keyed to a new sequence_id (regenerated turn):
-          // a move, not an addition.
+          // a move, not an addition (message_count), though joinsUp still
+          // sees it as an append at its new position.
           moved.push(priorKey);
         }
       } else {
         added++;
-        if (m.sequence_id > prevMax && m.sequence_id < firstNewSeq) firstNewSeq = m.sequence_id;
       }
       if (m.sequence_id > maxLocal) maxLocal = m.sequence_id;
     }
@@ -1354,9 +1372,7 @@ export class MessageStore {
     // A live append must continue the history we already hold. If it skips
     // ahead, messages were committed while we weren't listening and the
     // cached set now has a hole — mirror mergeRecords.joinsUp().
-    if (stillFull && firstNewSeq !== Infinity && firstNewSeq !== (prevMax >= 0 ? prevMax + 1 : 1)) {
-      stillFull = false;
-    }
+    if (stillFull && !joinsUp(incoming, prevMax)) stillFull = false;
     const observedAfter = await msgs.count(convRange(id));
     const metaRow: ConvMetaRow = {
       conversation_id: id,
@@ -1511,8 +1527,7 @@ export class MessageStore {
     this.hydrated.add(id);
     this.notify(id);
 
-    const repairToken = this.dirtyRepairs.get(id);
-    this.queueWrite(id, () => this._persistFullHistory(id, rec, repairToken)).catch((err) =>
+    this.queueWrite(id, () => this._persistFullHistory(id, rec)).catch((err) =>
       cacheDiag(
         "fail",
         "persist.full_history_failed",
@@ -1522,12 +1537,8 @@ export class MessageStore {
     );
   }
 
-  private async _persistFullHistory(
-    id: string,
-    rec: ConversationCacheRecord,
-    repairToken: string | undefined,
-  ): Promise<void> {
-    if (!(await this.canPersist(id, "full_history"))) return;
+  private async _persistFullHistory(id: string, rec: ConversationCacheRecord): Promise<void> {
+    if (!this.canPersist(id, "full_history")) return;
     const material = await this.getKey();
     if (!material) return;
     // Encrypt all message rows + the meta payload OUTSIDE the IDB tx.
@@ -1551,26 +1562,12 @@ export class MessageStore {
       context_window_size: rec.contextWindowSize,
     };
     const { iv, ct } = await wrapJSON(material.key, payload, this.metaAAD(id));
-    if (!(await this.canPersist(id, "full_history"))) return;
+    if (!this.canPersist(id, "full_history")) return;
 
     const tx = db.transaction(["messages", "conversation_meta", "keys_meta"], "readwrite");
-    const dirtyStore = tx.objectStore("keys_meta");
-    if (!(await this.verifyKeyInTx(dirtyStore, material.keyId))) {
+    if (!(await this.verifyKeyInTx(tx.objectStore("keys_meta"), material.keyId))) {
       tx.abort();
       return;
-    }
-    if (repairToken) {
-      const currentDirty = await dirtyStore.get(this.dirtyKey(id));
-      if (!currentDirty || currentDirty.key_id !== repairToken) {
-        // A newer repair removed our token, or a newer hidden update replaced
-        // it. Do not let this older snapshot overwrite the repaired disk.
-        await tx.done;
-        this.hot.delete(id);
-        this.hydrated.delete(id);
-        this.dirtyRepairs.delete(id);
-        this.notify(id);
-        return;
-      }
     }
     const msgs = tx.objectStore("messages");
     const metaStore = tx.objectStore("conversation_meta");
@@ -1591,24 +1588,26 @@ export class MessageStore {
       conversation_id: id,
       updated_at: Date.now(),
       max_sequence_id_known: Math.max(existing?.max_sequence_id_known ?? 0, rec.maxSequenceIdKnown),
-      // Ratchet against any concurrent writer that pushed local higher.
-      max_sequence_id_local: Math.max(existing?.max_sequence_id_local ?? -1, rec.maxSequenceId),
+      // NOT ratcheted: the delete-range above removed any rows a concurrent
+      // writer had pushed past our tail, so the row's tail is exactly ours.
+      // Carrying the old value forward would make the next append's join
+      // check compare against phantom rows and wave a real hole through.
+      max_sequence_id_local: rec.maxSequenceId,
       // Mirror the in-memory record rather than hardcoding true: an empty
       // snapshot with grafted live rows is not a complete history (see
       // applyFullHistory), and persisting `true` here would let the next
       // reload hydrate the certification we just refused.
       has_full_history: rec.hasFullHistory,
       message_count: rowCount,
-      // A full REST snapshot IS the re-verification, so clear any pending
-      // reconnect-driven refresh flag.
-      needs_refresh: false,
+      // Mirror the record: a fresh REST snapshot IS the re-verification
+      // (applyFullHistory clears the flag), but a hot record written from
+      // _persistUpsert may still be awaiting one after a stream reconnect.
+      needs_refresh: rec.needsRefresh,
       iv,
       ct,
     };
     await metaStore.put(row);
-    if (repairToken) await dirtyStore.delete(this.dirtyKey(id));
     await tx.done;
-    if (repairToken) this.dirtyRepairs.delete(id);
   }
   // ── setConversation ────────────────────────────────────────────────────────
 
@@ -1713,7 +1712,7 @@ export class MessageStore {
       needs_refresh?: boolean;
     },
   ): Promise<void> {
-    if (!(await this.canPersist(id, "metadata"))) return;
+    if (!this.canPersist(id, "metadata")) return;
     const material = await this.getKey();
     if (!material) return;
     const touchesPayload =
@@ -1749,7 +1748,7 @@ export class MessageStore {
     const emptyCipher = touchesPayload
       ? null
       : await wrapJSON(material.key, emptyPayload(), this.metaAAD(id));
-    if (!(await this.canPersist(id, "metadata"))) return;
+    if (!this.canPersist(id, "metadata")) return;
 
     const tx = db.transaction(["conversation_meta", "keys_meta"], "readwrite");
     if (!(await this.verifyKeyInTx(tx.objectStore("keys_meta"), material.keyId))) {
@@ -1928,6 +1927,10 @@ export class MessageStore {
     this.transient.delete(id);
     this.hydrated.delete(id);
     this.notify(id);
+    // Every tab receives the list patch that triggers this, so a hidden tab
+    // can leave the disk rows to a visible sibling (or to pruneStale) rather
+    // than open its own transaction; see canPersist.
+    if (!this.canPersist(id, "delete")) return;
     // Wait for any in-flight write-behind ops for this conversation to
     // settle before deleting, so a slow upsert can't race past us and
     // recreate rows after the delete, and put the delete itself on the same

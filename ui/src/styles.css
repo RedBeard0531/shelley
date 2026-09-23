@@ -14925,8 +14925,9 @@ kbd {
 
 .perf-hud-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   padding: 3px 8px;
   cursor: pointer;
   user-select: none;
@@ -15057,6 +15058,72 @@ kbd {
   padding: 2px 8px 4px;
   color: #6b7280;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* IndexedDB contention alert: the one thing in the HUD that should be
+   impossible to miss, so it is red and stays in the header when collapsed. */
+.perf-hud-alert {
+  background: #7f1d1d;
+  color: #fecaca;
+  border: 1px solid #ef4444;
+  border-radius: 3px;
+  font: inherit;
+  font-weight: 700;
+  padding: 0 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.perf-hud-alert:hover,
+.perf-hud-alert.active {
+  background: #991b1b;
+  color: #fff;
+}
+
+.perf-hud-contention-title {
+  color: #f87171;
+}
+
+.perf-hud-contention-explain {
+  padding: 2px 8px 4px;
+  color: #d0d6e0;
+  white-space: normal;
+  max-width: 320px;
+}
+
+.perf-hud-contention-explain code {
+  color: #7dd3fc;
+  font: inherit;
+}
+
+.perf-hud-stall td {
+  text-align: left;
+}
+
+.perf-hud-stall .perf-hud-name {
+  max-width: 120px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.perf-hud-stall-when {
+  color: #6b7280;
+}
+
+.perf-hud-stall-outcome {
+  max-width: 200px;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  color: #fbbf24;
+}
+
+.perf-hud-stall-inflight .perf-hud-stall-outcome,
+.perf-hud-stall-failed .perf-hud-stall-outcome {
+  color: #f87171;
+}
+
+.perf-hud-stall-completed .perf-hud-stall-outcome {
+  color: #a7f3d0;
 }
 
 @media (max-width: 768px) {

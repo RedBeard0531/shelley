@@ -5,14 +5,28 @@
      the rate over the last poll window (Δ/s), total count, and total ms for
      timed counters. A second section lists recent main-thread long tasks
      (>50ms) with the counters that incremented since the previous one — the
-     usual suspects for the stall. Observation is always on (utils/perf.ts);
-     the HUD only displays it.
-     Console access (always on, flag or not): window.__shelleyPerf -->
+     usual suspects for the stall. A red alert button appears in the header
+     (even when collapsed) whenever this tab has waited too long on IndexedDB
+     (see perfHudContention.ts). Observation is always on (utils/perf.ts,
+     services/deadline.ts); the HUD only displays it.
+     Console access (always on, flag or not): window.__shelleyPerf,
+     window.__shelleyCache.why() -->
 <template>
   <Teleport to="body">
     <div class="perf-hud" :class="{ collapsed }">
       <div class="perf-hud-header" @click="toggleCollapsed">
         <span class="perf-hud-title">perf</span>
+        <button
+          v-if="contention.alert"
+          class="perf-hud-alert"
+          :class="{ active: showContention }"
+          title="This tab waited too long on IndexedDB. Click for details."
+          @click.stop="toggleContention"
+        >
+          ⚠ IndexedDB contention{{
+            contention.rows.length > 0 ? ` ×${contention.rows.length}` : ""
+          }}
+        </button>
         <span v-if="collapsed" class="perf-hud-mini">{{ miniSummary }}</span>
         <span v-else class="perf-hud-actions" @click.stop>
           <button class="perf-hud-btn" title="Reset counters" @click="reset">reset</button>
@@ -28,6 +42,47 @@
           </button>
         </span>
       </div>
+      <template v-if="!collapsed && showContention && contention.alert">
+        <div class="perf-hud-section perf-hud-contention-title">
+          IndexedDB contention
+          <span class="perf-hud-section-hint">cache waits given up on, newest first</span>
+        </div>
+        <div class="perf-hud-contention-explain">
+          Another tab is holding the message cache's locks — usually a background Shelley tab the
+          browser has throttled. Until it clears, conversations load from the network instead of the
+          cache. Closing other Shelley tabs usually fixes it; if it recurs, run
+          <code>__shelleyCache.why()</code> in the console and report it.
+        </div>
+        <table class="perf-hud-table">
+          <tbody>
+            <tr
+              v-for="wait in contention.inFlight"
+              :key="`inflight-${wait.id}`"
+              class="perf-hud-stall perf-hud-stall-inflight"
+            >
+              <td class="perf-hud-stall-when">now</td>
+              <td class="perf-hud-name">{{ wait.what }}</td>
+              <td class="perf-hud-stall-outcome">
+                waiting {{ formatDuration(wait.elapsedMs) }} of
+                {{ formatDuration(wait.deadlineMs) }}
+              </td>
+            </tr>
+            <tr
+              v-for="stall in contention.rows"
+              :key="stall.id"
+              class="perf-hud-stall"
+              :class="`perf-hud-stall-${stall.outcome}`"
+            >
+              <td class="perf-hud-stall-when">{{ formatEpochAge(stall.at) }}</td>
+              <td class="perf-hud-name">{{ stall.what }}</td>
+              <td class="perf-hud-stall-outcome" :title="describeStallOutcome(stall)">
+                gave up at {{ formatDuration(stall.deadlineMs) }} ·
+                {{ describeStallOutcome(stall) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
       <template v-if="!collapsed && loads.length > 0">
         <div class="perf-hud-section">
           conversation loads
@@ -88,7 +143,7 @@
         </tbody>
       </table>
       <div v-if="!collapsed" class="perf-hud-footer">
-        __shelleyPerf.{snapshot,delta,loads,longTasks,log,reset}
+        __shelleyPerf.{snapshot,delta,loads,longTasks,log,reset} · __shelleyCache.why()
       </div>
     </div>
   </Teleport>
@@ -106,6 +161,13 @@ import {
   type LongTask,
   type PerfCounter,
 } from "../../utils/perf";
+import { missedDeadlines, pendingWaits, resetMissedDeadlines } from "../../services/deadline";
+import {
+  summarizeIdbContention,
+  describeStallOutcome,
+  formatDuration,
+  type IdbContention,
+} from "./perfHudContention";
 
 const POLL_MS = 500;
 const countFormatter = new Intl.NumberFormat();
@@ -120,6 +182,9 @@ interface Row {
 const rows = ref<Row[]>([]);
 const loads = ref<ConversationLoad[]>([]);
 const longTasks = ref<LongTask[]>([]);
+const contention = ref<IdbContention>(summarizeIdbContention([], []));
+// Details open on demand: the alert button is the summary.
+const showContention = ref(false);
 // performance.now() at the last sample; drives long-task age display without
 // a reactive clock.
 const sampledAt = ref(performance.now());
@@ -132,6 +197,13 @@ const copied = ref(false);
 function toggleCollapsed(): void {
   collapsed.value = !collapsed.value;
   localStorage.setItem(COLLAPSED_KEY, String(collapsed.value));
+}
+
+/** The alert is clickable even when the HUD is collapsed, so opening the
+ * details must also expand the HUD. */
+function toggleContention(): void {
+  showContention.value = collapsed.value || !showContention.value;
+  if (collapsed.value) toggleCollapsed();
 }
 
 let prev: Record<string, PerfCounter> = perfSnapshot();
@@ -170,6 +242,7 @@ function sample(): void {
   // through __shelleyPerf.{loads,longTasks}().
   loads.value = perfConversationLoads().reverse().slice(0, 6);
   longTasks.value = perfLongTasks().reverse().slice(0, 6);
+  contention.value = summarizeIdbContention(missedDeadlines(), pendingWaits());
   sampledAt.value = now;
   prev = snap;
   prevAt = now;
@@ -177,11 +250,14 @@ function sample(): void {
 
 function reset(): void {
   perfReset();
+  resetMissedDeadlines();
   prev = {};
   prevAt = performance.now();
   rows.value = [];
   loads.value = [];
   longTasks.value = [];
+  contention.value = summarizeIdbContention([], pendingWaits());
+  showContention.value = false;
 }
 
 async function copy(): Promise<void> {
@@ -192,6 +268,8 @@ async function copy(): Promise<void> {
           counters: perfSnapshot(),
           loads: perfConversationLoads(),
           longTasks: perfLongTasks(),
+          missedDeadlines: missedDeadlines(),
+          pendingWaits: pendingWaits(),
         },
         null,
         2,
@@ -219,11 +297,6 @@ function sourceLabel(source: ConversationLoadSource): string {
 
 function formatCount(value: number): string {
   return countFormatter.format(value);
-}
-
-function formatDuration(ms: number): string {
-  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}s`;
-  return `${Math.round(ms)}ms`;
 }
 
 function formatEpochAge(completedAt: number): string {

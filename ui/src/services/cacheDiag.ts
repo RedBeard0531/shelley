@@ -26,7 +26,7 @@
 // Verbose mode is also enabled by ?cache_debug=1 or localStorage
 // shelley_cache_debug=1, so it can be turned on before the first frame.
 
-import { pendingWaits } from "./deadline";
+import { missedDeadlines, pendingWaits } from "./deadline";
 
 export type CacheDiagLevel = "hit" | "info" | "fail";
 
@@ -125,6 +125,20 @@ function cacheDiagWhy(): void {
   } else {
     console.log("[shelley-cache] currently waiting on:");
     console.table(waits);
+  }
+  const missed = missedDeadlines();
+  if (missed.length > 0) {
+    console.log("[shelley-cache] gave up waiting on (lock contention if these later completed):");
+    console.table(
+      missed.map((m) => ({
+        what: m.what,
+        deadlineMs: m.deadlineMs,
+        outcome: m.outcome,
+        settledAfterMs: m.settledAfterMs ?? "",
+        error: m.error ?? "",
+        agoMs: Date.now() - m.at,
+      })),
+    );
   }
   const failures = cacheDiagEvents().filter((e) => e.level === "fail");
   if (failures.length > 0) {

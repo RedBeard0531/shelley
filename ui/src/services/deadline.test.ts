@@ -10,12 +10,23 @@
 //
 // Run via `pnpm test` (see scripts/run-tests.mjs).
 
-import { withDeadline, isDeadlineExceeded, DeadlineExceededError, pendingWaits } from "./deadline";
+import {
+  withDeadline,
+  isDeadlineExceeded,
+  DeadlineExceededError,
+  pendingWaits,
+  missedDeadlines,
+  resetMissedDeadlines,
+  isIndexedDBWait,
+  MISSED_DEADLINE_BUFFER,
+} from "./deadline";
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(`Assertion failed: ${msg}`);
 }
 async function run(name: string, fn: () => Promise<void>): Promise<void> {
+  // Every case that misses a deadline leaves a record; start each one clean.
+  resetMissedDeadlines();
   try {
     await fn();
     console.log(`\u2713 ${name}`);
@@ -134,6 +145,115 @@ async function main(): Promise<void> {
     }
     assert(String(err).includes("boom"), "the real error propagates");
     assert(pendingWaits().length === 0, "registry cleared on rejection");
+  });
+
+  // ── Missed-deadline record ──────────────────────────────────────────────
+  //
+  // A missed deadline is the tab's one durable trace of cache lock contention:
+  // the cache did not fail, it was too slow, and the caller has already moved
+  // on to the network by the time the answer arrives. The perf HUD reads this
+  // record to raise an alert, so its shape is a contract.
+
+  await run("a missed deadline is recorded with its label and budget", async () => {
+    await withDeadline(new Promise<string>(() => {}), 20, {
+      what: "indexedDB.read conversation_meta",
+    }).catch(() => {});
+    const missed = missedDeadlines();
+    assert(missed.length === 1, `expected 1 record, got ${missed.length}`);
+    assert(missed[0].what === "indexedDB.read conversation_meta", `label: ${missed[0].what}`);
+    assert(missed[0].deadlineMs === 20, "budget recorded");
+    assert(Date.now() - missed[0].at < 5_000, "timestamped now");
+    assert(missed[0].outcome === "pending", "no outcome until the operation settles");
+  });
+
+  await run("a timely wait leaves no record", async () => {
+    await withDeadline(Promise.resolve(1), 1_000, { what: "indexedDB.open" });
+    await withDeadline(Promise.reject(new Error("quota")), 1_000, { what: "indexedDB.open" }).catch(
+      () => {},
+    );
+    assert(missedDeadlines().length === 0, "only missed deadlines are recorded");
+  });
+
+  await run("a late value marks the miss as completed with its true duration", async () => {
+    // "Completed late" is what separates contention from breakage: the lock
+    // was held by someone else, and the operation was fine once it got it.
+    let release!: (v: string) => void;
+    const p = new Promise<string>((r) => {
+      release = r;
+    });
+    await withDeadline(p, 20, { what: "indexedDB.startup transaction" }).catch(() => {});
+    await sleep(30);
+    release("done");
+    await sleep(0);
+    const [rec] = missedDeadlines();
+    assert(rec.outcome === "completed", `outcome: ${rec.outcome}`);
+    assert(
+      rec.settledAfterMs !== undefined && rec.settledAfterMs >= 40,
+      `duration spans the whole wait, not just the overrun: ${rec.settledAfterMs}`,
+    );
+  });
+
+  await run("a late error marks the miss as failed and keeps the error", async () => {
+    let fail!: (e: unknown) => void;
+    const p = new Promise<string>((_r, rej) => {
+      fail = rej;
+    });
+    await withDeadline(p, 20, { what: "indexedDB.open" }).catch(() => {});
+    fail(new Error("VersionError"));
+    await sleep(0);
+    const [rec] = missedDeadlines();
+    assert(rec.outcome === "failed", `outcome: ${rec.outcome}`);
+    assert(String(rec.error).includes("VersionError"), "error text kept for the HUD");
+  });
+
+  await run("a caller that aborts its own late operation is recorded as abandoned", async () => {
+    // hydrate aborts its readonly tx after giving up so the bulk read cannot
+    // wake later and duplicate the REST work; that AbortError is the caller's
+    // own doing, not a cache failure, and must not read as one in the HUD.
+    let fail!: (e: unknown) => void;
+    const p = new Promise<string>((_r, rej) => {
+      fail = rej;
+    });
+    await withDeadline(p, 20, { what: "indexedDB.read conversation_meta" }).catch(() => {});
+    fail(new DOMException("The transaction was aborted", "AbortError"));
+    await sleep(0);
+    assert(missedDeadlines()[0].outcome === "abandoned", "self-inflicted abort is not a failure");
+  });
+
+  await run("the record is bounded and newest-last", async () => {
+    for (let i = 0; i < MISSED_DEADLINE_BUFFER + 5; i++) {
+      await withDeadline(new Promise<string>(() => {}), 1, { what: `op${i}` }).catch(() => {});
+    }
+    const missed = missedDeadlines();
+    assert(missed.length === MISSED_DEADLINE_BUFFER, `bounded at ${MISSED_DEADLINE_BUFFER}`);
+    assert(missed[missed.length - 1].what === `op${MISSED_DEADLINE_BUFFER + 4}`, "newest last");
+    assert(missed[0].what === "op5", "oldest dropped first");
+    resetMissedDeadlines();
+    assert(missedDeadlines().length === 0, "reset empties the record");
+  });
+
+  await run("waits sharing a label are still distinguishable", async () => {
+    // Two hydrates can be in flight at once (a quick conversation switch does
+    // not cancel the first), both labelled "indexedDB.read conversation_meta";
+    // the HUD keys its rows on the id, so it must be unique per wait.
+    const a = withDeadline(new Promise<string>(() => {}), 20, { what: "indexedDB.read x" });
+    const b = withDeadline(new Promise<string>(() => {}), 20, { what: "indexedDB.read x" });
+    const [w1, w2] = pendingWaits();
+    assert(w1.id !== w2.id, `in-flight ids differ: ${w1.id} vs ${w2.id}`);
+    await Promise.allSettled([a, b]);
+    const [m1, m2] = missedDeadlines();
+    assert(m1.id !== m2.id, `missed ids differ: ${m1.id} vs ${m2.id}`);
+    assert([w1.id, w2.id].includes(m1.id), "a miss keeps the id it had in flight");
+  });
+
+  await run("IndexedDB waits are told apart from other bounded waits", async () => {
+    // The HUD alert is specifically about cache lock contention, so it must
+    // not fire for a stalled cache-key fetch or a lock request.
+    assert(isIndexedDBWait("indexedDB.open"), "open");
+    assert(isIndexedDBWait("indexedDB.startup transaction"), "startup tx");
+    assert(isIndexedDBWait("indexedDB.read conversation_meta"), "read");
+    assert(!isIndexedDBWait("GET /api/cache-key"), "fetch is not IDB");
+    assert(!isIndexedDBWait("navigator.locks shelley-cache-key"), "lock is not IDB");
   });
 
   console.log("\ndeadline tests passed");
