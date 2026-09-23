@@ -300,6 +300,17 @@ func TestToolModelsHideUnknownIntegrationModelsButKeepCustomModels(t *testing.T)
 	}
 }
 
+func TestToolModelsKeepBothLunaGenerationsAvailable(t *testing.T) {
+	provider := &tieredModelProvider{
+		ids: []string{"gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol", "gpt-5.6-sol"},
+	}
+
+	got := setupToolSetConfig(nil, provider, nil).BuildAvailableModels()
+	if len(got) != 3 || got[0].ID != "gpt-6-luna" || got[1].ID != "gpt-5.6-luna" || got[2].ID != "gpt-6-sol" {
+		t.Fatalf("available tool models = %+v, want both Luna generations but only the latest Sol", got)
+	}
+}
+
 func findBuiltModelSource(built []models.Built, id string) string {
 	for _, model := range built {
 		if model.ID == id {

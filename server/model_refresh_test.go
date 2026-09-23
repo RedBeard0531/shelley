@@ -271,10 +271,11 @@ func TestHandleModelsAssignsTiers(t *testing.T) {
 			t.Errorf("%s tier = %d, want %d", id, tiers[id], models.Tier1)
 		}
 	}
-	for _, id := range []string{"gpt-5.6-sol", "gpt-5.6-luna"} {
-		if tiers[id] != models.Tier2 {
-			t.Errorf("%s tier = %d, want %d", id, tiers[id], models.Tier2)
-		}
+	if tiers["gpt-5.6-sol"] != models.Tier2 {
+		t.Errorf("gpt-5.6-sol tier = %d, want %d", tiers["gpt-5.6-sol"], models.Tier2)
+	}
+	if tiers["gpt-5.6-luna"] != models.Tier1 {
+		t.Errorf("gpt-5.6-luna tier = %d, want %d while subscription access lags", tiers["gpt-5.6-luna"], models.Tier1)
 	}
 }
 

@@ -51,7 +51,8 @@ var shadowPairs = []shadowPair{
 	{Better: "gpt-6-sol", Worse: "gpt-5.6-sol"},
 	{Better: "gpt-6-sol", Worse: "gpt-5.5"},
 	{Better: "gpt-6-sol", Worse: "gpt-5.4"},
-	{Better: "gpt-6-luna", Worse: "gpt-5.6-luna"},
+	// Deliberately no gpt-6-luna -> gpt-5.6-luna pair: ChatGPT
+	// subscriptions can lag managed access, so both must remain selectable.
 	{Better: "gpt-6-luna", Worse: "gpt-5.4-nano"},
 	{Better: "gpt-6-luna", Worse: "claude-haiku-4.5"},
 	{Better: "gpt-6-luna", Worse: "gpt-5.3-codex"},

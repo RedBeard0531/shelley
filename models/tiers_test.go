@@ -16,17 +16,24 @@ func TestAssignTiers(t *testing.T) {
 		}
 	})
 
-	t.Run("GPT-6 variants shadow only their lineages", func(t *testing.T) {
-		ids := []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+	t.Run("GPT-6 Sol shadows its superseded lineage", func(t *testing.T) {
+		ids := []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}
 		tiers := AssignTiers(ids)
 		for _, id := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-terra"} {
 			if tiers[id] != Tier1 {
 				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier1)
 			}
 		}
-		for _, id := range []string{"gpt-5.6-sol", "gpt-5.6-luna"} {
-			if tiers[id] != Tier2 {
-				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier2)
+		if tiers["gpt-5.6-sol"] != Tier2 {
+			t.Errorf("gpt-5.6-sol tier = %d, want %d", tiers["gpt-5.6-sol"], Tier2)
+		}
+	})
+
+	t.Run("Luna generations remain peers while subscription access lags", func(t *testing.T) {
+		tiers := AssignTiers([]string{"gpt-6-luna", "gpt-5.6-luna"})
+		for _, id := range []string{"gpt-6-luna", "gpt-5.6-luna"} {
+			if tiers[id] != Tier1 {
+				t.Errorf("%s tier = %d, want %d", id, tiers[id], Tier1)
 			}
 		}
 	})
