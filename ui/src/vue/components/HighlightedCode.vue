@@ -30,6 +30,11 @@ watch(
 
     const requestState = `pending:${language}\0${source}`;
     code.dataset.shelleyCodeHighlight = requestState;
+    // Reset the element's text to the new source. Vue's vdom still tracks the
+    // text node from the initial render, but applyHighlightTokens replaced the
+    // element's children, so Vue would patch a detached node and leave stale
+    // text visible. Writing textContent here keeps the DOM authoritative.
+    code.textContent = source;
     void highlightCode(language, source)
       .then((result) => {
         // The command can change while the worker is tokenizing. Do not let an
