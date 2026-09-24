@@ -78,9 +78,11 @@ const props = defineProps<{
   selectedDiff: string | null;
   selectedTo: "working" | "self";
   isMobile: boolean;
+  hasMore?: boolean;
 }>();
 const emit = defineEmits<{
   (e: "change", selectedDiff: string, selectedTo: "working" | "self"): void;
+  (e: "load-more"): void;
 }>();
 
 const open = ref(false);
@@ -310,6 +312,12 @@ const list = () => {
   commitDiffs.value.forEach((d, idx) => children.push(renderCommitRow(d, idx)));
   if (commitDiffs.value.length === 0 && !workingDiff.value) {
     children.push(h("div", { class: "commit-picker-empty" }, "No commits or working changes."));
+  }
+  if (props.hasMore) {
+    children.push(
+      h("button", { type: "button", class: "commit-picker-load-more", onClick: () => emit("load-more") },
+        "Load more commits"),
+    );
   }
   return h("div", { class: "commit-picker-list", onKeydown: onListKeyDown }, children);
 };
