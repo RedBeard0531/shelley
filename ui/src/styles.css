@@ -6787,6 +6787,22 @@ svg {
   font-size: 0.875rem;
 }
 
+.commit-picker-load-more {
+  margin: 0.5rem auto 0.75rem;
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.commit-picker-load-more:hover {
+  background: var(--blue-bg, rgba(59, 130, 246, 0.12));
+  color: var(--text-primary);
+}
+
 .commit-picker-row {
   display: flex;
   align-items: stretch;

@@ -289,6 +289,78 @@ func TestHandleGitDiffs(t *testing.T) {
 	}
 }
 
+// TestHandleGitDiffsLimitAndHasMore covers the `limit` query param and the
+// `hasMore` response flag that drives the commit picker's "load more".
+func TestHandleGitDiffsLimitAndHasMore(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	dir := setupTestGitRepo(t)
+
+	// Two more commits on top of the initial one → three total.
+	for i := range 2 {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("more%d.txt", i)), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		testGit(t, dir, "add", ".")
+		testGit(t, dir, "commit", "--no-verify", "-m", fmt.Sprintf("Commit %d", i))
+	}
+
+	fetch := func(query string) (int, []GitDiffInfo, bool) {
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/git/diffs?cwd=%s&%s", dir, query), nil)
+		w := httptest.NewRecorder()
+		h.server.handleGitDiffs(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("handleGitDiffs(%s): %d: %s", query, w.Code, w.Body.String())
+		}
+		var response struct {
+			Diffs   []GitDiffInfo `json:"diffs"`
+			HasMore bool          `json:"hasMore"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatalf("failed to parse response: %v", err)
+		}
+		return w.Code, response.Diffs, response.HasMore
+	}
+
+	// Default limit (100) exceeds the three-commit history: hasMore is false.
+	_, diffs, hasMore := fetch("")
+	if len(diffs) != 4 { // working changes + 3 commits
+		t.Errorf("default fetch: expected 4 diffs, got %d", len(diffs))
+	}
+	if hasMore {
+		t.Error("default fetch: expected hasMore=false")
+	}
+
+	// limit=2 truncates the commit list and reports more history.
+	_, diffs, hasMore = fetch("limit=2")
+	if len(diffs) != 3 { // working changes + 2 commits
+		t.Errorf("limit=2: expected 3 diffs, got %d", len(diffs))
+	}
+	if !hasMore {
+		t.Error("limit=2: expected hasMore=true")
+	}
+
+	// limit beyond history reports hasMore=false.
+	_, _, hasMore = fetch("limit=10")
+	if hasMore {
+		t.Error("limit=10: expected hasMore=false")
+	}
+
+	// Out-of-range limits are rejected.
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/git/diffs?cwd=%s&limit=0", dir), nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitDiffs(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("limit=0: expected 400, got %d", w.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/git/diffs?cwd=%s&limit=abc", dir), nil)
+	w = httptest.NewRecorder()
+	h.server.handleGitDiffs(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("limit=abc: expected 400, got %d", w.Code)
+	}
+}
+
 func TestHandleGitDiffsHasTour(t *testing.T) {
 	t.Parallel()
 	h := NewTestHarness(t)

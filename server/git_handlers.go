@@ -316,11 +316,21 @@ func (s *Server) handleGitDiffs(w http.ResponseWriter, r *http.Request) {
 		mergeBase = strings.TrimSpace(string(out))
 	}
 
-	// Decide how many commits to list. Always include the full stack down
+	// Decide how many commits to list. The client can raise it via the
+	// `limit` query param (the commit picker's "load more"); cap the value
+	// to keep the numstat walk bounded. Always include the full stack down
 	// to the upstream merge-base (plus a little context past it) so long
-	// branches aren't truncated; without an upstream, fall back to a fixed
+	// branches aren't truncated; without an upstream, the limit is the
 	// window of recent commits.
-	limit := 20
+	limit := 100
+	if s := r.URL.Query().Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 || n > 1000 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
 	if mergeBase != "" {
 		// Bound the count walk; past this depth we give up on reaching
 		// the merge-base and the UI shows a bounded window instead.
@@ -335,7 +345,14 @@ func (s *Server) handleGitDiffs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	commits := gitLogDiffs(gitRoot, limit, mergeBase, "HEAD")
+	// Fetch one extra commit so hasMore tells the client whether more
+	// history is available beyond the returned window.
+	commits := gitLogDiffs(gitRoot, limit+1, mergeBase, "HEAD")
+	hasMore := false
+	if len(commits) > limit {
+		commits = commits[:limit]
+		hasMore = true
+	}
 	if requestedCommit != "" {
 		found := false
 		for _, commit := range commits {
@@ -364,6 +381,7 @@ func (s *Server) handleGitDiffs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"diffs":   diffs,
 		"gitRoot": gitRoot,
+		"hasMore": hasMore,
 	})
 }
 
