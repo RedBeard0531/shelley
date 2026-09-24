@@ -25,7 +25,8 @@
         <ToolChevron :expanded="isExpanded" />
       </button>
     </div>
-    <div v-if="isExpanded && results.length > 0" class="web-search-results">
+    <div v-if="isExpanded && (isRunning || results.length > 0)" class="web-search-results">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div v-for="(result, index) in results" :key="index" class="web-search-result">
         <a
           :href="result.URL || ''"
@@ -48,10 +49,12 @@
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   searchResults?: LLMContent[];
   toolResult?: LLMContent[];
   hasError?: boolean;

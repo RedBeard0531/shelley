@@ -39,6 +39,7 @@
     </div>
 
     <div v-if="isExpanded" class="bash-tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div v-if="displayData?.workingDir" class="bash-tool-section">
         <div class="bash-tool-label">Working Directory:</div>
         <pre class="bash-tool-code bash-tool-code-cwd">{{ displayData.workingDir }}</pre>
@@ -82,6 +83,7 @@ import type { LLMContent } from "../../../types";
 import HighlightedCode from "../HighlightedCode.vue";
 import AnsiText from "./AnsiText.vue";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 import { isCancelledToolResult } from "../../utils/toolStatus";
 
 interface BashDisplayData {
@@ -92,6 +94,7 @@ interface BashDisplayData {
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

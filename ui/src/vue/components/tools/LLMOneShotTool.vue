@@ -37,6 +37,7 @@
     </div>
 
     <div v-if="isExpanded" class="tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div class="tool-section">
         <div class="tool-label">Prompt files:</div>
         <pre class="tool-code">{{ promptFiles.join("\n") || "(none)" }}</pre>
@@ -73,6 +74,7 @@ import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import CommentableImage from "../CommentableImage.vue";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 
 interface LLMOneShotInput {
   prompt_files?: string[] | string;
@@ -99,6 +101,7 @@ interface LLMOneShotDisplayImage {
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

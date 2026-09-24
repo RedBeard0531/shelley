@@ -20,6 +20,7 @@
     </div>
 
     <div v-if="isExpanded" class="screencast-tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div v-if="isRunning" class="screencast-tool-section">
         <div class="screencast-tool-status">
           <template v-if="action === 'screencast_start'">Starting screencast recording...</template>
@@ -63,10 +64,12 @@
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

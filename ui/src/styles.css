@@ -2149,6 +2149,12 @@ body {
   font-weight: 400;
 }
 
+.tool-running-elapsed {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 .tool-code {
   font-family: var(--font-mono);
   font-size: 0.875rem;

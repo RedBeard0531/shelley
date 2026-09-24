@@ -69,6 +69,7 @@ import GenericTool from "./GenericTool.vue";
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

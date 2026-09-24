@@ -76,6 +76,7 @@
     </div>
 
     <div v-if="isExpanded" class="output-iframe-tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div
         v-if="isComplete && !hasError && htmlWithHeightReporter"
         class="output-iframe-tool-section"
@@ -120,6 +121,7 @@ import { computed, ref, onMounted, onUnmounted } from "vue";
 import JSZip from "jszip";
 import type { LLMContent } from "../../../types";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 
 interface EmbeddedFile {
   name: string;
@@ -131,6 +133,7 @@ interface EmbeddedFile {
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

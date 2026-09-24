@@ -26,6 +26,7 @@
     </div>
 
     <div v-if="isExpanded" class="screenshot-tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div v-if="isComplete && !hasError && imageUrl" class="screenshot-tool-section">
         <div v-if="executionTime" class="screenshot-tool-label">
           <span>Image:</span>
@@ -68,10 +69,12 @@ import type { LLMContent } from "../../../types";
 import CommentableImage from "../CommentableImage.vue";
 import { displayNeedsAutoOrient, displaySourceSize } from "../../../utils/imageComment";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

@@ -22,6 +22,7 @@
     </div>
 
     <div v-if="isExpanded" class="tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div v-if="toolInput !== undefined" class="tool-section">
         <div class="tool-label">Input:</div>
         <pre class="tool-code">{{ formatData(toolInput) }}</pre>
@@ -48,11 +49,13 @@ import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import GenericToolWarning from "./GenericToolWarning.vue";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 
 const props = defineProps<{
   toolName: string;
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

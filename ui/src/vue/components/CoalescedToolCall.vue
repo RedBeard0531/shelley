@@ -45,6 +45,7 @@
         <div class="tool-input">
           {{ typeof toolInput === "string" ? toolInput : JSON.stringify(toolInput, null, 2) }}
         </div>
+        <RunningToolTime :start-time="toolInvokedAt" />
       </div>
     </div>
   </div>
@@ -133,6 +134,7 @@ import BrowserNetworkTool from "./tools/BrowserNetworkTool.vue";
 import BrowserAccessibilityTool from "./tools/BrowserAccessibilityTool.vue";
 import BrowserProfileTool from "./tools/BrowserProfileTool.vue";
 import GenericToolWarning from "./tools/GenericToolWarning.vue";
+import RunningToolTime from "./tools/RunningToolTime.vue";
 import KeywordSearchTool from "./tools/KeywordSearchTool.vue";
 import ChangeDirTool from "./tools/ChangeDirTool.vue";
 import SubagentTool from "./tools/SubagentTool.vue";
@@ -146,6 +148,7 @@ const props = defineProps<{
   toolInput?: unknown;
   toolResult?: LLMContent[];
   toolError?: boolean;
+  toolInvokedAt?: string | null;
   toolStartTime?: string | null;
   toolEndTime?: string | null;
   hasResult?: boolean;
@@ -221,6 +224,7 @@ const toolComponentProps = computed<Record<string, unknown>>(() => {
     toolResult: props.toolResult,
     hasError: props.toolError,
     executionTime: executionTime.value,
+    toolInvokedAt: props.toolInvokedAt,
     display: props.display,
   };
   if (props.toolName === "patch" && props.onCommentTextChange) {

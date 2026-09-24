@@ -46,6 +46,7 @@
     </button>
 
     <div v-if="isExpanded" class="tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div class="tool-section">
         <div class="tool-label">
           Prompt to '{{ slug }}':
@@ -83,6 +84,7 @@ import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import { useSubagentLive, navigateToConversationSlug } from "../../composables/subagentLive";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 
 interface SubagentInput {
   slug?: string;
@@ -95,6 +97,7 @@ interface SubagentInput {
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

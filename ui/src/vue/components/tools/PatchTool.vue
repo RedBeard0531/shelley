@@ -88,6 +88,7 @@
     </div>
 
     <div v-if="isExpanded" class="patch-tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div v-if="isComplete && !hasError && hasDiff" class="patch-tool-section">
         <div v-if="patchFiles.length > 1" class="patch-tool-diffs-container patch-tool-file-list">
           <PatchFileDiff
@@ -151,6 +152,7 @@ import { useFileDiffInstance } from "../../composables/fileDiffInstance";
 import { useNearViewport } from "../../composables/nearViewport";
 import { useOpenFileEditor } from "../../composables/fileEditor";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 import PatchFileDiff from "./PatchFileDiff.vue";
 
 const DIFF_THEMES: ThemesType = { dark: "github-dark", light: "github-light" };
@@ -229,6 +231,7 @@ function getLanguageFromPath(path: string): SupportedLanguages {
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;

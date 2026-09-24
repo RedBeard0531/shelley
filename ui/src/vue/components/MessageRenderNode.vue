@@ -41,6 +41,7 @@
     :tool-input="node.item.toolInput"
     :tool-result="node.item.toolResult"
     :tool-error="node.item.toolError"
+    :tool-invoked-at="node.item.toolInvokedAt"
     :tool-start-time="node.item.toolStartTime"
     :tool-end-time="node.item.toolEndTime"
     :has-result="node.item.hasResult"

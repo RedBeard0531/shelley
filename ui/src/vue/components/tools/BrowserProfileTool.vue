@@ -17,6 +17,7 @@
     </div>
 
     <div v-if="isExpanded" class="tool-details">
+      <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div class="tool-section">
         <div class="tool-label">Action:</div>
         <pre class="tool-code">{{ action || "(none)" }}</pre>
@@ -62,6 +63,7 @@
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import ToolChevron from "./ToolChevron.vue";
+import RunningToolTime from "./RunningToolTime.vue";
 
 interface ProfileInput {
   action?: string;
@@ -71,6 +73,7 @@ interface ProfileInput {
 const props = defineProps<{
   toolInput?: unknown;
   isRunning?: boolean;
+  toolInvokedAt?: string | null;
   toolResult?: LLMContent[];
   hasError?: boolean;
   executionTime?: string;
