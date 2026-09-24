@@ -839,7 +839,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
   // Cmd/Ctrl+P opens the fuzzy file finder (overrides the browser's print
   // shortcut, which all major browsers let us preventDefault).
-  if (modifierPressed && !e.shiftKey && e.key === "p") {
+  if (comboMatches(e, MENU_COMBOS.editFile)) {
     e.preventDefault();
     fileFinderOpen.value = true;
     return;

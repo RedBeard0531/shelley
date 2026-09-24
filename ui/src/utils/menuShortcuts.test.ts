@@ -73,6 +73,10 @@ function ev(part: Partial<KeyboardEvent>): KeyboardEvent {
 
 // comboMatches: exact modifier + physical key.
 assert(
+  comboMatches(ev({ code: "KeyP", key: "з", ctrlKey: true }), MENU_COMBOS.editFile),
+  "editFile uses physical KeyP regardless of keyboard layout",
+);
+assert(
   comboMatches(ev({ code: "KeyD", ctrlKey: true, shiftKey: true }), MENU_COMBOS.diffs),
   "diffs matches Ctrl+Shift+D",
 );
@@ -145,7 +149,7 @@ assert(
   "palette is NOT ChatInterface-owned",
 );
 assert(
-  matchChatInterfaceAction(ev({ code: "KeyP", ctrlKey: true, shiftKey: true })) === null,
+  matchChatInterfaceAction(ev({ code: "KeyP", ctrlKey: true })) === null,
   "editFile is NOT ChatInterface-owned",
 );
 assert(

@@ -4,7 +4,7 @@ import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { createConversationViaAPI, withTempDir } from "./helpers";
 
-// The fuzzy file finder (Cmd/Ctrl+Shift+P) ANDs whitespace-separated terms, so
+// The fuzzy file finder (Cmd/Ctrl+P) ANDs whitespace-separated terms, so
 // a half-remembered filename typed as words finds the file: "vm storage s3"
 // must reach vm-storage-s3-backup-design.md even though the literal query
 // (spaces and all) never appears in the path.
@@ -25,7 +25,7 @@ test.describe("File finder multi-term search", () => {
       await page.goto(`/c/${slug}`);
       await page.waitForLoadState("domcontentloaded");
 
-      await page.keyboard.press("ControlOrMeta+Shift+P");
+      await page.keyboard.press("ControlOrMeta+P");
       const finderInput = page.locator(".grp-filter");
       await expect(finderInput).toBeVisible({ timeout: 10000 });
       await finderInput.fill("vm storage s3");
@@ -59,7 +59,7 @@ test.describe("File finder path queries", () => {
         await page.goto(`/c/${slug}`);
         await page.waitForLoadState("domcontentloaded");
 
-        await page.keyboard.press("ControlOrMeta+Shift+P");
+        await page.keyboard.press("ControlOrMeta+P");
         const finderInput = page.locator(".grp-filter");
         await expect(finderInput).toBeVisible({ timeout: 10000 });
 
@@ -101,7 +101,7 @@ test.describe("File finder path queries", () => {
       await page.goto(`/c/${slug}`);
       await page.waitForLoadState("domcontentloaded");
 
-      await page.keyboard.press("ControlOrMeta+Shift+P");
+      await page.keyboard.press("ControlOrMeta+P");
       const finderInput = page.locator(".grp-filter");
       await expect(finderInput).toBeVisible({ timeout: 10000 });
 
@@ -128,7 +128,7 @@ test.describe("File finder path queries", () => {
       await page.goto(`/c/${slug}`);
       await page.waitForLoadState("domcontentloaded");
 
-      await page.keyboard.press("ControlOrMeta+Shift+P");
+      await page.keyboard.press("ControlOrMeta+P");
       const finderInput = page.locator(".grp-filter");
       await expect(finderInput).toBeVisible({ timeout: 10000 });
 
@@ -166,7 +166,7 @@ test.describe("File finder content search", () => {
       await page.goto(`/c/${slug}`);
       await page.waitForLoadState("domcontentloaded");
 
-      await page.keyboard.press("ControlOrMeta+Shift+P");
+      await page.keyboard.press("ControlOrMeta+P");
       const finderInput = page.locator(".grp-filter");
       await expect(finderInput).toBeVisible({ timeout: 10000 });
       await finderInput.fill("cardamom");
@@ -199,7 +199,7 @@ test.describe("File finder content search", () => {
       await page.goto(`/c/${slug}`);
       await page.waitForLoadState("domcontentloaded");
 
-      await page.keyboard.press("ControlOrMeta+Shift+P");
+      await page.keyboard.press("ControlOrMeta+P");
       const finderInput = page.locator(".grp-filter");
       await expect(finderInput).toBeVisible({ timeout: 10000 });
       await finderInput.fill("cardamom");
@@ -248,7 +248,7 @@ test.describe("File finder content search", () => {
       await page.goto(`/c/${slug}`);
       await page.waitForLoadState("domcontentloaded");
 
-      await page.keyboard.press("ControlOrMeta+Shift+P");
+      await page.keyboard.press("ControlOrMeta+P");
       const finderInput = page.locator(".grp-filter");
       await expect(finderInput).toBeVisible({ timeout: 10000 });
 

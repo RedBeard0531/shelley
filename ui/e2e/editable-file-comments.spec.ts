@@ -29,7 +29,7 @@ test.describe("Edit-file modal comment mode", () => {
     await page.waitForLoadState("domcontentloaded");
 
     // Open the fuzzy file finder and pick the file.
-    await page.keyboard.press("ControlOrMeta+Shift+P");
+    await page.keyboard.press("ControlOrMeta+P");
     const finderInput = page.locator(".grp-filter");
     await expect(finderInput).toBeVisible({ timeout: 10000 });
     await finderInput.fill("notes.txt");

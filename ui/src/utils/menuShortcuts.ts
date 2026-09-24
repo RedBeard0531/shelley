@@ -107,4 +107,3 @@ export function matchChatInterfaceAction(e: KeyboardEvent): MenuActionId | null 
   }
   return null;
 }
-

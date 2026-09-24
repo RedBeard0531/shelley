@@ -13,7 +13,7 @@ import { createConversationViaAPI, withTempDir } from "./helpers";
 // the file finder, enable vim, and focus the editor ready for normal-mode
 // keystrokes. Returns the modal, its Monaco root and the vim status bar.
 async function openFileWithVim(page: Page, file: string, basename: string, visibleText: string) {
-  await page.keyboard.press("ControlOrMeta+Shift+P");
+  await page.keyboard.press("ControlOrMeta+P");
   const finderInput = page.locator(".grp-filter");
   await expect(finderInput).toBeVisible({ timeout: 10000 });
   await finderInput.fill(basename);

@@ -3395,7 +3395,7 @@ async function archiveFromMenu() {
 // rather than always opening a new one), and is gated by the same availability
 // the menu uses (see the ChatOverflowMenu props bound in the template) so a
 // shortcut never fires for a hidden item. The palette (Cmd/Ctrl+K) and file
-// finder (Cmd/Ctrl+Shift+P) are handled in App.vue, which owns those modals.
+// finder (Cmd/Ctrl+P) are handled in App.vue, which owns those modals.
 // See utils/menuShortcuts.ts for the combos.
 function handleMenuShortcut(e: KeyboardEvent) {
   // Don't hijack keystrokes while typing in a field.
