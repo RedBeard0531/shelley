@@ -141,6 +141,40 @@ test.describe("Model picker (PrimeVue)", () => {
       },
     });
     expect(response.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await response.json();
+
+    // The suite shares a conversation DB across workers. Other tests can
+    // contribute a more popular recent model/effort combination, so keep
+    // this page's picker history scoped to the conversation we just created.
+    // Keep the stream connected for the picker, but ignore list patches
+    // that would reintroduce other tests' conversations after the snapshot.
+    await page.addInitScript(() => {
+      const NativeEventSource = window.EventSource;
+      window.EventSource = class extends NativeEventSource {
+        constructor(url: string | URL, options?: EventSourceInit) {
+          super(url, options);
+          this.addEventListener("message", (event) => {
+            const data = JSON.parse(event.data) as { conversation_list_patch?: unknown };
+            if (data.conversation_list_patch) event.stopImmediatePropagation();
+          });
+        }
+      };
+    });
+    await page.route("**/api/conversations/snapshot", async (route) => {
+      const snapshotResponse = await route.fetch();
+      const snapshot = (await snapshotResponse.json()) as {
+        conversations: Array<{ conversation_id: string }>;
+        hash: string;
+      };
+      const seed = snapshot.conversations.find(
+        (conversation) => conversation.conversation_id === conversationId,
+      );
+      if (!seed) throw new Error("recent model picker conversation missing from snapshot");
+      await route.fulfill({
+        response: snapshotResponse,
+        json: { ...snapshot, conversations: [seed] },
+      });
+    });
 
     await page.addInitScript(() => localStorage.setItem("shelley.thinkingLevel.v2", "high"));
     await page.goto("/new");
