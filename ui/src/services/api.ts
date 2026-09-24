@@ -798,10 +798,12 @@ class ApiService {
     cwd: string,
     commit?: string,
     includeStats = true,
-  ): Promise<{ diffs: GitDiffInfo[]; gitRoot: string }> {
+    limit?: number,
+  ): Promise<{ diffs: GitDiffInfo[]; gitRoot: string; hasMore: boolean }> {
     const params = new URLSearchParams({ cwd });
     if (commit) params.set("commit", commit);
     if (!includeStats) params.set("stats", "false");
+    if (limit != null) params.set("limit", String(limit));
     const response = await fetch(`${this.baseUrl}/git/diffs?${params}`);
     if (!response.ok) {
       const text = await response.text();

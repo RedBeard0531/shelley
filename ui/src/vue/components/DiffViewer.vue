@@ -57,8 +57,10 @@
               :selected-diff="selectedDiff"
               :selected-to="selectedTo"
               :is-mobile="isMobile"
+              :has-more="hasMoreCommits"
               @change="onCommitChange"
               @open="loadCommitStats"
+              @load-more="loadMoreCommits"
             />
             <div v-if="diffView === 'files'" class="diff-viewer-file-selector-wrapper">
               <select
@@ -164,8 +166,10 @@
                   :selected-diff="selectedDiff"
                   :selected-to="selectedTo"
                   :is-mobile="isMobile"
+                  :has-more="hasMoreCommits"
                   @change="onCommitChange"
                   @open="loadCommitStats"
+                  @load-more="loadMoreCommits"
                 />
               </div>
               <div v-if="diffView === 'files'" class="diff-viewer-selector-group">
@@ -765,6 +769,10 @@ const DIR_ICON =
 // --- Reactive state (mirrors React useState) ---
 const diffs = ref<GitDiffInfo[]>([]);
 const gitRoot = ref<string | null>(null);
+// Commit-picker history window: fetched commit count and whether the server
+// reports more beyond it. Grown by the picker's "load more" button.
+const diffLimit = ref(100);
+const hasMoreCommits = ref(false);
 const showDirPicker = ref(false);
 const selectedDiff = ref<string | null>(null);
 const selectedTo = ref<"working" | "self">("working");
@@ -1294,6 +1302,8 @@ watch(
       tourBuildStatus.value = null;
       selectedTo.value = "working";
       diffs.value = [];
+      diffLimit.value = 100;
+      hasMoreCommits.value = false;
       error.value = null;
       resetComments();
       tourCommentTarget.value = null;
@@ -1587,10 +1597,11 @@ async function loadDiffs() {
   try {
     loading.value = true;
     error.value = null;
-    const response = await api.getGitDiffs(cwd, initialCommit, false);
+    const response = await api.getGitDiffs(cwd, initialCommit, false, diffLimit.value);
     if (requestId !== loadDiffsRequestId) return;
     diffs.value = response.diffs;
     gitRoot.value = response.gitRoot;
+    hasMoreCommits.value = response.hasMore;
 
     const selection = defaultDiffSelection(response.diffs, initialCommit);
     if (selection) {
@@ -1639,6 +1650,14 @@ async function loadCommitStats() {
   }
 }
 
+// Commit picker's "load more": widen the history window and refetch.
+async function loadMoreCommits() {
+  if (loading.value || !hasMoreCommits.value) return;
+  diffLimit.value += 100;
+  await loadDiffs();
+}
+
+let loadFilesRequestId = 0;
 async function loadFiles(diffId: string) {
   const requestId = ++loadFilesRequestId;
   const cwd = props.cwd;
