@@ -1642,6 +1642,30 @@ func TestPatchToolExposesAndAcceptsComplexInput(t *testing.T) {
 	}
 }
 
+func TestPatchToolOperationDefaultsToReplace(t *testing.T) {
+	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(t.TempDir()), Profile: "complex"}
+	tool := patch.Tool()
+	if err := os.WriteFile(filepath.Join(patch.getWorkingDir(), "d.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Omitted operation behaves as replace.
+	result := tool.Run(t.Context(), json.RawMessage(`{"path":"d.txt","oldText":"hi","newText":"hello"}`))
+	if result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	content, err := os.ReadFile(filepath.Join(patch.getWorkingDir(), "d.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hello\n" {
+		t.Fatalf("content = %q", content)
+	}
+	if result := tool.Run(t.Context(), json.RawMessage(`{"path":"d.txt","oldText":"nope","newText":"x"}`)); result.Error == nil {
+		t.Error("missing oldText without operation unexpectedly succeeded")
+	}
+}
+
 func TestSimplePatchFailureDoesNotWrite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "simple.txt")
