@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 )
 
@@ -72,6 +73,16 @@ func TestSyntheticEndMarkerDoesNotCountLLMCall(t *testing.T) {
 			rows, err := database.GetSubagentUsage(ctx, parent.ConversationID)
 			if err != nil || len(rows) != 1 || rows[0].LlmCalls != tc.calls || rows[0].CostUsd != wantCost {
 				t.Fatalf("subagent usage: rows=%+v error=%v", rows, err)
+			}
+			var billing []generated.GetConversationUsageByModelRow
+			if err := database.Queries(ctx, func(q *generated.Queries) (err error) {
+				billing, err = q.GetConversationUsageByModel(ctx)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(billing) != 1 || billing[0].LlmCalls != tc.calls || billing[0].CostUsd != wantCost {
+				t.Fatalf("conversation billing rows=%+v, want %d calls", billing, tc.calls)
 			}
 			w := httptest.NewRecorder()
 			srv.handleSubagentUsage(w, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), parent.ConversationID)
