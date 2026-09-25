@@ -226,8 +226,8 @@ eof_line: "*** End of File" LF
 	PatchUsageNotes = `
 Usage notes:
 - All inputs are interpreted literally (no automatic newline or whitespace handling)
-- For replace operations, oldText must appear EXACTLY ONCE in the file
-- replace_all replaces every occurrence of oldText (non-overlapping) and requires at least one match
+- For the replace operation, oldText must appear EXACTLY ONCE in the file
+- replace_all replaces every occurrence of oldText (non-overlapping, exact match only — no whitespace tolerance) and requires at least one match
 
 IMPORTANT: Each patch call must be less than 60k tokens total. For large file
 changes, break them into multiple smaller patch operations rather than one
@@ -971,13 +971,9 @@ func validatePatchInput(input PatchInput) (PatchInput, error) {
 		patch.Operation = "replace"
 	}
 	switch patch.Operation {
-	case "replace":
+	case "replace", "replace_all":
 		if patch.OldText == "" {
-			return PatchInput{}, fmt.Errorf("oldText is required for replace operation")
-		}
-	case "replace_all":
-		if patch.OldText == "" {
-			return PatchInput{}, fmt.Errorf("oldText is required for replace_all operation")
+			return PatchInput{}, fmt.Errorf("oldText is required for %s operation", patch.Operation)
 		}
 	case "append_eof", "prepend_bof", "overwrite":
 	default:
@@ -1025,6 +1021,7 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 	// TODO: when the model gets into a "cannot apply patch" cycle of doom, how do we get it unstuck?
 	// Also: how do we detect that it's in a cycle?
 	var patchErr error
+	occurrences := 0 // occurrences replaced by replace_all, for result feedback
 
 	var clipboardsModified []string
 	updateToClipboard := func(patch PatchRequest, spec *patchkit.Spec) {
@@ -1146,18 +1143,11 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 			continue
 		case "replace_all":
 			if patch.OldText == "" {
+				// The guard also prevents an infinite loop: an empty
+				// oldText matches at every offset and never advances the scan.
 				return llm.ErrorfToolOut("patch %d: oldText cannot be empty for %s operation", i, patch.Operation)
 			}
-			var specs []*patchkit.Spec
-			for off := 0; ; {
-				idx := strings.Index(origStr[off:], patch.OldText)
-				if idx < 0 {
-					break
-				}
-				idx += off
-				specs = append(specs, &patchkit.Spec{Off: idx, Len: len(patch.OldText), Src: origStr, Old: patch.OldText, New: newText})
-				off = idx + len(patch.OldText)
-			}
+			specs := patchkit.All(origStr, patch.OldText, newText)
 			if len(specs) == 0 {
 				patchErr = errors.Join(patchErr, fmt.Errorf("old text not found:\n%s", patch.OldText))
 				continue
@@ -1165,6 +1155,7 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 			for _, spec := range specs {
 				spec.ApplyToEditBuf(buf)
 			}
+			occurrences += len(specs)
 		default:
 			return llm.ErrorfToolOut("unrecognized operation %q", patch.Operation)
 		}
@@ -1191,6 +1182,9 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 
 	response := new(strings.Builder)
 	fmt.Fprintf(response, "<patches_applied>all</patches_applied>\n")
+	if occurrences > 0 {
+		fmt.Fprintf(response, "Replaced %d occurrences.\n", occurrences)
+	}
 	for _, msg := range clipboardsModified {
 		fmt.Fprintln(response, msg)
 	}
