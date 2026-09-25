@@ -172,6 +172,7 @@ File modification tool for precise text edits.
 
 Operations:
 - replace: Substitute unique text with new content
+- replace_all: Substitute all occurrences of oldText with newText
 - append_eof: Append new text at the end of the file
 - prepend_bof: Insert new text at the beginning of the file
 - overwrite: Replace the entire file with new content (automatically creates the file)
@@ -225,7 +226,8 @@ eof_line: "*** End of File" LF
 	PatchUsageNotes = `
 Usage notes:
 - All inputs are interpreted literally (no automatic newline or whitespace handling)
-- For replace operations, oldText must appear EXACTLY ONCE in the file
+- For the replace operation, oldText must appear EXACTLY ONCE in the file
+- replace_all replaces every occurrence of oldText (non-overlapping, exact match only — no whitespace tolerance) and requires at least one match
 
 IMPORTANT: Each patch call must be less than 60k tokens total. For large file
 changes, break them into multiple smaller patch operations rather than one
@@ -239,8 +241,8 @@ large overwrite. Prefer incremental replace operations over full file overwrites
   "required": ["path", "newText"],
   "properties": {
     "path": {"type": "string", "description": "Path to the file to patch"},
-    "operation": {"type": "string", "enum": ["replace", "append_eof", "prepend_bof", "overwrite"], "description": "default: replace"},
-    "oldText": {"type": "string", "description": "Text to locate for the operation (must be unique in file, required for replace)"},
+    "operation": {"type": "string", "enum": ["replace", "replace_all", "append_eof", "prepend_bof", "overwrite"], "description": "default: replace"},
+    "oldText": {"type": "string", "description": "Text to locate for the operation (required for replace and replace_all; must be unique in file for replace)"},
     "newText": {"type": "string", "description": "The new text to use (empty for deletions)"}
   }
 }
@@ -969,9 +971,9 @@ func validatePatchInput(input PatchInput) (PatchInput, error) {
 		patch.Operation = "replace"
 	}
 	switch patch.Operation {
-	case "replace":
+	case "replace", "replace_all":
 		if patch.OldText == "" {
-			return PatchInput{}, fmt.Errorf("oldText is required for replace operation")
+			return PatchInput{}, fmt.Errorf("oldText is required for %s operation", patch.Operation)
 		}
 	case "append_eof", "prepend_bof", "overwrite":
 	default:
@@ -1019,6 +1021,7 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 	// TODO: when the model gets into a "cannot apply patch" cycle of doom, how do we get it unstuck?
 	// Also: how do we detect that it's in a cycle?
 	var patchErr error
+	occurrences := 0 // occurrences replaced by replace_all, for result feedback
 
 	var clipboardsModified []string
 	updateToClipboard := func(patch PatchRequest, spec *patchkit.Spec) {
@@ -1138,6 +1141,21 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 			// No dice.
 			patchErr = errors.Join(patchErr, fmt.Errorf("old text not found:\n%s", patch.OldText))
 			continue
+		case "replace_all":
+			if patch.OldText == "" {
+				// The guard also prevents an infinite loop: an empty
+				// oldText matches at every offset and never advances the scan.
+				return llm.ErrorfToolOut("patch %d: oldText cannot be empty for %s operation", i, patch.Operation)
+			}
+			specs := patchkit.All(origStr, patch.OldText, newText)
+			if len(specs) == 0 {
+				patchErr = errors.Join(patchErr, fmt.Errorf("old text not found:\n%s", patch.OldText))
+				continue
+			}
+			for _, spec := range specs {
+				spec.ApplyToEditBuf(buf)
+			}
+			occurrences += len(specs)
 		default:
 			return llm.ErrorfToolOut("unrecognized operation %q", patch.Operation)
 		}
@@ -1164,6 +1182,9 @@ func (p *PatchTool) patchRun(ctx context.Context, input *PatchInput) llm.ToolOut
 
 	response := new(strings.Builder)
 	fmt.Fprintf(response, "<patches_applied>all</patches_applied>\n")
+	if occurrences > 0 {
+		fmt.Fprintf(response, "Replaced %d occurrences.\n", occurrences)
+	}
 	for _, msg := range clipboardsModified {
 		fmt.Fprintln(response, msg)
 	}

@@ -40,6 +40,27 @@ func Unique(haystack, needle, replace string) (*Spec, int) {
 	return s, 1
 }
 
+// All generates patch specs to replace every non-overlapping occurrence of
+// needle in haystack with replace. It reports nil if there are no matches.
+func All(haystack, needle, replace string) []*Spec {
+	var specs []*Spec
+	for off := 0; ; {
+		idx := strings.Index(haystack[off:], needle)
+		if idx < 0 {
+			return specs
+		}
+		idx += off
+		specs = append(specs, &Spec{
+			Off: idx,
+			Len: len(needle),
+			Src: haystack,
+			Old: needle,
+			New: replace,
+		})
+		off = idx + len(needle)
+	}
+}
+
 // minimize reduces the size of the patch by removing any shared prefix and suffix.
 func (s *Spec) minimize() {
 	pre := commonPrefixLen(s.Old, s.New)
