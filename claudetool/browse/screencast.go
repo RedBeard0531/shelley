@@ -23,6 +23,8 @@ const (
 	ScreencastMaxFrames = 10000
 	// ScreencastMaxDuration is the maximum duration before auto-stopping.
 	ScreencastMaxDuration = 30 * time.Minute
+	// screencastStopTimeout bounds finalization if ffmpeg stops reading stdin.
+	screencastStopTimeout = 30 * time.Second
 	// ScreencastDir is the directory where screencast output files are stored.
 	ScreencastDir = "/tmp/shelley-screencasts"
 )
@@ -41,6 +43,8 @@ type screencastState struct {
 	// ffmpeg process — frames are piped directly to stdin.
 	ffmpegCmd *exec.Cmd
 	ffmpegIn  io.WriteCloser // ffmpeg's stdin pipe
+	writers   sync.WaitGroup // frame writes already in progress when stopping
+	stop      *screencastStopResult
 
 	// ackCh sends frame session IDs to the ack goroutine.
 	ackCh chan int64
@@ -48,6 +52,21 @@ type screencastState struct {
 	stopCh chan struct{}
 	// stopped is closed by the ack goroutine when it exits.
 	stopped chan struct{}
+}
+
+type screencastStopResult struct {
+	done chan struct{}
+	err  error // written before done is closed
+}
+
+type screencastStopResources struct {
+	result     *screencastStopResult
+	stopCh     chan struct{}
+	stopped    chan struct{}
+	ffmpegIn   io.WriteCloser
+	ffmpegCmd  *exec.Cmd
+	outputPath string
+	timeout    time.Duration
 }
 
 // handleScreencastFrame processes incoming screencast frame events.
@@ -65,14 +84,20 @@ func (b *BrowseTools) handleScreencastFrame(e *page.EventScreencastFrame) {
 		log.Printf("screencast: max frames (%d) reached, will auto-stop", ScreencastMaxFrames)
 		sc.mu.Unlock()
 		// Full teardown in a goroutine (can't call chromedp.Run from here).
-		go b.screencastStopInternal()
+		go func() {
+			if err := b.screencastStopInternal(); err != nil {
+				log.Printf("screencast: auto-stop failed: %v", err)
+			}
+		}()
 		return
 	}
 
 	sc.frameCount++
 	ffmpegIn := sc.ffmpegIn
 	ackCh := sc.ackCh
+	sc.writers.Add(1)
 	sc.mu.Unlock()
+	defer sc.writers.Done()
 
 	// Decode and pipe frame to ffmpeg outside the lock.
 	data, err := base64.StdEncoding.DecodeString(e.Data)
@@ -131,6 +156,15 @@ func (b *BrowseTools) screencastStart(format string, quality, maxWidth, maxHeigh
 		sc.mu.Unlock()
 		return "", fmt.Errorf("screencast is already active (session %s, %d frames so far) — stop it first", sid, fc)
 	}
+	if sc.stop != nil {
+		select {
+		case <-sc.stop.done:
+			sc.stop = nil
+		default:
+			sc.mu.Unlock()
+			return "", fmt.Errorf("previous screencast is still stopping")
+		}
+	}
 	sc.starting = true
 	sc.mu.Unlock()
 
@@ -174,22 +208,7 @@ func (b *BrowseTools) screencastStart(format string, quality, maxWidth, maxHeigh
 	}
 	outputPath := filepath.Join(ScreencastDir, sessionID+".mp4")
 
-	// Start ffmpeg: read frames from stdin, output MP4.
-	// -framerate 4: assume ~4fps from Chrome screencast (adjustable via every_nth_frame)
-	// -f mjpeg or image2pipe: tell ffmpeg the input format
-	// -c:v libx264 -pix_fmt yuv420p: widely compatible H.264 MP4
-	ffmpegCmd := exec.Command(
-		"ffmpeg",
-		"-y",
-		"-f", inputFormat,
-		"-framerate", "4",
-		"-i", "pipe:0",
-		"-c:v", "libx264",
-		"-pix_fmt", "yuv420p",
-		"-preset", "fast",
-		"-movflags", "+faststart",
-		outputPath,
-	)
+	ffmpegCmd := screencastFFmpegCommand(inputFormat, outputPath)
 	ffmpegIn, err := ffmpegCmd.StdinPipe()
 	if err != nil {
 		return "", fmt.Errorf("failed to create ffmpeg stdin pipe: %w", err)
@@ -239,55 +258,126 @@ func (b *BrowseTools) screencastStart(format string, quality, maxWidth, maxHeigh
 	sc.stopped = stoppedCh
 	sc.stopTimer = time.AfterFunc(ScreencastMaxDuration, func() {
 		log.Printf("screencast: max duration (%v) reached, auto-stopping", ScreencastMaxDuration)
-		b.screencastStopInternal()
+		if err := b.screencastStopInternal(); err != nil {
+			log.Printf("screencast: auto-stop failed: %v", err)
+		}
 	})
 	sc.mu.Unlock()
 
 	return sessionID, nil
 }
 
-// screencastStopInternal stops the screencast. Safe to call from any goroutine.
-func (b *BrowseTools) screencastStopInternal() {
-	sc := &b.screencast
-	sc.mu.Lock()
-	if !sc.active {
-		sc.mu.Unlock()
-		return
-	}
+// screencastFFmpegCommand encodes CDP's JPEG or PNG frames as H.264 MP4.
+func screencastFFmpegCommand(inputFormat, outputPath string) *exec.Cmd {
+	return exec.Command(
+		"ffmpeg",
+		"-nostdin",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-y",
+		"-f", inputFormat,
+		"-framerate", "4",
+		"-i", "pipe:0",
+		// yuv420p requires even dimensions. Padding preserves every source
+		// pixel (unlike cropping). FFmpeg's default autoscale keeps the
+		// output size fixed if the viewport changes mid-recording.
+		"-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0",
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-preset", "fast",
+		"-abort_on", "empty_output",
+		"-movflags", "+faststart",
+		outputPath,
+	)
+}
+
+// claimStopLocked assigns one caller the teardown. Caller must hold sc.mu.
+func (sc *screencastState) claimStopLocked() *screencastStopResources {
+	result := &screencastStopResult{done: make(chan struct{})}
+	sc.stop = result
 	sc.active = false
 	if sc.stopTimer != nil {
 		sc.stopTimer.Stop()
 		sc.stopTimer = nil
 	}
-	stopCh := sc.stopCh
-	stopped := sc.stopped
-	ffmpegIn := sc.ffmpegIn
-	ffmpegCmd := sc.ffmpegCmd
+	resources := &screencastStopResources{
+		result: result, stopCh: sc.stopCh, stopped: sc.stopped,
+		ffmpegIn: sc.ffmpegIn, ffmpegCmd: sc.ffmpegCmd, outputPath: sc.outputPath,
+		timeout: screencastStopTimeout,
+	}
 	sc.stopCh = nil
 	sc.ffmpegIn = nil
+	return resources
+}
+
+// screencastStopInternal stops the screencast, or waits for an in-progress
+// stop to finish. Safe to call from any goroutine.
+func (b *BrowseTools) screencastStopInternal() error {
+	sc := &b.screencast
+	sc.mu.Lock()
+	var resources *screencastStopResources
+	if sc.active {
+		resources = sc.claimStopLocked()
+	}
+	result := sc.stop
 	sc.mu.Unlock()
+	if resources != nil {
+		return b.finishScreencastStop(resources)
+	}
+	if result != nil {
+		<-result.done
+		return result.err
+	}
+	return nil
+}
+
+func (b *BrowseTools) finishScreencastStop(resources *screencastStopResources) (err error) {
+	defer func() {
+		resources.result.err = err
+		close(resources.result.done)
+	}()
+	// A stalled encoder can block a frame writer forever. Killing this
+	// recording's ffmpeg process closes the pipe and makes stop report an
+	// error instead of hanging the tool (or browser shutdown).
+	timer := time.AfterFunc(resources.timeout, func() {
+		if resources.ffmpegCmd != nil && resources.ffmpegCmd.Process != nil {
+			if err := resources.ffmpegCmd.Process.Kill(); err == nil {
+				log.Printf("screencast: ffmpeg did not finish within %v; killed encoder", resources.timeout)
+			}
+		}
+	})
+	defer timer.Stop()
 
 	// Signal the ack goroutine to stop.
-	if stopCh != nil {
-		close(stopCh)
+	if resources.stopCh != nil {
+		close(resources.stopCh)
 	}
-	if stopped != nil {
-		<-stopped
+	if resources.stopped != nil {
+		<-resources.stopped
 	}
 
-	// Close ffmpeg's stdin to signal EOF, then wait for it to finish encoding.
-	if ffmpegIn != nil {
-		ffmpegIn.Close()
+	// Finish any frame writes claimed before active was cleared, then
+	// signal EOF and wait for the MP4 to be finalized.
+	b.screencast.writers.Wait()
+	if resources.ffmpegIn != nil {
+		resources.ffmpegIn.Close()
 	}
-	if ffmpegCmd != nil {
-		if err := ffmpegCmd.Wait(); err != nil {
-			stderr := ""
-			if lb, ok := ffmpegCmd.Stderr.(*limitedBuffer); ok {
-				stderr = lb.String()
+	if resources.ffmpegCmd != nil {
+		if err := resources.ffmpegCmd.Wait(); err != nil {
+			if lb, ok := resources.ffmpegCmd.Stderr.(*limitedBuffer); ok {
+				return fmt.Errorf("ffmpeg failed: %w: %s", err, lb.String())
 			}
-			log.Printf("screencast: ffmpeg exited with error: %v; stderr: %s", err, stderr)
+			return fmt.Errorf("ffmpeg failed: %w", err)
 		}
 	}
+	info, err := os.Stat(resources.outputPath)
+	if err != nil {
+		return fmt.Errorf("screencast output %s: %w", resources.outputPath, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return fmt.Errorf("screencast output %s is not a nonempty regular file", resources.outputPath)
+	}
+	return nil
 }
 
 // screencastStop stops the screencast and returns summary info.
@@ -302,9 +392,12 @@ func (b *BrowseTools) screencastStop() (sessionID, outputPath string, frameCount
 	outputPath = sc.outputPath
 	frameCount = sc.frameCount
 	duration = time.Since(sc.startTime)
+	resources := sc.claimStopLocked()
 	sc.mu.Unlock()
 
-	b.screencastStopInternal()
+	if err := b.finishScreencastStop(resources); err != nil {
+		return sessionID, outputPath, frameCount, duration, fmt.Errorf("screencast %s failed after %d frames (MP4 at %s): %w", sessionID, frameCount, outputPath, err)
+	}
 	return sessionID, outputPath, frameCount, duration, nil
 }
 
@@ -319,23 +412,24 @@ func (b *BrowseTools) screencastStatus() (active bool, sessionID string, frameCo
 	return true, sc.sessionID, sc.frameCount, time.Since(sc.startTime)
 }
 
-// limitedBuffer is a bytes.Buffer that stops accepting writes after max bytes.
+// limitedBuffer keeps the end of ffmpeg's stderr, where the failure is reported.
 type limitedBuffer struct {
 	buf []byte
 	max int
 }
 
 func (lb *limitedBuffer) Write(p []byte) (int, error) {
-	remaining := lb.max - len(lb.buf)
-	if remaining > 0 {
-		n := len(p)
-		if n > remaining {
-			n = remaining
+	n := len(p)
+	if n >= lb.max {
+		lb.buf = append(lb.buf[:0], p[n-lb.max:]...)
+	} else {
+		if drop := len(lb.buf) + n - lb.max; drop > 0 {
+			lb.buf = lb.buf[drop:]
 		}
-		lb.buf = append(lb.buf, p[:n]...)
+		lb.buf = append(lb.buf, p...)
 	}
 	// Always report full length consumed so ffmpeg doesn't get write errors.
-	return len(p), nil
+	return n, nil
 }
 
 func (lb *limitedBuffer) String() string {

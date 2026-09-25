@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/url"
 	"os"
@@ -255,42 +254,22 @@ func (b *BrowseTools) idleShutdown() {
 // waiting for the chrome process to exit).
 func (b *BrowseTools) closeBrowserLocked() {
 	// Stop any active screencast before tearing down the browser.
-	// Extract state under lock, then do cleanup without holding it.
-	b.screencast.mu.Lock()
-	scActive := b.screencast.active
-	var scStopCh, scStopped chan struct{}
-	var scFfmpegIn io.WriteCloser
-	var scFfmpegCmd *exec.Cmd
-	if scActive {
-		b.screencast.active = false
-		if b.screencast.stopTimer != nil {
-			b.screencast.stopTimer.Stop()
-			b.screencast.stopTimer = nil
-		}
-		scStopCh = b.screencast.stopCh
-		scStopped = b.screencast.stopped
-		scFfmpegIn = b.screencast.ffmpegIn
-		scFfmpegCmd = b.screencast.ffmpegCmd
-		b.screencast.stopCh = nil
-		b.screencast.stopped = nil
-		b.screencast.ffmpegIn = nil
-		b.screencast.ffmpegCmd = nil
+	// If another caller already claimed the stop, wait for it instead of
+	// replaying a completed recording error as a new shutdown failure.
+	sc := &b.screencast
+	sc.mu.Lock()
+	var resources *screencastStopResources
+	if sc.active {
+		resources = sc.claimStopLocked()
 	}
-	b.screencast.mu.Unlock()
-
-	if scActive {
-		if scStopCh != nil {
-			close(scStopCh)
+	result := sc.stop
+	sc.mu.Unlock()
+	if resources != nil {
+		if err := b.finishScreencastStop(resources); err != nil {
+			log.Printf("screencast: browser shutdown failed to finalize recording: %v", err)
 		}
-		if scStopped != nil {
-			<-scStopped
-		}
-		if scFfmpegIn != nil {
-			scFfmpegIn.Close()
-		}
-		if scFfmpegCmd != nil {
-			scFfmpegCmd.Wait()
-		}
+	} else if result != nil {
+		<-result.done
 	}
 
 	if b.idleTimer != nil {
