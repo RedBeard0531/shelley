@@ -149,6 +149,8 @@ export interface ConversationWithStateForTS {
   search_snippet_message_id?: string;
   max_sequence_id: number;
   participants?: ConversationParticipant[] | null;
+  cost_usd?: number;
+  total_cost_usd?: number;
 }
 
 export type MessageType =

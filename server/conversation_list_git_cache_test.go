@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"reflect"
@@ -11,6 +12,28 @@ import (
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/gitstate"
 )
+
+// decorateServer is a Server whose conversation-cost cache is already warm:
+// these fixtures have no database, and the decorator prices conversations by
+// asking for one.
+func decorateServer() *Server {
+	return &Server{
+		conversationListGitCache: newConversationListGitCache(),
+		conversationCostsCache: &conversationCostsCache{
+			costs:   map[string]conversationCosts{},
+			expires: time.Now().Add(time.Hour),
+		},
+	}
+}
+
+func decorate(t testing.TB, s *Server, items []db.ConversationListItem) []ConversationWithState {
+	t.Helper()
+	rows, err := s.decorateConversations(context.Background(), items)
+	if err != nil {
+		t.Fatalf("decorateConversations: %v", err)
+	}
+	return rows
+}
 
 func TestConversationListGitCacheTTL(t *testing.T) {
 	cache := newConversationListGitCache()
@@ -156,8 +179,8 @@ func TestDecorateConversationsMixedCwds(t *testing.T) {
 			RunningBackgroundJobs: int64(i % 3),
 		}
 	}
-	server := &Server{conversationListGitCache: newConversationListGitCache()}
-	result := server.decorateConversations(items)
+	server := decorateServer()
+	result := decorate(t, server, items)
 	if len(result) != len(items) {
 		t.Fatalf("got %d rows, want %d", len(result), len(items))
 	}
@@ -185,7 +208,7 @@ func TestDecorateConversationsMixedCwds(t *testing.T) {
 		}
 		expiries[cwd] = entry.expiresAt
 	}
-	server.decorateConversations(items)
+	decorate(t, server, items)
 	for cwd, expiry := range expiries {
 		if !server.conversationListGitCache.entries[cwd].expiresAt.Equal(expiry) {
 			t.Fatalf("reuse extended expiry for %q", cwd)
@@ -202,10 +225,10 @@ func TestDecorateConversationsRevalidatesNextCall(t *testing.T) {
 		{Conversation: generated.Conversation{ConversationID: "first", Cwd: &repo}},
 		{Conversation: generated.Conversation{ConversationID: "second", Cwd: &repo}},
 	}
-	server := &Server{conversationListGitCache: newConversationListGitCache()}
-	before := server.decorateConversations(items)
+	server := decorateServer()
+	before := decorate(t, server, items)
 	runGit(t, repo, "-c", "user.email=a@b", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "two")
-	after := server.decorateConversations(items)
+	after := decorate(t, server, items)
 	state := gitstate.GetGitState(repo)
 	for i := range items {
 		if before[i].GitSubject != "one" || after[i].GitSubject != "two" ||
@@ -222,16 +245,16 @@ func BenchmarkDecorateConversationsRepeatedCwd(b *testing.B) {
 	runGit(b, repo, "pack-refs", "--all")
 	for _, count := range []int{1, 16} {
 		b.Run(fmt.Sprintf("rows=%d", count), func(b *testing.B) {
-			server := &Server{conversationListGitCache: newConversationListGitCache()}
+			server := decorateServer()
 			items := make([]db.ConversationListItem, count)
 			for i := range items {
 				items[i].Cwd = &repo
 			}
-			server.decorateConversations(items) // Warm the real packed-ref cache entry.
+			decorate(b, server, items) // Warm the real packed-ref cache entry.
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				server.decorateConversations(items)
+				decorate(b, server, items)
 			}
 		})
 	}
