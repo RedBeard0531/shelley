@@ -342,17 +342,18 @@
               :aria-label="
                 autoQueue
                   ? 'Queue message'
-                  : preferCompactAndSend
+                  : compactSendArmed
                     ? 'Compact and send'
                     : t('sendMessage')
               "
               data-testid="send-button"
+              @click="handleSendClick"
             >
               <div v-if="isDisabled || submitting" class="flex items-center justify-center">
                 <div class="spinner spinner-small message-send-spinner-white"></div>
               </div>
               <svg
-                v-else-if="preferCompactAndSend"
+                v-else-if="compactSendArmed"
                 class="compact-send-icon"
                 fill="none"
                 stroke="currentColor"
@@ -449,6 +450,9 @@
                   <line x1="3" y1="21" x2="10" y2="14" />
                 </svg>
                 Compact and send
+                <span class="overflow-menu-shortcut"
+                  ><kbd>{{ compactSendShortcut }}</kbd></span
+                >
               </button>
             </div>
           </div>
@@ -493,6 +497,7 @@ import RecordButton from "./RecordButton.vue";
 import RecordingPanel from "./RecordingPanel.vue";
 import type { RecordingDestination, RecordingMode, RecordingPreparation } from "./recordingDestination";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
+import { isMac } from "../../utils/menuShortcuts";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,
@@ -1038,12 +1043,33 @@ const canSubmit = computed(
 const isDraggingOver = computed(() => dragCounter.value > 0);
 const isShellMode = computed(() => message.value.trimStart().startsWith("!"));
 const isCommand = computed(() => /^[!/]/.test(message.value.trimStart()));
+// Compact-and-send never applies to commands.
+const canCompactAndSend = computed(() => canCompact.value && !isCommand.value);
 const preferCompactAndSend = computed(
   () =>
-    canCompact.value &&
-    !isCommand.value &&
+    canCompactAndSend.value &&
     props.compactSendLevel !== "" &&
     sendSelectedLevel.value !== props.compactSendLevel,
+);
+
+// Mod+Enter (⌘ on mac, Ctrl elsewhere) and mod+click on Send both compact and
+// send. While the mod is held the send button previews that, so track it from
+// every key event's modifier state (not e.key: Meta keyup reports metaKey=false
+// already, and the mod may be released while another key has focus).
+const modHeld = ref(false);
+const compactSendShortcut = isMac ? "\u2318\u21a9" : "Ctrl+Enter";
+function isModEvent(e: KeyboardEvent | MouseEvent) {
+  return e.metaKey || e.ctrlKey;
+}
+function trackMod(e: KeyboardEvent) {
+  modHeld.value = isModEvent(e);
+}
+function clearMod() {
+  modHeld.value = false;
+}
+// What the send button will do right now: threshold-driven or mod-held.
+const compactSendArmed = computed(
+  () => preferCompactAndSend.value || (modHeld.value && canCompactAndSend.value),
 );
 
 // --- @ filename autocomplete --------------------------------------------
@@ -1299,6 +1325,14 @@ watch([composerSession, () => props.compactSendLevel], () => {
   sendSelectedLevel.value = "";
 });
 
+// Mod+click on the send button compacts and sends; the form submit event
+// carries no modifier state, so intercept the click.
+function handleSendClick(e: MouseEvent) {
+  if (!isModEvent(e) || !canCompactAndSend.value || !canSubmit.value) return;
+  e.preventDefault();
+  void handleCompactAndSend();
+}
+
 async function handleSubmit(e: Event) {
   e.preventDefault();
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
@@ -1545,9 +1579,14 @@ function handleKeyDown(e: KeyboardEvent) {
     return;
   }
   if (e.key === "Enter" && !e.shiftKey) {
+    if (isModEvent(e) && canCompactAndSend.value) {
+      e.preventDefault();
+      if (canSubmit.value) void handleCompactAndSend();
+      return;
+    }
     // On mobile, let Enter create newlines since there's a send button.
     const isMobile = "ontouchstart" in window;
-    if (isMobile && !(e.ctrlKey || e.metaKey)) return;
+    if (isMobile && !isModEvent(e)) return;
     e.preventDefault();
     void handleSubmit(e);
   }
@@ -1577,6 +1616,9 @@ function handleViewportResize() {
 
 onMounted(() => {
   window.addEventListener("resize", handleResize);
+  window.addEventListener("keydown", trackMod);
+  window.addEventListener("keyup", trackMod);
+  window.addEventListener("blur", clearMod);
   if (typeof window !== "undefined" && window.visualViewport) {
     window.visualViewport.addEventListener("resize", handleViewportResize);
   }
@@ -1589,6 +1631,9 @@ onUnmounted(() => {
   recordingSubmission.value?.preparation.release();
   recordingSubmission.value = null;
   window.removeEventListener("resize", handleResize);
+  window.removeEventListener("keydown", trackMod);
+  window.removeEventListener("keyup", trackMod);
+  window.removeEventListener("blur", clearMod);
   if (typeof window !== "undefined" && window.visualViewport) {
     window.visualViewport.removeEventListener("resize", handleViewportResize);
   }

@@ -9184,7 +9184,7 @@ button.tour-visibility-control:focus-visible,
   color: var(--text-secondary);
 }
 
-/* Right-aligned keyboard hint on overflow-menu action rows. */
+/* Right-aligned keyboard hint on menu action rows (overflow menu, send menu). */
 .overflow-menu-shortcut {
   flex-shrink: 0;
   margin-left: auto;
