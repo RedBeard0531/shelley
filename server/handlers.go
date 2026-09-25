@@ -865,17 +865,24 @@ func (s *Server) decorateConversations(ctx context.Context, conversations []db.C
 	}
 
 	now := time.Now()
+	costs, err := s.conversationCostsCache.get(ctx, s, now)
+	if err != nil {
+		s.logger.Error("Failed to get conversation costs", "error", err)
+		costs = make(map[string]conversationCosts)
+	}
 	result := make([]ConversationWithState, len(conversations))
 	for i, item := range conversations {
 		conv := item.Conversation
 		cws := ConversationWithState{
-			Conversation:     conv,
-			Working:          conv.AgentWorking,
-			SubagentCount:    subagentCounts[conv.ConversationID],
+			Conversation: conv,
+			Working:      conv.AgentWorking,
+			SubagentCount: subagentCounts[conv.ConversationID],
 			Preview:          item.Preview,
 			PreviewUpdatedAt: item.PreviewUpdatedAt,
 			MaxSequenceID:    item.MaxSequenceID,
 			Participants:     item.Participants,
+			CostUsd:          costs[conv.ConversationID].direct,
+			TotalCostUsd:     costs[conv.ConversationID].total,
 		}
 		if conv.Cwd != nil {
 			entry, ok := s.conversationListGitCache.get(*conv.Cwd, now)
@@ -902,6 +909,74 @@ func (s *Server) decorateConversations(ctx context.Context, conversations []db.C
 			}
 		}
 		result[i] = cws
+	}
+	return result, nil
+}
+
+// conversationCosts prices every conversation's own LLM usage and folds each
+// conversation's cost into its ancestors, so a parent's total includes all
+// descendants (subagents, recursively). Mirrors the subagent-usage endpoint's
+// pricing: modelsdev token rates, with provider-reported cost_usd as the
+// fallback for unpriced models (handled inside db.GetConversationCosts).
+//
+// The pricing queries aggregate every agent message's usage JSON (~200ms on a
+// full history), and the list is recomputed on every stream update, so
+// results are cached briefly. Costs are estimates in the first place — a few
+// seconds of staleness is invisible next to the value they round to.
+type conversationCosts struct {
+	direct float64
+	total  float64
+}
+
+const conversationCostsCacheTTL = 5 * time.Second
+
+type conversationCostsCache struct {
+	mu      sync.Mutex
+	costs   map[string]conversationCosts
+	expires time.Time
+}
+
+func (c *conversationCostsCache) get(ctx context.Context, s *Server, now time.Time) (map[string]conversationCosts, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.costs != nil && now.Before(c.expires) {
+		return c.costs, nil
+	}
+	costs, err := s.conversationCosts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.costs = costs
+	c.expires = now.Add(conversationCostsCacheTTL)
+	return costs, nil
+}
+
+func (s *Server) conversationCosts(ctx context.Context) (map[string]conversationCosts, error) {
+	direct, err := s.db.GetConversationCosts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	parents, err := s.db.GetConversationParents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]conversationCosts, len(direct))
+	var total func(convID string) float64
+	total = func(convID string) float64 {
+		if c, ok := result[convID]; ok {
+			return c.total
+		}
+		t := direct[convID]
+		for child, parent := range parents {
+			if parent == convID {
+				t += total(child)
+			}
+		}
+		result[convID] = conversationCosts{direct: direct[convID], total: t}
+		return t
+	}
+	for convID := range direct {
+		total(convID)
 	}
 	return result, nil
 }

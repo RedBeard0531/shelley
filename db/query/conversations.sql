@@ -474,6 +474,50 @@ FROM conversations
 WHERE parent_conversation_id IS NOT NULL
 GROUP BY parent_conversation_id;
 
+-- name: GetConversationParents :many
+SELECT conversation_id, parent_conversation_id
+FROM conversations
+WHERE parent_conversation_id IS NOT NULL;
+
+-- name: GetConversationUsageByModel :many
+-- Per-conversation, per-model LLM usage over every conversation's own agent
+-- messages. Powers the conversation list's per-row price: the server prices
+-- the token totals via modelsdev rates (falling back to the reported
+-- cost_usd for unpriced models) and folds descendant costs into parents'
+-- totals. Mirrors GetSubtreeUsage but keyed by conversation.
+SELECT
+  m.conversation_id,
+  COALESCE(m.model_name, '') AS model_name,
+  COALESCE(m.llm_api_url, '') AS llm_api_url,
+  COUNT(*) AS llm_calls,
+  CAST(COALESCE(SUM(m.usage_data ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cost_usd'), 0) AS REAL) AS cost_usd
+FROM messages m
+WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
+GROUP BY m.conversation_id, COALESCE(m.model_name, ''), COALESCE(m.llm_api_url, '');
+
+-- name: GetConversationOtherUsageByModel :many
+-- Indirect LLM usage (messages.other_usage_data entries: compaction, slug
+-- generation, ...) keyed by conversation. Folded into the drawer price
+-- alongside GetConversationUsageByModel, matching handleSubagentUsage.
+SELECT
+  m.conversation_id,
+  CAST(COALESCE(je.value ->> 'model', '') AS TEXT) AS model_name,
+  CAST(COALESCE(je.value ->> 'url', '') AS TEXT) AS llm_api_url,
+  COUNT(*) AS llm_calls,
+  CAST(COALESCE(SUM(je.value ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cost_usd'), 0) AS REAL) AS cost_usd
+FROM messages m
+CROSS JOIN json_each(m.other_usage_data) je
+WHERE m.other_usage_data IS NOT NULL
+GROUP BY m.conversation_id, COALESCE(je.value ->> 'model', ''), COALESCE(je.value ->> 'url', '');
+
 -- name: UpdateConversationModel :exec
 UPDATE conversations
 SET model = ?

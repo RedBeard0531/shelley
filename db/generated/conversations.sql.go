@@ -397,6 +397,105 @@ func (q *Queries) GetConversationOptions(ctx context.Context, conversationID str
 	return conversation_options, err
 }
 
+const getConversationOtherUsageByModel = `-- name: GetConversationOtherUsageByModel :many
+SELECT
+  m.conversation_id,
+  CAST(COALESCE(je.value ->> 'model', '') AS TEXT) AS model_name,
+  CAST(COALESCE(je.value ->> 'url', '') AS TEXT) AS llm_api_url,
+  COUNT(*) AS llm_calls,
+  CAST(COALESCE(SUM(je.value ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
+  CAST(COALESCE(SUM(je.value ->> 'cost_usd'), 0) AS REAL) AS cost_usd
+FROM messages m
+CROSS JOIN json_each(m.other_usage_data) je
+WHERE m.other_usage_data IS NOT NULL
+GROUP BY m.conversation_id, COALESCE(je.value ->> 'model', ''), COALESCE(je.value ->> 'url', '')
+`
+
+type GetConversationOtherUsageByModelRow struct {
+	ConversationID           string  `json:"conversation_id"`
+	ModelName                string  `json:"model_name"`
+	LlmApiUrl                string  `json:"llm_api_url"`
+	LlmCalls                 int64   `json:"llm_calls"`
+	InputTokens              int64   `json:"input_tokens"`
+	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64   `json:"cache_read_input_tokens"`
+	OutputTokens             int64   `json:"output_tokens"`
+	CostUsd                  float64 `json:"cost_usd"`
+}
+
+// Indirect LLM usage (messages.other_usage_data entries: compaction, slug
+// generation, ...) keyed by conversation. Folded into the drawer price
+// alongside GetConversationUsageByModel, matching handleSubagentUsage.
+func (q *Queries) GetConversationOtherUsageByModel(ctx context.Context) ([]GetConversationOtherUsageByModelRow, error) {
+	rows, err := q.db.QueryContext(ctx, getConversationOtherUsageByModel)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetConversationOtherUsageByModelRow{}
+	for rows.Next() {
+		var i GetConversationOtherUsageByModelRow
+		if err := rows.Scan(
+			&i.ConversationID,
+			&i.ModelName,
+			&i.LlmApiUrl,
+			&i.LlmCalls,
+			&i.InputTokens,
+			&i.CacheCreationInputTokens,
+			&i.CacheReadInputTokens,
+			&i.OutputTokens,
+			&i.CostUsd,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getConversationParents = `-- name: GetConversationParents :many
+SELECT conversation_id, parent_conversation_id
+FROM conversations
+WHERE parent_conversation_id IS NOT NULL
+`
+
+type GetConversationParentsRow struct {
+	ConversationID       string  `json:"conversation_id"`
+	ParentConversationID *string `json:"parent_conversation_id"`
+}
+
+func (q *Queries) GetConversationParents(ctx context.Context) ([]GetConversationParentsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getConversationParents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetConversationParentsRow{}
+	for rows.Next() {
+		var i GetConversationParentsRow
+		if err := rows.Scan(&i.ConversationID, &i.ParentConversationID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getConversationQueuedMessages = `-- name: GetConversationQueuedMessages :one
 SELECT queued_messages FROM conversations
 WHERE conversation_id = ?
@@ -407,6 +506,72 @@ func (q *Queries) GetConversationQueuedMessages(ctx context.Context, conversatio
 	var queued_messages string
 	err := row.Scan(&queued_messages)
 	return queued_messages, err
+}
+
+const getConversationUsageByModel = `-- name: GetConversationUsageByModel :many
+SELECT
+  m.conversation_id,
+  COALESCE(m.model_name, '') AS model_name,
+  COALESCE(m.llm_api_url, '') AS llm_api_url,
+  COUNT(*) AS llm_calls,
+  CAST(COALESCE(SUM(m.usage_data ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cache_read_input_tokens'), 0) AS INTEGER) AS cache_read_input_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'output_tokens'), 0) AS INTEGER) AS output_tokens,
+  CAST(COALESCE(SUM(m.usage_data ->> 'cost_usd'), 0) AS REAL) AS cost_usd
+FROM messages m
+WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
+GROUP BY m.conversation_id, COALESCE(m.model_name, ''), COALESCE(m.llm_api_url, '')
+`
+
+type GetConversationUsageByModelRow struct {
+	ConversationID           string  `json:"conversation_id"`
+	ModelName                string  `json:"model_name"`
+	LlmApiUrl                string  `json:"llm_api_url"`
+	LlmCalls                 int64   `json:"llm_calls"`
+	InputTokens              int64   `json:"input_tokens"`
+	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64   `json:"cache_read_input_tokens"`
+	OutputTokens             int64   `json:"output_tokens"`
+	CostUsd                  float64 `json:"cost_usd"`
+}
+
+// Per-conversation, per-model LLM usage over every conversation's own agent
+// messages. Powers the conversation list's per-row price: the server prices
+// the token totals via modelsdev rates (falling back to the reported
+// cost_usd for unpriced models) and folds descendant costs into parents'
+// totals. Mirrors GetSubtreeUsage but keyed by conversation.
+func (q *Queries) GetConversationUsageByModel(ctx context.Context) ([]GetConversationUsageByModelRow, error) {
+	rows, err := q.db.QueryContext(ctx, getConversationUsageByModel)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetConversationUsageByModelRow{}
+	for rows.Next() {
+		var i GetConversationUsageByModelRow
+		if err := rows.Scan(
+			&i.ConversationID,
+			&i.ModelName,
+			&i.LlmApiUrl,
+			&i.LlmCalls,
+			&i.InputTokens,
+			&i.CacheCreationInputTokens,
+			&i.CacheReadInputTokens,
+			&i.OutputTokens,
+			&i.CostUsd,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getSubagentCounts = `-- name: GetSubagentCounts :many

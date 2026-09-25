@@ -103,6 +103,12 @@ type ConversationWithState struct {
 	// terms are wrapped in \x02..\x03 sentinels (see db.SnippetMarkStart /
 	// SnippetMarkEnd) so the UI can substitute spans without HTML injection.
 	SearchSnippet string `json:"search_snippet,omitempty"`
+	// CostUsd is the conversation's own estimated LLM spend in USD (agent
+	// messages plus indirect usage). 0 when there is no usage yet.
+	CostUsd float64 `json:"cost_usd,omitempty"`
+	// TotalCostUsd is CostUsd plus all descendants' costs — i.e. the main
+	// session's price plus its subagents'. 0 when there is no usage yet.
+	TotalCostUsd float64 `json:"total_cost_usd,omitempty"`
 }
 
 // StreamResponse represents the response format for conversation streaming
@@ -378,6 +384,7 @@ type Server struct {
 	notifDispatcher          *notifications.Dispatcher
 	conversationListStream   *conversationListStream
 	conversationListGitCache *conversationListGitCache
+	conversationCostsCache   *conversationCostsCache
 	integrationSkills        *integrationSkillCache
 	// fileListCache memoizes working-directory file listings for the fuzzy
 	// file finder (/api/find-files) so a burst of queries lists the tree once.
@@ -467,6 +474,7 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 	s.conversationListStream = newConversationListStream(s)
 	s.streamPub = subpub.New[StreamResponse]()
 	s.conversationListGitCache = newConversationListGitCache()
+	s.conversationCostsCache = &conversationCostsCache{}
 	s.fileListCache = newFileListCache()
 	s.integrationSkills = newIntegrationSkillCache(logger, currentIntegrationSkillDiscoverer(logger))
 

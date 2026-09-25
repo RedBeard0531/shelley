@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/models/modelsdev"
 
 	_ "modernc.org/sqlite"
 )
@@ -2392,6 +2393,68 @@ func (db *DB) GetSubagentCounts(ctx context.Context) (map[string]int64, error) {
 		}
 	}
 	return counts, nil
+}
+
+// GetConversationCosts returns each conversation's own LLM cost in USD
+// (direct agent messages plus indirect other-usage), priced via modelsdev
+// rates with the provider-reported cost_usd as the fallback for unpriced
+// models.
+func (db *DB) GetConversationCosts(ctx context.Context) (map[string]float64, error) {
+	direct := make(map[string]float64)
+	fold := func(convID, model, url string, in, cacheWrite, cacheRead, out int64, costUsd float64) {
+		if c, found := modelsdev.LookupCost(url, model); found {
+			direct[convID] += float64(in)*c.Input/1e6 +
+				float64(cacheWrite)*c.CacheWrite/1e6 +
+				float64(cacheRead)*c.CacheRead/1e6 +
+				float64(out)*c.Output/1e6
+		} else {
+			direct[convID] += costUsd
+		}
+	}
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		q := generated.New(rx.Conn())
+		rows, err := q.GetConversationUsageByModel(ctx)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			fold(r.ConversationID, r.ModelName, r.LlmApiUrl, r.InputTokens, r.CacheCreationInputTokens, r.CacheReadInputTokens, r.OutputTokens, r.CostUsd)
+		}
+		otherRows, err := q.GetConversationOtherUsageByModel(ctx)
+		if err != nil {
+			return err
+		}
+		for _, r := range otherRows {
+			fold(r.ConversationID, r.ModelName, r.LlmApiUrl, r.InputTokens, r.CacheCreationInputTokens, r.CacheReadInputTokens, r.OutputTokens, r.CostUsd)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return direct, nil
+}
+
+// GetConversationParents returns a map of conversation_id ->
+// parent_conversation_id for all conversations that have a parent.
+func (db *DB) GetConversationParents(ctx context.Context) (map[string]string, error) {
+	var rows []generated.GetConversationParentsRow
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		q := generated.New(rx.Conn())
+		var err error
+		rows, err = q.GetConversationParents(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	parents := make(map[string]string, len(rows))
+	for _, r := range rows {
+		if r.ParentConversationID != nil {
+			parents[r.ConversationID] = *r.ParentConversationID
+		}
+	}
+	return parents, nil
 }
 
 // GetMaxSequenceIDsForAllConversations returns a map of conversation_id -> max sequence_id.

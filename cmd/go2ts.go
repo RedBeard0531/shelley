@@ -137,6 +137,8 @@ type conversationWithStateForTS struct {
 	SearchSnippet        string                       `json:"search_snippet,omitempty"`
 	MaxSequenceID        int64                        `json:"max_sequence_id"`
 	Participants         []db.ConversationParticipant `json:"participants,omitempty"`
+	CostUsd              float64                      `json:"cost_usd,omitempty"`
+	TotalCostUsd         float64                      `json:"total_cost_usd,omitempty"`
 }
 
 type streamResponseForTS struct {

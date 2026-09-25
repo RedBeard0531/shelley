@@ -199,6 +199,17 @@
 
       <div class="conversation-meta">
         <span class="conversation-date">{{ ctx.formatDate(conversation.updated_at) }}</span>
+        <!-- Session price: own spend, or main/total when the session has
+             subagents. The separating slash is dimmed so each price reads
+             on its own. Hidden while there is no usage to price. -->
+        <span v-if="costParts" class="conversation-cost" :title="costTitle"
+          >{{ costParts.main }}<span
+            v-if="costParts.total"
+            class="conversation-cost-slash"
+            aria-hidden="true"
+            >/</span
+          >{{ costParts.total ?? "" }}</span
+        >
         <span
           v-if="conversation.cwd && ctx.groupBy.value !== 'cwd'"
           class="conversation-cwd ellipsis-start"
@@ -379,6 +390,7 @@
           <span class="conversation-date drawer-subagent-date">{{
             ctx.formatDate(sub.updated_at)
           }}</span>
+          <span v-if="subCostLabel(sub)" class="conversation-cost">{{ subCostLabel(sub) }}</span>
         </div>
       </div>
     </div>
@@ -411,6 +423,7 @@ import {
   renderSnippetSegments,
 } from "./conversationDrawerShared";
 import { isTagSelected } from "../../utils/tagFilter";
+import { formatUsd } from "../../utils/tokenCostGraph";
 import { perfCount } from "../../utils/perf";
 
 const props = defineProps<{
@@ -520,6 +533,27 @@ const subagentCount = computed(() =>
   isDraft.value ? 0 : conversationSubagents.value.length || convState.value.subagent_count || 0,
 );
 const hasSubagents = computed(() => subagentCount.value > 0);
+// Session price shown next to the date. With subagents the row reads
+// main/total (no labels — the tooltip spells them out); without, just the
+// session's own spend. Hidden while there is nothing to price.
+const costParts = computed(() => {
+  if (isDraft.value) return null;
+  const main = convState.value.cost_usd ?? 0;
+  const total = convState.value.total_cost_usd ?? 0;
+  if (total <= 0) return null;
+  if (hasSubagents.value && total > main) return { main: formatUsd(main), total: formatUsd(total) };
+  return { main: formatUsd(total) };
+});
+const costTitle = computed(() => {
+  if (!costParts.value) return "";
+  return costParts.value.total
+    ? `Estimated spend — main ${costParts.value.main}, ${costParts.value.total} with subagents`
+    : "Estimated session cost";
+});
+// Subagent rows always show their own spend (subagents never nest: the
+// server caps depth at 1).
+const subCostLabel = (sub: ConversationWithState): string =>
+  (sub.cost_usd ?? 0) > 0 ? formatUsd(sub.cost_usd ?? 0) : "";
 // Live terminals pinned to this conversation. Badged only when > 1.
 const terminalCount = computed(
   () => ctx.terminalCounts.value[props.conversation.conversation_id] ?? 0,

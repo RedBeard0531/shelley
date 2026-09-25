@@ -1351,6 +1351,24 @@ body {
   flex-shrink: 0;
 }
 
+/* Session price, right of the date. Same muted secondary as the git-subject
+   row — less loud than the title, more visible than the tertiary date — with
+   tabular numerals so rows line up; the main/total separator is dimmed back
+   to tertiary so each price reads as its own token. */
+.conversation-item .conversation-cost {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.conversation-item .conversation-cost-slash {
+  color: var(--text-tertiary);
+}
+
+.conversation-item.active .conversation-cost {
+  color: rgba(255, 255, 255, 0.9);
+}
+
 .conversation-item.active .conversation-meta {
   color: rgba(255, 255, 255, 0.8);
 }
