@@ -236,10 +236,10 @@ large overwrite. Prefer incremental replace operations over full file overwrites
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["path", "operation", "newText"],
+  "required": ["path", "newText"],
   "properties": {
     "path": {"type": "string", "description": "Path to the file to patch"},
-    "operation": {"type": "string", "enum": ["replace", "append_eof", "prepend_bof", "overwrite"]},
+    "operation": {"type": "string", "enum": ["replace", "append_eof", "prepend_bof", "overwrite"], "description": "default: replace"},
     "oldText": {"type": "string", "description": "Text to locate for the operation (must be unique in file, required for replace)"},
     "newText": {"type": "string", "description": "The new text to use (empty for deletions)"}
   }
@@ -962,14 +962,18 @@ func validatePatchInput(input PatchInput) (PatchInput, error) {
 	if len(input.Patches) != 1 {
 		return PatchInput{}, fmt.Errorf("patch input must contain exactly one modification, got %d", len(input.Patches))
 	}
-	switch patch := input.Patches[0]; patch.Operation {
+	patch := input.Patches[0]
+	if patch.Operation == "" {
+		// Default to replace; the replace case reports a missing oldText.
+		input.Patches[0].Operation = "replace"
+		patch.Operation = "replace"
+	}
+	switch patch.Operation {
 	case "replace":
 		if patch.OldText == "" {
 			return PatchInput{}, fmt.Errorf("oldText is required for replace operation")
 		}
 	case "append_eof", "prepend_bof", "overwrite":
-	case "":
-		return PatchInput{}, fmt.Errorf("operation is required")
 	default:
 		return PatchInput{}, fmt.Errorf("unrecognized operation %q", patch.Operation)
 	}
