@@ -275,6 +275,79 @@ func TestPatchTool_BasicOperations(t *testing.T) {
 	}
 }
 
+func TestPatchTool_ReplaceAll(t *testing.T) {
+	tempDir := t.TempDir()
+	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
+	ctx := t.Context()
+
+	testFile := filepath.Join(tempDir, "test.txt")
+	input := PatchInput{
+		Path: testFile,
+		Patches: []PatchRequest{{
+			Operation: "overwrite",
+			NewText:   "a b a\nb a b\n",
+		}},
+	}
+	if result := patch.runInput(ctx, input); result.Error != nil {
+		t.Fatalf("overwrite failed: %v", result.Error)
+	}
+
+	input.Patches = []PatchRequest{{
+		Operation: "replace_all",
+		OldText:   "a",
+		NewText:   "c",
+	}}
+	if result := patch.runInput(ctx, input); result.Error != nil {
+		t.Fatalf("replace_all failed: %v", result.Error)
+	}
+
+	content, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	expected := "c b c\nb c b\n"
+	if string(content) != expected {
+		t.Errorf("expected %q, got %q", expected, string(content))
+	}
+
+	// Occurrences do not overlap: "aa" in "aaaa" matches twice, not three times.
+	input.Patches = []PatchRequest{{Operation: "overwrite", NewText: "aaaa"}}
+	if result := patch.runInput(ctx, input); result.Error != nil {
+		t.Fatalf("overwrite failed: %v", result.Error)
+	}
+	input.Patches = []PatchRequest{{Operation: "replace_all", OldText: "aa", NewText: "b"}}
+	if result := patch.runInput(ctx, input); result.Error != nil {
+		t.Fatalf("replace_all failed: %v", result.Error)
+	}
+
+	// newText may contain oldText without rescanning into an infinite loop.
+	input.Patches = []PatchRequest{{Operation: "replace_all", OldText: "b", NewText: "bb"}}
+	if result := patch.runInput(ctx, input); result.Error != nil {
+		t.Fatalf("replace_all failed: %v", result.Error)
+	}
+	content, _ = os.ReadFile(testFile)
+	expected = "bbbb"
+	if string(content) != expected {
+		t.Errorf("expected %q, got %q", expected, string(content))
+	}
+
+	// replace_all with no matches is an error and leaves the file unchanged.
+	before, _ := os.ReadFile(testFile)
+	input.Patches = []PatchRequest{{
+		Operation: "replace_all",
+		OldText:   "zzz",
+		NewText:   "c",
+	}}
+	result := patch.runInput(ctx, input)
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "old text not found") {
+		t.Errorf("expected 'old text not found' error, got %v", result.Error)
+	}
+	after, _ := os.ReadFile(testFile)
+	if string(before) != string(after) {
+		t.Errorf("failed replace_all modified the file: %q -> %q", before, after)
+	}
+}
+
 func TestPatchTool_ClipboardOperations(t *testing.T) {
 	tempDir := t.TempDir()
 	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
@@ -1630,10 +1703,20 @@ func TestPatchToolExposesAndAcceptsComplexInput(t *testing.T) {
 		t.Fatalf("content = %q", content)
 	}
 
+	result = tool.Run(t.Context(), json.RawMessage(`{"path":"complex.txt","operation":"replace_all","oldText":"l","newText":"L"}`))
+	if result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	content, _ = os.ReadFile(filepath.Join(patch.getWorkingDir(), "complex.txt"))
+	if string(content) != "heLLo" {
+		t.Fatalf("content = %q", content)
+	}
+
 	for _, input := range []string{
 		`{"path":"complex.txt"}`,
 		`{"path":"complex.txt","patches":[{"operation":"overwrite","newText":"x"}]}`,
 		`{"path":"complex.txt","operation":"replace"}`,
+		`{"path":"complex.txt","operation":"replace_all"}`,
 		`{"path":"complex.txt","operation":"wat"}`,
 	} {
 		if result := tool.Run(t.Context(), json.RawMessage(input)); result.Error == nil {

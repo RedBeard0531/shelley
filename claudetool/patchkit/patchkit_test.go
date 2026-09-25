@@ -921,3 +921,54 @@ func TestImproveNeedle(t *testing.T) {
 		})
 	}
 }
+
+func TestAll(t *testing.T) {
+	tests := []struct {
+		name      string
+		haystack  string
+		needle    string
+		replace   string
+		wantSpecs []Spec
+	}{
+		{
+			name:     "multiple_matches",
+			haystack: "a b a\nb a b\n",
+			needle:   "a",
+			replace:  "c",
+			wantSpecs: []Spec{
+				{Off: 0, Len: 1},
+				{Off: 4, Len: 1},
+				{Off: 8, Len: 1},
+			},
+		},
+		{
+			name:      "non_overlapping",
+			haystack:  "aaaa",
+			needle:    "aa",
+			replace:   "b",
+			wantSpecs: []Spec{{Off: 0, Len: 2}, {Off: 2, Len: 2}},
+		},
+		{
+			name:      "no_match",
+			haystack:  "hello",
+			needle:    "zzz",
+			replace:   "x",
+			wantSpecs: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			specs := All(tt.haystack, tt.needle, tt.replace)
+			if len(specs) != len(tt.wantSpecs) {
+				t.Fatalf("All() returned %d specs, want %d", len(specs), len(tt.wantSpecs))
+			}
+			for i, spec := range specs {
+				if spec.Off != tt.wantSpecs[i].Off || spec.Len != tt.wantSpecs[i].Len {
+					t.Errorf("spec %d = {Off: %d, Len: %d}, want {Off: %d, Len: %d}",
+						i, spec.Off, spec.Len, tt.wantSpecs[i].Off, tt.wantSpecs[i].Len)
+				}
+			}
+		})
+	}
+}
