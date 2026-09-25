@@ -2849,6 +2849,20 @@ diffs-container {
   --diffs-font-family: var(--font-mono);
   --diffs-font-size: 12px;
   --diffs-line-height: 18px;
+  /* Whole-line add/remove backgrounds are computed by mixing
+     --diffs-bg-{addition,deletion}-override over the base background. The
+     library default mixes the opaque addition/deletion base color, which is
+     intense enough to fight syntax-highlighted (e.g. comment) text. Use the
+     translucent recipe of the word-level emphasis highlight instead, so
+     full-line changes read as softly as partial-line ones. Hues match the
+     library's default --diffs-{added,deleted}-{light,dark} colors. */
+  --diffs-bg-addition-override: rgba(13, 190, 78, 0.15);
+  --diffs-bg-deletion-override: rgba(255, 46, 63, 0.15);
+}
+
+.dark diffs-container {
+  --diffs-bg-addition-override: rgba(94, 204, 113, 0.2);
+  --diffs-bg-deletion-override: rgba(255, 103, 98, 0.2);
 }
 
 /* Target the diffs-container custom element from @pierre/diffs */
