@@ -275,6 +275,53 @@ func TestPatchTool_BasicOperations(t *testing.T) {
 	}
 }
 
+func TestPatchTool_ReplaceAll(t *testing.T) {
+	tempDir := t.TempDir()
+	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
+	ctx := t.Context()
+
+	testFile := filepath.Join(tempDir, "test.txt")
+	input := PatchInput{
+		Path: testFile,
+		Patches: []PatchRequest{{
+			Operation: "overwrite",
+			NewText:   "a b a\nb a b\n",
+		}},
+	}
+	if result := patch.runInput(ctx, input); result.Error != nil {
+		t.Fatalf("overwrite failed: %v", result.Error)
+	}
+
+	input.Patches = []PatchRequest{{
+		Operation: "replace_all",
+		OldText:   "a",
+		NewText:   "c",
+	}}
+	if result := patch.runInput(ctx, input); result.Error != nil {
+		t.Fatalf("replace_all failed: %v", result.Error)
+	}
+
+	content, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	expected := "c b c\nb c b\n"
+	if string(content) != expected {
+		t.Errorf("expected %q, got %q", expected, string(content))
+	}
+
+	// replace_all with no matches is an error.
+	input.Patches = []PatchRequest{{
+		Operation: "replace_all",
+		OldText:   "zzz",
+		NewText:   "c",
+	}}
+	result := patch.runInput(ctx, input)
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "old text not found") {
+		t.Errorf("expected 'old text not found' error, got %v", result.Error)
+	}
+}
+
 func TestPatchTool_ClipboardOperations(t *testing.T) {
 	tempDir := t.TempDir()
 	patch := &PatchTool{WorkingDir: NewMutableWorkingDir(tempDir)}
