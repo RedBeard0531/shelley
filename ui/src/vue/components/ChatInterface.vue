@@ -534,6 +534,8 @@ import {
   loadCachedDraft,
   saveCachedDraft,
   clearCachedDraft,
+  rebaseCachedDraft,
+  markCachedDraftPending,
   reconcileComposerDraft,
 } from "../../services/draftCache";
 import { setFaviconStatus } from "../../services/favicon";
@@ -890,10 +892,7 @@ function putDraftModel(draftId: string, model: string) {
       if (draftConvId === draftId && conv.updated_at > draftSyncedAt) {
         draftSyncedAt = conv.updated_at;
       }
-      const cur = loadCachedDraft(draftId);
-      if (cur && conv.updated_at > cur.basedOn) {
-        saveCachedDraft(draftId, cur.value, conv.updated_at);
-      }
+      rebaseCachedDraft(draftId, conv.updated_at);
     })
     .catch(() => {})
     .finally(() => {
@@ -3003,12 +3002,13 @@ function prepareRecording(text: string): RecordingPreparation {
             error.value = null;
             const suffix = context.trim();
             try {
-              await api.sendMessage(conversationId, {
-                message: `${SLASH_COMMANDS.TRANSCRIPTION.command} ${path}${suffix ? `\n${suffix}` : ""}`,
-                ...options,
-              });
+              await postSubmittedDraft(conversationId, text, () =>
+                api.sendMessage(conversationId, {
+                  message: `${SLASH_COMMANDS.TRANSCRIPTION.command} ${path}${suffix ? `\n${suffix}` : ""}`,
+                  ...options,
+                }),
+              );
               accepted = true;
-              clearSubmittedDraft(conversationId, text);
             } catch (err) {
               const detail = err instanceof Error ? err.message : String(err);
               error.value = `Failed to submit recording to ${conversationId}: ${detail}. Retry in that conversation with /transcription ${path}`;
@@ -3032,6 +3032,31 @@ function prepareRecording(text: string): RecordingPreparation {
 function handleRecordingUnsent(path: string, cause: unknown) {
   const detail = cause instanceof Error ? cause.message : String(cause);
   error.value = `${detail}. Retry with /transcription ${path}`;
+}
+
+// Conversation ids with a send from THIS tab in flight. Their pending mirror
+// entries are ours: the reconcile watch must keep treating them as the
+// composer's own text (see CachedDraft.pending), so an echo cannot clear a
+// composer whose send may yet fail.
+const ownSends = new Set<string>();
+
+// postSubmittedDraft runs the chat POST for a composer's text with its mirror
+// entry flagged pending, then clears the accepted text, or unflags it if the
+// POST fails.
+async function postSubmittedDraft<T>(conversationId: string, text: string, post: () => Promise<T>): Promise<T> {
+  const restore = markCachedDraftPending(conversationId, text);
+  ownSends.add(conversationId);
+  let result: T;
+  try {
+    result = await post();
+  } catch (err) {
+    restore();
+    throw err;
+  } finally {
+    ownSends.delete(conversationId);
+  }
+  clearSubmittedDraft(conversationId, text);
+  return result;
 }
 
 function clearSubmittedDraft(conversationId: string, text: string) {
@@ -3326,11 +3351,11 @@ async function sendMessage(message: string) {
     if (!effectiveId && props.onFirstMessage) {
       await sendFirstMessage(message.trim());
     } else if (effectiveId) {
-      const accepted = await api.sendMessage(effectiveId, request);
-      clearSubmittedDraft(effectiveId, submittedDraft);
+      const id = effectiveId;
+      const accepted = await postSubmittedDraft(id, submittedDraft, () => api.sendMessage(id, request));
       // A queued message starts no turn (e.g. it waits behind a failed
       // recording), so drop the optimistic indicator for the server's state.
-      if (accepted.status === "queued") syncTransientFromStore(effectiveId);
+      if (accepted.status === "queued") syncTransientFromStore(id);
     }
   } catch (err) {
     console.error("Failed to send message:", err);
@@ -3697,10 +3722,7 @@ async function saveDraft(value: string) {
       if (draftConvId === id && conv.updated_at > draftSyncedAt) {
         draftSyncedAt = conv.updated_at;
       }
-      const cur = loadCachedDraft(id);
-      if (cur && conv.updated_at > cur.basedOn) {
-        saveCachedDraft(id, cur.value, conv.updated_at);
-      }
+      rebaseCachedDraft(id, conv.updated_at);
     }
     return;
   }
@@ -4298,20 +4320,35 @@ watch(
     () => props.currentConversation?.updated_at,
     lazyDraftId,
   ],
-  () => {
+  ([id, isDraft], prev) => {
     perfCount("chat.draftReconcileWatch");
+    const sessionId = props.conversationId ?? null;
+    const cached = loadCachedDraft(sessionId);
+    // The row flipping is_draft true->false in place is the draft being sent.
+    const [prevId, prevIsDraft, prevDraft] = prev ?? [];
+    const promotedFrom =
+      prev && id === prevId && prevIsDraft === true && isDraft === false ? prevDraft || "" : null;
     const result = reconcileComposerDraft({
-      conversationId: props.conversationId ?? null,
+      conversationId: sessionId,
       lazyDraftId: lazyDraftId.value,
-      isDraft: !!props.currentConversation?.is_draft,
+      isDraft: !!isDraft,
       serverDraft: props.currentConversation?.draft || "",
       serverUpdatedAt: props.currentConversation?.updated_at || "",
-      cached: loadCachedDraft(props.conversationId ?? null),
+      cached,
+      ownsPending: sessionId !== null && ownSends.has(sessionId),
+      promotedFrom,
       composerValue: draftText,
       lastSeededSession,
       lastSeededValue,
     });
     if (result === null) return;
+    // Entering a session restores even a pending entry (reload mid-send). Unless
+    // the send is this tab's own (still in flight while we navigated away and
+    // back), it died with its page: the text is a plain draft again, or later
+    // echoes would treat it as departing and clear the composer.
+    if (lastSeededSession !== sessionId && cached?.pending && !ownSends.has(sessionId ?? "")) {
+      saveCachedDraft(sessionId, cached.value, cached.basedOn);
+    }
     draftSyncedAt = result.draftSyncedAt;
     seedComposer(result.value);
     lastSeededValue = result.value;
