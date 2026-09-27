@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -312,6 +313,18 @@ func TestLLMOneShotToolSchemaEnum(t *testing.T) {
 	}
 	if !strings.Contains(schema, `"model-a"`) || !strings.Contains(schema, `"model-b"`) {
 		t.Errorf("expected model IDs in enum, got: %s", schema)
+	}
+
+	// The model parameter must stay optional so calls default to the
+	// conversation's current model.
+	var parsed struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(llmTool.InputSchema, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(parsed.Required, "model") {
+		t.Errorf("model must not be required, got required=%v", parsed.Required)
 	}
 }
 

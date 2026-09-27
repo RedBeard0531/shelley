@@ -61,7 +61,7 @@ func (t *LLMOneShotTool) llmOneShotInputSchema() string {
 		modelProp = fmt.Sprintf(`,
     "model": {
       "type": "string",
-      "description": "LLM model to use. Defaults to the conversation's current model.",
+      "description": "Optional. LLM model to use. Omit to use the conversation's current model; set only when the user asks for a specific model.",
       "enum": [%s]
     }`, strings.Join(enumItems, ", "))
 	}
