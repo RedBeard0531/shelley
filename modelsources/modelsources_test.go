@@ -66,7 +66,7 @@ func TestEnvSourceLabels(t *testing.T) {
 		{"claude-opus-4.6", "$ANTHROPIC_API_KEY"},
 		{"gpt-5.5", "$OPENAI_API_KEY"},
 		{"gemini-3.8-flash", "$GEMINI_API_KEY"},
-		{"deepseek-v4-flash-0731-fireworks", "$FIREWORKS_API_KEY"},
+		{"kimi-k3-fireworks", "$FIREWORKS_API_KEY"},
 		// Also pins that the embedded models.dev snapshot knows this model: the
 		// loop below requires a non-empty release date, which the UI sorts by.
 		{"deepseek-v4.1-flash-fireworks", "$FIREWORKS_API_KEY"},
@@ -182,9 +182,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 			{ID: "fireworks/glm-5p2", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p2", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/glm-5p3", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p3", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/glm-5p3-flash", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p3-flash", APIs: []string{"openai_chat"}},
-			{ID: "fireworks/kimi-k2p6", Provider: "fireworks", NativeID: "accounts/fireworks/models/kimi-k2p6", APIs: []string{"openai_chat"}},
-			{ID: "fireworks/deepseek-v4-pro-0813", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-pro-0813", APIs: []string{"openai_chat"}},
-			{ID: "fireworks/deepseek-v4-flash-0731", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4-flash-0731", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/kimi-k3", Provider: "fireworks", NativeID: "accounts/fireworks/models/kimi-k3", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/deepseek-v4p1-flash", Provider: "fireworks", NativeID: "accounts/fireworks/models/deepseek-v4p1-flash", APIs: []string{"openai_chat"}},
 		},
 	}
@@ -205,9 +203,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"glm-5.2-fireworks",
 		"glm-5.3-fireworks",
 		"glm-5.3-flash-fireworks",
-		"kimi-k2.6-fireworks",
-		"deepseek-v4-pro-fireworks",
-		"deepseek-v4-flash-0731-fireworks",
+		"kimi-k3-fireworks",
 		// The gateway advertises this as fireworks/deepseek-v4p1-flash; it must
 		// resolve to the catalog entry (reasoning, images, Shelley's ID) rather
 		// than being materialized as a bare unknown model.
@@ -251,9 +247,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"glm-5p2",
 		"glm-5p3",
 		"glm-5p3-flash",
-		"kimi-k2p6",
-		"deepseek-v4-pro",
-		"deepseek-v4-flash-0731",
+		"kimi-k3",
 		"deepseek-v4p1-flash",
 		"gemini-3.8-flash",
 	} {
@@ -1060,7 +1054,7 @@ func TestBuiltBaseURLResolution(t *testing.T) {
 	}{
 		{"claude-opus-4.6", "https://api.anthropic.com"},
 		{"gpt-5.5", "https://api.openai.com"},
-		{"deepseek-v4-flash-0731-fireworks", "https://api.fireworks.ai/inference"},
+		{"kimi-k3-fireworks", "https://api.fireworks.ai/inference"},
 		{"gemini-3.8-flash", "https://generativelanguage.googleapis.com"},
 	} {
 		b := findBuilt(bs, tt.id)
@@ -1098,7 +1092,7 @@ func TestBuiltAPITypePopulated(t *testing.T) {
 	}{
 		{"claude-opus-4.6", models.APITypeAnthropicMessages},
 		{"gpt-5.5", models.APITypeOpenAIResponses},
-		{"deepseek-v4-flash-0731-fireworks", models.APITypeOpenAIChat},
+		{"kimi-k3-fireworks", models.APITypeOpenAIChat},
 		{"gemini-3.8-flash", models.APITypeGemini},
 		{"predictable", models.APITypeBuiltIn},
 	} {

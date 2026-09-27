@@ -2236,8 +2236,6 @@ func TestServiceReasoningEffort(t *testing.T) {
 		{name: "GLM low rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelLow, wantEffort: "high"},
 		{name: "GLM xhigh tie rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
 		{name: "Kimi xhigh tie rounds to high", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
-		{name: "DeepSeek V4 Pro 0813 keeps max", model: DeepseekV4ProFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
-		{name: "DeepSeek V4 Flash keeps max", model: DeepseekV4FlashFireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "GLM 5.2 keeps max", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "Kimi K3 keeps max", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "svc off, svc verbatim wins", svcLevel: llm.ThinkingLevelOff, svcEffort: "verbatim", wantEffort: "verbatim"},

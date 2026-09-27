@@ -60,11 +60,7 @@ var shadowPairs = []shadowPair{
 	{Better: "gpt-5.6-sol", Worse: "gpt-5.4"},
 	{Better: "gpt-5.6-terra", Worse: "gpt-5.4-mini"},
 	{Better: "gpt-5.6-luna", Worse: "gpt-5.4-nano"},
-	{Better: "kimi-k2.7-code-fireworks", Worse: "kimi-k2.6-fireworks"},
-	{Better: "kimi-k3-fireworks", Worse: "kimi-k2.7-code-fireworks"},
-	{Better: "kimi-k3-fireworks", Worse: "kimi-k2.6-fireworks"},
 	{Better: "glm-5.3-fireworks", Worse: "glm-5.2-fireworks"},
-	{Better: "deepseek-v4.1-flash-fireworks", Worse: "deepseek-v4-pro-fireworks"}, // per DeepSeek, 4.1 Flash is both stronger and cheaper than V4 Pro
 
 	// Arguable / cross-family supersessions. We still encode them so the
 	// default list stays lean; the reasoning is noted inline.
@@ -77,15 +73,9 @@ var shadowPairs = []shadowPair{
 	// subagent dispatched on a scoped task is doing — and the subagent tool
 	// has no way to hand it a turn budget or a stopping criterion.
 	{Better: "claude-opus-4.8", Worse: "claude-sonnet-5"},
-	{Better: "claude-opus-5", Worse: "claude-sonnet-5"},              // in case opus-4.8 isn't served
-	{Better: "claude-opus-5.5", Worse: "claude-sonnet-5"},            // in case neither older Opus is served
-	{Better: "gpt-5.6-terra", Worse: "claude-sonnet-5"},              // cheaper and stronger, and it doesn't run away with fan-out work
-	{Better: "glm-5.2-fireworks", Worse: "kimi-k2.7-code-fireworks"}, // different families; glm costs a bit more; kimi-k3 costs far more, so it doesn't shadow glm
-	{Better: "glm-5.2-fireworks", Worse: "deepseek-v4-flash-0731-fireworks"},
-	// V4.1 Flash adds vision, a newer base and a much larger output limit over
-	// 0731 Flash. Nothing shadows it: glm-5.3 is a different family at a
-	// different price point, so both stay in the default list.
-	{Better: "deepseek-v4.1-flash-fireworks", Worse: "deepseek-v4-flash-0731-fireworks"},
+	{Better: "claude-opus-5", Worse: "claude-sonnet-5"},   // in case opus-4.8 isn't served
+	{Better: "claude-opus-5.5", Worse: "claude-sonnet-5"}, // in case neither older Opus is served
+	{Better: "gpt-5.6-terra", Worse: "claude-sonnet-5"},   // cheaper and stronger, and it doesn't run away with fan-out work
 	{Better: "gpt-5.6-luna", Worse: "claude-haiku-4.5"},
 	{Better: "gpt-5.6-luna", Worse: "gpt-5.3-codex"},
 }

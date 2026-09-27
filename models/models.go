@@ -349,28 +349,10 @@ func All() []Model {
 			Build: oaiResponsesSvcNamed(oai.Grok45, "xai"),
 		},
 		{
-			ID: "kimi-k2.6-fireworks", Provider: ProviderFireworks,
-			Description: "Kimi K2.6 on Fireworks", APIModelName: oai.KimiK26Fireworks.ModelName,
-			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.KimiK26Fireworks, "fireworks"),
-		},
-		{
-			ID: "kimi-k2.7-code-fireworks", Provider: ProviderFireworks,
-			Description: "Kimi K2.7 Code on Fireworks", APIModelName: oai.KimiK27CodeFireworks.ModelName,
-			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.KimiK27CodeFireworks, "fireworks"),
-		},
-		{
 			ID: "kimi-k3-fireworks", Provider: ProviderFireworks,
 			Description: "Kimi K3 on Fireworks", APIModelName: oai.KimiK3Fireworks.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
 			Build: oaiChatSvc(oai.KimiK3Fireworks, "fireworks"),
-		},
-		{
-			ID: "deepseek-v4-pro-fireworks", Provider: ProviderFireworks,
-			Description: "DeepSeek V4 Pro 0813 on Fireworks", APIModelName: oai.DeepseekV4ProFireworks.ModelName,
-			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.DeepseekV4ProFireworks, "fireworks"),
 		},
 		{
 			ID: "claude-opus-4.8", Provider: ProviderAnthropic,
@@ -443,12 +425,6 @@ func All() []Model {
 			Description: "DeepSeek V4.1 Flash on Fireworks", APIModelName: oai.DeepseekV41FlashFireworks.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
 			Build: oaiChatSvc(oai.DeepseekV41FlashFireworks, "fireworks"),
-		},
-		{
-			ID: "deepseek-v4-flash-0731-fireworks", Provider: ProviderFireworks,
-			Description: "DeepSeek V4 Flash 0731 on Fireworks", APIModelName: oai.DeepseekV4FlashFireworks.ModelName,
-			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.DeepseekV4FlashFireworks, "fireworks"),
 		},
 		{
 			ID: "glm-5.2-fireworks", Provider: ProviderFireworks,
