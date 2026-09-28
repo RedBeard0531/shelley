@@ -2001,7 +2001,7 @@ func TestHandleGitBlob(t *testing.T) {
 	filePath := filepath.Join(gitDir, "test.txt")
 
 	// Invalid method.
-	req := httptest.NewRequest("POST", "/api/git/blob?path=x&ref=abcdef1", nil)
+	req := httptest.NewRequest("POST", "/api/git/blob?path=x&hash=abcdef1", nil)
 	w := httptest.NewRecorder()
 	h.server.handleGitBlob(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
@@ -2009,13 +2009,13 @@ func TestHandleGitBlob(t *testing.T) {
 	}
 
 	// Non-hex ref is rejected.
-	w = get(fmt.Sprintf("/api/git/blob?path=%s&ref=HEAD~1", url.QueryEscape(filePath)))
+	w = get(fmt.Sprintf("/api/git/blob?path=%s&hash=HEAD~1", url.QueryEscape(filePath)))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for non-hex ref, got %d", w.Code)
 	}
 
 	// Blob at the first commit holds the original content.
-	w = get(fmt.Sprintf("/api/git/blob?path=%s&ref=%s", url.QueryEscape(filePath), firstHash[:8]))
+	w = get(fmt.Sprintf("/api/git/blob?path=%s&hash=%s", url.QueryEscape(filePath), firstHash[:8]))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -2031,7 +2031,7 @@ func TestHandleGitBlob(t *testing.T) {
 	}
 
 	// A path outside any repository is rejected.
-	w = get("/api/git/blob?path=/tmp/nope/test.txt&ref=abcdef1")
+	w = get("/api/git/blob?path=/tmp/nope/test.txt&hash=abcdef1")
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 outside a repo, got %d", w.Code)
 	}

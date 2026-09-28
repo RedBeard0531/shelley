@@ -1377,16 +1377,18 @@ func (s *Server) handleGitCommitDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGitBlob serves a file's content as it existed at a commit:
-// GET /api/git/blob?path=<abs>&ref=<hash> -> {path, content}. Path is the
+// GET /api/git/blob?path=<abs>&hash=<sha> -> {path, content}. Path is the
 // file's absolute (or ~/) path; it locates the repository (via its containing
 // directory) and the path relative to that repository's root. Read-only
 // serving for commit-pinned file references; writing is /api/write-file's job.
+// The parameter is named "hash" (matching /api/git/commit-detail), not "ref":
+// the exe.dev edge proxy consumes a query parameter literally named "ref".
 func (s *Server) handleGitBlob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	ref := r.URL.Query().Get("ref")
+	ref := r.URL.Query().Get("hash")
 	if !safeRef(ref) {
 		http.Error(w, "ref required", http.StatusBadRequest)
 		return

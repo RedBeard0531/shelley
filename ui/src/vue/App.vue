@@ -271,7 +271,7 @@
         "
         :load-url="
           editorCommit
-            ? `/api/git/blob?path=${encodeURIComponent(editorFilePath)}&ref=${encodeURIComponent(editorCommit)}`
+            ? `/api/git/blob?path=${encodeURIComponent(editorFilePath)}&hash=${encodeURIComponent(editorCommit)}`
             : `/api/read-file?path=${encodeURIComponent(editorFilePath)}`
         "
         :read-only="!!editorCommit"
