@@ -16,6 +16,40 @@ const binPath = path.join(shelleyDir, 'bin', 'shelley');
 let serverProcess: ChildProcess | null = null;
 let tempDir: string | null = null;
 
+// Terminal sessions outlive the server by design, so end the ones the tests
+// left behind, along with every process group in each owned PTY session.
+// Interactive shells put foreground and background jobs in separate groups;
+// killing only the forkpty child's group leaves those jobs running forever.
+function killTerminalSessions(dir: string) {
+  const prefix = `exe-scroll: session ${dir}/`;
+  const procs = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid=,sess=,command='], { encoding: 'utf8' })
+    .split('\n')
+    .flatMap((line) => {
+      const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+      return m ? [{
+        pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]),
+        session: m[4], command: m[5],
+      }] : [];
+    });
+  const servers = procs.filter((p) => p.command.startsWith(prefix));
+  const serverSessions = new Map(servers.map((p) => [p.pid, p.session]));
+  // Linux ps prints the numeric SID; macOS ps prints a hex session pointer.
+  // forkpty's direct child leads its own group in a *different* session
+  // from the server. Match that session token exactly for every group.
+  const sessions = new Set(procs.filter((p) => p.pid === p.pgid && serverSessions.has(p.ppid)
+    && p.session !== serverSessions.get(p.ppid)).map((p) => p.session));
+  const kill = (pid: number) => {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  };
+  const groups = new Set(procs.filter((p) => sessions.has(p.session)).map((p) => p.pgid));
+  for (const group of groups) kill(-group);
+  for (const server of servers) kill(server.pid);
+}
+
 export default async function globalSetup() {
   // Give every shard its own home and cwd. The tests edit user AGENTS.md,
   // and prompt hydration scans cwd for guidance/skills: sharing the runner's
@@ -29,6 +63,7 @@ export default async function globalSetup() {
 
   const cleanup = () => {
     if (tempDir) {
+      killTerminalSessions(tempDir);
       rmSync(tempDir, { recursive: true, force: true });
       tempDir = null;
     }
