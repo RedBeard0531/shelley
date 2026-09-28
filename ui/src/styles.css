@@ -7264,17 +7264,22 @@ svg {
   padding: 0.375rem;
 }
 
+/* Comment/edit mode switch. The selected half is a solid fill rather than a
+   tint: the icons are emoji, which ignore `color`, and --blue-bg is 10% alpha
+   in dark mode, so a tinted half composited down to nearly the same pixel as
+   its unselected sibling — you could not tell which mode you were in. */
 .diff-viewer-mode-toggle {
   display: flex;
   border: 1px solid var(--border-color);
   border-radius: 0.25rem;
   overflow: hidden;
+  background: var(--bg-base);
 }
 
 .diff-viewer-mode-btn {
   padding: 0.25rem 0.5rem;
   border: none;
-  background: var(--bg-base);
+  background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   font-size: var(--font-size-14);
@@ -7285,8 +7290,8 @@ svg {
 }
 
 .diff-viewer-mode-btn.active {
-  background: var(--blue-bg);
-  color: var(--blue-text);
+  background: var(--primary);
+  color: #fff;
 }
 
 .diff-viewer-mode-btn:hover:not(.active):not(:disabled) {
@@ -8990,9 +8995,11 @@ button.tour-visibility-control:focus-visible,
   font-size: 1.25rem;
 }
 
+/* Same solid fill as the desktop switch: "comment mode is on" must survive
+   sitting on top of diff content in either theme. */
 .diff-viewer-mobile-mode-btn.active {
-  background: var(--blue-bg);
-  color: var(--blue-text);
+  background: var(--primary);
+  color: #fff;
 }
 
 /* Monaco comment glyph decoration */
