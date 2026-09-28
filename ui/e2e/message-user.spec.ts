@@ -75,14 +75,20 @@ test("message_user conversations show the chat", async ({ page, request }) => {
     const asked = page.getByTestId("message").filter({ hasText: "Please check the build" }).first();
     await expect(asked.getByTestId("message-reactions")).toHaveText("👀");
 
-    // Attachments: the image previews, the other file downloads.
-    const image = bubbles.last().locator(".message-user-image img");
-    await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(40);
-    const file = bubbles.last().getByTestId("message-user-file");
-    await expect(file).toContainText("report.txt");
-    const download = await request.get((await file.getAttribute("href"))!);
-    expect(download.ok()).toBeTruthy();
-    expect(await download.text()).toBe("the report");
+    // The rail wrapper must forward the result row's id to the attachment
+    // renderer in every view, including a fresh mount after reloading.
+    async function expectAttachments() {
+      const image = bubbles.last().locator(".message-user-image img");
+      await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(40);
+      const file = bubbles.last().getByTestId("message-user-file");
+      await expect(file).toContainText("report.txt");
+      const href = await file.getAttribute("href");
+      expect(href).toMatch(/^\/api\/message\/[^/]+\/attachment\?/);
+      const download = await request.get(href!);
+      expect(download.ok()).toBeTruthy();
+      expect(await download.text()).toBe("the report");
+    }
+    await expectAttachments();
 
     // The reply quote jumps to the message it replies to. Under the reduced
     // motion the tests run with, the highlight animation ends at once and
@@ -109,8 +115,11 @@ test("message_user conversations show the chat", async ({ page, request }) => {
     await page.keyboard.press("Escape");
     await expect(chatArea.getByText("message_user failed", { exact: false })).toBeVisible();
     await expect(page.getByTestId("message-user-bubble")).toHaveCount(2);
+    await expectAttachments();
     await page.reload();
     await expect(chatArea.getByText("message_user failed", { exact: false })).toBeVisible();
+    await expect(bubbles).toHaveCount(2);
+    await expectAttachments();
 
     // A fork copies the messages with new ids: reactions and quotes still
     // find their targets, and new calls target the fork's copies.
