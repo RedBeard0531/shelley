@@ -568,6 +568,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.HandleFunc("GET /api/message/{message_id}/attachment", s.handleMessageAttachment)                          // Serves files sent with message_user
 	api.HandleFunc("POST /api/write-file", s.handleWriteFile)                                                      // Small response
 	api.Handle("GET /api/read-file", compressionHandler(http.HandlerFunc(s.handleReadFile)))                       // Reads arbitrary text files as JSON
+	api.Handle("GET /api/git/blob", compressionHandler(http.HandlerFunc(s.handleGitBlob)))                         // Reads a file at a commit
 	api.HandleFunc("GET /api/user-agents-md", s.handleUserAgentsMd)                                                // Small response
 	api.HandleFunc("GET /api/exec-ws", s.handleExecWS)                                                             // Websocket for shell commands
 	api.HandleFunc("GET /api/terminals", s.handleTerminalsList)                                                    // List persistent terminal sessions

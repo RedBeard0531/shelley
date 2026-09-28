@@ -1972,3 +1972,67 @@ func TestHandleGitFileDiff_OldPath(t *testing.T) {
 		}
 	}
 }
+
+// TestHandleGitBlob tests the handleGitBlob function: reading a file's content
+// as it existed at a commit.
+func TestHandleGitBlob(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	gitDir := setupTestGitRepo(t) // commits test.txt ("Hello, World!\n")
+
+	// Modify and commit, so the first commit holds the original content.
+	if err := os.WriteFile(filepath.Join(gitDir, "test.txt"), []byte("Goodbye, World!\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, gitDir, "commit", "-am", "second")
+
+	out, err := exec.Command("git", "-C", gitDir, "rev-parse", "HEAD~1").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHash := strings.TrimSpace(string(out))
+
+	get := func(url string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", url, nil)
+		w := httptest.NewRecorder()
+		h.server.handleGitBlob(w, req)
+		return w
+	}
+	filePath := filepath.Join(gitDir, "test.txt")
+
+	// Invalid method.
+	req := httptest.NewRequest("POST", "/api/git/blob?path=x&ref=abcdef1", nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitBlob(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for POST, got %d", w.Code)
+	}
+
+	// Non-hex ref is rejected.
+	w = get(fmt.Sprintf("/api/git/blob?path=%s&ref=HEAD~1", url.QueryEscape(filePath)))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for non-hex ref, got %d", w.Code)
+	}
+
+	// Blob at the first commit holds the original content.
+	w = get(fmt.Sprintf("/api/git/blob?path=%s&ref=%s", url.QueryEscape(filePath), firstHash[:8]))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Content != "Hello, World!\n" {
+		t.Errorf("expected original content, got %q", resp.Content)
+	}
+
+	// A path outside any repository is rejected.
+	w = get("/api/git/blob?path=/tmp/nope/test.txt&ref=abcdef1")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 outside a repo, got %d", w.Code)
+	}
+}

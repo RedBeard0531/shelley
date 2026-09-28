@@ -10,12 +10,18 @@ import * as markdownMath from "./markdownMath";
 
 // A file reference: an inline-code span marked with 📄 that names a path and an
 // optional 1-based line or line range (`📄src/app.ts`, `📄src/app.ts:42`,
-// `📄src/app.ts:42-87`). The UI renders it as a chip that opens the file in the
-// editor at that line, selecting the range when given (line defaults to 1).
+// `📄src/app.ts:42-87`), and an optional commit the reference is pinned to
+// (`📄src/app.ts:42@a1b2c3d`): the chip then opens the file as it existed at
+// that commit, read-only, instead of the working tree. The UI renders it as a
+// chip that opens the file in the editor at that line, selecting the range
+// when given (line defaults to 1).
 export interface FileRef {
   path: string;
   line?: number;
   endLine?: number;
+  // Abbreviated or full commit hash: open the file's content at this commit
+  // rather than the working tree. Absent for ordinary references.
+  commit?: string;
 }
 
 // The marker. The renderer has no filesystem access, so the only honest signal
@@ -27,6 +33,12 @@ export interface FileRef {
 // marker to a reader.)
 const MARKER = "📄";
 const MARKER_RE = /^📄\uFE0F?/;
+
+// A trailing `@<hash>` pins the reference to a commit: the same 6-64 hex run
+// the ⎇ marker uses. Stripped before the path is matched. When the path itself
+// ends in `@hex` (e.g. `foo@bada55` with no extension) the suffix wins — a
+// commit pin is the only reading a hex tail supports.
+const COMMIT_SUFFIX_RE = /@([0-9a-f]{6,64})$/i;
 
 // A path is letters (with their combining marks, so both `café.ts` spellings
 // work) and digits in any script, plus the punctuation real filenames use:
@@ -45,7 +57,14 @@ const PATH_RE = /^([\p{L}\p{M}\p{N}._~@+\-[\]()/]+?)(?::(\d{1,9})(?:-(\d{1,9}))?
 // home-relative `~/...` paths are (the server's file endpoints expand them).
 export function parseFileRef(text: string): FileRef | null {
   if (!MARKER_RE.test(text)) return null;
-  const m = PATH_RE.exec(text.replace(MARKER_RE, "").trim());
+  text = text.replace(MARKER_RE, "").trim();
+  let commit: string | undefined;
+  const cm = COMMIT_SUFFIX_RE.exec(text);
+  if (cm) {
+    commit = cm[1];
+    text = text.slice(0, cm.index);
+  }
+  const m = PATH_RE.exec(text);
   if (!m) return null;
   const path = m[1];
   // A directory cannot be opened: reject the shapes that are certainly one.
@@ -59,12 +78,12 @@ export function parseFileRef(text: string): FileRef | null {
   // home), mid-path tildes (`a~b/c`), and bare `~` are not paths the endpoints
   // can serve.
   if (path.includes("~") && !path.startsWith("~/")) return null;
-  if (m[2] === undefined) return { path };
+  if (m[2] === undefined) return commit ? { path, commit } : { path };
   let line = parseInt(m[2], 10);
   let endLine = m[3] !== undefined ? parseInt(m[3], 10) : line;
   if (endLine < line) [line, endLine] = [endLine, line];
   if (line < 1) return null;
-  return { path, line, endLine };
+  return { path, line, endLine, commit };
 }
 
 // A commit reference: an inline-code span marked with ⎇ followed by a git
@@ -97,11 +116,13 @@ export function parseCommitRef(text: string): CommitRef | null {
 
 // refText is the text of a reference: the marker, the path, and the line or
 // range in canonical form, so `:007` displays as `:7` and a reversed range in
-// the order it opens.
+// the order it opens. A commit pin is kept verbatim — the chip's text is what
+// the click handler re-parses, so it must round-trip.
 function refText(ref: FileRef): string {
-  if (ref.line === undefined) return MARKER + ref.path;
+  const commit = ref.commit ? `@${ref.commit}` : "";
+  if (ref.line === undefined) return `${MARKER}${ref.path}${commit}`;
   const end = ref.endLine !== undefined && ref.endLine !== ref.line ? `-${ref.endLine}` : "";
-  return `${MARKER}${ref.path}:${ref.line}${end}`;
+  return `${MARKER}${ref.path}:${ref.line}${end}${commit}`;
 }
 
 // Maximum size (in characters of the data: URI) we are willing to inline.

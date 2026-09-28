@@ -1252,7 +1252,8 @@ That's a variety of table widths for testing!`
 
 // fileReferencesMarkdown exercises the clickable file-reference format: inline
 // code marked with 📄 (`path:line`, `path:start-end`) that opens the editor at
-// that location, plus the reference-then-fenced-block pattern the system prompt
+// that location, plus `path@hash` pinned to a commit (opened read-only at that
+// commit), plus the reference-then-fenced-block pattern the system prompt
 // teaches (annotated with comments, elided with a `...` comment). Paths are
 // relative so they resolve against the conversation's cwd. The trailing
 // unmarked spans are the regression guard: they look path-shaped but must stay
@@ -1260,6 +1261,8 @@ That's a variety of table widths for testing!`
 const fileReferencesMarkdown = `Here are some file references to test:
 
 A single line: ` + "`📄AGENTS.md:1`" + ` and a bare path: ` + "`📄./server/system_prompt.go`" + ` and a home-relative one: ` + "`📄~/.config/shelley/AGENTS.md:1-5`" + `.
+
+A commit-pinned one (read-only, at that commit): ` + "`📄AGENTS.md:1@a1b2c3d`" + `.
 
 A range, with the code it points at:
 

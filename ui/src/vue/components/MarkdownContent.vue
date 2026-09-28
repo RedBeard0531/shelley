@@ -368,7 +368,12 @@ function onRefActivate(e: MouseEvent | KeyboardEvent): boolean {
   } else {
     const ref = parseFileRef(anchor.textContent ?? "");
     if (ref && fileOpener) {
-      fileOpener(ref.path, { line: ref.line ?? 1, endLine: ref.endLine, baseDir: props.cwd || undefined });
+      fileOpener(ref.path, {
+        line: ref.line ?? 1,
+        endLine: ref.endLine,
+        baseDir: props.cwd || undefined,
+        commit: ref.commit,
+      });
     }
   }
   return true;

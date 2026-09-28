@@ -258,13 +258,23 @@
 
       <EditableFileModal
         v-if="editorFilePath"
-        :key="editorFilePath"
+        :key="`${editorFilePath}@${editorCommit ?? ''}`"
         :is-open="!!editorFilePath"
         :path="editorFilePath"
         :line="editorLine"
         :end-line="editorEndLine"
-        :title="`Edit ${tildifyPath(editorFilePath)}`"
-        :load-url="`/api/read-file?path=${encodeURIComponent(editorFilePath)}`"
+        :commit="editorCommit"
+        :title="
+          editorCommit
+            ? `View ${tildifyPath(editorFilePath)} @ ${editorCommit.slice(0, 7)}`
+            : `Edit ${tildifyPath(editorFilePath)}`
+        "
+        :load-url="
+          editorCommit
+            ? `/api/git/blob?path=${encodeURIComponent(editorFilePath)}&ref=${encodeURIComponent(editorCommit)}`
+            : `/api/read-file?path=${encodeURIComponent(editorFilePath)}`
+        "
+        :read-only="!!editorCommit"
         commentable
         @close="editorFilePath = null"
         @comment="onEditorComment"
@@ -797,6 +807,7 @@ function openFileInEditor(absPath: string, opts?: OpenFileOptions) {
   editorFilePath.value = absPath;
   editorLine.value = opts?.line;
   editorEndLine.value = opts?.endLine;
+  editorCommit.value = opts?.commit;
 }
 
 // Open any file in the editor modal, from anywhere in the tree (patch tool
@@ -807,6 +818,9 @@ function openFileInEditor(absPath: string, opts?: OpenFileOptions) {
 // clean absolute path.
 const editorLine = ref<number | undefined>(undefined);
 const editorEndLine = ref<number | undefined>(undefined);
+// Set when a file reference is pinned to a commit: the modal loads the blob
+// at that commit, read-only, instead of the working tree file.
+const editorCommit = ref<string | undefined>(undefined);
 provideOpenFileEditor((path: string, opts?: OpenFileOptions) => {
   // Home-relative paths (~/.config/...) stay in tilde form: the server's
   // file endpoints expand them (the browser doesn't know $HOME).

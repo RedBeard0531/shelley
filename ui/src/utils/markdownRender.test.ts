@@ -396,6 +396,25 @@ const render = (text: string) =>
     "marked slash-less name parses: the marker, not the slash, is what makes it a reference");
   assert(parseFileRef(`${M}~/.config/shelley/AGENTS.md:12-20`)?.endLine === 20,
     "marked home-relative path with range parses");
+  // Commit-pinned references: an `@<hash>` suffix pins the file to a commit.
+  const pinned = parseFileRef(`${M}src/app.ts:42@a1b2c3d`);
+  assert(pinned?.path === "src/app.ts" && pinned?.line === 42 && pinned?.commit === "a1b2c3d",
+    "path:line@hash parses with commit");
+  assert(parseFileRef(`${M}src/app.ts:42-87@a1b2c3d`)?.endLine === 87
+    && parseFileRef(`${M}src/app.ts:42-87@a1b2c3d`)?.commit === "a1b2c3d",
+    "range with commit parses");
+  assert(parseFileRef(`${M}src/app.ts@a1b2c3d9`)?.path === "src/app.ts"
+    && parseFileRef(`${M}src/app.ts@a1b2c3d9`)?.line === undefined
+    && parseFileRef(`${M}src/app.ts@a1b2c3d9`)?.commit === "a1b2c3d9",
+    "path@hash without line parses");
+  assert(parseFileRef(`${M}src/app.ts@abc`)?.path === "src/app.ts@abc"
+    && parseFileRef(`${M}src/app.ts@abc`)?.commit === undefined,
+    "short hash suffix is not a pin (stays part of the path)");
+  assert(parseFileRef(`${M}src/app.ts@HEAD~1`) === null, "non-hex suffix is not a pin");
+  // An @ in the path itself survives when what follows is not hex-shaped.
+  assert(parseFileRef(`${M}pkg@name/readme.md`)?.path === "pkg@name/readme.md"
+    && parseFileRef(`${M}pkg@name/readme.md`)?.commit === undefined,
+    "@ in a path is not a commit pin");
   assert(parseFileRef(`${M}src/app.ts:140-100`)?.line === 100, "reversed range is normalized");
   assert(parseFileRef(`${M}~tim/x:2`) === null, "~user path is not a reference");
   assert(parseFileRef(`${M}a~b/c`) === null, "mid-path tilde is not a reference");
