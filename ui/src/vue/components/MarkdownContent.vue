@@ -151,7 +151,7 @@ const html = computed(
 
     // The shared renderer already strips executable HTML. In file preview,
     // also discard file-authored CSS classes: otherwise a raw div with an
-    // app class such as "diff-viewer-overlay" could cover the modal. Keep
+    // app overlay class could cover the modal. Keep
     // only fenced code's language class for syntax highlighting.
     const inert = document.createElement("template");
     inert.innerHTML = rendered;
