@@ -232,6 +232,11 @@ Usage notes:
 IMPORTANT: Each patch call must be less than 60k tokens total. For large file
 changes, break them into multiple smaller patch operations rather than one
 large overwrite. Prefer incremental replace operations over full file overwrites.
+
+Multiple edits: make one patch call per independent edit and send them all in the
+same reply as parallel tool calls. Do not serialize edits across replies when they
+don't depend on each other's results; the tool handles concurrent calls, including
+to the same file.
 `
 
 	PatchComplexInputSchema = `
@@ -253,7 +258,10 @@ large overwrite. Prefer incremental replace operations over full file overwrites
 A call performs exactly one modification: either replace oldText (which must
 match exactly once in the original file) with newText, or append content at
 the end of the file (which needs no anchor). The file is written only after
-the modification validates.`
+the modification validates.
+
+To make several edits, issue one call per edit and send them all in the same
+reply as parallel tool calls rather than serializing them across replies.`
 
 	PatchSimpleInputSchema = `
 {
