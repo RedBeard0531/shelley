@@ -737,7 +737,7 @@ import {
   type UsageEntry,
 } from "../../utils/tokenCostGraph";
 import { coalesceMessages, type CoalescedItem } from "./coalesce";
-import type { RenderNode, RenderChunk, GenerationBlock } from "./renderNode";
+import { markToolTurnRuns, type RenderNode, type RenderChunk, type GenerationBlock } from "./renderNode";
 import type { EphemeralTerminal } from "./terminalTypes";
 import { INTERACTIVE_SHELL_COMMAND, isInteractiveShellLaunch } from "./terminalHelpers";
 import {
@@ -2637,6 +2637,7 @@ function buildRenderModel(): GenerationBlock[] {
       i++;
     }
 
+    markToolTurnRuns(sectionNodes);
     blocks.push({
       generation,
       divider:
