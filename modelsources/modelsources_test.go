@@ -48,6 +48,15 @@ func findBuilt(bs []models.Built, id string) *models.Built {
 	return nil
 }
 
+func testEnvConfig() EnvConfig {
+	return EnvConfig{
+		AnthropicAPIKey: "a",
+		OpenAIAPIKey:    "o",
+		GeminiAPIKey:    "g",
+		FireworksAPIKey: "f",
+	}
+}
+
 func TestPredictableBuilds(t *testing.T) {
 	bs := Build(models.All(), []Source{Predictable()}, &http.Client{}, nil)
 	if b := findBuilt(bs, "predictable"); b == nil {
@@ -56,7 +65,7 @@ func TestPredictableBuilds(t *testing.T) {
 }
 
 func TestEnvSourceBuildsAllProviders(t *testing.T) {
-	src := Env("a", "o", "g", "f")
+	src := Env(testEnvConfig())
 	bs := Build(models.All(), []Source{src}, &http.Client{}, nil)
 	// Order must match catalog order.
 	var expected []string
@@ -78,7 +87,7 @@ func TestEnvSourceBuildsAllProviders(t *testing.T) {
 }
 
 func TestEnvSourceLabels(t *testing.T) {
-	bs := Build(models.All(), []Source{Env("a", "o", "g", "f")}, &http.Client{}, nil)
+	bs := Build(models.All(), []Source{Env(testEnvConfig())}, &http.Client{}, nil)
 	for _, tt := range []struct {
 		id, want string
 	}{
@@ -106,7 +115,7 @@ func TestEnvSourceLabels(t *testing.T) {
 
 func TestGatewaySourceLabels(t *testing.T) {
 	// Plain gateway.
-	bs := Build(models.All(), []Source{Gateway("https://gw.example.com", "", "", "")}, &http.Client{}, nil)
+	bs := Build(models.All(), []Source{Gateway("https://gw.example.com", EnvConfig{})}, &http.Client{}, nil)
 	if b := findBuilt(bs, "claude-opus-4.6"); b == nil || b.Source != "exe.dev gateway" {
 		t.Errorf("claude-opus-4.6 with plain gateway: %+v", b)
 	}
@@ -118,7 +127,7 @@ func TestGatewaySourceLabels(t *testing.T) {
 	}
 
 	// Gateway with explicit anthropic key: provider label switches.
-	bs = Build(models.All(), []Source{Gateway("https://gw.example.com", "real-key", "", "")}, &http.Client{}, nil)
+	bs = Build(models.All(), []Source{Gateway("https://gw.example.com", EnvConfig{AnthropicAPIKey: "real-key"})}, &http.Client{}, nil)
 	if b := findBuilt(bs, "claude-opus-4.6"); b == nil || b.Source != "$ANTHROPIC_API_KEY" {
 		t.Errorf("claude-opus-4.6 with explicit anthropic key: %+v", b)
 	}
@@ -127,8 +136,48 @@ func TestGatewaySourceLabels(t *testing.T) {
 	}
 }
 
+func TestProviderBaseURLOverrides(t *testing.T) {
+	config := EnvConfig{
+		AnthropicAPIKey:  "a",
+		OpenAIAPIKey:     "o",
+		FireworksAPIKey:  "f",
+		AnthropicBaseURL: "https://anthropic.example",
+		OpenAIBaseURL:    "https://openai.example",
+		FireworksBaseURL: "https://fireworks.example",
+	}
+	bs := Build(models.All(), []Source{Env(config)}, &http.Client{}, nil)
+	for _, tt := range []struct {
+		id, want string
+	}{
+		{"claude-opus-4.6", config.AnthropicBaseURL},
+		{"gpt-5.5", config.OpenAIBaseURL},
+		{"kimi-k3-fireworks", config.FireworksBaseURL},
+	} {
+		b := findBuilt(bs, tt.id)
+		if b == nil || b.BaseURL != tt.want {
+			t.Errorf("%s BaseURL = %v, want %q", tt.id, b, tt.want)
+		}
+	}
+
+	// Explicit base URLs also replace gateway routes when a gateway is configured.
+	bs = Build(models.All(), []Source{Gateway("https://gw.example.com", config)}, &http.Client{}, nil)
+	for _, tt := range []struct {
+		id, want string
+	}{
+		{"claude-opus-4.6", config.AnthropicBaseURL},
+		{"gpt-5.5", config.OpenAIBaseURL},
+		{"kimi-k3-fireworks", config.FireworksBaseURL},
+		{"grok-4.5", "https://gw.example.com/xai"},
+	} {
+		b := findBuilt(bs, tt.id)
+		if b == nil || b.BaseURL != tt.want {
+			t.Errorf("%s BaseURL = %v, want %q", tt.id, b, tt.want)
+		}
+	}
+}
+
 func TestAnthropicThinkingBindingSources(t *testing.T) {
-	gateway := Build(models.All(), []Source{Gateway("https://gw.example.com", "", "", "")}, &http.Client{}, nil)
+	gateway := Build(models.All(), []Source{Gateway("https://gw.example.com", EnvConfig{})}, &http.Client{}, nil)
 	gatewayModel := findBuilt(gateway, "claude-opus-4.6")
 	if gatewayModel == nil {
 		t.Fatal("gateway did not build claude-opus-4.6")
@@ -138,7 +187,7 @@ func TestAnthropicThinkingBindingSources(t *testing.T) {
 		t.Fatalf("gateway Anthropic service = %#v, want explicit binding support", gatewayService)
 	}
 
-	env := Build(models.All(), []Source{Env("key", "", "", "")}, &http.Client{}, nil)
+	env := Build(models.All(), []Source{Env(EnvConfig{AnthropicAPIKey: "key"})}, &http.Client{}, nil)
 	envModel := findBuilt(env, "claude-opus-4.6")
 	if envModel == nil {
 		t.Fatal("env source did not build claude-opus-4.6")
@@ -1070,7 +1119,7 @@ func TestMultipleLLMIntegrationsUnionWithSuffix(t *testing.T) {
 
 func TestBuiltBaseURLResolution(t *testing.T) {
 	// Env source supplies no URL: BaseURL should be the catalog default.
-	bs := Build(models.All(), []Source{Env("a", "o", "g", "f")}, &http.Client{}, nil)
+	bs := Build(models.All(), []Source{Env(testEnvConfig())}, &http.Client{}, nil)
 	for _, tt := range []struct {
 		id, want string
 	}{
@@ -1107,7 +1156,7 @@ func TestBuiltBaseURLResolution(t *testing.T) {
 }
 
 func TestBuiltAPITypePopulated(t *testing.T) {
-	bs := Build(models.All(), []Source{Env("a", "o", "g", "f"), Predictable()}, &http.Client{}, nil)
+	bs := Build(models.All(), []Source{Env(testEnvConfig()), Predictable()}, &http.Client{}, nil)
 	for _, tt := range []struct {
 		id   string
 		want models.APIType
@@ -1146,22 +1195,22 @@ func TestTranscriptionModelsFromOpenAICredentials(t *testing.T) {
 	}{
 		{
 			name: "env key",
-			got:  routes(Env("a", "sk-openai", "g", "f"), Predictable()),
+			got:  routes(Env(EnvConfig{AnthropicAPIKey: "a", OpenAIAPIKey: "sk-openai", GeminiAPIKey: "g", FireworksAPIKey: "f"}), Predictable()),
 			want: want("https://api.openai.com/v1/audio/transcriptions", "sk-openai", "$OPENAI_API_KEY"),
 		},
 		{
 			name: "gateway",
-			got:  routes(Gateway("https://gw.example.com", "", "", "")),
+			got:  routes(Gateway("https://gw.example.com", EnvConfig{})),
 			want: want("https://gw.example.com/openai/v1/audio/transcriptions", "implicit", "exe.dev gateway"),
 		},
 		{
 			name: "gateway with explicit key",
-			got:  routes(Gateway("https://gw.example.com", "", "sk-openai", "")),
+			got:  routes(Gateway("https://gw.example.com", EnvConfig{OpenAIAPIKey: "sk-openai"})),
 			want: want("https://gw.example.com/openai/v1/audio/transcriptions", "sk-openai", "$OPENAI_API_KEY"),
 		},
 		{
 			name: "no OpenAI credential",
-			got:  routes(Env("a", "", "g", "f"), Predictable()),
+			got:  routes(Env(EnvConfig{AnthropicAPIKey: "a", GeminiAPIKey: "g", FireworksAPIKey: "f"}), Predictable()),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

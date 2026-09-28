@@ -37,6 +37,19 @@ type providerConn struct {
 	apiKey  string // "implicit" when credentials are injected at the network edge
 }
 
+// EnvConfig contains the supported provider environment settings. Base URLs
+// are bare origins/prefixes; model factories append each API's protocol path.
+type EnvConfig struct {
+	AnthropicAPIKey string
+	OpenAIAPIKey    string
+	GeminiAPIKey    string
+	FireworksAPIKey string
+
+	AnthropicBaseURL string
+	OpenAIBaseURL    string
+	FireworksBaseURL string
+}
+
 // Source is one origin from which built-in Shelley models can be
 // materialized into the server's Manager. Sources are evaluated in
 // order; the first to claim an ID wins.
@@ -77,11 +90,15 @@ func Predictable() Source {
 	}
 }
 
+func providerBaseURL(override, defaultURL string) string {
+	return strings.TrimSuffix(cmp.Or(override, defaultURL), "/")
+}
+
 // Gateway returns a Source for the exe.dev gateway. The gateway serves
 // Anthropic, OpenAI, Fireworks, and xAI but not Gemini; Gemini models must
-// come from an env-var or LLM-integration source. Any non-empty
-// explicit per-provider key overrides the gateway's implicit credential.
-func Gateway(gatewayURL, anthropicKey, openAIKey, fireworksKey string) Source {
+// come from an env-var or LLM-integration source. Explicit keys override the
+// gateway's implicit credentials, and explicit base URLs override its routes.
+func Gateway(gatewayURL string, config EnvConfig) Source {
 	key := func(k string) string {
 		if k != "" {
 			return k
@@ -91,14 +108,14 @@ func Gateway(gatewayURL, anthropicKey, openAIKey, fireworksKey string) Source {
 	return Source{
 		label: "exe.dev gateway",
 		providers: map[models.Provider]*providerConn{
-			models.ProviderAnthropic: {baseURL: gatewayURL + "/anthropic", apiKey: key(anthropicKey)},
-			models.ProviderOpenAI:    {baseURL: gatewayURL + "/openai", apiKey: key(openAIKey)},
-			models.ProviderFireworks: {baseURL: gatewayURL + "/fireworks/inference", apiKey: key(fireworksKey)},
+			models.ProviderAnthropic: {baseURL: providerBaseURL(config.AnthropicBaseURL, gatewayURL+"/anthropic"), apiKey: key(config.AnthropicAPIKey)},
+			models.ProviderOpenAI:    {baseURL: providerBaseURL(config.OpenAIBaseURL, gatewayURL+"/openai"), apiKey: key(config.OpenAIAPIKey)},
+			models.ProviderFireworks: {baseURL: providerBaseURL(config.FireworksBaseURL, gatewayURL+"/fireworks/inference"), apiKey: key(config.FireworksAPIKey)},
 			// xAI is served by the gateway with an implicit (edge-injected)
 			// credential only. Direct XAI_API_KEY env support was removed.
 			models.ProviderXAI: {baseURL: gatewayURL + "/xai", apiKey: "implicit"},
 		},
-		providerLabels: explicitEnvLabels(anthropicKey, openAIKey, fireworksKey),
+		providerLabels: explicitEnvLabels(config.AnthropicAPIKey, config.OpenAIAPIKey, config.FireworksAPIKey),
 	}
 }
 
@@ -106,25 +123,26 @@ func Gateway(gatewayURL, anthropicKey, openAIKey, fireworksKey string) Source {
 // providers with a non-empty key are included.
 //
 // DEPRECATED: Per-provider env-var model credentials are frozen. Do NOT add
-// new providers here. New models should be served through the exe.dev LLM
-// gateway or an exe.dev LLM integration (or added as DB-backed custom
-// models) rather than a new direct env-var credential. The one exception is
-// transcription: an OpenAI key also serves recordings (see
-// TranscriptionModels).
-func Env(anthropicKey, openAIKey, geminiKey, fireworksKey string) Source {
+// new credential providers here. Base URL overrides are supported for the
+// existing Anthropic, OpenAI, and Fireworks providers. New models should be
+// served through the exe.dev LLM gateway or an exe.dev LLM integration (or
+// added as DB-backed custom models) rather than a new direct env-var
+// credential. The one exception is transcription: an OpenAI key also serves
+// recordings (see TranscriptionModels).
+func Env(config EnvConfig) Source {
 	prov := map[models.Provider]*providerConn{}
 	labels := map[models.Provider]string{}
-	add := func(p models.Provider, k, env string) {
+	add := func(p models.Provider, k, baseURL, env string) {
 		if k == "" {
 			return
 		}
-		prov[p] = &providerConn{apiKey: k}
+		prov[p] = &providerConn{baseURL: providerBaseURL(baseURL, ""), apiKey: k}
 		labels[p] = "$" + env
 	}
-	add(models.ProviderAnthropic, anthropicKey, "ANTHROPIC_API_KEY")
-	add(models.ProviderOpenAI, openAIKey, "OPENAI_API_KEY")
-	add(models.ProviderGemini, geminiKey, "GEMINI_API_KEY")
-	add(models.ProviderFireworks, fireworksKey, "FIREWORKS_API_KEY")
+	add(models.ProviderAnthropic, config.AnthropicAPIKey, config.AnthropicBaseURL, "ANTHROPIC_API_KEY")
+	add(models.ProviderOpenAI, config.OpenAIAPIKey, config.OpenAIBaseURL, "OPENAI_API_KEY")
+	add(models.ProviderGemini, config.GeminiAPIKey, "", "GEMINI_API_KEY")
+	add(models.ProviderFireworks, config.FireworksAPIKey, config.FireworksBaseURL, "FIREWORKS_API_KEY")
 	return Source{label: "env", providers: prov, providerLabels: labels}
 }
 

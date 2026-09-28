@@ -44,12 +44,15 @@ func TestWithAnthropicAPI(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo, // Less verbose for real API test
 	}))
-	srcs := []modelsources.Source{modelsources.Env(
-		os.Getenv("ANTHROPIC_API_KEY"),
-		os.Getenv("OPENAI_API_KEY"),
-		os.Getenv("GEMINI_API_KEY"),
-		os.Getenv("FIREWORKS_API_KEY"),
-	)}
+	srcs := []modelsources.Source{modelsources.Env(modelsources.EnvConfig{
+		AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),
+		OpenAIAPIKey:     os.Getenv("OPENAI_API_KEY"),
+		GeminiAPIKey:     os.Getenv("GEMINI_API_KEY"),
+		FireworksAPIKey:  os.Getenv("FIREWORKS_API_KEY"),
+		AnthropicBaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
+		OpenAIBaseURL:    os.Getenv("OPENAI_BASE_URL"),
+		FireworksBaseURL: os.Getenv("FIREWORKS_BASE_URL"),
+	})}
 	llmConfig := &server.LLMConfig{
 		Models: modelsources.Build(models.All(), srcs, nil, logger),
 		Logger: logger,

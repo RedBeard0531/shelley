@@ -75,6 +75,9 @@ func TestBuildLLMConfigSkipsGatewayWhenReflectionFoundLLMIntegration(t *testing.
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("FIREWORKS_API_KEY", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("FIREWORKS_BASE_URL", "")
 
 	configPath := filepath.Join(t.TempDir(), "shelley.json")
 	if err := os.WriteFile(configPath, []byte(`{"llm_gateway":"https://gateway.example.com"}`), 0o600); err != nil {
@@ -125,6 +128,9 @@ func TestBuildLLMConfigDoesNotOverrideMetadataEnvironment(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("FIREWORKS_API_KEY", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("FIREWORKS_BASE_URL", "")
 
 	configPath := filepath.Join(t.TempDir(), "shelley.json")
 	config := `{
@@ -150,6 +156,66 @@ func TestBuildLLMConfigDoesNotOverrideMetadataEnvironment(t *testing.T) {
 	if !gatewayFound {
 		t.Fatal("parsed llm_gateway was not reused")
 	}
+}
+
+func TestBuildLLMConfigProviderBaseURLOverrides(t *testing.T) {
+	oldDiscover := discoverLLMIntegrations
+	discoverLLMIntegrations = func(context.Context, *http.Client, *slog.Logger) modelsources.LLMIntegrationDiscoveryResult {
+		return modelsources.LLMIntegrationDiscoveryResult{}
+	}
+	t.Cleanup(func() { discoverLLMIntegrations = oldDiscover })
+
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("FIREWORKS_API_KEY", "fireworks-key")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://anthropic.example/")
+	t.Setenv("OPENAI_BASE_URL", "https://openai.example/")
+	t.Setenv("FIREWORKS_BASE_URL", "https://fireworks.example/")
+
+	configPath := filepath.Join(t.TempDir(), "shelley.json")
+	if err := os.WriteFile(configPath, []byte(`{"llm_gateway":"https://gateway.example.com"}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := buildLLMConfig(GlobalConfig{ConfigPath: configPath}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"claude-opus-4.6":   "https://anthropic.example",
+		"gpt-5.5":           "https://openai.example",
+		"kimi-k3-fireworks": "https://fireworks.example",
+	}
+	assertOverrides := func(built []models.Built) {
+		t.Helper()
+		remaining := map[string]string{}
+		for id, baseURL := range want {
+			remaining[id] = baseURL
+		}
+		for _, model := range built {
+			if baseURL, ok := remaining[model.ID]; ok {
+				if model.BaseURL != baseURL {
+					t.Errorf("%s BaseURL = %q, want %q", model.ID, model.BaseURL, baseURL)
+				}
+				delete(remaining, model.ID)
+			}
+		}
+		if len(remaining) != 0 {
+			t.Errorf("models missing from config: %v", remaining)
+		}
+	}
+	assertOverrides(cfg.Models)
+
+	// With no gateway, the same overrides apply to the direct API-key source.
+	if err := os.WriteFile(configPath, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("write config without gateway: %v", err)
+	}
+	cfg, err = buildLLMConfig(GlobalConfig{ConfigPath: configPath}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOverrides(cfg.Models)
 }
 
 // TestGlobalFlagsDefaultModelEmptyByDefault guards the production fix: the
@@ -199,6 +265,9 @@ func TestBuildLLMConfigDefaultModelPrecedence(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("FIREWORKS_API_KEY", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("FIREWORKS_BASE_URL", "")
 
 	configPath := filepath.Join(t.TempDir(), "shelley.json")
 	config := `{"default_model": "gpt-5.6-sol"}`
