@@ -14,8 +14,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-RELEASE_TAG = "exe-scroll/v0.5.943506167"
-API_URL = "https://api.github.com/repos/boldsoftware/exe.dev/releases/tags/exe-scroll%2Fv0.5.943506167"
+RELEASE_TAG = "exe-scroll/v0.10.971335601"
+API_URL = "https://api.github.com/repos/boldsoftware/exe.dev/releases/tags/exe-scroll%2Fv0.10.971335601"
 TARGETS = (
     ("linux", "amd64"),
     ("linux", "arm64"),
