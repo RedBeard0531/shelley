@@ -16,6 +16,9 @@ export interface OpenFileOptions {
   /** Directory to resolve a relative path against (the emitting message's
    *  cwd). Falls back to the conversation's current cwd when absent. */
   baseDir?: string;
+  /** Commit hash the reference is pinned to: open the file as it existed at
+   *  that commit, read-only, instead of the working tree. */
+  commit?: string;
 }
 
 /** Opens `path` (absolute, or relative to the conversation's cwd) in the

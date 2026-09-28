@@ -36,6 +36,8 @@ func (r *Retryer) Do(fn func() error) error {
 - one line: `📄src/app.ts:42`
 - a range: `📄src/app.ts:42-87`
 
+To show a file as it existed at a particular commit, append `@` and that commit's hash (abbreviated or full): `📄src/app.ts:42@a1b2c3d`. The chip opens the file at that commit, read-only.
+
 Reference a git commit the same way — inline code starting with ⎇ followed by the commit hash (abbreviated or full). The hash you show is what opens: `⎇a1b2c3d` pops open that commit's diff in the viewer. Use it when pointing at work that has already been committed, e.g. "Fixed in `⎇a1b2c3d`".
 ~~~
 

@@ -233,6 +233,9 @@ const props = withDefaults(
     line?: number;
     /** Last line of the selection; only set for line-range references. */
     endLine?: number;
+    /** Read-only view (a commit-pinned reference): the editor cannot be
+     *  edited and never auto-saves. */
+    readOnly?: boolean;
   }>(),
   {},
 );
@@ -284,7 +287,7 @@ function setVimEnabled(v: boolean) {
 const isDesktop = ref(window.innerWidth >= 768);
 // vim status bar only makes sense while the editor is writable.
 const vimActive = computed(
-  () => vimEnabled.value && (mode.value === "edit" || mode.value === "split"),
+  () => !props.readOnly && vimEnabled.value && (mode.value === "edit" || mode.value === "split"),
 );
 let pendingG = false;
 let modeBeforePreview: "comment" | "edit" | "split" = "edit";
@@ -387,7 +390,7 @@ let commentsCleanup: (() => void) | null = null;
 // clearing only the selection prompt).
 watch(mode, (m) => {
   clearPrompt();
-  editor.value?.updateOptions({ readOnly: m === "comment" || m === "preview" });
+  editor.value?.updateOptions({ readOnly: props.readOnly || m === "comment" || m === "preview" });
 });
 
 // A host can reuse this instance for a different path without closing it.
@@ -443,7 +446,9 @@ watch(
         }
         if (cancelled) return;
         if (json?.path) resolvedPath.value = json.path;
-        const unsaved = unsavedFileContent(resolvedPath.value);
+        // A commit-pinned view must not overlay unsaved working-tree edits:
+        // the blob is a snapshot, and those edits belong to a different file.
+        const unsaved = props.readOnly ? undefined : unsavedFileContent(resolvedPath.value);
         content.value = unsaved ?? text ?? "";
         if (unsaved !== undefined) saveStatus.value = "error";
         loadStatus.value = "loaded";
@@ -579,7 +584,7 @@ watch(
       automaticLayout: true,
       fontSize: 14,
       padding: { top: 8 },
-      readOnly: mode.value === "comment" || mode.value === "preview",
+      readOnly: props.readOnly || mode.value === "comment" || mode.value === "preview",
       ...mobileLayoutOptions(!isDesktop.value),
     });
     editor.value = nextEditor;
@@ -590,7 +595,7 @@ watch(
 
     nextEditor.onDidChangeModelContent(() => {
       const text = nextEditor.getValue();
-      scheduleSave(text);
+      if (!props.readOnly) scheduleSave(text);
       if (mode.value === "split") {
         if (previewUpdateTimeout) clearTimeout(previewUpdateTimeout);
         previewUpdateTimeout = window.setTimeout(() => {
