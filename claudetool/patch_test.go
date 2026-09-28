@@ -975,6 +975,19 @@ func TestSimplePatchRejectsCombinedModifications(t *testing.T) {
 	}
 }
 
+func TestPatchDescriptionsRecommendParallelCalls(t *testing.T) {
+	tempDir := t.TempDir()
+	for _, profile := range []string{"", "simple"} {
+		tool := (&PatchTool{WorkingDir: NewMutableWorkingDir(tempDir), Profile: profile}).Tool()
+		flat := strings.Join(strings.Fields(tool.Description), " ")
+		for _, want := range []string{"send them all in the same reply as parallel tool calls"} {
+			if !strings.Contains(flat, want) {
+				t.Errorf("profile %q description missing %q:\n%s", profile, want, tool.Description)
+			}
+		}
+	}
+}
+
 func TestClassifyPatchError(t *testing.T) {
 	tests := []struct {
 		err  string
