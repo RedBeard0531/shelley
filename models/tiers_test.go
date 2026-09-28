@@ -16,6 +16,13 @@ func TestAssignTiers(t *testing.T) {
 		}
 	})
 
+	t.Run("sonnet 5.5 supersedes sonnet 5", func(t *testing.T) {
+		tiers := AssignTiers([]string{"claude-sonnet-5.5", "claude-sonnet-5", "claude-sonnet-4.6"})
+		if tiers["claude-sonnet-5.5"] != Tier1 || tiers["claude-sonnet-5"] != Tier2 || tiers["claude-sonnet-4.6"] != Tier2 {
+			t.Fatalf("tiers = %v", tiers)
+		}
+	})
+
 	t.Run("GPT-6 Sol shadows its superseded lineage", func(t *testing.T) {
 		ids := []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}
 		tiers := AssignTiers(ids)

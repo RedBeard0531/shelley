@@ -36,6 +36,7 @@ const (
 	Claude46Opus   = "claude-opus-4-6"
 	Claude46Sonnet = "claude-sonnet-4-6"
 	Claude5Sonnet  = "claude-sonnet-5"
+	Claude55Sonnet = "claude-sonnet-5-5"
 	Claude47Opus   = "claude-opus-4-7"
 	Claude48Opus   = "claude-opus-4-8"
 	Claude55Opus   = "claude-opus-5-5"

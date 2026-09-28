@@ -945,6 +945,13 @@ func TestMaxOutputTokensCapping(t *testing.T) {
 		t.Errorf("Fable 5.1 thinking = %+v, want adaptive", got6.Thinking)
 	}
 
+	// Sonnet 5.5 uses its snapshot's 128k output limit and adaptive thinking.
+	s55 := &Service{Model: Claude55Sonnet, MaxTokens: 200000, ThinkingLevel: llm.ThinkingLevelMedium}
+	got55 := s55.fromLLMRequest(simpleReq)
+	if got55.MaxTokens != 128000 || got55.Thinking == nil || got55.Thinking.Type != "adaptive" {
+		t.Errorf("Sonnet 5.5 request = %+v, want 128000 tokens with adaptive thinking", got55)
+	}
+
 	// The embedded snapshot, not a handwritten Claude table, sets Sonnet 5.
 	s7 := &Service{Model: Claude5Sonnet, MaxTokens: 200000}
 	if got := s7.fromLLMRequest(simpleReq); got.MaxTokens != 128000 {
@@ -2044,6 +2051,7 @@ func TestLiveAnthropicModels(t *testing.T) {
 		{"Opus 4.8", Claude48Opus},
 		{"Opus 5", Claude5Opus},
 		{"Sonnet 5", Claude5Sonnet},
+		{"Sonnet 5.5", Claude55Sonnet},
 	}
 
 	req := &llm.Request{
@@ -2977,6 +2985,7 @@ func TestUseAdaptiveThinking(t *testing.T) {
 		{Claude47Opus, true},
 		{Claude5Opus, true},
 		{Claude5Sonnet, true},
+		{Claude55Sonnet, true},
 		{ClaudeFable51, true},
 		{ClaudeFable5, true},
 		{"claude-opus-4-8-20260115", true},
@@ -3019,6 +3028,7 @@ func TestSupportedReasoningLevels(t *testing.T) {
 		want  string
 	}{
 		{Claude55Opus, "low,medium,high,xhigh,max"},
+		{Claude55Sonnet, "low,medium,high,xhigh,max"},
 		{Claude48Opus, "low,medium,high,xhigh,max"},
 		{ClaudeFable51, "low,medium,high,xhigh,max"},
 	}
@@ -3049,6 +3059,7 @@ func TestFromLLMRequestThinkingLevels(t *testing.T) {
 		wantBudgetGreat int // wantBudgetGreat: BudgetTokens must equal this when set
 	}{
 		{name: "adaptive opus 5.5 default medium", model: Claude55Opus, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
+		{name: "adaptive sonnet 5.5 default medium", model: Claude55Sonnet, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive default medium", model: Claude47Opus, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive fable 5.1 default medium", model: ClaudeFable51, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive req xhigh", model: Claude47Opus, svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelXHigh, wantType: "adaptive", wantEffort: "xhigh"},

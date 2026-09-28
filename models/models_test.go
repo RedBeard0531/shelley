@@ -49,6 +49,22 @@ func TestAll(t *testing.T) {
 	}
 }
 
+func TestSonnet55InBuiltInCatalog(t *testing.T) {
+	var found bool
+	for _, m := range All() {
+		if m.ID != "claude-sonnet-5.5" {
+			continue
+		}
+		found = true
+		if m.APIModelName != "claude-sonnet-5-5" || m.Description != "Claude Sonnet 5.5" || m.APIType != APITypeAnthropicMessages || m.Build == nil {
+			t.Fatalf("Sonnet 5.5 = %+v", m)
+		}
+	}
+	if !found {
+		t.Fatal("Claude Sonnet 5.5 not in built-in catalog")
+	}
+}
+
 func TestIDs(t *testing.T) {
 	ids := IDs()
 	if len(ids) == 0 {

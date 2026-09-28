@@ -402,6 +402,7 @@ func TestLookupCost(t *testing.T) {
 		// First-party models resolve by name alone even when the endpoint is
 		// an unknown gateway host.
 		{"anthropic via gateway", "https://llm.int.exe.xyz/v1/messages", "claude-opus-4-6", true, Cost{Input: 5, Output: 25, CacheRead: 0.5, CacheWrite: 6.25}},
+		{"sonnet 5.5 via gateway", "https://llm.int.exe.xyz/v1/messages", "claude-sonnet-5-5", true, Cost{Input: 2, Output: 10, CacheRead: 0.2, CacheWrite: 2.5}},
 		{"anthropic dated", "", "claude-sonnet-4-5-20250929", true, Cost{Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
 		// OpenAI snapshot names carry a date suffix that models.dev omits.
 		{"openai dated", "https://llm.int.exe.xyz/v1/responses", "gpt-5.5-2026-04-23", true, Cost{Input: 5, Output: 30, CacheRead: 0.5}},
@@ -438,6 +439,7 @@ func TestLookupAnthropicOutputLimit(t *testing.T) {
 	}{
 		{"canonical Anthropic", "https://api.anthropic.com/v1/messages", "claude-opus-4-5-20251101", 64000, true},
 		{"gateway Claude resolves canonical catalog", "https://llm.int.exe.xyz/anthropic/v1/messages", "claude-sonnet-5", 128000, true},
+		{"sonnet 5.5 uses snapshot limit", "https://llm.int.exe.xyz/anthropic/v1/messages", "claude-sonnet-5-5", 128000, true},
 		{"date alias resolves canonical catalog", "", "claude-opus-4-5-2026-01-01", 64000, true},
 		// The Fireworks endpoint must win over OpenRouter's differently priced
 		// gpt-oss-120b entry. No cross-provider catalog scan is allowed.
