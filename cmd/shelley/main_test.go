@@ -96,12 +96,17 @@ func TestBuildLLMConfigSkipsGatewayWhenReflectionFoundLLMIntegration(t *testing.
 	}
 }
 
-func TestBuildLLMConfigAppliesExeEnvironmentBeforeDiscovery(t *testing.T) {
-	oldEnv, err := exeenv.Current()
+func TestBuildLLMConfigDoesNotOverrideMetadataEnvironment(t *testing.T) {
+	oldEnv, err := exeenv.New("https", "exe.xyz")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { exeenv.Configure(oldEnv) })
+	metadataEnv, err := exeenv.New("http", "exe.cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exeenv.Configure(metadataEnv)
 
 	oldDiscover := discoverLLMIntegrations
 	discoverLLMIntegrations = func(context.Context, *http.Client, *slog.Logger) modelsources.LLMIntegrationDiscoveryResult {
@@ -109,7 +114,7 @@ func TestBuildLLMConfigAppliesExeEnvironmentBeforeDiscovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := env.ReflectionURL(); got != "https://reflection.int.example.test" {
+		if got := env.ReflectionURL(); got != metadataEnv.ReflectionURL() {
 			t.Fatalf("discovery environment = %q", got)
 		}
 		return modelsources.LLMIntegrationDiscoveryResult{}
@@ -261,7 +266,7 @@ func TestModelsCommandDefaultIDMatchesServerVisibility(t *testing.T) {
 	}
 }
 
-func TestBuildLLMConfigRejectsInvalidExeEnvironmentBeforeDiscovery(t *testing.T) {
+func TestBuildLLMConfigIgnoresInvalidLegacyExeEnvironment(t *testing.T) {
 	oldDiscover := discoverLLMIntegrations
 	discoveryCalls := 0
 	discoverLLMIntegrations = func(context.Context, *http.Client, *slog.Logger) modelsources.LLMIntegrationDiscoveryResult {
@@ -276,11 +281,11 @@ func TestBuildLLMConfigRejectsInvalidExeEnvironmentBeforeDiscovery(t *testing.T)
 	}
 
 	_, err := buildLLMConfig(GlobalConfig{ConfigPath: configPath}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
-	if err == nil || !strings.Contains(err.Error(), "exe_environment") {
-		t.Fatalf("buildLLMConfig() error = %v", err)
+	if err != nil {
+		t.Fatalf("legacy exe_environment should be ignored: %v", err)
 	}
-	if discoveryCalls != 0 {
-		t.Fatalf("discovery called %d times before config validation", discoveryCalls)
+	if discoveryCalls != 1 {
+		t.Fatalf("discovery called %d times, want 1", discoveryCalls)
 	}
 }
 

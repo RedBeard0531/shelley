@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -13,6 +14,24 @@ import (
 	"shelley.exe.dev/llm/oai"
 	"shelley.exe.dev/models"
 )
+
+func TestMain(m *testing.M) {
+	env, err := exeenv.New("https", "exe.xyz")
+	if err != nil {
+		panic(err)
+	}
+	exeenv.Configure(env) // tests use fake integration clients, never live VM metadata
+	os.Exit(m.Run())
+}
+
+func testProdExeEnv(t *testing.T) exeenv.Environment {
+	t.Helper()
+	env, err := exeenv.New("https", "exe.xyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -749,7 +768,7 @@ func TestDiscoverLLMIntegrationsFallsBackWhenReflectionRequestFails(t *testing.T
 				}, nil
 			})}
 
-			result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+			result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), testProdExeEnv(t))
 			if result.Found != tt.wantFound {
 				t.Fatalf("Found = %v, want %v", result.Found, tt.wantFound)
 			}
@@ -788,7 +807,7 @@ func TestDiscoverLLMIntegrationsDoesNotFallbackAfterSuccessfulReflection(t *test
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), testProdExeEnv(t))
 	if result.Found {
 		t.Fatal("Found = true, want false")
 	}
@@ -813,7 +832,7 @@ func TestDiscoverLLMIntegrationsKeepsFoundWhenReflectedCatalogFails(t *testing.T
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), testProdExeEnv(t))
 	if !result.Found || len(result.Integrations) != 0 {
 		t.Fatalf("result = %+v, want found integration with unavailable catalog", result)
 	}
@@ -894,7 +913,7 @@ func TestDiscoverLLMIntegrationsReadsModelsJSONCatalog(t *testing.T) {
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), testProdExeEnv(t))
 	if !result.Found {
 		t.Fatal("Found = false, want true")
 	}
@@ -945,7 +964,7 @@ func TestDiscoverLLMIntegrationsUsesTeamHost(t *testing.T) {
 		}, nil
 	})}
 
-	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), exeenv.FromHostname("box.exe.xyz"))
+	result := discoverLLMIntegrations(t.Context(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), testProdExeEnv(t))
 	if !result.Found {
 		t.Fatal("Found = false, want true")
 	}

@@ -15,7 +15,6 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/client"
 	"shelley.exe.dev/db"
-	"shelley.exe.dev/exeenv"
 	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/modelsources"
@@ -37,14 +36,8 @@ type GlobalConfig struct {
 }
 
 type shelleyConfig struct {
-	LLMGateway     string                `json:"llm_gateway"`
-	DefaultModel   string                `json:"default_model"`
-	ExeEnvironment *exeEnvironmentConfig `json:"exe_environment"`
-}
-
-type exeEnvironmentConfig struct {
-	Scheme  string `json:"scheme"`
-	BoxHost string `json:"box_host"`
+	LLMGateway   string `json:"llm_gateway"`
+	DefaultModel string `json:"default_model"`
 }
 
 var discoverLLMIntegrations = modelsources.DiscoverLLMIntegrations
@@ -448,14 +441,6 @@ func buildLLMConfig(global GlobalConfig, logger *slog.Logger, database *db.DB) (
 	if err != nil {
 		return nil, err
 	}
-	if config.ExeEnvironment != nil {
-		env, err := exeenv.New(config.ExeEnvironment.Scheme, config.ExeEnvironment.BoxHost)
-		if err != nil {
-			return nil, fmt.Errorf("exe_environment: %w", err)
-		}
-		exeenv.Configure(env)
-	}
-
 	defaultModel, sources := buildLLMModelSources(context.Background(), global, config, logger)
 
 	httpc := llmhttp.NewClient(nil)
