@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,6 +64,11 @@ func safeRef(ref string) bool {
 	}
 	return !strings.HasPrefix(ref, "-")
 }
+
+// blobRefRe restricts /api/git/blob's ref to a commit hash: a plain hex run,
+// abbreviated (git's shortest unambiguous output) through full SHA-256. Any
+// other revision expression could smuggle git syntax (`ref^`, `ref:path`).
+var blobRefRe = regexp.MustCompile(`^[0-9a-f]{6,64}$`)
 
 // parentRef returns the parent commit hash for a commit.
 // For root commits (no parent), it returns the empty tree hash.
@@ -1414,4 +1420,67 @@ func (s *Server) handleGitCommitDetail(w http.ResponseWriter, r *http.Request) {
 		InsTotal: insTotal,
 		DelTotal: delTotal,
 	})
+}
+
+// handleGitBlob serves a file's content as it existed at a commit:
+// GET /api/git/blob?path=<abs>&ref=<hash> -> {path, content}. Path is the
+// file's absolute (or ~/) path; it locates the repository (via its containing
+// directory) and the path relative to that repository's root. Read-only
+// serving for commit-pinned file references; writing is /api/write-file's job.
+func (s *Server) handleGitBlob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+	if !safeRef(ref) {
+		http.Error(w, "ref required", http.StatusBadRequest)
+		return
+	}
+	// A ref is a commit hash here, not an arbitrary revision expression:
+	// anything that is not a plain hex run could smuggle git syntax
+	// (`ref^`, `ref:path`).
+	if !blobRefRe.MatchString(ref) {
+		http.Error(w, "ref must be a commit hash", http.StatusBadRequest)
+		return
+	}
+	path, err := expandTilde(r.URL.Query().Get("path"))
+	if err != nil || filepath.Clean(path) == "" || !filepath.IsAbs(filepath.Clean(path)) {
+		http.Error(w, "absolute path required", http.StatusBadRequest)
+		return
+	}
+	clean := filepath.Clean(path)
+	gitRoot, err := getGitRoot(filepath.Dir(clean))
+	if err != nil {
+		http.Error(w, "not in a git repository: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	rel, err := filepath.Rel(gitRoot, clean)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		http.Error(w, "path is outside its repository", http.StatusBadRequest)
+		return
+	}
+	// Size check before reading: the blob stays bounded like handleReadFile.
+	rev := ref + ":" + filepath.ToSlash(rel)
+	sizeOut, err := exec.Command("git", "-C", gitRoot, "cat-file", "-s", rev).Output()
+	if err != nil {
+		http.Error(w, "blob not found at ref", http.StatusNotFound)
+		return
+	}
+	size, err := strconv.Atoi(strings.TrimSpace(string(sizeOut)))
+	if err != nil {
+		http.Error(w, "bad blob size: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if size > maxEditableFileBytes {
+		http.Error(w, "file too large to edit", http.StatusRequestEntityTooLarge)
+		return
+	}
+	blob, err := exec.Command("git", "-C", gitRoot, "cat-file", "blob", rev).Output()
+	if err != nil {
+		http.Error(w, "failed to read blob: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"path": clean, "content": string(blob)})
 }
