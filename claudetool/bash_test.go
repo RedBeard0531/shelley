@@ -648,6 +648,26 @@ func TestBashTailPipe(t *testing.T) {
 		}
 	})
 
+	t.Run("cd prefix", func(t *testing.T) {
+		dir := t.TempDir()
+		out := run(t, fmt.Sprintf(`cd %s && printf 'a\nb\nc\n' | tail -1`, dir))
+		if out.Error != nil {
+			t.Fatalf("Run() error = %v", out.Error)
+		}
+		if got := out.LLMContent[0].Text; !strings.HasSuffix(got, "c\n") {
+			t.Errorf("output = %q, want it to end with %q", got, "c\n")
+		}
+		// The cd itself survives the strip (the hint about a chained cd not
+		// persisting still precedes it).
+		out = run(t, fmt.Sprintf(`cd %s && pwd | tail -1`, dir))
+		if out.Error != nil {
+			t.Fatalf("Run() error = %v", out.Error)
+		}
+		if got := strings.TrimSpace(out.LLMContent[0].Text); !strings.HasSuffix(got, dir) {
+			t.Errorf("output = %q, want it to end with %q (the cd prefix ran)", got, dir)
+		}
+	})
+
 	t.Run("tail joined to another command", func(t *testing.T) {
 		// `&&` makes the pipeline only part of the command: stripping the
 		// tail would truncate the echo too.
