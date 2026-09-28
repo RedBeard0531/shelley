@@ -141,6 +141,10 @@ type bashInput struct {
 	Command    string `json:"command"`
 	Background bool   `json:"background,omitempty"`
 	Cwd        string `json:"cwd,omitempty"`
+
+	// tailLines is the line count of a `... | tail -N` stage that
+	// bashkit.TailPipe stripped from Command; 0 when there was none.
+	tailLines int
 }
 
 // resolveWorkingDir returns the directory to run a command in: the per-call
@@ -183,6 +187,16 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 	wd, errOut := resolveWorkingDir(b.getWorkingDir(), req.Cwd)
 	if errOut != nil {
 		return *errOut
+	}
+
+	// A `| tail -N` around the whole command would hold the output back until
+	// the command finished. Run the command unwrapped instead and keep the
+	// last N lines here, so the UI sees output as it is produced. stdout and
+	// stderr share one log, so the merge is what gets truncated, as
+	// `2>&1 | tail` would.
+	if stripped, lines, ok := bashkit.TailPipe(req.Command); ok {
+		req.Command = stripped
+		req.tailLines = lines
 	}
 
 	// do a quick permissions check (NOT a security barrier)
@@ -375,7 +389,12 @@ func (b *BashTool) executeBashInDir(ctx context.Context, req bashInput, wd strin
 	if readErr != nil {
 		return bashResult{}, fmt.Errorf("read command output: %w", readErr)
 	}
-	out, err := formatForegroundBashOutput(string(content))
+	out := string(content)
+	if req.tailLines > 0 {
+		// The tail stage the command asked for, applied to the whole run.
+		out = lastLinesString(out, req.tailLines)
+	}
+	out, err = formatForegroundBashOutput(out)
 	if err != nil {
 		return bashResult{}, err
 	}
