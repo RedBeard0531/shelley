@@ -121,7 +121,7 @@ func TestOpenAIRecordingTranscriberUsesOpenAICredentialRoutes(t *testing.T) {
 	defer api.Close()
 
 	manager, err := models.NewManager(&models.Config{
-		TranscriptionModels: modelsources.TranscriptionModels([]modelsources.Source{modelsources.Gateway(api.URL, "", "sk-test", "")}),
+		TranscriptionModels: modelsources.TranscriptionModels([]modelsources.Source{modelsources.Gateway(api.URL, modelsources.EnvConfig{OpenAIAPIKey: "sk-test"})}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestOpenAIRecordingTranscriberUnavailableWithoutTimestampsModel(t *testing.
 
 func TestOpenAIRecordingTranscriberIgnoresRoutesWhenPredictableOnly(t *testing.T) {
 	manager, err := models.NewManager(&models.Config{
-		TranscriptionModels: modelsources.TranscriptionModels([]modelsources.Source{modelsources.Env("", "sk-test", "", "")}),
+		TranscriptionModels: modelsources.TranscriptionModels([]modelsources.Source{modelsources.Env(modelsources.EnvConfig{OpenAIAPIKey: "sk-test"})}),
 	})
 	if err != nil {
 		t.Fatal(err)
