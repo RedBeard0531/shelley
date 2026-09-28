@@ -595,13 +595,18 @@ func loadConfig(path string) (shelleyConfig, error) {
 
 func buildLLMModelSources(ctx context.Context, global GlobalConfig, config shelleyConfig, logger *slog.Logger) (string, []modelsources.Source) {
 	defaultModel := global.DefaultModel
-	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
-	openAIKey := os.Getenv("OPENAI_API_KEY")
-	geminiKey := os.Getenv("GEMINI_API_KEY")
-	fireworksKey := os.Getenv("FIREWORKS_API_KEY")
 	// DEPRECATED: Per-provider env-var credentials are frozen. Do NOT add new
 	// env vars or models here; new models belong to the exe.dev LLM gateway or
 	// an exe.dev LLM integration. OPENAI_API_KEY also serves transcription.
+	providerEnv := modelsources.EnvConfig{
+		AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),
+		OpenAIAPIKey:     os.Getenv("OPENAI_API_KEY"),
+		GeminiAPIKey:     os.Getenv("GEMINI_API_KEY"),
+		FireworksAPIKey:  os.Getenv("FIREWORKS_API_KEY"),
+		AnthropicBaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
+		OpenAIBaseURL:    os.Getenv("OPENAI_BASE_URL"),
+		FireworksBaseURL: os.Getenv("FIREWORKS_BASE_URL"),
+	}
 
 	var sources []modelsources.Source
 
@@ -632,24 +637,24 @@ func buildLLMModelSources(ctx context.Context, global GlobalConfig, config shell
 	}
 
 	// 2. Gateway (Anthropic, OpenAI, Fireworks, xAI). Per-provider env vars
-	// override the gateway's implicit credential for those providers; xAI is
-	// gateway-only (no direct env-var credential).
+	// override the gateway's implicit credentials and routes; xAI remains
+	// gateway-only.
 	if gateway != "" && llmIntegrationFound {
 		logger.Info("Skipping LLM gateway because an exe.dev LLM integration was discovered")
-		if geminiKey != "" {
-			sources = append(sources, modelsources.Env("", "", geminiKey, ""))
+		if providerEnv.GeminiAPIKey != "" {
+			sources = append(sources, modelsources.Env(modelsources.EnvConfig{GeminiAPIKey: providerEnv.GeminiAPIKey}))
 		}
 	} else if gateway != "" {
 		logger.Info("Using LLM gateway", "gateway", gateway)
-		sources = append(sources, modelsources.Gateway(gateway, anthropicKey, openAIKey, fireworksKey))
+		sources = append(sources, modelsources.Gateway(gateway, providerEnv))
 		// 2b. Gemini is not served by the gateway; let GEMINI_API_KEY,
 		// when set, supply Gemini models alongside the gateway.
-		if geminiKey != "" {
-			sources = append(sources, modelsources.Env("", "", geminiKey, ""))
+		if providerEnv.GeminiAPIKey != "" {
+			sources = append(sources, modelsources.Env(modelsources.EnvConfig{GeminiAPIKey: providerEnv.GeminiAPIKey}))
 		}
-	} else if anthropicKey != "" || openAIKey != "" || geminiKey != "" || fireworksKey != "" {
+	} else if providerEnv.AnthropicAPIKey != "" || providerEnv.OpenAIAPIKey != "" || providerEnv.GeminiAPIKey != "" || providerEnv.FireworksAPIKey != "" {
 		// 3. Env vars.
-		sources = append(sources, modelsources.Env(anthropicKey, openAIKey, geminiKey, fireworksKey))
+		sources = append(sources, modelsources.Env(providerEnv))
 	}
 
 	// 4. Predictable always available.
