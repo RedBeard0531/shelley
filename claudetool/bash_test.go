@@ -8,9 +8,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/josharian/sockpath"
+
+	"shelley.exe.dev/llm"
 )
 
 func TestBashToolExitCode(t *testing.T) {
@@ -576,5 +579,124 @@ func TestShellHasCommand(t *testing.T) {
 	cancel()
 	if shellHasCommand(canceled, "bash") {
 		t.Error("expected cancelled context to return false")
+	}
+}
+
+func TestBashTailPipe(t *testing.T) {
+	// A `| tail -N` around the whole command is stripped from it and applied
+	// server-side, so the command's own exit status and output survive.
+	wd := t.TempDir()
+	tool := (&BashTool{WorkingDir: NewMutableWorkingDir(wd)}).Tool()
+
+	run := func(t *testing.T, command string) llm.ToolOut {
+		t.Helper()
+		input, err := json.Marshal(bashInput{Command: command})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tool.Run(t.Context(), input)
+	}
+
+	t.Run("last lines kept", func(t *testing.T) {
+		out := run(t, `printf 'a\nb\nc\n' | tail -2`)
+		if out.Error != nil {
+			t.Fatalf("Run() error = %v", out.Error)
+		}
+		if got := out.LLMContent[0].Text; got != "b\nc\n" {
+			t.Errorf("output = %q, want %q", got, "b\nc\n")
+		}
+	})
+
+	t.Run("fewer lines than asked for", func(t *testing.T) {
+		out := run(t, `printf 'only\n' | tail -5`)
+		if out.Error != nil {
+			t.Fatalf("Run() error = %v", out.Error)
+		}
+		if got := out.LLMContent[0].Text; got != "only\n" {
+			t.Errorf("output = %q, want %q", got, "only\n")
+		}
+	})
+
+	t.Run("status of the stripped command", func(t *testing.T) {
+		out := run(t, `sh -c 'echo boom >&2; exit 3' | tail -1`)
+		if out.Error == nil {
+			t.Fatal("Run() error = nil, want non-nil")
+		}
+		if !strings.Contains(out.Error.Error(), "exit status 3") {
+			t.Errorf("error = %v, want the command's exit status 3", out.Error)
+		}
+		if display := bashDisplayData(t, out.Display); display.ExitCode == nil || *display.ExitCode != 3 {
+			t.Errorf("ExitCode = %v, want 3", display.ExitCode)
+		}
+	})
+
+	t.Run("tail that is not the whole command", func(t *testing.T) {
+		// The last stage is not tail, so the pipeline runs as written.
+		out := run(t, `printf 'a\nb\nc\n' | tail -2 > out.txt`)
+		if out.Error != nil {
+			t.Fatalf("Run() error = %v", out.Error)
+		}
+		if got := out.LLMContent[0].Text; got != "" {
+			t.Errorf("output = %q, want empty (it was redirected)", got)
+		}
+		b, err := os.ReadFile(filepath.Join(wd, "out.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(b); got != "b\nc\n" {
+			t.Errorf("out.txt = %q, want %q", got, "b\nc\n")
+		}
+	})
+
+	t.Run("tail joined to another command", func(t *testing.T) {
+		// `&&` makes the pipeline only part of the command: stripping the
+		// tail would truncate the echo too.
+		out := run(t, `printf 'a\nb\nc\n' | tail -2 && echo done`)
+		if out.Error != nil {
+			t.Fatalf("Run() error = %v", out.Error)
+		}
+		if got := out.LLMContent[0].Text; got != "b\nc\ndone\n" {
+			t.Errorf("output = %q, want %q", got, "b\nc\ndone\n")
+		}
+	})
+}
+
+// TestBashTailPipeStreams checks that stripping the tail is what makes output
+// visible while the command runs: tail holds its lines back until it is done.
+func TestBashTailPipeStreams(t *testing.T) {
+	var mu sync.Mutex
+	var updates []string
+	ctx := WithToolProgress(t.Context(), func(p llm.ToolProgress) {
+		mu.Lock()
+		defer mu.Unlock()
+		updates = append(updates, p.Output)
+	})
+	ctx = WithToolUseID(ctx, "tool-use-tail")
+
+	tool := (&BashTool{WorkingDir: NewMutableWorkingDir("/")}).Tool()
+	out := tool.Run(ctx, json.RawMessage(
+		`{"command":"{ echo first; sleep 1; echo second; } | tail -1"}`,
+	))
+	if out.Error != nil {
+		t.Fatalf("Run() error = %v", out.Error)
+	}
+	if got := out.LLMContent[0].Text; got != "second\n" {
+		t.Errorf("output = %q, want %q", got, "second\n")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(updates) == 0 {
+		t.Fatal("expected progress updates, got none")
+	}
+	sawFirstAlone := false
+	for _, u := range updates {
+		if strings.Contains(u, "first") && !strings.Contains(u, "second") {
+			sawFirstAlone = true
+			break
+		}
+	}
+	if !sawFirstAlone {
+		t.Errorf("expected a progress update with 'first' before the command finished, got %q", updates)
 	}
 }

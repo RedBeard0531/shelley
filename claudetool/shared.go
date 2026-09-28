@@ -6,10 +6,39 @@
 package claudetool
 
 import (
+	"bytes"
 	"context"
 
 	"shelley.exe.dev/llm"
 )
+
+// lastLines returns the final n lines of b, trailing newlines included, or all
+// of b if it holds fewer than n lines. A final line without a newline counts
+// as a line of its own. n <= 0 keeps everything.
+func lastLines(b []byte, n int) []byte {
+	// The newline terminating the last line does not begin one, so the
+	// search for line starts begins before it.
+	end := len(b)
+	if end > 0 && b[end-1] == '\n' {
+		end--
+	}
+	for i := end; n > 0; n-- {
+		j := bytes.LastIndexByte(b[:i], '\n')
+		if j < 0 {
+			return b // b holds fewer than n lines
+		}
+		if n == 1 {
+			return b[j+1:]
+		}
+		i = j
+	}
+	return b
+}
+
+// lastLinesString is lastLines for a string.
+func lastLinesString(s string, n int) string {
+	return string(lastLines([]byte(s), n))
+}
 
 func WithWorkingDir(ctx context.Context, wd string) context.Context {
 	return llm.WithWorkingDir(ctx, wd)
