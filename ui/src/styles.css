@@ -1670,6 +1670,37 @@ body {
   color: var(--text-primary);
 }
 
+/* Connector rail linking tool calls emitted by the same assistant message.
+   Purely decorative: the line is absolutely positioned in the messages-
+   container's left padding, so cards keep their exact size and position.
+   Segments span each card plus a small overhang, fusing across the flush
+   .message-tool boxes into one continuous line; the start/end insets stop
+   the line at the visible card edge (1rem content padding + 0.5rem details
+   margin) instead of its rounded corner. */
+.tool-turn {
+  position: relative;
+}
+
+.tool-turn::before {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: -6px;
+  bottom: -6px;
+  width: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--primary) 35%, var(--bg-secondary));
+  pointer-events: none;
+}
+
+.tool-turn-start::before {
+  top: 20px;
+}
+
+.tool-turn-end::before {
+  bottom: 20px;
+}
+
 .thinking-indicator {
   display: inline-flex;
   align-items: center;

@@ -35,21 +35,27 @@
       :exchange="exchange"
     />
   </template>
-  <CoalescedToolCall
+  <!-- The rail classes live on this wrapper, not the card, so card geometry
+       stays untouched (see .tool-turn in styles.css). -->
+  <div
     v-else-if="node.kind === 'tool-call'"
-    :tool-name="node.item.toolName || 'Unknown Tool'"
-    :tool-input="node.item.toolInput"
-    :tool-result="node.item.toolResult"
-    :tool-error="node.item.toolError"
-    :tool-invoked-at="node.item.toolInvokedAt"
-    :tool-start-time="node.item.toolStartTime"
-    :tool-end-time="node.item.toolEndTime"
-    :has-result="node.item.hasResult"
-    :tool-interrupted="node.item.toolInterrupted"
-    :display="node.item.display"
-    :on-comment-text-change="onCommentTextChange"
-    :tool-use-id="node.item.toolUseId"
-  />
+    :class="node.turnGroup ? `tool-turn tool-turn-${node.turnGroup}` : undefined"
+  >
+    <CoalescedToolCall
+      :tool-name="node.item.toolName || 'Unknown Tool'"
+      :tool-input="node.item.toolInput"
+      :tool-result="node.item.toolResult"
+      :tool-error="node.item.toolError"
+      :tool-invoked-at="node.item.toolInvokedAt"
+      :tool-start-time="node.item.toolStartTime"
+      :tool-end-time="node.item.toolEndTime"
+      :has-result="node.item.hasResult"
+      :tool-interrupted="node.item.toolInterrupted"
+      :display="node.item.display"
+      :on-comment-text-change="onCommentTextChange"
+      :tool-use-id="node.item.toolUseId"
+    />
+  </div>
   <CarriedBand v-else-if="node.kind === 'carried-band'" :count="node.count">
     <MessageRenderNode
       v-for="child in node.children"
