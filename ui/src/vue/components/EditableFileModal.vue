@@ -412,6 +412,10 @@ watch(isDesktop, (desktop) => {
 });
 
 // --- File load (when opened / path / loadUrl change) ---
+// Cancels the in-flight load when the watcher re-runs. Declared before the
+// watcher below: the immediate first run assigns it, and a `let` read or
+// written before its declaration is a TDZ error.
+let currentLoadCancel: (() => void) | null = null;
 watch(
   () => [props.isOpen, props.path, props.loadUrl] as const,
   () => {
@@ -462,7 +466,6 @@ watch(
   },
   { immediate: true },
 );
-let currentLoadCancel: (() => void) | null = null;
 
 // --- Load Monaco when opened ---
 watch(
