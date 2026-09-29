@@ -30,6 +30,26 @@ export interface UsageEntry {
   turnStartTimestamp?: number;
 }
 
+type TokenUsageBreakdown = Pick<
+  UsageEntry,
+  "input_tokens" | "cache_creation_input_tokens" | "cache_read_input_tokens" | "output_tokens"
+>;
+
+export function totalPromptTokens(usage: TokenUsageBreakdown): number {
+  return usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
+}
+
+export function estimateUsageCost(usage: TokenUsageBreakdown, cost: ModelCost): number {
+  // Output tokens already include reasoning tokens, so price the output once.
+  return (
+    (usage.input_tokens * cost.input +
+      usage.cache_creation_input_tokens * cost.cache_write +
+      usage.cache_read_input_tokens * cost.cache_read +
+      usage.output_tokens * cost.output) /
+    1e6
+  );
+}
+
 /** models.dev pricing, USD per million tokens. */
 export interface ModelCost {
   input: number;

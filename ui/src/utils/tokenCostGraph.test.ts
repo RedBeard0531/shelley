@@ -6,6 +6,7 @@ import {
   buildTokenCostStack,
   callXLayout,
   countConfirmedUnpricedCalls,
+  estimateUsageCost,
   formatDuration,
   formatTokenCount,
   formatUsd,
@@ -15,6 +16,7 @@ import {
   segmentColor,
   timeXLayout,
   TOKEN_BANDS,
+  totalPromptTokens,
   UsageEntry,
   yTicks,
 } from "./tokenCostGraph";
@@ -44,6 +46,23 @@ function entry(partial: Partial<UsageEntry>): UsageEntry {
     model: "claude-opus-4-6",
     ...partial,
   };
+}
+
+{
+  const usage = entry({
+    input_tokens: 1_000,
+    cache_creation_input_tokens: 2_000_000,
+    cache_read_input_tokens: 3_000_000,
+    output_tokens: 200,
+  });
+  assert(
+    totalPromptTokens(usage) === 5_001_000,
+    "prompt total includes uncached, cache write, and cache read",
+  );
+  assert(
+    approx(estimateUsageCost(usage, opusCost), 14.01),
+    "estimated cost prices each prompt band and output once",
+  );
 }
 
 function modelUsage(
