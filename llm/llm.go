@@ -311,6 +311,9 @@ type Tool struct {
 	CustomGrammar string
 	// EndsTurn indicates that this tool should cause the model to end its turn when used
 	EndsTurn bool
+	// Sequential runs sibling calls to this tool one at a time in request order.
+	// Other tools in the same sibling batch still run concurrently.
+	Sequential bool
 	// Cache indicates whether to use prompt caching for this tool
 	Cache bool
 
@@ -321,7 +324,7 @@ type Tool struct {
 
 	// The Run function is automatically called when the tool is used.
 	// Run functions may be called concurrently with adjacent tools, including
-	// other calls to the same tool.
+	// other calls to the same tool unless Sequential is set.
 	// The input to Run function is the input to the tool, as provided by Claude, in compliance with the input schema.
 	// The outputs from Run will be sent back to Claude.
 	// If you do not want to respond to the tool call request from Claude, return ErrDoNotRespond.

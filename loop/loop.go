@@ -960,9 +960,20 @@ func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) erro
 	finished.Add(len(toolUses))
 	start := make(chan struct{})
 	run := false
+	sequentialTails := make(map[string]<-chan struct{})
 	for i, c := range toolUses {
-		go func(i int, c llm.Content) {
+		var predecessor <-chan struct{}
+		var successor chan struct{}
+		if tool := l.findTool(c.ToolName); tool != nil && tool.Sequential {
+			predecessor = sequentialTails[c.ToolName]
+			successor = make(chan struct{})
+			sequentialTails[c.ToolName] = successor
+		}
+		go func(i int, c llm.Content, predecessor <-chan struct{}, successor chan struct{}) {
 			defer finished.Done()
+			if successor != nil {
+				defer close(successor)
+			}
 			ready.Done()
 			<-start
 			if !run {
@@ -974,8 +985,20 @@ func (l *Loop) executeToolCalls(ctx context.Context, content []llm.Content) erro
 				}
 				return
 			}
+			if predecessor != nil {
+				<-predecessor
+				if ctx.Err() != nil {
+					toolResults[i] = llm.Content{
+						Type:       llm.ContentTypeToolResult,
+						ToolUseID:  c.ID,
+						ToolError:  true,
+						ToolResult: llm.TextContent(notExecutedToolResultText),
+					}
+					return
+				}
+			}
 			toolResults[i] = l.executeToolCall(ctx, c)
-		}(i, c)
+		}(i, c, predecessor, successor)
 	}
 	ready.Wait()
 	run = ctx.Err() == nil
