@@ -890,22 +890,25 @@ func TestSystemPromptSentToLLM(t *testing.T) {
 			t.Fatalf("Expected status 202, got %d: %s", resp2.StatusCode, body)
 		}
 
-		// Poll for second message to be processed
-		// We need to wait for a request WITH a system prompt, not just any request
+		// Poll for second message to be processed.
+		// Like the first subtest, the loop fires systemless requests (e.g.
+		// slug generation) alongside the conversation request; scan all
+		// requests to find one with a system prompt regardless of order.
 		var lastReq *llm.Request
-		for i := 0; i < 50; i++ {
-			lastReq = predictableService.GetLastRequest()
-			if lastReq != nil && len(lastReq.System) > 0 {
+		for i := 0; i < 500; i++ {
+			for _, req := range predictableService.GetRecentRequests() {
+				if len(req.System) > 0 {
+					lastReq = req
+					break
+				}
+			}
+			if lastReq != nil {
 				break
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}
 		if lastReq == nil {
-			t.Fatal("No request was sent to the LLM service after 5 seconds")
-		}
-
-		if len(lastReq.System) == 0 {
-			t.Fatal("System prompt was not included in subsequent LLM request")
+			t.Fatal("No request with a system prompt was sent to the LLM service after 5 seconds")
 		}
 
 		// Verify system prompt contains expected content
