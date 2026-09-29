@@ -790,8 +790,9 @@ async function handleDistillNewGeneration(
   instructions?: string,
 ) {
   try {
+    // Compaction happens in place; don't touch currentConversationId here or
+    // a user who navigated away mid-request gets pulled back.
     await api.distillNewGeneration(sourceConversationId, model, cwd, method, instructions);
-    currentConversationId.value = sourceConversationId;
   } catch (err) {
     console.error("Failed to compact into new generation:", err);
     error.value = "Failed to compact conversation";
