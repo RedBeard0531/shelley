@@ -30,11 +30,11 @@ type ToolResponse struct {
 	OtherUsage []llm.PurposedUsage
 }
 
-// Hooks observe agent-loop lifecycle events. Errors from durable persistence
-// hooks are logged and do not abort the run; streaming and tool-progress hooks
-// are non-error callbacks.
+// Hooks observe agent-loop lifecycle events. Failed tool-use and tool-result
+// persistence aborts the run; streaming and tool-progress hooks cannot fail.
 type Hooks struct {
 	OnStreamingResponse func(context.Context, llm.StreamDelta)
+	OnStreamDone        func()
 	OnToolProgress      func(context.Context, llm.ToolProgress)
 	OnResponse          func(context.Context, Response) error
 	OnSuccessfulRequest func(*llm.Request)
@@ -46,10 +46,12 @@ type Hooks struct {
 // Config until the conversation manager switches to Run.
 type RunConfig struct {
 	LLM           llm.Service
+	ModelID       string
 	Messages      []llm.Message
 	Tools         []*llm.Tool
 	System        []llm.SystemContent
 	ThinkingLevel llm.ThinkingLevel
+	WorkingDir    string
 	// PromptCacheKey, when set, overrides provider prompt-cache affinity for
 	// model requests. Tool-initiated model calls keep the context's key.
 	PromptCacheKey string
@@ -117,7 +119,6 @@ func (l *RunConfig) run(ctx context.Context) error {
 		requestMessages := cloneMessages(messages)
 		tools := l.Tools
 		system := append([]llm.SystemContent(nil), l.System...)
-		llmService := l.LLM
 
 		// Enable prompt caching: set cache flag on last tool and last user message content
 		// See https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
@@ -169,60 +170,8 @@ func (l *RunConfig) run(ctx context.Context) error {
 		}
 		l.Logger.Debug("sending LLM request", "message_count", len(requestMessages), "tool_count", len(tools), "system_items", len(system), "system_length", systemLen)
 
-		// sendWithRetry issues a single LLM request, retrying transient transport
-		// failures (EOF, connection reset). Provider-internal retries own
-		// user-visible retry warnings; this outer retry catches transport failures
-		// that escape the provider without adding noise.
-		//
-		// Timeouts are layered:
-		//   - The primary bound is the provider transport's idle/stall timeout,
-		//     which aborts only when no bytes arrive for the idle window. This lets
-		//     a slow-but-progressing turn (a long high-reasoning response, or a
-		//     slow ChatGPT-subscription proxy hop) run to completion instead of
-		//     dying at a fixed cap.
-		//   - maxTurnDuration is a generous absolute backstop so a provider that
-		//     keeps the socket warm with heartbeats/keepalives while otherwise
-		//     wedged (which would keep resetting the idle timer) can't hang the
-		//     turn forever. It is intentionally far larger than the idle window.
-		// User cancellation still flows through ctx.
-		// requestTrace collects correlation ids (our request id, plus
-		// any upstream provider request id) for this turn so we can surface them
-		// in a user-facing error — including on the idle/stall-timeout path, where
-		// there is no successful response to read an id from.
 		var requestTrace *llm.RequestTrace
-		sendWithRetry := func(req *llm.Request) (*llm.Response, error) {
-			llmCtx, cancel := context.WithTimeout(ctx, maxTurnDuration)
-			defer cancel()
-			if l.PromptCacheKey != "" {
-				llmCtx = llmhttp.WithPromptCacheKey(llmCtx, l.PromptCacheKey)
-			}
-			llmCtx, requestTrace = llm.WithRequestTrace(llmCtx)
-			const maxRetries = 2
-			var resp *llm.Response
-			var err error
-			for attempt := 1; attempt <= maxRetries; attempt++ {
-				resp, err = llmService.Do(llmCtx, req)
-				if err == nil {
-					return resp, nil
-				}
-				if !isRetryableError(err) || attempt == maxRetries {
-					return nil, err
-				}
-				sleep := time.Second * time.Duration(attempt)
-				l.Logger.Warn("LLM request failed with retryable error, retrying",
-					"error", err,
-					"attempt", attempt,
-					"max_retries", maxRetries)
-				select {
-				case <-time.After(sleep):
-				case <-llmCtx.Done():
-					return nil, llmCtx.Err()
-				}
-			}
-			return resp, err
-		}
-
-		resp, err := sendWithRetry(req)
+		resp, err := l.sendWithRetry(ctx, req, &requestTrace)
 
 		// Resolve server-side tool "pause_turn" responses before any further
 		// handling. When Anthropic pauses mid-turn to run a server-side tool
@@ -235,7 +184,11 @@ func (l *RunConfig) run(ctx context.Context) error {
 		// loop interleave client tool execution (which permanently splits the
 		// pair and wedges the conversation). See resolvePausedTurn.
 		if err == nil && resp != nil && resp.StopReason == llm.StopReasonPause {
-			resp, err = l.resolvePausedTurn(ctx, sendWithRetry, req, resp)
+			resp, err = l.resolvePausedTurn(ctx, req, resp, &requestTrace)
+		}
+		// Flush buffered deltas before a complete response or error is recorded.
+		if l.Hooks.OnStreamDone != nil {
+			l.Hooks.OnStreamDone()
 		}
 		if err != nil {
 			// User cancellation owns its own end-of-turn bookkeeping. Avoid a
@@ -293,7 +246,16 @@ func (l *RunConfig) run(ctx context.Context) error {
 		// Convert response to a message, persist it through the response hook,
 		// and retain it for the next model request.
 		assistantMessage := resp.ToMessage()
-		l.emitResponse(ctx, assistantMessage, resp.UsageWithMeta(), "failed to record assistant message")
+		if resp.StopReason == llm.StopReasonToolUse {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := l.emitResponse(context.WithoutCancel(ctx), assistantMessage, resp.UsageWithMeta(), "failed to record assistant tool-use message"); err != nil {
+				return fmt.Errorf("%w: assistant tool-use message: %v", errMessagePersistence, err)
+			}
+		} else {
+			l.emitResponse(ctx, assistantMessage, resp.UsageWithMeta(), "failed to record assistant message")
+		}
 		messages = append(messages, assistantMessage)
 
 		if resp.StopReason != llm.StopReasonToolUse {
@@ -308,6 +270,43 @@ func (l *RunConfig) run(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// sendWithRetry issues one model request with transport retries. Provider-internal
+// retries own user-visible warnings; this catches transient failures that escape
+// the provider. The transport's idle timeout is the primary bound, while
+// maxTurnDuration is an absolute backstop for sockets kept alive without progress.
+// requestTrace retains correlation IDs even if the request fails without a response.
+func (l *RunConfig) sendWithRetry(ctx context.Context, req *llm.Request, requestTrace **llm.RequestTrace) (*llm.Response, error) {
+	llmCtx, cancel := context.WithTimeout(ctx, maxTurnDuration)
+	defer cancel()
+	if l.PromptCacheKey != "" {
+		llmCtx = llmhttp.WithPromptCacheKey(llmCtx, l.PromptCacheKey)
+	}
+	llmCtx, *requestTrace = llm.WithRequestTrace(llmCtx)
+	const maxRetries = 2
+	var resp *llm.Response
+	var err error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		resp, err = l.LLM.Do(llmCtx, req)
+		if err == nil {
+			return resp, nil
+		}
+		if !isRetryableError(err) || attempt == maxRetries {
+			return nil, err
+		}
+		sleep := time.Second * time.Duration(attempt)
+		l.Logger.Warn("LLM request failed with retryable error, retrying",
+			"error", err,
+			"attempt", attempt,
+			"max_retries", maxRetries)
+		select {
+		case <-time.After(sleep):
+		case <-llmCtx.Done():
+			return nil, llmCtx.Err()
+		}
+	}
+	return resp, err
 }
 
 // maxPauseContinuations bounds how many times we will re-request to resolve a
@@ -332,9 +331,9 @@ func (l *RunConfig) run(ctx context.Context) error {
 // slice that has the running assistant turn appended.
 func (l *RunConfig) resolvePausedTurn(
 	ctx context.Context,
-	send func(*llm.Request) (*llm.Response, error),
 	req *llm.Request,
 	resp *llm.Response,
+	requestTrace **llm.RequestTrace,
 ) (*llm.Response, error) {
 	// Copy the initial content so appends never alias the first response's
 	// backing array.
@@ -357,7 +356,7 @@ func (l *RunConfig) resolvePausedTurn(
 		continueReq.Messages = append(append([]llm.Message(nil), req.Messages...),
 			llm.Message{Role: llm.MessageRoleAssistant, Content: merged})
 
-		next, err := send(&continueReq)
+		next, err := l.sendWithRetry(ctx, &continueReq, requestTrace)
 		if err != nil {
 			return nil, err
 		}
@@ -376,22 +375,26 @@ func (l *RunConfig) resolvePausedTurn(
 	return &resolved, nil
 }
 
-func (l *RunConfig) emitResponse(ctx context.Context, message llm.Message, usage llm.Usage, failureMessage string) {
+func (l *RunConfig) emitResponse(ctx context.Context, message llm.Message, usage llm.Usage, failureMessage string) error {
 	if l.Hooks.OnResponse == nil {
-		return
+		return nil
 	}
 	if err := l.Hooks.OnResponse(ctx, Response{Message: message, Usage: usage}); err != nil {
 		l.Logger.Error(failureMessage, "error", err)
+		return err
 	}
+	return nil
 }
 
-func (l *RunConfig) emitToolResponse(ctx context.Context, message llm.Message, otherUsage []llm.PurposedUsage) {
+func (l *RunConfig) emitToolResponse(ctx context.Context, message llm.Message, otherUsage []llm.PurposedUsage) error {
 	if l.Hooks.OnToolResponse == nil {
-		return
+		return nil
 	}
 	if err := l.Hooks.OnToolResponse(ctx, ToolResponse{Message: message, OtherUsage: otherUsage}); err != nil {
 		l.Logger.Error("failed to record tool result message", "error", err)
+		return err
 	}
+	return nil
 }
 
 func (l *RunConfig) retryWarningHook(ctx context.Context) func(llm.RetryEvent) {
@@ -455,10 +458,8 @@ func (l *RunConfig) handleRefusal(ctx context.Context, resp *llm.Response) error
 	// Build the user-visible notice. Start with the standard guidance, then
 	// append every field the provider gave us in the refusal reason (category
 	// and full explanation), so nothing is hidden from the user.
-	noticeText := "[The model declined to continue this request. Retrying the same " +
-		"request will likely be declined again. Switch to Opus to continue, " +
-		"or use /model to switch models. You can also try rephrasing or " +
-		"clarifying the intent instead.]"
+	noticeText := "[The model declined to continue this request. Choose another model " +
+		"or rephrase the request.]"
 	var refusalCategory, refusalExplanation string
 	if resp.RefusalDetails != nil {
 		refusalCategory = strings.TrimSpace(resp.RefusalDetails.Category)
@@ -484,6 +485,10 @@ func (l *RunConfig) handleRefusal(ctx context.Context, resp *llm.Response) error
 	// the same session would show the model an assistant turn narrating its own
 	// refusal, biasing it toward refusing again. (Mirrors the llm_request error
 	// path above, which also records without appending.)
+	refusalModel := l.ModelID
+	if refusalModel == "" {
+		refusalModel = resp.Model
+	}
 	errorMessage := llm.Message{
 		Role: llm.MessageRoleAssistant,
 		Content: []llm.Content{
@@ -495,6 +500,7 @@ func (l *RunConfig) handleRefusal(ctx context.Context, resp *llm.Response) error
 		EndOfTurn:          true,
 		ErrorType:          llm.ErrorTypeRefusal,
 		ErrorRetryable:     false,
+		RefusalModel:       refusalModel,
 		RefusalCategory:    refusalCategory,
 		RefusalExplanation: refusalExplanation,
 	}
@@ -588,8 +594,10 @@ func (l *RunConfig) executeToolCalls(ctx context.Context, content []llm.Content,
 	// Keep every result in history and persist it, including interrupted and
 	// never-started calls, without inheriting the canceled tool context.
 	toolMessage := llm.Message{Role: llm.MessageRoleUser, Content: contents}
+	if err := l.emitToolResponse(context.WithoutCancel(ctx), toolMessage, otherUsage.Take()); err != nil {
+		return fmt.Errorf("%w: tool result message: %v", errMessagePersistence, err)
+	}
 	*messages = append(*messages, toolMessage)
-	l.emitToolResponse(context.WithoutCancel(ctx), toolMessage, otherUsage.Take())
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -618,6 +626,9 @@ func (l *RunConfig) executeToolCall(ctx context.Context, call llm.Content, tool 
 	}
 
 	toolCtx := ctx
+	if l.WorkingDir != "" {
+		toolCtx = llm.WithWorkingDir(toolCtx, l.WorkingDir)
+	}
 	if l.Hooks.OnToolProgress != nil {
 		toolCtx = llm.WithToolProgress(toolCtx, func(progress llm.ToolProgress) {
 			l.Hooks.OnToolProgress(ctx, progress)

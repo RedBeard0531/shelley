@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -13,11 +15,16 @@ import (
 type runTestService struct {
 	requests []*llm.Request
 	first    []llm.Content
+	response *llm.Response
+	failure  error
 }
 
 func (s *runTestService) Do(_ context.Context, req *llm.Request) (*llm.Response, error) {
 	s.requests = append(s.requests, req)
 	if len(s.requests) == 1 {
+		if s.response != nil || s.failure != nil {
+			return s.response, s.failure
+		}
 		content := s.first
 		if content == nil {
 			content = []llm.Content{{Type: llm.ContentTypeToolUse, ID: "job", ToolName: "work", ToolInput: json.RawMessage(`{}`)}}
@@ -150,4 +157,96 @@ func TestRunCancellationDoesNotPublishModelFailure(t *testing.T) {
 			t.Fatalf("canceled request recorded a model failure: %+v", recorded)
 		}
 	})
+}
+
+func TestRunDoesNotExecuteUnpersistedToolUse(t *testing.T) {
+	service := &runTestService{}
+	called := false
+	err := Run(t.Context(), RunConfig{
+		LLM: service,
+		Tools: []*llm.Tool{{Name: "work", Run: func(context.Context, json.RawMessage) llm.ToolOut {
+			called = true
+			return llm.ToolOut{}
+		}}},
+		Hooks: Hooks{OnResponse: func(context.Context, Response) error { return errors.New("storage unavailable") }},
+	})
+	if !errors.Is(err, errMessagePersistence) || called || len(service.requests) != 1 {
+		t.Fatalf("error = %v, tool ran = %v, requests = %d; tool-use must be stored first", err, called, len(service.requests))
+	}
+}
+
+func TestRunDoesNotRequestModelWithUnpersistedToolResult(t *testing.T) {
+	service := &runTestService{}
+	err := Run(t.Context(), RunConfig{
+		LLM: service,
+		Tools: []*llm.Tool{{Name: "work", Run: func(context.Context, json.RawMessage) llm.ToolOut {
+			return llm.ToolOut{LLMContent: llm.TextContent("result")}
+		}}},
+		Hooks: Hooks{OnToolResponse: func(context.Context, ToolResponse) error { return errors.New("storage unavailable") }},
+	})
+	if !errors.Is(err, errMessagePersistence) || len(service.requests) != 1 {
+		t.Fatalf("error = %v, requests = %d; failed tool result must not reach model", err, len(service.requests))
+	}
+}
+
+func TestRunPassesWorkingDirToTools(t *testing.T) {
+	service := &runTestService{}
+	var got string
+	err := Run(t.Context(), RunConfig{
+		LLM: service, WorkingDir: "/workspace/project",
+		Tools: []*llm.Tool{{Name: "work", Run: func(ctx context.Context, _ json.RawMessage) llm.ToolOut {
+			got = llm.WorkingDir(ctx)
+			return llm.ToolOut{LLMContent: llm.TextContent("done")}
+		}}},
+	})
+	if err != nil || got != "/workspace/project" {
+		t.Fatalf("error = %v, tool working dir = %q", err, got)
+	}
+}
+
+func TestRunRefusalCarriesModelChoice(t *testing.T) {
+	for _, tc := range []struct{ configured, want string }{
+		{configured: "chosen-model", want: "chosen-model"},
+		{want: "provider-model"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			service := &runTestService{response: &llm.Response{
+				Role: llm.MessageRoleAssistant, Model: "provider-model", StopReason: llm.StopReasonRefusal,
+			}}
+			var notice llm.Message
+			err := Run(t.Context(), RunConfig{
+				LLM: service, ModelID: tc.configured,
+				Hooks: Hooks{OnResponse: func(_ context.Context, response Response) error {
+					if response.Message.ErrorType == llm.ErrorTypeRefusal {
+						notice = response.Message
+					}
+					return nil
+				}},
+			})
+			if err != nil || notice.RefusalModel != tc.want || !strings.Contains(notice.Content[0].Text, "Choose another model") || strings.Contains(notice.Content[0].Text, "Opus") {
+				t.Fatalf("error = %v, refusal notice = %+v", err, notice)
+			}
+		})
+	}
+}
+
+func TestRunFlushesStreamBeforeRecording(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		service := &runTestService{response: &llm.Response{Role: llm.MessageRoleAssistant, StopReason: llm.StopReasonEndTurn}}
+		if failed {
+			service.failure = errors.New("not retryable")
+			service.response = nil
+		}
+		var events []string
+		err := Run(t.Context(), RunConfig{LLM: service, Hooks: Hooks{
+			OnStreamDone: func() { events = append(events, "flush") },
+			OnResponse: func(context.Context, Response) error {
+				events = append(events, "record")
+				return nil
+			},
+		}})
+		if (err != nil) != failed || !slices.Equal(events, []string{"flush", "record"}) {
+			t.Fatalf("failed = %v, error = %v, events = %v", failed, err, events)
+		}
+	}
 }
