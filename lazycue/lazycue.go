@@ -31,6 +31,7 @@ type Options struct {
 	ArtifactDir      string // If set, write per-step screenshots here and record their paths on StepResults
 	VideoDir         string // If set, render an MP4 per test (prompt title card + captioned screenshots) here, named <DescriptionHash>.mp4
 	RepoRoot         string // Repository root passed to the heal agent's git_command tool (default: `git rev-parse --show-toplevel` from the cwd, falling back to ".")
+	InitScript       string // JavaScript evaluated before every page's own scripts
 }
 
 func (o *Options) defaults() {
@@ -198,7 +199,7 @@ func Run(ctx context.Context, opts Options, description string) (*TestResult, er
 
 	// Step 2: Launch browser
 	logf("[lazycue] launching browser for %s", opts.BaseURL)
-	browser, err := NewBrowser(ctx)
+	browser, err := NewBrowser(ctx, opts.InitScript)
 	if err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
@@ -256,7 +257,7 @@ func Run(ctx context.Context, opts Options, description string) (*TestResult, er
 					logf("[lazycue] cached test failed; retry %d/%d with a fresh browser", attempt+1, maxRetriesBeforeHeal)
 				}
 				browser.Close()
-				rb, rErr := NewBrowser(ctx)
+				rb, rErr := NewBrowser(ctx, opts.InitScript)
 				if rErr != nil {
 					return nil, fmt.Errorf("relaunch browser for retry: %w", rErr)
 				}
@@ -290,7 +291,7 @@ func Run(ctx context.Context, opts Options, description string) (*TestResult, er
 
 			// Reset browser for agent
 			browser.Close()
-			browser, err = NewBrowser(ctx)
+			browser, err = NewBrowser(ctx, opts.InitScript)
 			if err != nil {
 				return nil, fmt.Errorf("relaunch browser: %w", err)
 			}

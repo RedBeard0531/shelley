@@ -45,7 +45,8 @@ func (b *Browser) SetScreenshotSink(sink func(stepIndex int, action string, png 
 }
 
 // NewBrowser launches a headless Chrome instance with Pixel 5 viewport (393x851).
-func NewBrowser(parentCtx context.Context) (*Browser, error) {
+// initScript runs before every page's own scripts when non-empty.
+func NewBrowser(parentCtx context.Context, initScript string) (*Browser, error) {
 	opts := append(
 		chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("no-sandbox", true),
@@ -66,6 +67,16 @@ func NewBrowser(parentCtx context.Context) (*Browser, error) {
 		ctxCancel()
 		allocCancel()
 		return nil, fmt.Errorf("set viewport: %w", err)
+	}
+	if initScript != "" {
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := page.AddScriptToEvaluateOnNewDocument(initScript).Do(ctx)
+			return err
+		})); err != nil {
+			ctxCancel()
+			allocCancel()
+			return nil, fmt.Errorf("install init script: %w", err)
+		}
 	}
 
 	return &Browser{

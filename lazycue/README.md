@@ -117,6 +117,7 @@ and the app shows "Y", that's a genuine failure.
 | `--api-url` | `ANTHROPIC_BASE_URL` or `https://api.anthropic.com` | Anthropic API base URL |
 | `--api-key` | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `--verbose` | false | Verbose output |
+| `Options.InitScript` | | JavaScript evaluated before every page's own scripts (Go harness only) |
 
 ## Screenshots & Video Artifacts
 

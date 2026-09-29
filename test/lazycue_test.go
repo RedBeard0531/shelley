@@ -43,7 +43,10 @@ import (
 
 // app is the shared harness. Its BaseURL is filled in by TestMain once the
 // server is listening.
-var app *lazycue.Harness
+var (
+	app          *lazycue.Harness
+	recordingApp *lazycue.Harness
+)
 
 func TestMain(m *testing.M) {
 	// Resolve the LazyCue cache dir relative to this package before leaving
@@ -53,6 +56,10 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	cacheDir := filepath.Join(pkgDir, "..", "ui", "lazycue", ".lazycue")
+	recordingMock, err := os.ReadFile(filepath.Join(pkgDir, "testdata", "recording-mock.js"))
+	if err != nil {
+		panic(err)
+	}
 
 	// Run from a small temp dir, not the package dir. Conversations created
 	// with an empty cwd fall back to os.Getwd(), and system-prompt generation
@@ -102,13 +109,16 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
-	app = lazycue.New(lazycue.Options{
+	opts := lazycue.Options{
 		BaseURL:     ts.URL,
 		CacheDir:    cacheDir,
 		Verbose:     true,
 		ArtifactDir: os.Getenv("LAZYCUE_ARTIFACT_DIR"),
 		VideoDir:    os.Getenv("LAZYCUE_VIDEO_DIR"),
-	})
+	}
+	app = lazycue.New(opts)
+	opts.InitScript = string(recordingMock)
+	recordingApp = lazycue.New(opts)
 
 	code := m.Run()
 
@@ -118,9 +128,13 @@ func TestMain(m *testing.M) {
 	if err := app.RenderVideos(); err != nil {
 		slog.Warn("lazycue: render videos", "error", err)
 	}
+	if err := recordingApp.RenderVideos(); err != nil {
+		slog.Warn("lazycue: render recording videos", "error", err)
+	}
 
 	// Emit the reporting artifacts CI surfaces (HTML report + JSON summary).
 	results := app.Results()
+	results = append(results, recordingApp.Results()...)
 	if dir := os.Getenv("LAZYCUE_ARTIFACT_DIR"); dir != "" && len(results) > 0 {
 		if err := lazycue.WriteReport(dir, results); err != nil {
 			slog.Warn("lazycue: write report", "error", err)
@@ -150,6 +164,15 @@ func lazyTest(t *testing.T, description string) {
 	app.Test(t, description)
 }
 
+func lazyRecordingTest(t *testing.T, description string) {
+	t.Helper()
+	if os.Getenv("LAZYCUE_INTEGRATION") == "" {
+		t.Skip("set LAZYCUE_INTEGRATION=1 to run the LazyCue browser integration tests")
+	}
+	t.Parallel()
+	recordingApp.Test(t, description)
+}
+
 // lazyTestSerial is lazyTest without t.Parallel, for descriptions that make
 // assumptions about the global conversation list (e.g. "the conversation
 // immediately below"). Go runs all serial tests before releasing the paused
@@ -172,6 +195,14 @@ func TestNewPageAccessibility(t *testing.T) {
 
 func TestNewPageSendEnables(t *testing.T) {
 	lazyTest(t, `Navigate to /new. Type the text "hello world" into the message input (data-testid "message-input"). After typing, the send button (data-testid "send-button") should become enabled.`)
+}
+
+func TestNewPageRecordingCancelDoesNotUpload(t *testing.T) {
+	lazyRecordingTest(t, `Navigate to /new. Use an eval step to call window.__recordingMock.reset() and return "ready". Click the voice recording button (data-testid "voice-button"). Wait for eval "String(window.__recordingMock.recorderStarts)" to equal "1". Without asserting on the transient pre-roll state, click the recording cancel button (data-testid "recording-cancel-button"). The recording panel (data-testid "recording-panel") must close. Assert the durable result with eval "(function(){var m=window.__recordingMock;return m.uploadCount===0&&m.recorderStops===1&&m.stoppedTracks>0?'pass':'uploads='+m.uploadCount+' stops='+m.recorderStops+' tracks='+m.stoppedTracks;})()" expecting "pass".`)
+}
+
+func TestNewPageShortRecordingUploadsFinalEncodedData(t *testing.T) {
+	lazyRecordingTest(t, `Navigate to /new. Use an eval step to call window.__recordingMock.reset(), set window.__recordingMock.dataOnlyOnStop=true, and return "ready". Click the voice recording button (data-testid "voice-button"). Wait for eval "String(window.__recordingMock.recorderStarts)" to equal "1". Without asserting on the transient pre-roll state, click the recording stop button (data-testid "recording-stop-button"). Wait for the recording panel (data-testid "recording-panel") to close. Assert the durable result with eval "(function(){var m=window.__recordingMock;var b=m.uploadedBodies[0]||[];var tail=String.fromCharCode.apply(null,b.slice(4));return m.uploadCount===1&&m.chatCount===1&&m.recorderStops===1&&m.stoppedTracks>0&&b[0]===26&&b[1]===69&&b[2]===223&&b[3]===163&&tail==='encodedlast'?'pass':'uploads='+m.uploadCount+' chats='+m.chatCount+' stops='+m.recorderStops+' tracks='+m.stoppedTracks+' bytes='+JSON.stringify(b);})()" expecting "pass".`)
 }
 
 // Regression test for the mobile "double UI" bug: on the Pixel 5 mobile

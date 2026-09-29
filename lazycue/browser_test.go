@@ -17,7 +17,7 @@ func newBrowserOrSkip(t *testing.T) *Browser {
 	if os.Getenv("LAZYCUE_INTEGRATION") == "" {
 		t.Skip("set LAZYCUE_INTEGRATION=1 to run LazyCue browser tests")
 	}
-	br, err := NewBrowser(context.Background())
+	br, err := NewBrowser(context.Background(), "")
 	if err != nil {
 		t.Skipf("no browser available: %v", err)
 	}
@@ -34,6 +34,28 @@ func serveHTML(t *testing.T, html string) string {
 	}))
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+func TestInitScriptRunsBeforePageScripts(t *testing.T) {
+	if os.Getenv("LAZYCUE_INTEGRATION") == "" {
+		t.Skip("set LAZYCUE_INTEGRATION=1 to run LazyCue browser tests")
+	}
+	br, err := NewBrowser(context.Background(), `window.__lazycueInit = "ready"`)
+	if err != nil {
+		t.Skipf("no browser available: %v", err)
+	}
+	t.Cleanup(br.Close)
+	url := serveHTML(t, `<!doctype html><html><body>
+<script>document.body.dataset.initValue = window.__lazycueInit || "missing";</script>
+</body></html>`)
+
+	steps := []Step{
+		{Action: ActionNavigate, URL: url},
+		{Action: ActionAssertAttribute, Selector: "body", Attribute: "data-init-value", Value: "ready"},
+	}
+	if results, err := br.ExecuteSteps(context.Background(), url, steps); err != nil {
+		t.Fatalf("ExecuteSteps returned error: %v (results=%+v)", err, results)
+	}
 }
 
 // TestAssertPollsUntilSettled proves the point-in-time assert_* steps now poll:

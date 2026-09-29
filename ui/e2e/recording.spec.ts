@@ -13,7 +13,6 @@ async function installMediaMocks(page: Page, screenCapture = true) {
       meterPeak: 4,
       recorderStarts: 0,
       recorderStops: 0,
-      dataOnlyOnStop: false,
       revokedPreviews: [] as string[],
       endDisplay: () => {},
     };
@@ -67,15 +66,13 @@ async function installMediaMocks(page: Page, screenCapture = true) {
         if (timeslice !== 1000) throw new Error(`unexpected timeslice ${timeslice}`);
         mock.recorderStarts++;
         this.state = "recording";
-        if (mock.dataOnlyOnStop) return;
         queueMicrotask(() => this.emitChunk("first", true));
         queueMicrotask(() => this.emitChunk("second"));
       }
       stop() {
         mock.recorderStops++;
         this.state = "inactive";
-        if (mock.dataOnlyOnStop) this.emitChunk("encodedlast", true);
-        else this.emitChunk("last");
+        this.emitChunk("last");
         queueMicrotask(() => this.onstop?.());
       }
       emitChunk(value: string, withWebMHeader = false) {
@@ -2239,8 +2236,9 @@ test.describe("media recording composer", () => {
   });
 
   test("uses the recorder lifetime when screen sharing ends during pre-roll", async ({ page }) => {
-    const captureStartedAt = new Date("2026-09-17T12:00:00Z");
-    await page.clock.setFixedTime(captureStartedAt);
+    await page.clock.install();
+    const captureStartedAt = new Date(await page.evaluate(() => Date.now() + 1000));
+    await page.clock.pauseAt(captureStartedAt);
     let metadata: { duration_ms?: number } | null = null;
     await page.route("**/api/upload/raw?filename=*", async (route) => {
       const filename = new URL(route.request().url()).searchParams.get("filename") ?? "";
@@ -2259,10 +2257,12 @@ test.describe("media recording composer", () => {
 
     await page.goto("/new");
     await page.getByTestId("voice-button").click();
+    await expect(page.locator(".recording-status")).toHaveAttribute("data-state", "preroll");
+    await page.clock.runFor(100);
     await expect(page.locator(".recording-status")).toHaveAttribute("data-state", "recording");
     await page.getByTestId("recording-screen-button").click();
     await expect(page.locator(".recording-status")).toHaveAttribute("data-state", "preroll");
-    await page.clock.setFixedTime(new Date(captureStartedAt.getTime() + 1000));
+    await page.clock.setFixedTime(new Date(captureStartedAt.getTime() + 1100));
     await page.evaluate(() => {
       window.__recordingMock.endDisplay();
     });
@@ -2498,53 +2498,6 @@ test.describe("media recording composer", () => {
     await expect(page.getByTestId("message-input")).toHaveValue("");
     expect(await page.evaluate(() => window.__recordingMock.stoppedTracks)).toBeGreaterThan(0);
   });
-
-  test("cancels captured pre-roll without uploading", async ({ page }) => {
-    let uploadCount = 0;
-    await page.route("**/api/upload/raw?filename=*", async (route) => {
-      uploadCount++;
-      await fulfillJSON(route, { path: "/tmp/shelley-uploads/unexpected.webm" });
-    });
-
-    await page.goto("/new");
-    await page.getByTestId("voice-button").click();
-    await expect.poll(() => page.evaluate(() => window.__recordingMock.recorderStarts)).toBe(1);
-    await expect(page.locator(".recording-status")).toHaveAttribute("data-state", "preroll");
-    await page.getByTestId("recording-cancel-button").click();
-
-    await expect(page.getByTestId("recording-panel")).toHaveCount(0);
-    expect(uploadCount).toBe(0);
-    expect(await page.evaluate(() => window.__recordingMock.stoppedTracks)).toBeGreaterThan(0);
-  });
-
-  test("accepts encoded data emitted when a short recording stops", async ({ page }) => {
-    let uploadedBody = Buffer.alloc(0);
-    const uploadStarted = deferred();
-    const releaseUpload = deferred();
-    await page.route("**/api/upload/raw?filename=*", async (route) => {
-      uploadedBody = route.request().postDataBuffer() ?? Buffer.alloc(0);
-      uploadStarted.resolve();
-      await releaseUpload.promise;
-      await fulfillJSON(route, { path: "/tmp/shelley-uploads/short.webm" });
-    });
-    await page.route("**/api/conversation/*/chat", async (route) => {
-      await fulfillJSON(route, { status: "queued" }, 202);
-    });
-
-    await page.goto("/new");
-    await page.evaluate(() => {
-      window.__recordingMock.dataOnlyOnStop = true;
-    });
-    await page.getByTestId("voice-button").click();
-    await expect(page.locator(".recording-status")).toHaveAttribute("data-state", "preroll");
-    await page.getByTestId("recording-stop-button").click();
-    await uploadStarted.promise;
-    await expect(page.getByTestId("recording-status")).toHaveText("Finishing recording…");
-    releaseUpload.resolve();
-    await expect(page.getByTestId("recording-panel")).toHaveCount(0);
-    expect([...uploadedBody.subarray(0, 4)]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
-    expect(uploadedBody.subarray(4).toString()).toBe("encodedlast");
-  });
 });
 
 test("keeps audio recording available without screen capture", async ({ page }) => {
@@ -2583,7 +2536,6 @@ declare global {
       meterPeak: number;
       recorderStarts: number;
       recorderStops: number;
-      dataOnlyOnStop: boolean;
       revokedPreviews: string[];
       endDisplay: () => void;
     };

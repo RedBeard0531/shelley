@@ -21,6 +21,9 @@ Add a Go test function in `shelley/test/lazycue_test.go` that calls
 `data-testid`), expected text, and expected states. The description is the
 source of truth; if the app diverges from it, the test fails.
 
+Recording tests use `lazyRecordingTest`, which injects
+`shelley/test/testdata/recording-mock.js` before the application loads.
+
 ## Running locally
 
 The tests run as ordinary Go integration tests in `shelley/test`. `TestMain`
