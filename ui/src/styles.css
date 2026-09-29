@@ -1280,7 +1280,9 @@ body {
 .conversation-item .conversation-title {
   font-weight: 500;
   font-size: 0.875rem;
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-item .conversation-preview {

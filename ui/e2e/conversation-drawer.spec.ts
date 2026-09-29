@@ -88,6 +88,35 @@ test.describe("conversation drawer startup and app bar", () => {
     await expect(runningRow.locator(".drawer-interrupted-indicator")).toHaveCount(0);
   });
 
+  test("truncates long slugs to one line with an ellipsis", async ({ page }) => {
+    const long = conversation(
+      "unexpected-conversation-navigation-redirect-with-an-even-longer-tail",
+    );
+    const short = conversation("short");
+    await stubConversationList(page, [long, short]);
+    await page.goto("/new");
+
+    const longTitle = page.locator(
+      `[data-conversation-id="${long.conversation_id}"] .conversation-title`,
+    );
+    const shortTitle = page.locator('[data-conversation-id="short"] .conversation-title');
+    await expect(longTitle).toHaveText(long.slug!);
+    await expect(longTitle).toHaveAttribute("title", long.slug!);
+
+    const [longBox, shortBox] = await Promise.all([
+      longTitle.boundingBox(),
+      shortTitle.boundingBox(),
+    ]);
+    // Same height as a one-line slug: no wrapping.
+    expect(longBox!.height).toBe(shortBox!.height);
+    // Overflowing content is clipped with an ellipsis rather than wrapped.
+    const overflow = await longTitle.evaluate((el) => ({
+      clipped: el.scrollWidth > el.clientWidth,
+      textOverflow: getComputedStyle(el).textOverflow,
+    }));
+    expect(overflow).toEqual({ clipped: true, textOverflow: "ellipsis" });
+  });
+
   test("highlights matching slug text in drawer and command-palette searches", async ({ page }) => {
     const slugHit = conversation("Pelican-project-pelican");
     const messageHit = conversation("message-only");
