@@ -317,6 +317,13 @@ type Tool struct {
 	// Cache indicates whether to use prompt caching for this tool
 	Cache bool
 
+	// Serial runs calls to this tool from one model response in response order.
+	Serial bool `json:"-"`
+	// ConcurrencyGroup coordinates calls sharing mutable state; exclusive calls
+	// form barriers between the shared calls before and after them.
+	ConcurrencyGroup     string `json:"-"`
+	ConcurrencyExclusive bool   `json:"-"`
+
 	// ServerSide marks tools that are executed server-side by the LLM provider
 	// (e.g., Anthropic web search). These tools are provider-specific and must
 	// be filtered out when sending requests to other providers.
@@ -367,10 +374,14 @@ type ToolOut struct {
 	// The type of content is set by the tool and coordinated with the UIs.
 	// It should be JSON-serializable.
 	Display any
+	// ResponseHandled means the tool already durably persisted its result.
+	ResponseHandled bool
 	// Error is the error (if any) that occurred during the tool run.
 	// The text contents of the error will be sent back to the LLM.
 	// If non-nil, LLMContent will be ignored.
 	Error error
+	// EndsTurn ends this run when the tool result succeeds.
+	EndsTurn bool
 }
 
 // OpenAIResponsesReasoningSummary preserves one Responses API reasoning
@@ -418,6 +429,9 @@ type Content struct {
 	// timing information for tool_result; added externally; not sent to the LLM
 	ToolUseStartTime *time.Time
 	ToolUseEndTime   *time.Time
+
+	// DisplayOnly persists for the UI but is excluded from model requests.
+	DisplayOnly bool `json:",omitempty"`
 
 	// Display is content to be displayed to the user, copied from ToolOut
 	Display any
@@ -520,6 +534,10 @@ const (
 	StopReasonRefusal
 	StopReasonPause // server-side tool use paused mid-turn (Anthropic pause_turn)
 )
+
+// MessageRoleSystem is a request-level instruction. It is outside the iota
+// block so persisted message-role values remain stable.
+const MessageRoleSystem MessageRole = 2
 
 // IsServerSideContentType reports whether a content type represents server-side
 // tool activity (e.g., Anthropic web search). These content blocks are

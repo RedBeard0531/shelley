@@ -1,0 +1,179 @@
+package loop
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"testing/synctest"
+
+	"shelley.exe.dev/llm"
+)
+
+type runTestService struct {
+	requests []*llm.Request
+	first    []llm.Content
+}
+
+func (s *runTestService) Do(_ context.Context, req *llm.Request) (*llm.Response, error) {
+	s.requests = append(s.requests, req)
+	if len(s.requests) == 1 {
+		content := s.first
+		if content == nil {
+			content = []llm.Content{{Type: llm.ContentTypeToolUse, ID: "job", ToolName: "work", ToolInput: json.RawMessage(`{}`)}}
+		}
+		return &llm.Response{Role: llm.MessageRoleAssistant, StopReason: llm.StopReasonToolUse, Content: content}, nil
+	}
+	return &llm.Response{Role: llm.MessageRoleAssistant, StopReason: llm.StopReasonEndTurn, Content: llm.TextContent("done")}, nil
+}
+
+func (*runTestService) Provider() string       { return "test" }
+func (*runTestService) MaxImageDimension() int { return 0 }
+func (*runTestService) MaxImageBytes() int     { return 0 }
+func (*runTestService) SupportsImages() bool   { return false }
+
+func TestRunDrainsPendingBetweenModelRequests(t *testing.T) {
+	service := &runTestService{}
+	var recorded []llm.Message
+	checks := 0
+	err := Run(t.Context(), RunConfig{
+		LLM:      service,
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("start")}},
+		Tools: []*llm.Tool{{Name: "work", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`), Run: func(context.Context, json.RawMessage) llm.ToolOut {
+			return llm.ToolOut{LLMContent: llm.TextContent("finished")}
+		}}},
+		Pending: func(context.Context) ([]llm.Message, error) {
+			checks++
+			if checks == 2 {
+				return []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("child completed")}}, nil
+			}
+			return nil, nil
+		},
+		Hooks: Hooks{
+			OnResponse: func(_ context.Context, response Response) error {
+				recorded = append(recorded, response.Message)
+				return nil
+			},
+			OnToolResponse: func(_ context.Context, response ToolResponse) error {
+				recorded = append(recorded, response.Message)
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checks != 2 || len(service.requests) != 2 {
+		t.Fatalf("pending checks = %d, requests = %d; want two of each", checks, len(service.requests))
+	}
+	messages := service.requests[1].Messages
+	if len(messages) != 4 || messages[2].Content[0].ToolUseID != "job" || messages[3].Content[0].Text != "child completed" {
+		t.Fatalf("second request lost tool-result / pending order: %+v", messages)
+	}
+	if len(recorded) != 3 || recorded[0].Role != llm.MessageRoleAssistant || recorded[1].Content[0].ToolUseID != "job" || recorded[2].Content[0].Text != "done" {
+		t.Fatalf("persisted responses out of order: %+v", recorded)
+	}
+}
+
+func TestRunHonorsExclusiveToolBarrier(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan string, 4)
+		releaseReaders := make(chan struct{})
+		releaseExclusive := make(chan struct{})
+		reader := func(name string, release <-chan struct{}) *llm.Tool {
+			return &llm.Tool{
+				Name: name, InputSchema: llm.MustSchema(`{"type":"object","properties":{}}`),
+				ConcurrencyGroup: "workspace",
+				Run: func(context.Context, json.RawMessage) llm.ToolOut {
+					started <- name
+					if release != nil {
+						<-release
+					}
+					return llm.ToolOut{LLMContent: llm.TextContent("ok")}
+				},
+			}
+		}
+		first := reader("first", releaseReaders)
+		second := reader("second", releaseReaders)
+		exclusive := reader("exclusive", releaseExclusive)
+		exclusive.ConcurrencyExclusive = true
+		after := reader("after", nil)
+		tools := []*llm.Tool{first, second, exclusive, after}
+		service := &runTestService{}
+		for _, tool := range tools {
+			service.first = append(service.first, llm.Content{
+				Type: llm.ContentTypeToolUse, ID: tool.Name, ToolName: tool.Name, ToolInput: json.RawMessage(`{}`),
+			})
+		}
+		done := make(chan error, 1)
+		go func() {
+			done <- Run(t.Context(), RunConfig{
+				LLM: service, Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("work")}}, Tools: tools,
+			})
+		}()
+		synctest.Wait()
+		if len(started) != 2 {
+			t.Fatalf("shared calls did not start together: %d started", len(started))
+		}
+		<-started
+		<-started
+		close(releaseReaders)
+		synctest.Wait()
+		if len(started) != 1 || <-started != "exclusive" {
+			t.Fatal("exclusive call did not wait for both shared calls")
+		}
+		close(releaseExclusive)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if len(started) != 1 || <-started != "after" {
+			t.Fatal("call after exclusive barrier did not start last")
+		}
+		messages := service.requests[1].Messages
+		results := messages[len(messages)-1].Content
+		for i, tool := range tools {
+			if results[i].ToolUseID != tool.Name {
+				t.Fatalf("tool result %d = %q, want %q", i, results[i].ToolUseID, tool.Name)
+			}
+		}
+	})
+}
+
+type cancellingRunService struct{ entered chan struct{} }
+
+func (s *cancellingRunService) Do(ctx context.Context, _ *llm.Request) (*llm.Response, error) {
+	close(s.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (*cancellingRunService) Provider() string       { return "test" }
+func (*cancellingRunService) MaxImageDimension() int { return 0 }
+func (*cancellingRunService) MaxImageBytes() int     { return 0 }
+func (*cancellingRunService) SupportsImages() bool   { return false }
+
+func TestRunCancellationDoesNotPublishModelFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := &cancellingRunService{entered: make(chan struct{})}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var recorded []llm.Message
+		done := make(chan error, 1)
+		go func() {
+			done <- Run(ctx, RunConfig{
+				LLM: service, Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("hello")}},
+				Hooks: Hooks{OnResponse: func(_ context.Context, response Response) error {
+					recorded = append(recorded, response.Message)
+					return nil
+				}},
+			})
+		}()
+		<-service.entered
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want cancellation", err)
+		}
+		if len(recorded) != 0 {
+			t.Fatalf("canceled request recorded a model failure: %+v", recorded)
+		}
+	})
+}
