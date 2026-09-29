@@ -3,13 +3,9 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createConversationViaAPI, withTempDir } from "./helpers";
+import { createConversationViaAPI, git, initGitRepo, withTempDir } from "./helpers";
 
 const shelleyBin = resolve(fileURLToPath(new URL("../../bin/shelley", import.meta.url)));
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
 
 async function openTour(page: Page, slug: string) {
   await page.setViewportSize({ width: 1800, height: 900 });
@@ -68,9 +64,7 @@ test.describe("Commit tour full file", () => {
     await withTempDir("shelley-tour-full-file-", async (tempDir) => {
       const repo = join(tempDir, "repo");
       mkdirSync(join(repo, "src"), { recursive: true });
-      git(repo, "init");
-      git(repo, "config", "user.name", "Tour Test");
-      git(repo, "config", "user.email", "tour@example.com");
+      initGitRepo(repo);
 
       // Three changes far apart in one file: the tour gets one chunk per hunk,
       // and the whole file shows them all. Plus a renamed-and-edited file,
@@ -86,7 +80,7 @@ test.describe("Commit tour full file", () => {
       const renamedLines = Array.from({ length: 40 }, (_, index) => `// comment ${index + 1}`);
       writeFileSync(join(repo, "old_name.go"), renamedLines.join("\n") + "\n");
       git(repo, "add", "src/example.ts", "old_name.go");
-      git(repo, "commit", "-m", "Base commit\n\nPrompt: tour full file base");
+      git(repo, "commit", "-m", "Base commit");
 
       lines[1] = "export const top = 'updated';";
       lines[99] = "export const middle = 'updated';";
@@ -96,7 +90,7 @@ test.describe("Commit tour full file", () => {
       renameSync(join(repo, "old_name.go"), join(repo, "new_name.go"));
       writeFileSync(join(repo, "new_name.go"), renamedLines.join("\n") + "\n");
       git(repo, "add", "src/example.ts", "old_name.go", "new_name.go");
-      git(repo, "commit", "-m", "Tour the top commit\n\nPrompt: tour full file feature");
+      git(repo, "commit", "-m", "Tour the top commit");
 
       const scaffold = JSON.parse(
         execFileSync(shelleyBin, ["tour", "scaffold", "-C", repo, "HEAD"], {

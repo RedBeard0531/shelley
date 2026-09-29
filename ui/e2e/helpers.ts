@@ -1,8 +1,36 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
+import { hermeticGitEnvironment } from "../scripts/git-test-env";
+
+export function git(cwd: string, ...args: string[]): string {
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "user.name=Shelley Test",
+      "-c",
+      "user.email=test@example.com",
+      ...args,
+    ],
+    { cwd, encoding: "utf8", env: hermeticGitEnvironment() },
+  ).trim();
+}
+
+export function initGitRepo(cwd: string): void {
+  git(cwd, "init");
+  git(cwd, "config", "user.name", "Shelley Test");
+  git(cwd, "config", "user.email", "test@example.com");
+  git(cwd, "config", "commit.gpgsign", "false");
+  git(cwd, "config", "core.hooksPath", "/dev/null");
+}
 
 // Set by globalSetup for both managed and externally supplied test servers.
 // Do not default to /tmp: hydration would scan every other job's test files.

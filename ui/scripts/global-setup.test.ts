@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,67 @@ import globalSetup from './global-setup';
 // External-server mode exposes the same cleanup closure without starting a
 // Shelley server. The terminals still use the actual embedded exe-scroll.
 process.env.TEST_SERVER_URL = 'http://example.invalid';
+
+async function checkGitIsolation() {
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'shelley-git-config-'));
+  const hooksDir = join(fixtureDir, 'hooks');
+  const globalConfig = join(fixtureDir, 'gitconfig');
+  const previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+  const previousGitDir = process.env.GIT_DIR;
+  const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  mkdirSync(hooksDir);
+  writeFileSync(join(hooksDir, 'commit-msg'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  writeFileSync(globalConfig, `[core]\n\thooksPath = ${hooksDir}\n`);
+  process.env.GIT_CONFIG_GLOBAL = globalConfig;
+  process.env.GIT_DIR = join(fixtureDir, 'wrong-repo');
+
+  const cleanup = await globalSetup();
+  const cwd = process.env.SHELLEY_TEST_CWD!;
+  try {
+    assert.equal(process.env.GIT_CONFIG_GLOBAL, '/dev/null');
+    assert.equal(process.env.GIT_CONFIG_NOSYSTEM, '1');
+    assert.equal(process.env.GIT_DIR, undefined);
+    execFileSync('git', ['-C', cwd, 'init', '--quiet']);
+    execFileSync('git', [
+      '-C', cwd,
+      '-c', 'user.name=Shelley Test',
+      '-c', 'user.email=test@example.com',
+      'commit', '--quiet', '--allow-empty', '-m', 'Hook-independent fixture',
+    ]);
+  } finally {
+    await cleanup();
+    assert.equal(process.env.GIT_CONFIG_GLOBAL, globalConfig);
+    assert.equal(process.env.GIT_CONFIG_NOSYSTEM, previousNoSystem);
+    assert.equal(process.env.GIT_DIR, join(fixtureDir, 'wrong-repo'));
+    if (previousGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobalConfig;
+    if (previousGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = previousGitDir;
+    if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
+}
+
+async function checkFailedSetupRestoresEnvironment() {
+  const fakeBin = mkdtempSync(join(tmpdir(), 'shelley-failing-git-'));
+  const originalPath = process.env.PATH!;
+  const testServerURL = process.env.TEST_SERVER_URL;
+  const globalConfig = process.env.GIT_CONFIG_GLOBAL;
+  writeFileSync(join(fakeBin, 'git'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  process.env.PATH = `${fakeBin}:${originalPath}`;
+  delete process.env.TEST_SERVER_URL;
+  try {
+    await assert.rejects(globalSetup());
+    assert.equal(process.env.GIT_CONFIG_GLOBAL, globalConfig);
+    assert.equal(process.env.SHELLEY_TEST_CWD, undefined);
+  } finally {
+    process.env.PATH = originalPath;
+    if (testServerURL === undefined) delete process.env.TEST_SERVER_URL;
+    else process.env.TEST_SERVER_URL = testServerURL;
+    rmSync(fakeBin, { recursive: true, force: true });
+  }
+}
 
 // Darwin's ps sess column is a hexadecimal pointer, not a numeric PID.
 // Feed a captured-format snapshot through the real cleanup without signaling.
@@ -40,6 +101,8 @@ async function checkDarwinSessionFormat() {
   }
 }
 
+await checkGitIsolation();
+await checkFailedSetupRestoresEnvironment();
 await checkDarwinSessionFormat();
 const cleanup = await globalSetup();
 const groups = new Set<number>();

@@ -7,6 +7,7 @@ import { mkdirSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { hermeticGitEnvironment, installHermeticGitEnvironment } from './git-test-env';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,6 +52,38 @@ function killTerminalSessions(dir: string) {
 }
 
 export default async function globalSetup() {
+  const originalEnvironment = { ...process.env };
+  // Keep fixture commands, Playwright workers, and the managed Shelley server
+  // independent of the developer's global/system git config and hooks.
+  const restoreGitEnvironment = installHermeticGitEnvironment();
+
+  const cleanup = () => {
+    const dir = tempDir;
+    tempDir = null;
+    try {
+      if (dir) {
+        killTerminalSessions(dir);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    } finally {
+      delete process.env.SHELLEY_TEST_CWD;
+      restoreGitEnvironment();
+    }
+  };
+
+  try {
+    return await startTestEnvironment(cleanup, originalEnvironment);
+  } catch (error) {
+    if (serverProcess) {
+      serverProcess.kill('SIGKILL');
+      serverProcess = null;
+    }
+    cleanup();
+    throw error;
+  }
+}
+
+async function startTestEnvironment(cleanup: () => void, originalEnvironment: NodeJS.ProcessEnv) {
   // Give every shard its own home and cwd. The tests edit user AGENTS.md,
   // and prompt hydration scans cwd for guidance/skills: sharing the runner's
   // HOME or walking all of /tmp makes unrelated builds interfere.
@@ -60,15 +93,6 @@ export default async function globalSetup() {
   mkdirSync(cwd);
   mkdirSync(home);
   process.env.SHELLEY_TEST_CWD = cwd;
-
-  const cleanup = () => {
-    if (tempDir) {
-      killTerminalSessions(tempDir);
-      rmSync(tempDir, { recursive: true, force: true });
-      tempDir = null;
-    }
-    delete process.env.SHELLEY_TEST_CWD;
-  };
 
   // External servers keep their own environment; API fixtures still get a
   // small, real directory instead of the shared /tmp tree.
@@ -80,8 +104,8 @@ export default async function globalSetup() {
   // Git-viewer specs need real history, not the runner's giant checkout.
   const git = (...args: string[]) => execFileSync('git', [
     '-C', cwd, '-c', 'user.name=Shelley Test', '-c', 'user.email=test@example.com',
-    '-c', 'commit.gpgsign=false', ...args,
-  ], { env: { ...process.env, HOME: home } });
+    '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args,
+  ], { env: hermeticGitEnvironment({ ...process.env, HOME: home }) });
   git('init', '--quiet', '--initial-branch=main');
   writeFileSync(path.join(cwd, 'example.txt'), 'before\n');
   git('add', 'example.txt');
@@ -89,12 +113,14 @@ export default async function globalSetup() {
   writeFileSync(path.join(cwd, 'example.txt'), 'after\n');
   git('commit', '--quiet', '-am', 'Update test fixture');
 
-  // Build shelley binary if it doesn't exist.
+  // Building is not part of Git fixture isolation and may need the developer's
+  // Git config for module fetching or version stamping.
   if (!existsSync(binPath)) {
     console.log('Building shelley binary…');
     execSync('go build -o bin/shelley ./cmd/shelley', {
       cwd: shelleyDir,
       stdio: 'inherit',
+      env: originalEnvironment,
     });
   }
 
@@ -119,12 +145,12 @@ export default async function globalSetup() {
   ], {
     cwd,
     stdio: 'inherit',
-    env: {
+    env: hermeticGitEnvironment({
       ...process.env,
       HOME: home,
       PWD: cwd,
       PREDICTABLE_DELAY_MS: process.env.PREDICTABLE_DELAY_MS || '20',
-    },
+    }),
   });
 
   serverProcess.on('exit', (code) => {

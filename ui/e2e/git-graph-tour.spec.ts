@@ -3,32 +3,31 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createConversationViaAPI, createConversationViaAPIWithDetails, withTempDir } from "./helpers";
+import {
+  createConversationViaAPI,
+  createConversationViaAPIWithDetails,
+  git,
+  initGitRepo,
+  withTempDir,
+} from "./helpers";
 
 const shelleyBin = resolve(fileURLToPath(new URL("../../bin/shelley", import.meta.url)));
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
 
 test("git graph shows and opens an attached commit tour", async ({ page, request }) => {
   await withTempDir("shelley-git-graph-tour-", async (tempDir) => {
     const repo = join(tempDir, "repo");
     mkdirSync(repo);
-    git(repo, "init");
-    git(repo, "config", "user.name", "Tour Test");
-    git(repo, "config", "user.email", "tour@example.com");
-
+    initGitRepo(repo);
     writeFileSync(join(repo, "example.txt"), "before\n");
     git(repo, "add", "example.txt");
-    git(repo, "commit", "-m", "Base commit", "-m", "Prompt: graph tour base");
+    git(repo, "commit", "-m", "Base commit");
     writeFileSync(join(repo, "example.txt"), "after\n");
     git(repo, "add", "example.txt");
-    git(repo, "commit", "-m", "Tour from graph", "-m", "Prompt: graph tour commit");
+    git(repo, "commit", "-m", "Tour from graph");
     const hash = git(repo, "rev-parse", "HEAD");
     writeFileSync(join(repo, "tip.txt"), "tip\n");
     git(repo, "add", "tip.txt");
-    git(repo, "commit", "-m", "Tip commit", "-m", "Prompt: graph tour tip");
+    git(repo, "commit", "-m", "Tip commit");
 
     const scaffold = JSON.parse(
       execFileSync(shelleyBin, ["tour", "scaffold", "-C", repo, hash], { encoding: "utf8" }),
@@ -98,9 +97,7 @@ test("git graph links to the builder and exposes the tour on return", async ({ p
   await withTempDir("shelley-git-graph-build-tour-", async (tempDir) => {
     const repo = join(tempDir, "repo");
     mkdirSync(repo);
-    git(repo, "init");
-    git(repo, "config", "user.name", "Tour Test");
-    git(repo, "config", "user.email", "tour@example.com");
+    initGitRepo(repo);
     writeFileSync(join(repo, "example.txt"), "before\n");
     git(repo, "add", "example.txt");
     git(repo, "commit", "-m", "Base commit");

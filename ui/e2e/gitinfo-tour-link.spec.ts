@@ -3,32 +3,25 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createConversationViaAPIWithDetails, withTempDir } from "./helpers";
+import { createConversationViaAPIWithDetails, git, initGitRepo, withTempDir } from "./helpers";
 
 const shelleyBin = resolve(fileURLToPath(new URL("../../bin/shelley", import.meta.url)));
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
 
 test("git info shows and opens an attached commit tour", async ({ page, request }) => {
   await withTempDir("shelley-gitinfo-tour-", async (tempDir) => {
     const repo = join(tempDir, "repo");
     mkdirSync(repo);
-    git(repo, "init");
-    git(repo, "config", "user.name", "Tour Test");
-    git(repo, "config", "user.email", "tour@example.com");
-
+    initGitRepo(repo);
     writeFileSync(join(repo, "example.txt"), "before\n");
     git(repo, "add", "example.txt");
-    git(repo, "commit", "-m", "Base commit", "-m", "Prompt: prepare the gitinfo tour fixture");
+    git(repo, "commit", "-m", "Base commit");
     git(repo, "branch", "upstream");
     git(repo, "switch", "-c", "feature");
     git(repo, "branch", "--set-upstream-to=upstream", "feature");
 
     const { slug } = await createConversationViaAPIWithDetails(
       request,
-      "bash: printf 'after\\n' > example.txt && git add example.txt && git commit --no-verify -m 'Tour this commit' -m 'Prompt: create a commit with a guided tour'",
+      "bash: printf 'after\\n' > example.txt && git add example.txt && git commit -m 'Tour this commit'",
       { cwd: repo },
     );
     const hash = git(repo, "rev-parse", "HEAD");
@@ -85,19 +78,17 @@ test("missing tour requests a visible background subagent", async ({ page, reque
   await withTempDir("shelley-gitinfo-tour-request-", async (tempDir) => {
     const repo = join(tempDir, "repo");
     mkdirSync(repo);
-    git(repo, "init");
-    git(repo, "config", "user.name", "Tour Test");
-    git(repo, "config", "user.email", "tour@example.com");
+    initGitRepo(repo);
     writeFileSync(join(repo, "example.txt"), "before\n");
     git(repo, "add", "example.txt");
-    git(repo, "commit", "-m", "Base commit", "-m", "Prompt: prepare the request-tour fixture");
+    git(repo, "commit", "-m", "Base commit");
     git(repo, "branch", "upstream");
     git(repo, "switch", "-c", "feature");
     git(repo, "branch", "--set-upstream-to=upstream", "feature");
 
     const { conversationId, slug } = await createConversationViaAPIWithDetails(
       request,
-      "bash: printf 'after\\n' > example.txt && git add example.txt && git commit --no-verify -m 'Request this tour' -m 'Prompt: create a commit needing a tour'",
+      "bash: printf 'after\\n' > example.txt && git add example.txt && git commit -m 'Request this tour'",
       { cwd: repo },
     );
     const hash = git(repo, "rev-parse", "HEAD");
@@ -159,9 +150,7 @@ test("untouched /tour shows a compact event and opens when ready", async ({ page
   await withTempDir("shelley-tour-auto-open-", async (tempDir) => {
     const repo = join(tempDir, "repo");
     mkdirSync(repo);
-    git(repo, "init");
-    git(repo, "config", "user.name", "Tour Test");
-    git(repo, "config", "user.email", "tour@example.com");
+    initGitRepo(repo);
     writeFileSync(join(repo, "example.txt"), "before\n");
     git(repo, "add", "example.txt");
     git(repo, "commit", "-m", "Marker commit");
@@ -231,9 +220,7 @@ test("bare and explicit /tour open an attached HEAD tour", async ({ page, reques
   await withTempDir("shelley-bare-tour-", async (tempDir) => {
     const repo = join(tempDir, "repo");
     mkdirSync(repo);
-    git(repo, "init");
-    git(repo, "config", "user.name", "Tour Test");
-    git(repo, "config", "user.email", "tour@example.com");
+    initGitRepo(repo);
     writeFileSync(join(repo, "example.txt"), "the change\n");
     git(repo, "add", "example.txt");
     git(repo, "commit", "-m", "Tour HEAD");

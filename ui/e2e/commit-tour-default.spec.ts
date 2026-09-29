@@ -3,13 +3,9 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createConversationViaAPI, withTempDir } from "./helpers";
+import { createConversationViaAPI, git, initGitRepo, withTempDir } from "./helpers";
 
 const shelleyBin = resolve(fileURLToPath(new URL("../../bin/shelley", import.meta.url)));
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
 
 async function openDiffViewer(page: Page, slug: string) {
   await page.setViewportSize({ width: 1800, height: 900 });
@@ -31,16 +27,14 @@ test.describe("Commit tour defaults", () => {
     await withTempDir("shelley-tour-viewer-", async (tempDir) => {
       const repo = join(tempDir, "repo");
       mkdirSync(repo);
-      git(repo, "init");
-      git(repo, "config", "user.name", "Tour Test");
-      git(repo, "config", "user.email", "tour@example.com");
+      initGitRepo(repo);
 
       const lines = Array.from({ length: 220 }, (_, index) => `line ${index + 1}`);
       const examplePath = join(repo, "src", "nested", "example.spec.ts");
       mkdirSync(join(repo, "src", "nested"), { recursive: true });
       writeFileSync(examplePath, lines.join("\n") + "\n");
       git(repo, "add", "src/nested/example.spec.ts");
-      git(repo, "commit", "-m", "Base commit\n\nPrompt: tour viewer base");
+      git(repo, "commit", "-m", "Base commit");
       git(repo, "branch", "upstream");
       git(repo, "switch", "-c", "feature");
       git(repo, "branch", "--set-upstream-to=upstream", "feature");
@@ -49,7 +43,7 @@ test.describe("Commit tour defaults", () => {
       lines[198] = "updated near the bottom";
       writeFileSync(examplePath, lines.join("\n") + "\n");
       git(repo, "add", "src/nested/example.spec.ts");
-      git(repo, "commit", "-m", "Tour the top commit\n\nPrompt: tour viewer feature");
+      git(repo, "commit", "-m", "Tour the top commit");
 
       const scaffold = JSON.parse(
         execFileSync(shelleyBin, ["tour", "scaffold", "-C", repo, "HEAD"], {
@@ -253,9 +247,7 @@ test.describe("Commit tour defaults", () => {
       const repo = join(tempDir, "repo");
       mkdirSync(join(repo, "src", "first"), { recursive: true });
       mkdirSync(join(repo, "src", "second"), { recursive: true });
-      git(repo, "init");
-      git(repo, "config", "user.name", "Tour Test");
-      git(repo, "config", "user.email", "tour@example.com");
+      initGitRepo(repo);
 
       const firstLines = Array.from({ length: 240 }, (_, index) => `first line ${index + 1}`);
       const secondLines = Array.from({ length: 240 }, (_, index) => `second line ${index + 1}`);
@@ -264,7 +256,7 @@ test.describe("Commit tour defaults", () => {
       writeFileSync(firstPath, firstLines.join("\n") + "\n");
       writeFileSync(secondPath, secondLines.join("\n") + "\n");
       git(repo, "add", "src/first/shared.ts", "src/second/shared.ts");
-      git(repo, "commit", "-m", "Navigation base\n\nPrompt: commit tour navigation base");
+      git(repo, "commit", "-m", "Navigation base");
       git(repo, "branch", "upstream");
       git(repo, "switch", "-c", "feature");
       git(repo, "branch", "--set-upstream-to=upstream", "feature");
@@ -274,7 +266,7 @@ test.describe("Commit tour defaults", () => {
       writeFileSync(firstPath, firstLines.join("\n") + "\n");
       writeFileSync(secondPath, secondLines.join("\n") + "\n");
       git(repo, "add", "src/first/shared.ts", "src/second/shared.ts");
-      git(repo, "commit", "-m", "Tour grouped changes\n\nPrompt: test grouped tour navigation");
+      git(repo, "commit", "-m", "Tour grouped changes");
 
       const scaffold = JSON.parse(
         execFileSync(shelleyBin, ["tour", "scaffold", "-C", repo, "HEAD"], {
