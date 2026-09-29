@@ -17,6 +17,8 @@
   <div
     ref="dialogRef"
     class="diff-viewer-comment-dialog"
+    role="dialog"
+    :aria-label="`Add Comment (${where})`"
     :class="{ 'is-dragged': dialogPos }"
     :style="dialogPos ? { top: `${dialogPos.top}px`, left: `${dialogPos.left}px` } : undefined"
   >

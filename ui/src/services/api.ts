@@ -416,6 +416,23 @@ class ApiService {
     return response.json();
   }
 
+  // Saves body in the server's upload directory; resolves to its absolute path.
+  async uploadRaw(filename: string, body: Blob): Promise<string> {
+    const response = await fetch(
+      `${this.baseUrl}/upload/raw?filename=${encodeURIComponent(filename)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": body.type || "application/octet-stream" },
+        body,
+      },
+    );
+    if (!response.ok) throw await responseError(response, `Failed to upload ${filename}`);
+    const { path } = (await response.json()) as { path?: unknown };
+    if (typeof path !== "string" || !path)
+      throw new Error(`Upload of ${filename} returned no path`);
+    return path;
+  }
+
   async sendMessage(
     conversationId: string,
     request: ChatRequest,

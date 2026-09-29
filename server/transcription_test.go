@@ -91,7 +91,7 @@ func transcriptionTestFile(t *testing.T, name string) string {
 }
 
 func TestTranscriptionParentMessageOmitsWorkerMetadata(t *testing.T) {
-	message := transcriptionParentMessage("Spoken words.", "/tmp/shelley-uploads/voice memo.webm", "", "", "", "")
+	message := transcriptionParentMessage("", "Spoken words.")
 	got := message.Content[0].Text
 	want := "Spoken words."
 	if got != want {

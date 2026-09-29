@@ -331,6 +331,13 @@ func (s *Server) runQueuedTranscription(ctx context.Context, parentID string, qu
 		s.failQueuedTranscription(parentID, queued.ID, attemptID, nil, fmt.Errorf("inspect recording: %w", err))
 		return
 	}
+	review, err := loadReviewRecording(mediaPath)
+	if err != nil {
+		s.failQueuedTranscription(parentID, queued.ID, attemptID, nil, fmt.Errorf("read review events: %w", err))
+		return
+	}
+	// Word timings let the agent line speech up with the video or review events.
+	timestamps := media.HasVideo || review != nil
 	if media.HasVideo && queued.Transcription.ContactSheetPath == "" {
 		contactSheetPath, err := createVideoContactSheet(ctx, mediaPath, media, s.mediaRun)
 		if err != nil {
@@ -348,12 +355,12 @@ func (s *Server) runQueuedTranscription(ctx context.Context, parentID string, qu
 		queued = updated
 	}
 
-	prompt, err := s.transcriptionPrompt(ctx, parentID)
+	prompt, err := s.transcriptionPrompt(ctx, parentID, review)
 	if err != nil {
 		s.failQueuedTranscription(parentID, queued.ID, attemptID, nil, fmt.Errorf("build transcription prompt: %w", err))
 		return
 	}
-	toolUseID, toolUse, err := transcriptionToolUse(mediaPath, prompt, media.HasVideo)
+	toolUseID, toolUse, err := transcriptionToolUse(mediaPath, prompt, timestamps, review)
 	if err != nil {
 		s.failQueuedTranscription(parentID, queued.ID, attemptID, nil, err)
 		return
@@ -374,7 +381,7 @@ func (s *Server) runQueuedTranscription(ctx context.Context, parentID string, qu
 	queued = updated
 
 	started := time.Now()
-	result, err := s.transcriber.Transcribe(ctx, mediaPath, prompt, media.HasVideo)
+	result, err := s.transcriber.Transcribe(ctx, mediaPath, prompt, timestamps)
 	finished := time.Now()
 	toolResult, auditErr := transcriptionToolResult(toolUseID, result, started, finished, err)
 	if auditErr != nil {
@@ -386,7 +393,13 @@ func (s *Server) runQueuedTranscription(ctx context.Context, parentID string, qu
 		s.failQueuedTranscription(parentID, queued.ID, attemptID, audit, err)
 		return
 	}
-	s.finalizeQueuedTranscription(parentID, queued, attemptID, result, audit)
+	if review != nil {
+		if err := review.writeTimeline(result.TimestampsPath); err != nil {
+			s.failQueuedTranscription(parentID, queued.ID, attemptID, audit, fmt.Errorf("build review timeline: %w", err))
+			return
+		}
+	}
+	s.finalizeQueuedTranscription(parentID, queued, attemptID, result, review, audit)
 }
 
 // queuedTranscriptionIsCurrent reports whether the durable item is still in
@@ -402,7 +415,7 @@ func (s *Server) queuedTranscriptionIsCurrent(ctx context.Context, parentID stri
 	return err == nil && validateCurrentQueuedTranscription(&current) == nil
 }
 
-func transcriptionToolUse(mediaPath, prompt string, timestamps bool) (string, llm.Message, error) {
+func transcriptionToolUse(mediaPath, prompt string, timestamps bool, review *reviewRecording) (string, llm.Message, error) {
 	toolUseID := "transcription_" + uuid.NewString()
 	toolInputFields := map[string]any{
 		"file":            mediaPath,
@@ -414,6 +427,9 @@ func transcriptionToolUse(mediaPath, prompt string, timestamps bool) (string, ll
 		toolInputFields["timestamps_model"] = timestampTranscription.Model
 		toolInputFields["timestamps_response_format"] = timestampTranscription.ResponseFormat
 		toolInputFields["timestamp_granularities"] = timestampTranscription.TimestampGranularities
+	}
+	if review != nil {
+		toolInputFields["review_events"] = review.eventsPath()
 	}
 	toolInput, err := json.Marshal(toolInputFields)
 	if err != nil {
@@ -472,26 +488,35 @@ func transcriptionToolResult(toolUseID string, result transcriptionResult, start
 	}, nil
 }
 
-func transcriptionParentMessage(text, mediaPath, contactSheetPath, timestampsPath, metadataPath, transcriptionContext string) llm.Message {
-	parts := make([]string, 0, 7)
+func transcriptionParentMessage(transcriptionContext, text string, details ...string) llm.Message {
+	parts := make([]string, 0, len(details)+2)
 	if transcriptionContext = strings.TrimSpace(transcriptionContext); transcriptionContext != "" {
 		parts = append(parts, transcriptionContext)
 	}
 	parts = append(parts, strings.TrimSpace(text))
-	if contactSheetPath != "" {
-		parts = append(
-			parts,
-			"Screen recording: ["+mediaPath+"]",
-			"Contact sheet: ["+contactSheetPath+"]",
+	return llm.UserStringMessage(strings.Join(append(parts, details...), "\n\n"))
+}
+
+// recordingDetails lists the artifacts of a plain audio or screen recording
+// for the transcription message.
+func recordingDetails(transcription *db.QueuedTranscription, timestampsPath string) []string {
+	var details []string
+	if transcription.ContactSheetPath != "" {
+		details = append(
+			details,
+			"Screen recording: ["+transcription.MediaPath+"]",
+			"Contact sheet: ["+transcription.ContactSheetPath+"]",
 		)
 	}
-	if timestampsPath != "" {
-		parts = append(parts, "Transcript timestamps: ["+timestampsPath+"]")
+	if timestampsPath == "" {
+		return details
 	}
-	if metadataPath != "" {
-		parts = append(parts, "Recording metadata: ["+metadataPath+"]")
+	details = append(details, "Transcript timestamps: ["+timestampsPath+"]")
+	metadataPath := transcription.MediaPath + ".json"
+	if info, err := os.Stat(metadataPath); err == nil && info.Mode().IsRegular() {
+		details = append(details, "Recording metadata: ["+metadataPath+"]")
 	}
-	return llm.UserStringMessage(strings.Join(parts, "\n\n"))
+	return details
 }
 
 // queuedUserDataWithMessageText keeps FTS search text aligned with the final
@@ -512,22 +537,14 @@ func queuedUserDataWithMessageText(raw json.RawMessage, text string) (json.RawMe
 	return json.Marshal(data)
 }
 
-func (s *Server) finalizeQueuedTranscription(parentID string, queued db.QueuedMessage, attemptID string, result transcriptionResult, audit []llm.Message) {
-	var metadataPath string
-	if result.TimestampsPath != "" {
-		metadataPath = queued.Transcription.MediaPath + ".json"
-		if info, err := os.Stat(metadataPath); err != nil || !info.Mode().IsRegular() {
-			metadataPath = ""
-		}
+func (s *Server) finalizeQueuedTranscription(parentID string, queued db.QueuedMessage, attemptID string, result transcriptionResult, review *reviewRecording, audit []llm.Message) {
+	var details []string
+	if review != nil {
+		details = review.parentDetails(result.TimestampsPath)
+	} else {
+		details = recordingDetails(queued.Transcription, result.TimestampsPath)
 	}
-	message := transcriptionParentMessage(
-		result.Text,
-		queued.Transcription.MediaPath,
-		queued.Transcription.ContactSheetPath,
-		result.TimestampsPath,
-		metadataPath,
-		queued.Transcription.Context,
-	)
+	message := transcriptionParentMessage(queued.Transcription.Context, result.Text, details...)
 	llmJSON, err := json.Marshal(message)
 	if err != nil {
 		s.failQueuedTranscription(parentID, queued.ID, attemptID, audit, err)

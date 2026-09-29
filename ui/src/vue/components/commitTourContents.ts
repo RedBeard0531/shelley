@@ -97,7 +97,7 @@ export function isVideoMedia(entry: GitTourMediaEntry): boolean {
   return entry.mime.startsWith("video/");
 }
 
-function headerLabel(markdown: string): string {
+export function headerLabel(markdown: string): string {
   const firstLine = markdown
     .split(/\r?\n/)
     .map((line) => line.trim())

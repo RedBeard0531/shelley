@@ -1,5 +1,11 @@
 <template>
-  <article class="commit-tour-chunk" :data-tour-file="fileLabel">
+  <article
+    class="commit-tour-chunk"
+    :data-tour-file="fileLabel"
+    :data-review="section ? `${section} › ${chunkLabel}` : chunkLabel"
+    :data-review-file="paths.new ?? paths.old ?? undefined"
+    data-review-item
+  >
     <div class="commit-tour-chunk-header">
       <button
         v-if="entry.trivial"
@@ -67,7 +73,12 @@
     </div>
 
     <div v-if="expanded" class="commit-tour-chunk-body">
-      <MarkdownContent v-if="entry.comment" class="commit-tour-comment" :text="entry.comment" />
+      <MarkdownContent
+        v-if="entry.comment"
+        class="commit-tour-comment"
+        data-review="narration"
+        :text="entry.comment"
+      />
       <div v-if="isBinary" class="commit-tour-placeholder">
         <span>Binary file</span>
         <pre>{{ entry.patch }}</pre>
@@ -130,6 +141,8 @@ import ToolChevron from "./tools/ToolChevron.vue";
 
 const props = defineProps<{
   entry: GitTourPatchEntry;
+  // Heading the chunk sits under, if any; labels recorded review context.
+  section?: string;
   expanded: boolean;
   themeType: ThemeTypes;
   sideBySide: boolean;

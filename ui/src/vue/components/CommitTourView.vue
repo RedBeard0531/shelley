@@ -1,5 +1,11 @@
 <template>
-  <div ref="viewRef" class="commit-tour-view" @scroll.passive="handleScroll">
+  <div
+    ref="viewRef"
+    class="commit-tour-view"
+    data-review="Tour"
+    data-review-scroll
+    @scroll.passive="handleScroll"
+  >
     <article ref="documentRef" class="commit-tour-document">
       <div v-if="!isMobile" class="commit-tour-toolbar">
         <button
@@ -34,7 +40,12 @@
         :data-tour-anchor="TOUR_OVERVIEW_ANCHOR"
         class="commit-tour-overview"
       >
-        <section v-if="commitMessage" class="commit-tour-commit-message">
+        <section
+          v-if="commitMessage"
+          class="commit-tour-commit-message"
+          data-review="Commit message"
+          data-review-item
+        >
           <div class="commit-tour-commit-meta">
             <code :title="commitMessage.hash">{{ commitMessage.hash.slice(0, 8) }}</code>
             <span>{{ commitMessage.author }}</span>
@@ -49,7 +60,12 @@
           </details>
         </section>
 
-        <header v-if="tour.tour.title || tour.tour.intro" class="commit-tour-introduction">
+        <header
+          v-if="tour.tour.title || tour.tour.intro"
+          class="commit-tour-introduction"
+          data-review="Intro"
+          data-review-item
+        >
           <h1 v-if="tour.tour.title">{{ tour.tour.title }}</h1>
           <MarkdownContent v-if="tour.tour.intro" :text="tour.tour.intro" />
         </header>
@@ -78,12 +94,16 @@
           :id="tourEntryAnchor(position)"
           class="commit-tour-section-heading"
           :data-tour-anchor="tourEntryAnchor(position)"
+          :data-review="sections[position]"
+          data-review-item
           :text="entry.header"
         />
         <CommitTourMedia
           v-else-if="isMediaEntry(entry)"
           :id="tourEntryAnchor(position)"
           :data-tour-anchor="tourEntryAnchor(position)"
+          :data-review="sections[position] ? `${sections[position]} › ${entry.name}` : entry.name"
+          data-review-item
           :entry="entry"
           :src="api.gitTourMediaURL(cwd, entry.blob)"
           @comment="emit('open-comment', $event)"
@@ -93,6 +113,7 @@
           :id="tourEntryAnchor(position)"
           :data-tour-anchor="tourEntryAnchor(position)"
           :entry="entry"
+          :section="sections[position]"
           :expanded="!entry.trivial || expandedAnchors.has(tourEntryAnchor(position))"
           :theme-type="themeType"
           :side-by-side="sideBySide"
@@ -141,6 +162,7 @@ import {
   TOUR_DECISIONS_ANCHOR,
   TOUR_OVERVIEW_ANCHOR,
   TOUR_QUESTIONS_ANCHOR,
+  headerLabel,
   isHeaderEntry,
   isMediaEntry,
   tourEntryAnchor,
@@ -276,6 +298,15 @@ function openItemComment(kind: "decision" | "question", item: GitTourItem, index
     selectedText: item.title,
   });
 }
+
+// The heading each entry sits under, for recorded review context.
+const sections = computed(() => {
+  let current = "";
+  return props.tour.tour.chunks.map((entry) => {
+    if (isHeaderEntry(entry)) current = headerLabel(entry.header);
+    return current;
+  });
+});
 
 function composedClosest(node: Node | null, selector: string): HTMLElement | null {
   let current: Node | null = node;

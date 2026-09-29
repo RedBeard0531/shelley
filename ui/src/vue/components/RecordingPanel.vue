@@ -138,6 +138,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useI18n } from "../composables/i18n";
 import type { RecordingMode } from "./recordingDestination";
+import { startRecordingMeter } from "./recordingMeter";
 
 type RecordingState = "starting" | "preroll" | "recording" | "stopping" | "error";
 
@@ -178,10 +179,7 @@ const minimumEncodedRecordingBytes = 8;
 let microphoneStream: MediaStream | null = null;
 let recordingStream: MediaStream | null = null;
 let audioContext: AudioContext | null = null;
-let meterContext: AudioContext | null = null;
-let meterSource: MediaStreamAudioSourceNode | null = null;
-let meterAnalyser: AnalyserNode | null = null;
-let meterFrame: number | null = null;
+let stopMeter: (() => void) | null = null;
 let recorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let startedAt = 0;
@@ -210,54 +208,16 @@ const formattedElapsed = computed(() => {
 });
 
 function stopAudioMeter() {
-  if (meterFrame !== null) cancelAnimationFrame(meterFrame);
-  meterFrame = null;
-  meterSource?.disconnect();
-  meterAnalyser?.disconnect();
-  meterSource = null;
-  meterAnalyser = null;
-  const context = meterContext;
-  meterContext = null;
-  if (context) void context.close();
+  stopMeter?.();
+  stopMeter = null;
   waveformLevels.value = waveformLevels.value.map(() => 0.15);
 }
 
 function startAudioMeter(stream: MediaStream) {
   stopAudioMeter();
-  if (stream.getAudioTracks().length === 0 || typeof AudioContext !== "function") return;
-
-  const context = new AudioContext();
-  if (typeof context.createAnalyser !== "function") {
-    void context.close();
-    return;
-  }
-  const analyser = context.createAnalyser();
-  analyser.fftSize = 64;
-  analyser.smoothingTimeConstant = 0.7;
-  const source = context.createMediaStreamSource(stream);
-  source.connect(analyser);
-  meterContext = context;
-  meterSource = source;
-  meterAnalyser = analyser;
-  if (context.state === "suspended") void context.resume();
-
-  const samples = new Uint8Array(analyser.fftSize);
-  const draw = () => {
-    if (meterAnalyser !== analyser) return;
-    analyser.getByteTimeDomainData(samples);
-    waveformLevels.value = waveformLevels.value.map((level, index, levels) => {
-      const start = Math.floor((index / levels.length) * samples.length);
-      const end = Math.floor(((index + 1) / levels.length) * samples.length);
-      let peak = 0;
-      for (let sampleIndex = start; sampleIndex < end; sampleIndex++) {
-        peak = Math.max(peak, Math.abs((samples[sampleIndex] ?? 128) - 128));
-      }
-      const target = Math.max(0.1, Math.min(1, Math.pow(peak / 128, 0.65) * 2.3));
-      return target >= level ? target : Math.max(0.1, level * 0.8 + target * 0.2);
-    });
-    meterFrame = requestAnimationFrame(draw);
-  };
-  draw();
+  stopMeter = startRecordingMeter(stream, waveformLevels.value.length, (levels) => {
+    waveformLevels.value = levels;
+  });
 }
 
 watch(

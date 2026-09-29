@@ -3,10 +3,20 @@
      a comment action whose text lands in the message input like any other
      tour comment, so answering a question is just commenting on it. -->
 <template>
-  <section class="commit-tour-items" :class="`commit-tour-items-${kind}`">
+  <section
+    class="commit-tour-items"
+    :class="`commit-tour-items-${kind}`"
+    :data-review="heading"
+    data-review-item
+  >
     <h2 class="commit-tour-items-heading">{{ heading }}</h2>
     <ol class="commit-tour-item-list">
-      <li v-for="(item, index) in items" :key="index" class="commit-tour-item">
+      <li
+        v-for="(item, index) in items"
+        :key="index"
+        class="commit-tour-item"
+        :data-review="`${kind === 'question' ? 'Question' : 'Decision'} ${index + 1}`"
+      >
         <div class="commit-tour-item-head">
           <span class="commit-tour-item-number" aria-hidden="true">{{ index + 1 }}</span>
           <MarkdownContent class="commit-tour-item-title" :text="item.title" />

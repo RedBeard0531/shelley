@@ -14,7 +14,7 @@
        cwd-change        -> onCwdChange(cwd) -->
 <template>
   <div v-if="isOpen" class="diff-viewer-overlay">
-    <div class="diff-viewer-container">
+    <div ref="containerRef" class="diff-viewer-container">
       <!-- Toast notifications -->
       <div
         v-if="saveStatus !== 'idle'"
@@ -32,57 +32,86 @@
         <template v-else-if="amendStatus === 'saved'">✅ Amended</template>
         <template v-else-if="amendStatus === 'error'">❌ Error amending</template>
       </div>
+      <div
+        v-if="review.sent.value && !review.error.value"
+        class="diff-viewer-toast diff-viewer-toast-saved"
+        role="status"
+        data-testid="review-recording-sent"
+      >
+        ✅ Sent — transcribing in the conversation
+      </div>
       <div v-if="showKeyboardHint" class="diff-viewer-toast diff-viewer-toast-hint">
         ⌨️ Use . , for next/prev change, &lt; &gt; for files
       </div>
 
       <!-- Mobile header -->
-      <div v-if="isMobile" class="diff-viewer-header diff-viewer-header-mobile">
-        <div class="diff-viewer-mobile-selectors">
-          <CommitPicker
-            :diffs="diffs"
-            :selected-diff="selectedDiff"
-            :selected-to="selectedTo"
-            :is-mobile="isMobile"
-            @change="onCommitChange"
-          />
-          <div v-if="diffView === 'files'" class="diff-viewer-file-selector-wrapper">
-            <select
-              :value="selectedFile || ''"
-              class="diff-viewer-select"
-              :disabled="files.length === 0"
-              @change="selectedFile = ($event.target as HTMLSelectElement).value || null"
-            >
-              <option value="">{{ files.length === 0 ? "No files" : "Choose file..." }}</option>
-              <option v-for="file in files" :key="file.path" :value="file.path">
-                {{ fileOptionLabel(file) }}
-              </option>
-            </select>
-            <span v-if="fileIndexIndicator" class="diff-viewer-file-index">{{
-              fileIndexIndicator
-            }}</span>
+      <div
+        v-if="isMobile"
+        class="diff-viewer-header diff-viewer-header-mobile"
+        data-review="Toolbar"
+      >
+        <div class="diff-viewer-header-main">
+          <div class="diff-viewer-mobile-selectors" :inert="recordingLocked">
+            <CommitPicker
+              :diffs="diffs"
+              :selected-diff="selectedDiff"
+              :selected-to="selectedTo"
+              :is-mobile="isMobile"
+              @change="onCommitChange"
+            />
+            <div v-if="diffView === 'files'" class="diff-viewer-file-selector-wrapper">
+              <select
+                :value="selectedFile || ''"
+                class="diff-viewer-select"
+                :disabled="files.length === 0"
+                @change="selectedFile = ($event.target as HTMLSelectElement).value || null"
+              >
+                <option value="">{{ files.length === 0 ? "No files" : "Choose file..." }}</option>
+                <option v-for="file in files" :key="file.path" :value="file.path">
+                  {{ fileOptionLabel(file) }}
+                </option>
+              </select>
+              <span v-if="fileIndexIndicator" class="diff-viewer-file-index">{{
+                fileIndexIndicator
+              }}</span>
+            </div>
           </div>
+          <ReviewRecordingStatus
+            v-if="recordingLocked"
+            :phase="review.phase.value"
+            :levels="review.levels.value"
+            :current="review.current.value"
+          />
         </div>
+        <ReviewRecordButton
+          v-if="(recordingConversationId && reviewSupported) || review.phase.value !== 'idle'"
+          :phase="review.phase.value"
+          :elapsed-ms="review.elapsedMs.value"
+          @start="review.start"
+          @stop="review.stop"
+        />
         <button
           v-tooltip.top="`Git directory: ${cwd}\nClick to change`"
           class="diff-viewer-dir-btn"
           :aria-label="`Git directory: ${cwd}. Click to change`"
+          :disabled="recordingLocked"
           @click="showDirPicker = true"
         >
           <span v-html="DIR_ICON" />
         </button>
         <button
-          v-tooltip.top="'Close (Esc)'"
+          v-tooltip.top="closeTooltip"
           class="diff-viewer-close"
-          aria-label="Close (Esc)"
-          @click="emit('close')"
+          :aria-label="closeTooltip"
+          :disabled="recordingLocked"
+          @click="requestClose"
         >
           ×
         </button>
       </div>
 
       <!-- Desktop header -->
-      <div v-else class="diff-viewer-header">
+      <div v-else class="diff-viewer-header" data-review="Toolbar">
         <div class="diff-viewer-header-row">
           <button
             v-if="layout === 'sidebar'"
@@ -119,39 +148,58 @@
             </svg>
           </button>
 
-          <div v-if="layout === 'header'" class="diff-viewer-selectors-row">
-            <div class="diff-viewer-selector-group">
-              <label class="diff-viewer-selector-label">Commits</label>
-              <CommitPicker
-                :diffs="diffs"
-                :selected-diff="selectedDiff"
-                :selected-to="selectedTo"
-                :is-mobile="isMobile"
-                @change="onCommitChange"
-              />
-            </div>
-            <div v-if="diffView === 'files'" class="diff-viewer-selector-group">
-              <label class="diff-viewer-selector-label">Commit messages and changed files</label>
-              <div class="diff-viewer-file-selector-wrapper">
-                <select
-                  :value="selectedFile || ''"
-                  class="diff-viewer-select"
-                  :disabled="files.length === 0"
-                  @change="selectedFile = ($event.target as HTMLSelectElement).value || null"
-                >
-                  <option value="">{{ files.length === 0 ? "No files" : "Choose file..." }}</option>
-                  <option v-for="file in files" :key="file.path" :value="file.path">
-                    {{ fileOptionLabel(file) }}
-                  </option>
-                </select>
-                <span v-if="fileIndexIndicator" class="diff-viewer-file-index">{{
-                  fileIndexIndicator
-                }}</span>
+          <div class="diff-viewer-header-main">
+            <div
+              v-if="layout === 'header'"
+              class="diff-viewer-selectors-row"
+              :inert="recordingLocked"
+            >
+              <div class="diff-viewer-selector-group">
+                <label class="diff-viewer-selector-label">Commits</label>
+                <CommitPicker
+                  :diffs="diffs"
+                  :selected-diff="selectedDiff"
+                  :selected-to="selectedTo"
+                  :is-mobile="isMobile"
+                  @change="onCommitChange"
+                />
+              </div>
+              <div v-if="diffView === 'files'" class="diff-viewer-selector-group">
+                <label class="diff-viewer-selector-label">Commit messages and changed files</label>
+                <div class="diff-viewer-file-selector-wrapper">
+                  <select
+                    :value="selectedFile || ''"
+                    class="diff-viewer-select"
+                    :disabled="files.length === 0"
+                    @change="selectedFile = ($event.target as HTMLSelectElement).value || null"
+                  >
+                    <option value="">
+                      {{ files.length === 0 ? "No files" : "Choose file..." }}
+                    </option>
+                    <option v-for="file in files" :key="file.path" :value="file.path">
+                      {{ fileOptionLabel(file) }}
+                    </option>
+                  </select>
+                  <span v-if="fileIndexIndicator" class="diff-viewer-file-index">{{
+                    fileIndexIndicator
+                  }}</span>
+                </div>
               </div>
             </div>
-          </div>
-          <div v-else class="diff-viewer-header-title" :title="currentTitleTooltip ?? undefined">
-            {{ currentTitleText ?? "\u00a0" }}
+            <div
+              v-else
+              class="diff-viewer-header-title"
+              :title="currentTitleTooltip ?? undefined"
+              :inert="recordingLocked"
+            >
+              {{ currentTitleText ?? "\u00a0" }}
+            </div>
+            <ReviewRecordingStatus
+              v-if="recordingLocked"
+              :phase="review.phase.value"
+              :levels="review.levels.value"
+              :current="review.current.value"
+            />
           </div>
 
           <div class="diff-viewer-controls-row">
@@ -214,25 +262,45 @@
               </div>
               <VimToggle :enabled="vimEnabled" @change="setVimEnabled" />
             </template>
+            <ReviewRecordButton
+              v-if="(recordingConversationId && reviewSupported) || review.phase.value !== 'idle'"
+              :phase="review.phase.value"
+              :elapsed-ms="review.elapsedMs.value"
+              @start="review.start"
+              @stop="review.stop"
+            />
             <button
               v-tooltip.top="`Git directory: ${cwd}\nClick to change`"
               class="diff-viewer-dir-btn"
               :aria-label="`Git directory: ${cwd}. Click to change`"
+              :disabled="recordingLocked"
               @click="showDirPicker = true"
             >
               <span v-html="DIR_ICON" />
             </button>
             <button
-              v-tooltip.top="'Close (Esc)'"
+              v-tooltip.top="closeTooltip"
               class="diff-viewer-close"
-              aria-label="Close (Esc)"
-              @click="emit('close')"
+              :aria-label="closeTooltip"
+              :disabled="recordingLocked"
+              @click="requestClose"
             >
               ×
             </button>
           </div>
         </div>
       </div>
+
+      <ReviewRecordingBar
+        :busy="recordingLocked"
+        :error="review.error.value"
+        :pending="review.pending.value"
+        :conversation-id="recordingConversationId"
+        @retry="review.retry"
+        @download="review.download"
+        @discard="review.discard"
+        @dismiss="review.dismissError"
+      />
 
       <div
         v-if="tourAvailable"
@@ -266,7 +334,10 @@
         :class="`diff-viewer-content${!isMobile && layout === 'sidebar' ? ' diff-viewer-content-sidebar' : ''}`"
       >
         <aside v-if="!isMobile && layout === 'sidebar'" class="diff-viewer-sidebar">
-          <div class="diff-viewer-sidebar-section diff-viewer-sidebar-commits">
+          <div
+            class="diff-viewer-sidebar-section diff-viewer-sidebar-commits"
+            data-review="Commits"
+          >
             <div class="diff-viewer-sidebar-label"><span>Commits</span></div>
             <div class="diff-viewer-sidebar-range">
               <RangeToggle
@@ -323,7 +394,10 @@
               </ul>
             </div>
           </div>
-          <div class="diff-viewer-sidebar-section diff-viewer-sidebar-files">
+          <div
+            class="diff-viewer-sidebar-section diff-viewer-sidebar-files"
+            :data-review="diffView === 'tour' ? 'Tour contents' : 'Changed files'"
+          >
             <template v-if="diffView === 'tour'">
               <div class="diff-viewer-sidebar-label"><span>Table of Contents</span></div>
               <div ref="tourContentsScrollRef" class="diff-viewer-sidebar-tour-scroll">
@@ -383,7 +457,7 @@
               @open-comment="openTourComment"
             />
           </div>
-          <div v-show="diffView === 'files'" class="diff-viewer-files-pane">
+          <div v-show="diffView === 'files'" class="diff-viewer-files-pane" data-review="Files">
             <div v-if="loading && !fileDiff" class="diff-viewer-loading">
               <div class="spinner"></div>
               <span>Loading...</span>
@@ -528,6 +602,17 @@ import CommitPicker from "./CommitPicker.vue";
 import RangeToggle from "./RangeToggle.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
 import DiffFileTree from "./DiffFileTree.vue";
+import ReviewRecordButton from "./ReviewRecordButton.vue";
+import ReviewRecordingBar from "./ReviewRecordingBar.vue";
+import ReviewRecordingStatus from "./ReviewRecordingStatus.vue";
+import {
+  clipSelection,
+  collapse,
+  type ReviewContext,
+  type ReviewSide,
+  type ReviewTarget,
+} from "./reviewCapture";
+import { reviewRecordingSupported, useReviewRecording } from "./useReviewRecording";
 import { COMMIT_MESSAGES_DIR, treeRealPathOrder, type DiffFileTreeEntry } from "./diffFileTree";
 import { buildTourContents } from "./commitTourContents";
 import { defaultDiffSelection, workingChangesStatus } from "./diffViewerModel";
@@ -540,6 +625,8 @@ const props = defineProps<{
   // File to select once initialCommit's file list loads (e.g. from the git
   // graph diffstat). Consumed on the first load only.
   initialFile?: string;
+  // Conversation that receives narrated review recordings; none hides Record.
+  recordingConversationId?: string;
 }>();
 const emit = defineEmits<{
   (e: "close"): void;
@@ -744,7 +831,7 @@ const {
   isMobile: () => isMobileVal,
   promptHost: () => mainRef.value,
   fileRef: commentFileRef,
-  onSubmit: (block) => emit("comment-text-change", block),
+  onSubmit: emitComment,
 });
 
 // Reference used in the quote header of a submitted comment: the file path,
@@ -761,6 +848,135 @@ function commentFileRef(): string | null {
   return selectedFile.value;
 }
 
+// --- Narrated review recording ---
+// While recording (and until it is handed off) the viewer stays open, so the
+// captured context always describes what the reviewer is looking at.
+const containerRef = ref<HTMLElement | null>(null);
+
+function commitLabel(id: string | null): string {
+  if (!id) return "";
+  if (id === "working") return "working changes";
+  const commit = diffs.value.find((diff) => diff.id === id);
+  const label = commit
+    ? `${id.slice(0, 8)} ${truncateWithEllipsis(commit.message, 60)}`
+    : id.slice(0, 8);
+  return selectedTo.value === "working" ? `${label} → working tree` : label;
+}
+
+function reviewFileLabel(path: string): string {
+  return isCommitMessageFile(path)
+    ? `commit message ${commitHashFromPath(path).slice(0, 8)}`
+    : path;
+}
+
+function lineSpan(first: number, last: number): string {
+  return first === last ? `${first}` : `${first}–${last}`;
+}
+
+function monacoEditors(): Array<[Monaco.editor.ICodeEditor, ReviewSide]> {
+  if (!diffEditor) return [];
+  return [
+    [diffEditor.getModifiedEditor(), "new"],
+    [diffEditor.getOriginalEditor(), "old"],
+  ];
+}
+
+const reviewContext: ReviewContext = {
+  view() {
+    const commit = commitLabel(selectedDiff.value);
+    if (diffView.value === "tour") {
+      return { where: `Tour · ${commit}`, mode: "tour", commit: selectedDiff.value ?? undefined };
+    }
+    const file = selectedFile.value ? reviewFileLabel(selectedFile.value) : undefined;
+    return {
+      where: ["Files", commit, file].filter(Boolean).join(" · "),
+      mode: "files",
+      commit: selectedDiff.value ?? undefined,
+      file,
+    };
+  },
+  pointAt(x, y, element) {
+    if (diffView.value !== "files" || !selectedFile.value) return undefined;
+    const file = reviewFileLabel(selectedFile.value);
+    for (const [editor, side] of monacoEditors()) {
+      if (!editor.getDomNode()?.contains(element)) continue;
+      const line = editor.getTargetAtClientPoint(x, y)?.position?.lineNumber;
+      const model = editor.getModel();
+      if (!line || !model) return { where: `Files › ${file}`, file };
+      return {
+        where: `Files › ${file} ${side} ${line}`,
+        file,
+        side,
+        line,
+        text: collapse(model.getLineContent(line)),
+      };
+    }
+    return undefined;
+  },
+  selection() {
+    if (diffView.value !== "files" || !selectedFile.value) return undefined;
+    const file = reviewFileLabel(selectedFile.value);
+    for (const [editor, side] of monacoEditors()) {
+      const selection = editor.getSelection();
+      const model = editor.getModel();
+      if (!selection || selection.isEmpty() || !model) continue;
+      const text = model.getValueInRange(selection);
+      if (!text.trim()) continue;
+      const target: ReviewTarget = {
+        where: `Files › ${file} ${side} ${lineSpan(selection.startLineNumber, selection.endLineNumber)}`,
+        file,
+        side,
+        line: selection.startLineNumber,
+        end_line: selection.endLineNumber,
+        text: clipSelection(text),
+      };
+      return target;
+    }
+    // Selections elsewhere (sidebar, commit list) are ordinary DOM selections.
+    return undefined;
+  },
+  onScreen() {
+    if (diffView.value !== "files") return undefined;
+    if (!selectedFile.value || !fileDiff.value) return [];
+    const spans = monacoEditors().flatMap(([editor, side]) => {
+      const ranges = editor.getVisibleRanges();
+      if (!ranges.length || !editor.getModel()?.getValueLength()) return [];
+      return [
+        `${side} ${lineSpan(ranges[0].startLineNumber, ranges[ranges.length - 1].endLineNumber)}`,
+      ];
+    });
+    const file = reviewFileLabel(selectedFile.value);
+    return [spans.length ? `${file} (${spans.join(", ")})` : file];
+  },
+};
+
+const review = useReviewRecording({
+  root: () => containerRef.value,
+  context: reviewContext,
+  cwd: () => props.cwd,
+  conversationId: () => props.recordingConversationId,
+});
+const reviewSupported = reviewRecordingSupported();
+const recordingLocked = computed(() => review.phase.value !== "idle");
+const closeTooltip = computed(() =>
+  recordingLocked.value ? "Stop recording to close" : "Close (Esc)",
+);
+
+function requestClose() {
+  if (!recordingLocked.value) emit("close");
+}
+
+function emitComment(block: string) {
+  review.note({ type: "comment", where: "Comment", text: block.trim() });
+  emit("comment-text-change", block);
+}
+
+watch(
+  () => props.isOpen,
+  (open) => (open ? review.refresh() : review.abandon()),
+  { immediate: true },
+);
+
 // Keep mirror values in sync.
 watch(commitMessages, (v) => (commitMessagesVal = v), { immediate: true });
 watch(
@@ -774,7 +990,7 @@ useMonacoVim(
   () => modifiedEditor.value,
   () => vimStatusRef.value,
   () => !isMobile.value && vimEnabled.value && mode.value === "edit",
-  () => emit("close"),
+  () => requestClose(),
 );
 
 // Keep modeRef in sync + update editor readOnly when mode changes.
@@ -1375,7 +1591,7 @@ function handleKeyDown(e: KeyboardEvent) {
     } else if (showCommentDialog.value) {
       showCommentDialog.value = null;
     } else {
-      emit("close");
+      requestClose();
     }
     return;
   }
@@ -1674,10 +1890,7 @@ function openTourComment(target: TourCommentTarget) {
 
 function handleAddTourComment() {
   if (!tourCommentTarget.value || !tourCommentText.value.trim()) return;
-  emit(
-    "comment-text-change",
-    buildTourCommentBlock(tourCommentTarget.value, tourCommentText.value),
-  );
+  emitComment(buildTourCommentBlock(tourCommentTarget.value, tourCommentText.value));
   tourCommentTarget.value = null;
   tourCommentText.value = "";
 }

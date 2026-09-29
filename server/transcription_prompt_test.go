@@ -7,7 +7,7 @@ import (
 )
 
 func TestBuildTranscriptionPrompt(t *testing.T) {
-	prompt := buildTranscriptionPrompt("minikomi-faster-recording", "/home/exedev/shelley", "transcription-testing")
+	prompt := buildTranscriptionPrompt("minikomi-faster-recording", "/home/exedev/shelley", "transcription-testing", nil)
 	for _, expected := range []string{
 		"dictating a request or instruction to Shelley",
 		"Application: Shelley",
@@ -24,7 +24,7 @@ func TestBuildTranscriptionPrompt(t *testing.T) {
 }
 
 func TestBuildTranscriptionPromptClampsMetadata(t *testing.T) {
-	prompt := buildTranscriptionPrompt(strings.Repeat("vm ", 200), "/home/exedev/"+strings.Repeat("project", 100), strings.Repeat("conversation", 100))
+	prompt := buildTranscriptionPrompt(strings.Repeat("vm ", 200), "/home/exedev/"+strings.Repeat("project", 100), strings.Repeat("conversation", 100), nil)
 	if got := utf8.RuneCountInString(prompt); got > 1400 {
 		t.Fatalf("prompt runes = %d", got)
 	}

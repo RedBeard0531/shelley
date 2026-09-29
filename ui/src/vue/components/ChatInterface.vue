@@ -477,6 +477,11 @@
       :is-open="showDiffViewer"
       :initial-commit="diffViewerInitialCommit"
       :initial-file="diffViewerInitialFile"
+      :recording-conversation-id="
+        currentConversation && !currentConversation.archived && !currentConversation.is_draft
+          ? (conversationId ?? undefined)
+          : undefined
+      "
       @close="onDiffViewerClose"
       @comment-text-change="(text) => (diffCommentText = text)"
       @cwd-change="(cwd) => (diffViewerCwd = cwd)"
