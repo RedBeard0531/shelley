@@ -71,7 +71,6 @@ func Run(ctx context.Context, config RunConfig) error {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	config.Messages = cloneMessages(config.Messages)
 	config.Logger.Info("starting agent run", "tools", len(config.Tools))
 	if err := config.run(ctx); err != nil {
 		return err
@@ -105,32 +104,25 @@ func cloneContents(contents []llm.Content) []llm.Content {
 	return out
 }
 
-func (l *RunConfig) appendPending(ctx context.Context) error {
-	if l.Pending == nil {
-		return nil
-	}
-	pending, err := l.Pending(ctx)
-	if err != nil {
-		return fmt.Errorf("load pending messages: %w", err)
-	}
-	l.Messages = append(l.Messages, pending...)
-	return nil
-}
-
 // run sends requests to the LLM and handles responses until the model finishes
 // without requesting another client-side tool call.
 func (l *RunConfig) run(ctx context.Context) error {
+	messages := cloneMessages(l.Messages)
 	iterations := 0
 	for {
 		if l.MaxIterations > 0 && iterations >= l.MaxIterations {
 			return fmt.Errorf("agent loop exceeded %d iterations", l.MaxIterations)
 		}
 		iterations++
-		if err := l.appendPending(ctx); err != nil {
-			return err
+		if l.Pending != nil {
+			pending, err := l.Pending(ctx)
+			if err != nil {
+				return fmt.Errorf("load pending messages: %w", err)
+			}
+			messages = append(messages, pending...)
 		}
 
-		messages := cloneMessages(l.Messages)
+		requestMessages := cloneMessages(messages)
 		tools := l.Tools
 		system := append([]llm.SystemContent(nil), l.System...)
 		llmService := l.LLM
@@ -147,14 +139,14 @@ func (l *RunConfig) run(ctx context.Context) error {
 		}
 
 		// Set cache flag on the last content block of the last user message
-		if len(messages) > 0 {
-			for i := len(messages) - 1; i >= 0; i-- {
-				if messages[i].Role == llm.MessageRoleUser && len(messages[i].Content) > 0 {
+		if len(requestMessages) > 0 {
+			for i := len(requestMessages) - 1; i >= 0; i-- {
+				if requestMessages[i].Role == llm.MessageRoleUser && len(requestMessages[i].Content) > 0 {
 					// Deep copy the message to avoid modifying the shared history
-					msg := messages[i]
+					msg := requestMessages[i]
 					msg.Content = append([]llm.Content(nil), msg.Content...)
 					msg.Content[len(msg.Content)-1].Cache = true
-					messages[i] = msg
+					requestMessages[i] = msg
 					break
 				}
 			}
@@ -162,7 +154,7 @@ func (l *RunConfig) run(ctx context.Context) error {
 
 		onRetry := l.retryWarningHook(ctx)
 		req := &llm.Request{
-			Messages:      messages,
+			Messages:      requestMessages,
 			Tools:         tools,
 			System:        system,
 			ThinkingLevel: l.ThinkingLevel,
@@ -183,7 +175,7 @@ func (l *RunConfig) run(ctx context.Context) error {
 		for _, sys := range system {
 			systemLen += len(sys.Text)
 		}
-		l.Logger.Debug("sending LLM request", "message_count", len(messages), "tool_count", len(tools), "system_items", len(system), "system_length", systemLen)
+		l.Logger.Debug("sending LLM request", "message_count", len(requestMessages), "tool_count", len(tools), "system_items", len(system), "system_length", systemLen)
 
 		// sendWithRetry issues a single LLM request, retrying transient transport
 		// failures (EOF, connection reset). Provider-internal retries own
@@ -310,14 +302,14 @@ func (l *RunConfig) run(ctx context.Context) error {
 		// and retain it for the next model request.
 		assistantMessage := resp.ToMessage()
 		l.emitResponse(ctx, assistantMessage, resp.UsageWithMeta(), "failed to record assistant message")
-		l.Messages = append(l.Messages, assistantMessage)
+		messages = append(messages, assistantMessage)
 
 		if resp.StopReason != llm.StopReasonToolUse {
 			return nil
 		}
 
 		l.Logger.Debug("handling tool calls", "content_count", len(resp.Content))
-		if err := l.executeToolCalls(ctx, resp.Content); err != nil {
+		if err := l.executeToolCalls(ctx, resp.Content, &messages); err != nil {
 			if errors.Is(err, errToolEndedTurn) {
 				return nil
 			}
@@ -537,7 +529,7 @@ type toolCallExecution struct {
 
 // executeToolCalls runs all tools from an LLM response as a deterministic
 // sibling cohort and appends their results in original tool-call order.
-func (l *RunConfig) executeToolCalls(ctx context.Context, content []llm.Content) error {
+func (l *RunConfig) executeToolCalls(ctx context.Context, content []llm.Content, messages *[]llm.Message) error {
 	var calls []llm.Content
 	for _, c := range content {
 		if c.Type == llm.ContentTypeToolUse {
@@ -604,7 +596,7 @@ func (l *RunConfig) executeToolCalls(ctx context.Context, content []llm.Content)
 	// Keep every result in history and persist it, including interrupted and
 	// never-started calls, without inheriting the canceled tool context.
 	toolMessage := llm.Message{Role: llm.MessageRoleUser, Content: contents}
-	l.Messages = append(l.Messages, toolMessage)
+	*messages = append(*messages, toolMessage)
 	l.emitToolResponse(context.WithoutCancel(ctx), toolMessage, otherUsage.Take())
 	if ctx.Err() != nil {
 		return ctx.Err()
