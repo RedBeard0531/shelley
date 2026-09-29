@@ -56,10 +56,8 @@ type RunConfig struct {
 	// MaxIterations bounds model requests in one run. Zero means unlimited.
 	MaxIterations int
 	Pending       PendingMessages
-	// ValidateCompletion rejects successful completion when durable obligations remain.
-	ValidateCompletion func(context.Context) error
-	Hooks              Hooks
-	Logger             *slog.Logger
+	Hooks         Hooks
+	Logger        *slog.Logger
 }
 
 // Run executes one agent turn. It checks RunConfig.Pending before every model
@@ -72,13 +70,7 @@ func Run(ctx context.Context, config RunConfig) error {
 		config.Logger = slog.Default()
 	}
 	config.Logger.Info("starting agent run", "tools", len(config.Tools))
-	if err := config.run(ctx); err != nil {
-		return err
-	}
-	if config.ValidateCompletion != nil {
-		return config.ValidateCompletion(ctx)
-	}
-	return nil
+	return config.run(ctx)
 }
 
 func cloneMessages(messages []llm.Message) []llm.Message {
