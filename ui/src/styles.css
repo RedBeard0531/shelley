@@ -44,6 +44,10 @@ body {
        weight. */
     ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, "Cascadia Code", "Roboto Mono",
     Consolas, "Courier New", monospace;
+  /* Tallest a conversation image may render, so the whole of it fits on
+     screen at once. svh, not dvh: toolbars showing and hiding must not
+     resize every image mid-scroll. */
+  --image-max-height: 70svh;
   --primary: #2563eb;
   --primary-dark: #1d4ed8;
   --bg-base: #ffffff;
@@ -8021,9 +8025,9 @@ button.tour-visibility-control:focus-visible,
   max-width: 100%;
 }
 
+/* A document reads top to bottom, and these images don't open larger. */
 .file-preview-document .markdown-content img {
-  max-width: 100%;
-  height: auto;
+  max-height: none;
 }
 
 .file-preview-document .markdown-content th,
@@ -10422,6 +10426,13 @@ kbd {
   margin-bottom: 0;
 }
 
+/* Markdown images have no size of their own, and screenshots routinely dwarf
+ * the column: a phone capture at device scale 3 is 1170x2532. */
+.markdown-content img {
+  max-width: 100%;
+  max-height: var(--image-max-height);
+}
+
 .markdown-content h1,
 .markdown-content h2,
 .markdown-content h3,
@@ -12320,6 +12331,9 @@ kbd {
 /* ReadImageTool and ScreenshotTool styles */
 .tool-image-responsive {
   max-width: 100%;
+  /* Alone this would squash an image with width/height attributes, whose
+   * width is then fixed; CommentableImage.vue caps the width to match. */
+  max-height: var(--image-max-height);
   height: auto;
 }
 

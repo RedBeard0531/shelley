@@ -402,6 +402,75 @@ test.describe("Image comments", () => {
     });
   }
 
+  // Images render at their intrinsic size unless styled, and a browser-tool
+  // screenshot taken at a phone's device scale factor is 1170x2532: wider than
+  // the message column and several screens tall. Every conversation image has
+  // to fit the column and the message area, keep its aspect ratio, and keep the
+  // comment badge on its own corner. The tall fixture is taller still, so it
+  // is over the height cap on both viewports.
+  for (const [name, viewport] of [
+    ["a phone", { width: 390, height: 844 }],
+    ["desktop", { width: 1280, height: 800 }],
+  ] as const) {
+    test(`images fit the conversation on ${name} viewport`, async ({ page, request }) => {
+      await page.setViewportSize(viewport);
+
+      const { dir, path: tall } = scratchPNG("tall.png", 1170, 4000);
+      writeFileSync(join(dir, "wide.png"), makePNG(3000, 200));
+
+      // Markdown images carry no size; tool cards pass width/height
+      // attributes (of the downscaled copy) to reserve their space.
+      const markdown = await createConversationViaAPI(
+        request,
+        "echo: ![tall](tall.png) ![wide](wide.png)",
+        { agentTimeout: 60000, cwd: dir },
+      );
+      await page.goto(`/c/${markdown}`);
+      await expectFits(page, page.locator('.markdown-content img[src*="tall.png"]'), 1170, 4000);
+      await expectFits(page, page.locator('.markdown-content img[src*="wide.png"]'), 3000, 200);
+
+      const tool = await createConversationViaAPI(request, `read_image: ${tall}`, {
+        agentTimeout: 60000,
+        cwd: dir,
+      });
+      await page.goto(`/c/${tool}`);
+      await expectFits(page, page.locator(".screenshot-tool .commentable-image"), 1170, 4000);
+    });
+  }
+
+  async function expectFits(page: Page, img: Locator, width: number, height: number) {
+    await expect(img).toBeVisible({ timeout: 30000 });
+    // Wait for the bytes: before they arrive a markdown image has no size.
+    await expect
+      .poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 15000 })
+      .toBeGreaterThan(0);
+
+    const scrollport = page.locator(".messages-container");
+    const link = img.locator("xpath=ancestor::*[contains(@class, 'commentable-image-link')][1]");
+    const [imgBox, portBox, portHeight, linkBox, badgeBox] = await Promise.all([
+      img.boundingBox(),
+      scrollport.boundingBox(),
+      scrollport.evaluate((el) => el.clientHeight),
+      link.boundingBox(),
+      link.locator(".commentable-image-badge").boundingBox(),
+    ]);
+    const what = `${width}x${height}`;
+    expect(imgBox!.x + imgBox!.width, `${what} fits the column`).toBeLessThanOrEqual(
+      portBox!.x + portBox!.width,
+    );
+    expect(imgBox!.height, `${what} fits the message area`).toBeLessThanOrEqual(portHeight);
+    expect(imgBox!.height, `${what} keeps its aspect ratio`).toBeCloseTo(
+      (imgBox!.width * height) / width,
+      0,
+    );
+    // The badge is positioned against the link, so the link has to shrink with
+    // the image rather than keep its natural width.
+    expect(linkBox!.width, `${what} link hugs the image`).toBeCloseTo(imgBox!.width, 0);
+    expect(badgeBox!.x + badgeBox!.width, `${what} badge on the image`).toBeLessThanOrEqual(
+      imgBox!.x + imgBox!.width,
+    );
+  }
+
   test("a touch drag draws a box, and a second finger cannot hijack it", async ({
     page,
     request,

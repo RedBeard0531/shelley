@@ -12,6 +12,7 @@
     target="_blank"
     rel="noopener noreferrer"
     :aria-label="`Comment on ${label}`"
+    :style="fitStyle"
     @click="onClick"
   >
     <img
@@ -56,6 +57,17 @@ const label = computed(() => {
   const ref = imageRefFromSrc(props.src, props.path);
   return tildifyPath(ref) || ref;
 });
+
+// The width at which the image reaches --image-max-height. The width/height
+// attributes reserve the image's space before it loads but also fix its width,
+// so the height cap has to be applied as a width cap. It goes on the link, not
+// the image, so the link (which anchors the badge) and the card around it
+// shrink with the image.
+const fitStyle = computed(() =>
+  props.width && props.height
+    ? { maxWidth: `calc(var(--image-max-height) * ${props.width / props.height})` }
+    : undefined,
+);
 
 function onClick(e: MouseEvent) {
   handleImageCommentClick(e, {
