@@ -42,21 +42,6 @@ type Hooks struct {
 	OnWarning           func(context.Context, string) error
 }
 
-// BeforeRequestPolicy is transient model-request policy, visible only to this
-// request. System adds ephemeral request-level instructions; Divert ends
-// the run before calling the model.
-type BeforeRequestPolicy struct {
-	// UserContext is resolved request-only data, appended without changing stored history.
-	UserContext []llm.Content
-	System      []llm.SystemContent
-	Divert      bool
-}
-
-// BeforeRequest runs after pending input is appended and before every model
-// request. The callback receives a defensive copy of the provider-visible
-// history, so policy can inspect it without mutating the run.
-type BeforeRequest func(context.Context, []llm.Message) (BeforeRequestPolicy, error)
-
 // RunConfig describes one agent turn. It is separate from the long-lived
 // Config until the conversation manager switches to Run.
 type RunConfig struct {
@@ -71,15 +56,10 @@ type RunConfig struct {
 	// MaxIterations bounds model requests in one run. Zero means unlimited.
 	MaxIterations int
 	Pending       PendingMessages
-	BeforeRequest BeforeRequest
 	// ValidateCompletion rejects successful completion when durable obligations remain.
 	ValidateCompletion func(context.Context) error
 	Hooks              Hooks
 	Logger             *slog.Logger
-}
-
-type runner struct {
-	RunConfig
 }
 
 // Run executes one agent turn. It checks RunConfig.Pending before every model
@@ -92,9 +72,8 @@ func Run(ctx context.Context, config RunConfig) error {
 		config.Logger = slog.Default()
 	}
 	config.Messages = cloneMessages(config.Messages)
-	r := &runner{RunConfig: config}
 	config.Logger.Info("starting agent run", "tools", len(config.Tools))
-	if err := r.run(ctx); err != nil {
+	if err := config.run(ctx); err != nil {
 		return err
 	}
 	if config.ValidateCompletion != nil {
@@ -126,47 +105,34 @@ func cloneContents(contents []llm.Content) []llm.Content {
 	return out
 }
 
-func (l *runner) appendPending(ctx context.Context) (bool, error) {
+func (l *RunConfig) appendPending(ctx context.Context) error {
 	if l.Pending == nil {
-		return false, nil
+		return nil
 	}
 	pending, err := l.Pending(ctx)
 	if err != nil {
-		return false, fmt.Errorf("load pending messages: %w", err)
+		return fmt.Errorf("load pending messages: %w", err)
 	}
 	l.Messages = append(l.Messages, pending...)
-	return len(pending) > 0, nil
+	return nil
 }
 
 // run sends requests to the LLM and handles responses until the model finishes
 // without requesting another client-side tool call.
-func (l *runner) run(ctx context.Context) error {
+func (l *RunConfig) run(ctx context.Context) error {
 	iterations := 0
 	for {
 		if l.MaxIterations > 0 && iterations >= l.MaxIterations {
 			return fmt.Errorf("agent loop exceeded %d iterations", l.MaxIterations)
 		}
 		iterations++
-		if _, err := l.appendPending(ctx); err != nil {
+		if err := l.appendPending(ctx); err != nil {
 			return err
-		}
-
-		var policy BeforeRequestPolicy
-		if l.BeforeRequest != nil {
-			var err error
-			policy, err = l.BeforeRequest(ctx, cloneMessages(l.Messages))
-			if err != nil {
-				return fmt.Errorf("before model request: %w", err)
-			}
-			if policy.Divert {
-				return nil
-			}
 		}
 
 		messages := cloneMessages(l.Messages)
 		tools := l.Tools
 		system := append([]llm.SystemContent(nil), l.System...)
-		system = append(system, policy.System...)
 		llmService := l.LLM
 
 		// Enable prompt caching: set cache flag on last tool and last user message content
@@ -212,10 +178,6 @@ func (l *runner) run(ctx context.Context) error {
 		// without corresponding tool_result blocks. This can happen when a request
 		// is cancelled or fails after the LLM responds but before tools execute.
 		l.insertMissingToolResults(req)
-
-		if len(policy.UserContext) > 0 {
-			req.Messages = append(req.Messages, llm.Message{Role: llm.MessageRoleUser, Content: policy.UserContext})
-		}
 
 		systemLen := 0
 		for _, sys := range system {
@@ -384,7 +346,7 @@ func (l *runner) run(ctx context.Context) error {
 // req is the request that produced the initial paused response; it is not
 // mutated — each continuation request is a shallow copy with a fresh Messages
 // slice that has the running assistant turn appended.
-func (l *runner) resolvePausedTurn(
+func (l *RunConfig) resolvePausedTurn(
 	ctx context.Context,
 	send func(*llm.Request) (*llm.Response, error),
 	req *llm.Request,
@@ -430,7 +392,7 @@ func (l *runner) resolvePausedTurn(
 	return &resolved, nil
 }
 
-func (l *runner) emitResponse(ctx context.Context, message llm.Message, usage llm.Usage, failureMessage string) {
+func (l *RunConfig) emitResponse(ctx context.Context, message llm.Message, usage llm.Usage, failureMessage string) {
 	if l.Hooks.OnResponse == nil {
 		return
 	}
@@ -439,7 +401,7 @@ func (l *runner) emitResponse(ctx context.Context, message llm.Message, usage ll
 	}
 }
 
-func (l *runner) emitToolResponse(ctx context.Context, message llm.Message, otherUsage []llm.PurposedUsage) {
+func (l *RunConfig) emitToolResponse(ctx context.Context, message llm.Message, otherUsage []llm.PurposedUsage) {
 	if l.Hooks.OnToolResponse == nil {
 		return
 	}
@@ -448,7 +410,7 @@ func (l *runner) emitToolResponse(ctx context.Context, message llm.Message, othe
 	}
 }
 
-func (l *runner) retryWarningHook(ctx context.Context) func(llm.RetryEvent) {
+func (l *RunConfig) retryWarningHook(ctx context.Context) func(llm.RetryEvent) {
 	if l.Hooks.OnWarning == nil {
 		return nil
 	}
@@ -462,7 +424,7 @@ func (l *runner) retryWarningHook(ctx context.Context) func(llm.RetryEvent) {
 // handleMaxTokensTruncation handles the case where the LLM response was truncated
 // due to hitting the maximum output token limit. It records the truncated message
 // for cost tracking (excluded from context) and an error message for the user.
-func (l *runner) handleMaxTokensTruncation(ctx context.Context, resp *llm.Response) error {
+func (l *RunConfig) handleMaxTokensTruncation(ctx context.Context, resp *llm.Response) error {
 	// Record the truncated message for cost tracking, but mark it as excluded from context.
 	// This preserves billing information without confusing the LLM on future turns.
 	truncatedMessage := resp.ToMessage()
@@ -497,7 +459,7 @@ func (l *runner) handleMaxTokensTruncation(ctx context.Context, resp *llm.Respon
 // raw response excluded from context (for cost tracking) and record a visible,
 // non-retryable error message that ends the turn. Neither is added to the live
 // context history, matching the cold-start rehydration path.
-func (l *runner) handleRefusal(ctx context.Context, resp *llm.Response) error {
+func (l *RunConfig) handleRefusal(ctx context.Context, resp *llm.Response) error {
 	// Record the raw refusal for cost tracking, but keep it out of context so it
 	// doesn't poison future turns (an empty/near-empty assistant turn biases the
 	// model toward refusing again, and empty content blocks can wedge replay).
@@ -557,7 +519,7 @@ func (l *runner) handleRefusal(ctx context.Context, resp *llm.Response) error {
 	return nil
 }
 
-func (l *runner) findTool(name string) *llm.Tool {
+func (l *RunConfig) findTool(name string) *llm.Tool {
 	for _, tool := range l.Tools {
 		if tool.Name == name {
 			return tool
@@ -575,7 +537,7 @@ type toolCallExecution struct {
 
 // executeToolCalls runs all tools from an LLM response as a deterministic
 // sibling cohort and appends their results in original tool-call order.
-func (l *runner) executeToolCalls(ctx context.Context, content []llm.Content) error {
+func (l *RunConfig) executeToolCalls(ctx context.Context, content []llm.Content) error {
 	var calls []llm.Content
 	for _, c := range content {
 		if c.Type == llm.ContentTypeToolUse {
@@ -656,7 +618,7 @@ func (l *runner) executeToolCalls(ctx context.Context, content []llm.Content) er
 // executeToolCall runs one client-side tool call after its sibling cohort has
 // crossed the start barrier. Do not pre-check ctx: a released sibling is
 // logically started even when cancellation reaches it before the scheduler.
-func (l *runner) executeToolCall(ctx context.Context, call llm.Content, tool *llm.Tool) toolCallExecution {
+func (l *RunConfig) executeToolCall(ctx context.Context, call llm.Content, tool *llm.Tool) toolCallExecution {
 	l.Logger.Debug("executing tool", "name", call.ToolName, "id", call.ID)
 
 	if tool == nil {
@@ -765,7 +727,7 @@ func (l *runner) executeToolCall(ctx context.Context, call llm.Content, tool *ll
 //     a corresponding tool_use block in the previous message"
 //
 // Mutates the request's Messages slice.
-func (l *runner) insertMissingToolResults(req *llm.Request) {
+func (l *RunConfig) insertMissingToolResults(req *llm.Request) {
 	if len(req.Messages) < 1 {
 		return
 	}

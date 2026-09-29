@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"testing/synctest"
 
@@ -150,4 +151,31 @@ func TestRunCancellationDoesNotPublishModelFailure(t *testing.T) {
 			t.Fatalf("canceled request recorded a model failure: %+v", recorded)
 		}
 	})
+}
+
+// terminalRunService counts requests and ends each turn immediately.
+type terminalRunService struct{ calls int }
+
+func (s *terminalRunService) Do(context.Context, *llm.Request) (*llm.Response, error) {
+	s.calls++
+	return &llm.Response{Role: llm.MessageRoleAssistant, StopReason: llm.StopReasonEndTurn, Content: llm.TextContent("done")}, nil
+}
+func (*terminalRunService) Provider() string       { return "test" }
+func (*terminalRunService) MaxImageDimension() int { return 0 }
+func (*terminalRunService) MaxImageBytes() int     { return 0 }
+func (*terminalRunService) SupportsImages() bool   { return false }
+
+func TestRunValidatesCompletionAfterFinalResponse(t *testing.T) {
+	service := &terminalRunService{}
+	err := Run(t.Context(), RunConfig{
+		LLM:                service,
+		Messages:           []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("hello")}},
+		ValidateCompletion: func(context.Context) error { return fmt.Errorf("unresolved obligation") },
+	})
+	if err == nil || err.Error() != "unresolved obligation" {
+		t.Fatalf("completion error = %v", err)
+	}
+	if service.calls != 1 {
+		t.Fatalf("model calls = %d, want 1", service.calls)
+	}
 }
