@@ -75,65 +75,39 @@ func TestRunDrainsPendingBetweenModelRequests(t *testing.T) {
 	}
 }
 
-func TestRunHonorsExclusiveToolBarrier(t *testing.T) {
+func TestRunConcurrentToolsPreserveResponseOrder(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		started := make(chan string, 4)
-		releaseReaders := make(chan struct{})
-		releaseExclusive := make(chan struct{})
-		reader := func(name string, release <-chan struct{}) *llm.Tool {
-			return &llm.Tool{
+		started := make(chan string, 2)
+		release := make(chan struct{})
+		tools := make([]*llm.Tool, 0, 2)
+		service := &runTestService{}
+		for _, name := range []string{"first", "second"} {
+			tools = append(tools, &llm.Tool{
 				Name: name, InputSchema: llm.MustSchema(`{"type":"object","properties":{}}`),
-				ConcurrencyGroup: "workspace",
 				Run: func(context.Context, json.RawMessage) llm.ToolOut {
 					started <- name
-					if release != nil {
-						<-release
-					}
-					return llm.ToolOut{LLMContent: llm.TextContent("ok")}
+					<-release
+					return llm.ToolOut{LLMContent: llm.TextContent(name)}
 				},
-			}
-		}
-		first := reader("first", releaseReaders)
-		second := reader("second", releaseReaders)
-		exclusive := reader("exclusive", releaseExclusive)
-		exclusive.ConcurrencyExclusive = true
-		after := reader("after", nil)
-		tools := []*llm.Tool{first, second, exclusive, after}
-		service := &runTestService{}
-		for _, tool := range tools {
-			service.first = append(service.first, llm.Content{
-				Type: llm.ContentTypeToolUse, ID: tool.Name, ToolName: tool.Name, ToolInput: json.RawMessage(`{}`),
 			})
+			service.first = append(service.first, llm.Content{Type: llm.ContentTypeToolUse, ID: name, ToolName: name, ToolInput: json.RawMessage(`{}`)})
 		}
 		done := make(chan error, 1)
 		go func() {
-			done <- Run(t.Context(), RunConfig{
-				LLM: service, Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("work")}}, Tools: tools,
-			})
+			done <- Run(t.Context(), RunConfig{LLM: service, Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("work")}}, Tools: tools})
 		}()
 		synctest.Wait()
 		if len(started) != 2 {
-			t.Fatalf("shared calls did not start together: %d started", len(started))
+			t.Fatalf("only %d of 2 tools started concurrently", len(started))
 		}
-		<-started
-		<-started
-		close(releaseReaders)
-		synctest.Wait()
-		if len(started) != 1 || <-started != "exclusive" {
-			t.Fatal("exclusive call did not wait for both shared calls")
-		}
-		close(releaseExclusive)
+		close(release)
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		if len(started) != 1 || <-started != "after" {
-			t.Fatal("call after exclusive barrier did not start last")
-		}
-		messages := service.requests[1].Messages
-		results := messages[len(messages)-1].Content
-		for i, tool := range tools {
-			if results[i].ToolUseID != tool.Name {
-				t.Fatalf("tool result %d = %q, want %q", i, results[i].ToolUseID, tool.Name)
+		results := service.requests[1].Messages[2].Content
+		for i, name := range []string{"first", "second"} {
+			if results[i].ToolUseID != name || results[i].ToolResult[0].Text != name {
+				t.Fatalf("result %d = %+v, want %s", i, results[i], name)
 			}
 		}
 	})

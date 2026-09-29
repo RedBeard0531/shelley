@@ -43,13 +43,12 @@ type Hooks struct {
 }
 
 // BeforeRequestPolicy is transient model-request policy, visible only to this
-// request. ExtraTail is an ephemeral message appended to the end of the
-// outgoing message copy — never written to run history or persisted. Divert
-// ends the run before calling the model.
+// request. System adds ephemeral request-level instructions; Divert ends
+// the run before calling the model.
 type BeforeRequestPolicy struct {
 	// UserContext is resolved request-only data, appended without changing stored history.
 	UserContext []llm.Content
-	ExtraTail   *llm.Message
+	System      []llm.SystemContent
 	Divert      bool
 }
 
@@ -105,36 +104,24 @@ func Run(ctx context.Context, config RunConfig) error {
 }
 
 func cloneMessages(messages []llm.Message) []llm.Message {
-	return cloneMessagesWithFilter(messages, false)
-}
-
-func cloneMessagesForProvider(messages []llm.Message) []llm.Message {
-	return cloneMessagesWithFilter(messages, true)
-}
-
-func cloneMessagesWithFilter(messages []llm.Message, filterDisplayOnly bool) []llm.Message {
 	out := make([]llm.Message, len(messages))
 	for i, message := range messages {
 		out[i] = message
-		out[i].Content = cloneContents(message.Content, filterDisplayOnly)
+		out[i].Content = cloneContents(message.Content)
 	}
 	return out
 }
 
-func cloneContents(contents []llm.Content, filterDisplayOnly bool) []llm.Content {
+func cloneContents(contents []llm.Content) []llm.Content {
 	if contents == nil {
 		return nil
 	}
-	out := make([]llm.Content, 0, len(contents))
-	for _, content := range contents {
-		if filterDisplayOnly && content.DisplayOnly {
-			continue
+	out := make([]llm.Content, len(contents))
+	copy(out, contents)
+	for i := range out {
+		if out[i].ToolResult != nil {
+			out[i].ToolResult = cloneContents(out[i].ToolResult)
 		}
-		cloned := content
-		if content.ToolResult != nil {
-			cloned.ToolResult = cloneContents(content.ToolResult, filterDisplayOnly)
-		}
-		out = append(out, cloned)
 	}
 	return out
 }
@@ -149,35 +136,6 @@ func (l *runner) appendPending(ctx context.Context) (bool, error) {
 	}
 	l.Messages = append(l.Messages, pending...)
 	return len(pending) > 0, nil
-}
-
-// splitRequestSystem lifts freshly promoted, context-excluded system messages
-// into request-level instructions. They remain visible to BeforeRequest policy
-// but never enter provider message history or a later run's context.
-func splitRequestSystem(messages []llm.Message) ([]llm.Message, []llm.SystemContent) {
-	providerMessages := make([]llm.Message, 0, len(messages))
-	var requestSystem []llm.SystemContent
-	for _, message := range messages {
-		if message.Role != llm.MessageRoleSystem || !message.ExcludedFromContext {
-			providerMessages = append(providerMessages, message)
-			continue
-		}
-		textOnly := true
-		for _, content := range message.Content {
-			if content.Type != llm.ContentTypeText {
-				textOnly = false
-				break
-			}
-		}
-		if !textOnly {
-			providerMessages = append(providerMessages, message)
-			continue
-		}
-		for _, content := range message.Content {
-			requestSystem = append(requestSystem, llm.SystemContent{Type: "text", Text: content.Text})
-		}
-	}
-	return providerMessages, requestSystem
 }
 
 // run sends requests to the LLM and handles responses until the model finishes
@@ -196,7 +154,7 @@ func (l *runner) run(ctx context.Context) error {
 		var policy BeforeRequestPolicy
 		if l.BeforeRequest != nil {
 			var err error
-			policy, err = l.BeforeRequest(ctx, cloneMessagesForProvider(l.Messages))
+			policy, err = l.BeforeRequest(ctx, cloneMessages(l.Messages))
 			if err != nil {
 				return fmt.Errorf("before model request: %w", err)
 			}
@@ -205,11 +163,10 @@ func (l *runner) run(ctx context.Context) error {
 			}
 		}
 
-		messages := cloneMessagesForProvider(l.Messages)
-		messages, transientSystem := splitRequestSystem(messages)
+		messages := cloneMessages(l.Messages)
 		tools := l.Tools
 		system := append([]llm.SystemContent(nil), l.System...)
-		system = append(system, transientSystem...)
+		system = append(system, policy.System...)
 		llmService := l.LLM
 
 		// Enable prompt caching: set cache flag on last tool and last user message content
@@ -258,16 +215,6 @@ func (l *runner) run(ctx context.Context) error {
 
 		if len(policy.UserContext) > 0 {
 			req.Messages = append(req.Messages, llm.Message{Role: llm.MessageRoleUser, Content: policy.UserContext})
-		}
-
-		// Append the ephemeral tail message last: after the cache-flag pass, so
-		// the cache breakpoint stays on the last real user message with the tail
-		// past it, and after insertMissingToolResults and request-only user context,
-		// so the guard sees the final history. Anthropic requires inline system
-		// messages to immediately follow a user turn and end the request; skip
-		// the tail if the last message is not user-role.
-		if policy.ExtraTail != nil && len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == llm.MessageRoleUser {
-			req.Messages = append(req.Messages, *policy.ExtraTail)
 		}
 
 		systemLen := 0
@@ -622,9 +569,8 @@ func (l *runner) findTool(name string) *llm.Tool {
 var errToolEndedTurn = errors.New("tool ended turn")
 
 type toolCallExecution struct {
-	content         llm.Content
-	responseHandled bool
-	endsTurn        bool
+	content  llm.Content
+	endsTurn bool
 }
 
 // executeToolCalls runs all tools from an LLM response as a deterministic
@@ -648,17 +594,8 @@ func (l *runner) executeToolCalls(ctx context.Context, content []llm.Content) er
 	ctx = llm.WithUsageCollector(ctx, otherUsage.Collect)
 
 	toolResults := make([]toolCallExecution, len(calls))
-	serialTails := make(map[*llm.Tool]<-chan struct{})
-	type concurrencyGroupState struct {
-		exclusive <-chan struct{}
-		shared    []<-chan struct{}
-	}
-	groupStates := make(map[string]*concurrencyGroupState)
-
-	// Every worker reaches start before any waits on scheduling dependencies.
-	// Cancellation before this cohort is released produces a never-started
-	// result for every call. Once released, workers still honor serial and
-	// concurrency-group dependencies before invoking their tools.
+	// Every worker reaches start before any tool is invoked. Cancellation
+	// before release produces a never-started result for every call.
 	var ready, finishedWorkers sync.WaitGroup
 	ready.Add(len(calls))
 	start := make(chan struct{})
@@ -666,39 +603,7 @@ func (l *runner) executeToolCalls(ctx context.Context, content []llm.Content) er
 	for i, call := range calls {
 		tool := l.findTool(call.ToolName)
 
-		var dependencies []<-chan struct{}
-		var finished chan struct{}
-		if tool != nil && (tool.Serial || tool.ConcurrencyGroup != "") {
-			finished = make(chan struct{})
-		}
-		if tool != nil && tool.Serial {
-			if previous := serialTails[tool]; previous != nil {
-				dependencies = append(dependencies, previous)
-			}
-			serialTails[tool] = finished
-		}
-		if tool != nil && tool.ConcurrencyGroup != "" {
-			state := groupStates[tool.ConcurrencyGroup]
-			if state == nil {
-				state = &concurrencyGroupState{}
-				groupStates[tool.ConcurrencyGroup] = state
-			}
-			if state.exclusive != nil {
-				dependencies = append(dependencies, state.exclusive)
-			}
-			if tool.ConcurrencyExclusive {
-				dependencies = append(dependencies, state.shared...)
-				state.exclusive = finished
-				state.shared = nil
-			} else {
-				state.shared = append(state.shared, finished)
-			}
-		}
-
 		finishedWorkers.Go(func() {
-			if finished != nil {
-				defer close(finished)
-			}
 			ready.Done()
 			<-start
 			if !run {
@@ -709,9 +614,6 @@ func (l *runner) executeToolCalls(ctx context.Context, content []llm.Content) er
 					ToolResult: llm.TextContent(notExecutedToolResultText),
 				}
 				return
-			}
-			for _, dependency := range dependencies {
-				<-dependency
 			}
 			if tool != nil && tool.EndsTurn && len(calls) != 1 {
 				toolResults[i].content = llm.Content{
@@ -731,28 +633,17 @@ func (l *runner) executeToolCalls(ctx context.Context, content []llm.Content) er
 	finishedWorkers.Wait()
 
 	contents := make([]llm.Content, len(toolResults))
-	persisted := make([]llm.Content, 0, len(toolResults))
 	endsTurn := false
 	for i, result := range toolResults {
 		contents[i] = result.content
-		if !result.responseHandled {
-			persisted = append(persisted, result.content)
-		}
 		endsTurn = endsTurn || result.endsTurn
 	}
 
-	// Add every result to in-memory history. Persist only results not already
-	// committed by their tool, using a cancellation-free context so completed,
-	// interrupted, and never-started results remain durable.
+	// Keep every result in history and persist it, including interrupted and
+	// never-started calls, without inheriting the canceled tool context.
 	toolMessage := llm.Message{Role: llm.MessageRoleUser, Content: contents}
 	l.Messages = append(l.Messages, toolMessage)
-	if len(persisted) > 0 {
-		l.emitToolResponse(context.WithoutCancel(ctx), llm.Message{
-			Role: llm.MessageRoleUser, Content: persisted,
-		}, otherUsage.Take())
-	} else {
-		otherUsage.Take()
-	}
+	l.emitToolResponse(context.WithoutCancel(ctx), toolMessage, otherUsage.Take())
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -856,8 +747,7 @@ func (l *runner) executeToolCall(ctx context.Context, call llm.Content, tool *ll
 			ToolUseEndTime:   &endTime,
 			Display:          result.Display,
 		},
-		responseHandled: result.ResponseHandled,
-		endsTurn:        (tool.EndsTurn || result.EndsTurn) && result.Error == nil,
+		endsTurn: tool.EndsTurn && result.Error == nil,
 	}
 }
 
