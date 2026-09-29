@@ -80,17 +80,7 @@ type RunConfig struct {
 }
 
 type runner struct {
-	llm            llm.Service
-	messages       []llm.Message
-	tools          []*llm.Tool
-	system         []llm.SystemContent
-	thinkingLevel  llm.ThinkingLevel
-	promptCacheKey string
-	maxIterations  int
-	pending        PendingMessages
-	beforeRequest  BeforeRequest
-	hooks          Hooks
-	logger         *slog.Logger
+	RunConfig
 }
 
 // Run executes one agent turn. It checks RunConfig.Pending before every model
@@ -99,24 +89,12 @@ func Run(ctx context.Context, config RunConfig) error {
 	if config.LLM == nil {
 		return fmt.Errorf("no LLM service configured")
 	}
-	logger := config.Logger
-	if logger == nil {
-		logger = slog.Default()
+	if config.Logger == nil {
+		config.Logger = slog.Default()
 	}
-	r := &runner{
-		llm:            config.LLM,
-		messages:       cloneMessages(config.Messages),
-		tools:          config.Tools,
-		system:         config.System,
-		thinkingLevel:  config.ThinkingLevel,
-		promptCacheKey: config.PromptCacheKey,
-		maxIterations:  config.MaxIterations,
-		pending:        config.Pending,
-		beforeRequest:  config.BeforeRequest,
-		hooks:          config.Hooks,
-		logger:         logger,
-	}
-	logger.Info("starting agent run", "tools", len(r.tools))
+	config.Messages = cloneMessages(config.Messages)
+	r := &runner{RunConfig: config}
+	config.Logger.Info("starting agent run", "tools", len(config.Tools))
 	if err := r.run(ctx); err != nil {
 		return err
 	}
@@ -162,14 +140,14 @@ func cloneContents(contents []llm.Content, filterDisplayOnly bool) []llm.Content
 }
 
 func (l *runner) appendPending(ctx context.Context) (bool, error) {
-	if l.pending == nil {
+	if l.Pending == nil {
 		return false, nil
 	}
-	pending, err := l.pending(ctx)
+	pending, err := l.Pending(ctx)
 	if err != nil {
 		return false, fmt.Errorf("load pending messages: %w", err)
 	}
-	l.messages = append(l.messages, pending...)
+	l.Messages = append(l.Messages, pending...)
 	return len(pending) > 0, nil
 }
 
@@ -207,8 +185,8 @@ func splitRequestSystem(messages []llm.Message) ([]llm.Message, []llm.SystemCont
 func (l *runner) run(ctx context.Context) error {
 	iterations := 0
 	for {
-		if l.maxIterations > 0 && iterations >= l.maxIterations {
-			return fmt.Errorf("agent loop exceeded %d iterations", l.maxIterations)
+		if l.MaxIterations > 0 && iterations >= l.MaxIterations {
+			return fmt.Errorf("agent loop exceeded %d iterations", l.MaxIterations)
 		}
 		iterations++
 		if _, err := l.appendPending(ctx); err != nil {
@@ -216,9 +194,9 @@ func (l *runner) run(ctx context.Context) error {
 		}
 
 		var policy BeforeRequestPolicy
-		if l.beforeRequest != nil {
+		if l.BeforeRequest != nil {
 			var err error
-			policy, err = l.beforeRequest(ctx, cloneMessagesForProvider(l.messages))
+			policy, err = l.BeforeRequest(ctx, cloneMessagesForProvider(l.Messages))
 			if err != nil {
 				return fmt.Errorf("before model request: %w", err)
 			}
@@ -227,12 +205,12 @@ func (l *runner) run(ctx context.Context) error {
 			}
 		}
 
-		messages := cloneMessagesForProvider(l.messages)
+		messages := cloneMessagesForProvider(l.Messages)
 		messages, transientSystem := splitRequestSystem(messages)
-		tools := l.tools
-		system := append([]llm.SystemContent(nil), l.system...)
+		tools := l.Tools
+		system := append([]llm.SystemContent(nil), l.System...)
 		system = append(system, transientSystem...)
-		llmService := l.llm
+		llmService := l.LLM
 
 		// Enable prompt caching: set cache flag on last tool and last user message content
 		// See https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
@@ -264,12 +242,12 @@ func (l *runner) run(ctx context.Context) error {
 			Messages:      messages,
 			Tools:         tools,
 			System:        system,
-			ThinkingLevel: l.thinkingLevel,
+			ThinkingLevel: l.ThinkingLevel,
 			OnRetry:       onRetry,
 		}
-		if l.hooks.OnStreamingResponse != nil {
+		if l.Hooks.OnStreamingResponse != nil {
 			req.OnStream = func(delta llm.StreamDelta) {
-				l.hooks.OnStreamingResponse(ctx, delta)
+				l.Hooks.OnStreamingResponse(ctx, delta)
 			}
 		}
 
@@ -296,7 +274,7 @@ func (l *runner) run(ctx context.Context) error {
 		for _, sys := range system {
 			systemLen += len(sys.Text)
 		}
-		l.logger.Debug("sending LLM request", "message_count", len(messages), "tool_count", len(tools), "system_items", len(system), "system_length", systemLen)
+		l.Logger.Debug("sending LLM request", "message_count", len(messages), "tool_count", len(tools), "system_items", len(system), "system_length", systemLen)
 
 		// sendWithRetry issues a single LLM request, retrying transient transport
 		// failures (EOF, connection reset). Provider-internal retries own
@@ -322,8 +300,8 @@ func (l *runner) run(ctx context.Context) error {
 		sendWithRetry := func(req *llm.Request) (*llm.Response, error) {
 			llmCtx, cancel := context.WithTimeout(ctx, maxTurnDuration)
 			defer cancel()
-			if l.promptCacheKey != "" {
-				llmCtx = llmhttp.WithPromptCacheKey(llmCtx, l.promptCacheKey)
+			if l.PromptCacheKey != "" {
+				llmCtx = llmhttp.WithPromptCacheKey(llmCtx, l.PromptCacheKey)
 			}
 			llmCtx, requestTrace = llm.WithRequestTrace(llmCtx)
 			const maxRetries = 2
@@ -338,7 +316,7 @@ func (l *runner) run(ctx context.Context) error {
 					return nil, err
 				}
 				sleep := time.Second * time.Duration(attempt)
-				l.logger.Warn("LLM request failed with retryable error, retrying",
+				l.Logger.Warn("LLM request failed with retryable error, retrying",
 					"error", err,
 					"attempt", attempt,
 					"max_retries", maxRetries)
@@ -371,7 +349,7 @@ func (l *runner) run(ctx context.Context) error {
 			// duplicate LLM error row, and avoid trying to persist it on a dead
 			// context.
 			if errors.Is(ctx.Err(), context.Canceled) {
-				l.logger.Info("LLM request aborted by loop cancellation", "error", err)
+				l.Logger.Info("LLM request aborted by loop cancellation", "error", err)
 				return fmt.Errorf("LLM request failed: %w", err)
 			}
 
@@ -394,12 +372,12 @@ func (l *runner) run(ctx context.Context) error {
 			return fmt.Errorf("LLM request failed: %w", err)
 		}
 
-		l.logger.Debug("received LLM response", "content_count", len(resp.Content), "stop_reason", resp.StopReason.String(), "usage", resp.Usage.String())
+		l.Logger.Debug("received LLM response", "content_count", len(resp.Content), "stop_reason", resp.StopReason.String(), "usage", resp.Usage.String())
 
 		// Handle max tokens truncation BEFORE adding to history - truncated responses
 		// should not be added to history normally (they get special handling)
 		if resp.StopReason == llm.StopReasonMaxTokens {
-			l.logger.Warn("LLM response truncated due to max tokens")
+			l.Logger.Warn("LLM response truncated due to max tokens")
 			return l.handleMaxTokensTruncation(ctx, resp)
 		}
 
@@ -410,26 +388,26 @@ func (l *runner) run(ctx context.Context) error {
 		// the same context and refuses again, wedging the conversation in an
 		// endless string of blank turns. Surface it as a visible error instead.
 		if resp.StopReason == llm.StopReasonRefusal {
-			l.logger.Warn("LLM declined to continue (stop_reason=refusal)")
+			l.Logger.Warn("LLM declined to continue (stop_reason=refusal)")
 			return l.handleRefusal(ctx, resp)
 		}
 
 		// Retain the exact provider-visible prefix for an idle cache refresh.
-		if l.hooks.OnSuccessfulRequest != nil {
-			l.hooks.OnSuccessfulRequest(req)
+		if l.Hooks.OnSuccessfulRequest != nil {
+			l.Hooks.OnSuccessfulRequest(req)
 		}
 
 		// Convert response to a message, persist it through the response hook,
 		// and retain it for the next model request.
 		assistantMessage := resp.ToMessage()
 		l.emitResponse(ctx, assistantMessage, resp.UsageWithMeta(), "failed to record assistant message")
-		l.messages = append(l.messages, assistantMessage)
+		l.Messages = append(l.Messages, assistantMessage)
 
 		if resp.StopReason != llm.StopReasonToolUse {
 			return nil
 		}
 
-		l.logger.Debug("handling tool calls", "content_count", len(resp.Content))
+		l.Logger.Debug("handling tool calls", "content_count", len(resp.Content))
 		if err := l.executeToolCalls(ctx, resp.Content); err != nil {
 			if errors.Is(err, errToolEndedTurn) {
 				return nil
@@ -476,10 +454,10 @@ func (l *runner) resolvePausedTurn(
 	startTime := resp.StartTime
 	for i := 0; resp.StopReason == llm.StopReasonPause; i++ {
 		if i >= maxPauseContinuations {
-			l.logger.Warn("server-side tool pause did not resolve", "continuations", i)
+			l.Logger.Warn("server-side tool pause did not resolve", "continuations", i)
 			break
 		}
-		l.logger.Debug("resolving paused turn (server-side tool)", "continuation", i+1)
+		l.Logger.Debug("resolving paused turn (server-side tool)", "continuation", i+1)
 
 		// Append the running assistant turn so the provider resumes from it.
 		continueReq := *req
@@ -506,30 +484,30 @@ func (l *runner) resolvePausedTurn(
 }
 
 func (l *runner) emitResponse(ctx context.Context, message llm.Message, usage llm.Usage, failureMessage string) {
-	if l.hooks.OnResponse == nil {
+	if l.Hooks.OnResponse == nil {
 		return
 	}
-	if err := l.hooks.OnResponse(ctx, Response{Message: message, Usage: usage}); err != nil {
-		l.logger.Error(failureMessage, "error", err)
+	if err := l.Hooks.OnResponse(ctx, Response{Message: message, Usage: usage}); err != nil {
+		l.Logger.Error(failureMessage, "error", err)
 	}
 }
 
 func (l *runner) emitToolResponse(ctx context.Context, message llm.Message, otherUsage []llm.PurposedUsage) {
-	if l.hooks.OnToolResponse == nil {
+	if l.Hooks.OnToolResponse == nil {
 		return
 	}
-	if err := l.hooks.OnToolResponse(ctx, ToolResponse{Message: message, OtherUsage: otherUsage}); err != nil {
-		l.logger.Error("failed to record tool result message", "error", err)
+	if err := l.Hooks.OnToolResponse(ctx, ToolResponse{Message: message, OtherUsage: otherUsage}); err != nil {
+		l.Logger.Error("failed to record tool result message", "error", err)
 	}
 }
 
 func (l *runner) retryWarningHook(ctx context.Context) func(llm.RetryEvent) {
-	if l.hooks.OnWarning == nil {
+	if l.Hooks.OnWarning == nil {
 		return nil
 	}
 	return func(event llm.RetryEvent) {
-		if err := l.hooks.OnWarning(ctx, llm.FormatRetryEvent(event)); err != nil {
-			l.logger.Error("failed to record retry warning", "error", err)
+		if err := l.Hooks.OnWarning(ctx, llm.FormatRetryEvent(event)); err != nil {
+			l.Logger.Error("failed to record retry warning", "error", err)
 		}
 	}
 }
@@ -633,7 +611,7 @@ func (l *runner) handleRefusal(ctx context.Context, resp *llm.Response) error {
 }
 
 func (l *runner) findTool(name string) *llm.Tool {
-	for _, tool := range l.tools {
+	for _, tool := range l.Tools {
 		if tool.Name == name {
 			return tool
 		}
@@ -767,7 +745,7 @@ func (l *runner) executeToolCalls(ctx context.Context, content []llm.Content) er
 	// committed by their tool, using a cancellation-free context so completed,
 	// interrupted, and never-started results remain durable.
 	toolMessage := llm.Message{Role: llm.MessageRoleUser, Content: contents}
-	l.messages = append(l.messages, toolMessage)
+	l.Messages = append(l.Messages, toolMessage)
 	if len(persisted) > 0 {
 		l.emitToolResponse(context.WithoutCancel(ctx), llm.Message{
 			Role: llm.MessageRoleUser, Content: persisted,
@@ -788,10 +766,10 @@ func (l *runner) executeToolCalls(ctx context.Context, content []llm.Content) er
 // crossed the start barrier. Do not pre-check ctx: a released sibling is
 // logically started even when cancellation reaches it before the scheduler.
 func (l *runner) executeToolCall(ctx context.Context, call llm.Content, tool *llm.Tool) toolCallExecution {
-	l.logger.Debug("executing tool", "name", call.ToolName, "id", call.ID)
+	l.Logger.Debug("executing tool", "name", call.ToolName, "id", call.ID)
 
 	if tool == nil {
-		l.logger.Error("tool not found", "name", call.ToolName)
+		l.Logger.Error("tool not found", "name", call.ToolName)
 		return toolCallExecution{content: llm.Content{
 			Type:      llm.ContentTypeToolResult,
 			ToolUseID: call.ID,
@@ -803,13 +781,13 @@ func (l *runner) executeToolCall(ctx context.Context, call llm.Content, tool *ll
 	}
 
 	toolCtx := ctx
-	if l.hooks.OnToolProgress != nil {
+	if l.Hooks.OnToolProgress != nil {
 		toolCtx = llm.WithToolProgress(toolCtx, func(progress llm.ToolProgress) {
-			l.hooks.OnToolProgress(ctx, progress)
+			l.Hooks.OnToolProgress(ctx, progress)
 		})
 	}
 	toolCtx = llm.WithToolUseID(toolCtx, call.ID)
-	toolCtx = llm.WithLLMService(toolCtx, l.llm)
+	toolCtx = llm.WithLLMService(toolCtx, l.LLM)
 
 	startTime := time.Now()
 	resultCh := make(chan llm.ToolOut, 1)
@@ -841,7 +819,7 @@ func (l *runner) executeToolCall(ctx context.Context, call llm.Content, tool *ll
 	if abandoned {
 		// A context-ignoring goroutine cannot be forcefully stopped. Its buffered
 		// result has no consumer after this point, so it cannot publish late.
-		l.logger.Warn("tool ignored cancellation; abandoning", "name", call.ToolName, "id", call.ID)
+		l.Logger.Warn("tool ignored cancellation; abandoning", "name", call.ToolName, "id", call.ID)
 		return toolCallExecution{content: llm.Content{
 			Type:             llm.ContentTypeToolResult,
 			ToolUseID:        call.ID,
@@ -858,14 +836,14 @@ func (l *runner) executeToolCall(ctx context.Context, call llm.Content, tool *ll
 		// Cancellation is a property of this tool's own result, not the shared
 		// context: a sibling may cancel after this tool has already failed.
 		if errors.Is(result.Error, context.Canceled) {
-			l.logger.Info("tool cancelled by user", "name", call.ToolName)
+			l.Logger.Info("tool cancelled by user", "name", call.ToolName)
 			text = strings.TrimRight(text, "\r\n") + "\n\n" + cancelledToolResultText
 		} else {
-			l.logger.Error("tool execution failed", "name", call.ToolName, "error", result.Error)
+			l.Logger.Error("tool execution failed", "name", call.ToolName, "error", result.Error)
 		}
 		toolResultContent = llm.TextContent(text)
 	} else {
-		l.logger.Debug("tool executed successfully", "name", call.ToolName, "duration", endTime.Sub(startTime))
+		l.Logger.Debug("tool executed successfully", "name", call.ToolName, "duration", endTime.Sub(startTime))
 	}
 
 	return toolCallExecution{
@@ -923,7 +901,7 @@ func (l *runner) insertMissingToolResults(req *llm.Request) {
 			if len(msg.Content) == 0 && i < len(req.Messages)-1 {
 				req.Messages[i].Content = []llm.Content{{Type: llm.ContentTypeText, Text: "(no response)"}}
 				msg = req.Messages[i] // update local copy for subsequent processing
-				l.logger.Debug("added placeholder content to empty assistant message", "index", i)
+				l.Logger.Debug("added placeholder content to empty assistant message", "index", i)
 			}
 
 			// Track all tool_use IDs in this assistant message
@@ -989,7 +967,7 @@ func (l *runner) insertMissingToolResults(req *llm.Request) {
 					} else {
 						// Orphan tool_result - skip it
 						totalRemoved++
-						l.logger.Debug("removing orphan tool_result", "tool_use_id", c.ToolUseID)
+						l.Logger.Debug("removing orphan tool_result", "tool_use_id", c.ToolUseID)
 					}
 				} else {
 					// Keep non-tool_result content
@@ -1025,7 +1003,7 @@ func (l *runner) insertMissingToolResults(req *llm.Request) {
 				newMessages = append(newMessages, msg)
 			} else {
 				// Message is now empty after filtering - skip it entirely
-				l.logger.Debug("removing empty user message after filtering orphan tool_results")
+				l.Logger.Debug("removing empty user message after filtering orphan tool_results")
 			}
 
 			// Reset for next iteration - user message "consumes" the previous tool_uses
@@ -1038,10 +1016,10 @@ func (l *runner) insertMissingToolResults(req *llm.Request) {
 	if totalInserted > 0 || totalRemoved > 0 {
 		req.Messages = newMessages
 		if totalInserted > 0 {
-			l.logger.Debug("inserted missing tool results", "count", totalInserted)
+			l.Logger.Debug("inserted missing tool results", "count", totalInserted)
 		}
 		if totalRemoved > 0 {
-			l.logger.Debug("removed orphan tool results", "count", totalRemoved)
+			l.Logger.Debug("removed orphan tool results", "count", totalRemoved)
 		}
 	}
 }
