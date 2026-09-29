@@ -1,7 +1,14 @@
-import type { GitTour, GitTourEntry, GitTourHeaderEntry } from "../../services/api";
+import type {
+  GitTour,
+  GitTourEntry,
+  GitTourHeaderEntry,
+  GitTourMediaEntry,
+} from "../../services/api";
 import { analyzeTourPatch } from "./commitTourPatch";
 
 export const TOUR_OVERVIEW_ANCHOR = "tour-overview";
+export const TOUR_DECISIONS_ANCHOR = "tour-decisions";
+export const TOUR_QUESTIONS_ANCHOR = "tour-questions";
 
 export interface TourOverviewItem {
   anchor: string;
@@ -27,7 +34,14 @@ export interface TourChangeItem {
   deletions: number;
 }
 
-export type TourContentsItem = TourOverviewItem | TourSectionItem | TourChangeItem;
+export interface TourMediaItem {
+  anchor: string;
+  label: string;
+  kind: "media";
+  video: boolean;
+}
+
+export type TourContentsItem = TourOverviewItem | TourSectionItem | TourChangeItem | TourMediaItem;
 
 export type TourContentsRow =
   | {
@@ -40,6 +54,11 @@ export type TourContentsRow =
       key: string;
       item: TourChangeItem;
       depth: number;
+    }
+  | {
+      kind: "media";
+      key: string;
+      item: TourMediaItem;
     }
   | {
       kind: "file";
@@ -57,7 +76,8 @@ export interface TourContentsGroup {
 }
 
 export interface TourContentsLayout {
-  overview: TourOverviewItem | null;
+  // Front matter ahead of the narrative: overview, decisions, questions.
+  lead: TourOverviewItem[];
   groups: TourContentsGroup[];
 }
 
@@ -65,8 +85,16 @@ export function tourEntryAnchor(position: number): string {
   return `tour-entry-${position}`;
 }
 
-function isHeaderEntry(entry: GitTourEntry): entry is GitTourHeaderEntry {
+export function isHeaderEntry(entry: GitTourEntry): entry is GitTourHeaderEntry {
   return "header" in entry;
+}
+
+export function isMediaEntry(entry: GitTourEntry): entry is GitTourMediaEntry {
+  return "blob" in entry;
+}
+
+export function isVideoMedia(entry: GitTourMediaEntry): boolean {
+  return entry.mime.startsWith("video/");
 }
 
 function headerLabel(markdown: string): string {
@@ -87,6 +115,20 @@ export function buildTourContents(tour: GitTour, includeOverview: boolean): Tour
   if (includeOverview || tour.title || tour.intro) {
     contents.push({ anchor: TOUR_OVERVIEW_ANCHOR, label: "Overview", kind: "overview" });
   }
+  if (tour.decisions?.length) {
+    contents.push({
+      anchor: TOUR_DECISIONS_ANCHOR,
+      label: "Key design decisions",
+      kind: "overview",
+    });
+  }
+  if (tour.questions?.length) {
+    contents.push({
+      anchor: TOUR_QUESTIONS_ANCHOR,
+      label: `Questions (${tour.questions.length})`,
+      kind: "overview",
+    });
+  }
 
   tour.chunks.forEach((entry, position) => {
     if (isHeaderEntry(entry)) {
@@ -94,6 +136,15 @@ export function buildTourContents(tour: GitTour, includeOverview: boolean): Tour
         anchor: tourEntryAnchor(position),
         label: headerLabel(entry.header),
         kind: "section",
+      });
+      return;
+    }
+    if (isMediaEntry(entry)) {
+      contents.push({
+        anchor: tourEntryAnchor(position),
+        label: entry.name,
+        kind: "media",
+        video: isVideoMedia(entry),
       });
       return;
     }
@@ -119,7 +170,7 @@ export function buildTourContents(tour: GitTour, includeOverview: boolean): Tour
 }
 
 export function buildTourContentsLayout(items: TourContentsItem[]): TourContentsLayout {
-  const overview = items.find((item): item is TourOverviewItem => item.kind === "overview") ?? null;
+  const lead = items.filter((item): item is TourOverviewItem => item.kind === "overview");
   const groups: TourContentsGroup[] = [];
   let current: TourContentsGroup = { section: null, rows: [] };
   let previousDirectory = "";
@@ -134,6 +185,14 @@ export function buildTourContentsLayout(items: TourContentsItem[]): TourContents
     if (item.kind === "section") {
       finishGroup();
       current = { section: item, rows: [] };
+      previousDirectory = "";
+      previousFile = "";
+      continue;
+    }
+    if (item.kind === "media") {
+      current.rows.push({ kind: "media", key: item.anchor, item });
+      // A change after media starts its file tree afresh; otherwise it would
+      // read as belonging to the media row above it.
       previousDirectory = "";
       previousFile = "";
       continue;
@@ -173,5 +232,5 @@ export function buildTourContentsLayout(items: TourContentsItem[]): TourContents
   }
   finishGroup();
 
-  return { overview, groups };
+  return { lead, groups };
 }

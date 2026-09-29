@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -405,6 +406,43 @@ func (s *Server) handleGitTour(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(GitTourResponse{Hash: target.Hash, Tour: resolved})
+}
+
+// handleGitTourMedia serves an image or recording embedded in a tour. Blobs
+// are content-addressed, so responses are immutable.
+func (s *Server) handleGitTourMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cwd := r.URL.Query().Get("cwd")
+	blob := r.URL.Query().Get("blob")
+	if cwd == "" || blob == "" {
+		http.Error(w, "cwd and blob are required", http.StatusBadRequest)
+		return
+	}
+	gitRoot, err := getGitRoot(cwd)
+	if err != nil {
+		http.Error(w, "not a git repository", http.StatusBadRequest)
+		return
+	}
+	data, mime, err := committour.ReadMedia(gitRoot, blob)
+	switch {
+	case errors.Is(err, committour.ErrNoMedia):
+		http.Error(w, "no such tour media", http.StatusNotFound)
+		return
+	case errors.Is(err, committour.ErrInvalidMedia):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("ETag", `"`+blob+`"`)
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 }
 
 func writeGitTourNotFound(w http.ResponseWriter) {

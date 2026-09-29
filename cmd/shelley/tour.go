@@ -142,11 +142,20 @@ func runTour(args []string) {
 		if err != nil {
 			fail(err)
 		}
-		resolved, err := committour.Resolve(*dir, rest[0], tour)
+		// Resolve the commit once: HEAD may move while attaching.
+		hash, err := committour.CommitHash(*dir, rest[0])
 		if err != nil {
 			fail(err)
 		}
-		warnings, err := committour.Verify(*dir, rest[0], tour)
+		resolved, err := committour.Resolve(*dir, hash, tour)
+		if err != nil {
+			fail(err)
+		}
+		mediaResolved, err := committour.ResolveMedia(*dir, tour, args[0] == "attach")
+		if err != nil {
+			fail(err)
+		}
+		warnings, err := committour.Verify(*dir, hash, tour)
 		for _, warning := range warnings {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 		}
@@ -157,14 +166,15 @@ func runTour(args []string) {
 			fmt.Printf("tour for %s verifies\n", rest[0])
 			return
 		}
-		if resolved {
-			// Store the resolved tour so readers need not re-derive chunks.
+		if resolved || mediaResolved {
+			// Store the resolved tour so readers need not re-derive chunks
+			// and the note does not depend on local media files.
 			data, err = json.MarshalIndent(tour, "", "  ")
 			if err != nil {
 				fail(err)
 			}
 		}
-		if err := committour.WriteNote(*dir, rest[0], data); err != nil {
+		if err := committour.WriteNote(*dir, hash, data, tour.MediaBlobs()...); err != nil {
 			fail(err)
 		}
 		fmt.Printf("attached tour note to %s\n", rest[0])

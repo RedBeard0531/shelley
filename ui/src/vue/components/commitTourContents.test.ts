@@ -201,7 +201,9 @@ run("file grouping respects narrative boundaries and full paths", () => {
           ? `directory:${row.label}`
           : row.kind === "file"
             ? `file:${row.label}:${row.depth}`
-            : `change:${row.item.anchor}:${row.depth}`,
+            : row.kind === "media"
+              ? `media:${row.item.anchor}`
+              : `change:${row.item.anchor}:${row.depth}`,
       ),
     ),
     [
@@ -227,5 +229,57 @@ run("file grouping respects narrative boundaries and full paths", () => {
       ],
     ],
     "grouped narrative",
+  );
+});
+
+run("decisions, questions, and media join the contents", () => {
+  const tour: GitTour = {
+    version: 1,
+    decisions: [{ title: "Pin media in git" }],
+    questions: [{ title: "Autoplay?" }, { title: "Keep the old screen?", body: "Context." }],
+    chunks: [
+      { patch: patch(2, "ui/view.ts") },
+      { blob: "a".repeat(40), mime: "image/png", name: "after.png", comment: "After." },
+      { patch: patch(8, "ui/view.ts") },
+      { blob: "b".repeat(40), mime: "video/webm", name: "demo.webm" },
+    ],
+  };
+  const contents = buildTourContents(tour, false);
+  assertEqual(
+    contents.filter((item) => item.kind === "overview" || item.kind === "media"),
+    [
+      { anchor: "tour-decisions", label: "Key design decisions", kind: "overview" },
+      { anchor: "tour-questions", label: "Questions (2)", kind: "overview" },
+      { anchor: "tour-entry-1", label: "after.png", kind: "media", video: false },
+      { anchor: "tour-entry-3", label: "demo.webm", kind: "media", video: true },
+    ],
+    "front matter and media items",
+  );
+  const layout = buildTourContentsLayout(contents);
+  assertEqual(
+    layout.lead.map((item) => item.anchor),
+    ["tour-decisions", "tour-questions"],
+    "lead items",
+  );
+  assertEqual(
+    layout.groups[0]?.rows.map((row) =>
+      row.kind === "directory"
+        ? `directory:${row.label}`
+        : row.kind === "file"
+          ? `file:${row.label}`
+          : `${row.kind}:${row.item.anchor}`,
+    ),
+    [
+      "directory:ui",
+      "file:ui/view.ts",
+      "change:tour-entry-0",
+      "media:tour-entry-1",
+      // Media interrupts the file tree, so the next change restates its file.
+      "directory:ui",
+      "file:ui/view.ts",
+      "change:tour-entry-2",
+      "media:tour-entry-3",
+    ],
+    "media rows",
   );
 });

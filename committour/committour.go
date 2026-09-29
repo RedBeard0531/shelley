@@ -6,28 +6,49 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const notesRef = "shelley-tour"
 
 type Tour struct {
-	Version int         `json:"version"`
-	Title   string      `json:"title,omitempty"`
-	Intro   string      `json:"intro,omitempty"`
-	Chunks  []TourChunk `json:"chunks"`
+	Version int    `json:"version"`
+	Title   string `json:"title,omitempty"`
+	Intro   string `json:"intro,omitempty"`
+	// Decisions are the key design decisions behind the commit.
+	Decisions []TourItem `json:"decisions,omitempty"`
+	// Questions are open questions for the reader to answer.
+	Questions []TourItem  `json:"questions,omitempty"`
+	Chunks    []TourChunk `json:"chunks"`
 }
 
-// TourChunk is either a markdown section header, a self-contained patch, or
-// a reference to a suggested chunk id (resolved to a patch by Resolve).
+// TourItem is a decision or question: a one-line title with an optional
+// body, both markdown.
+type TourItem struct {
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
+}
+
+// TourChunk is one narrative entry: a markdown section header, a
+// self-contained patch, a reference to a suggested chunk id (resolved to a
+// patch by Resolve), or an image or recording. Media names a file to embed;
+// ResolveMedia replaces it with its Blob and sniffed MIME type, and defaults
+// Name, the label readers see, to the file's base name.
 type TourChunk struct {
 	Header  string `json:"header,omitempty"`
 	Patch   string `json:"patch,omitempty"`
 	Ref     *int   `json:"ref,omitempty"`
+	Media   string `json:"media,omitempty"`
+	Blob    string `json:"blob,omitempty"`
+	MIME    string `json:"mime,omitempty"`
+	Name    string `json:"name,omitempty"`
 	Comment string `json:"comment,omitempty"`
 	Trivial bool   `json:"trivial,omitempty"`
 }
@@ -113,8 +134,8 @@ func Resolve(dir, commit string, tour *Tour) (bool, error) {
 		if entry.Ref == nil {
 			continue
 		}
-		if entry.Header != "" || entry.Patch != "" {
-			return false, fmt.Errorf("chunks[%d] has ref alongside header or patch", i)
+		if entry.Header != "" || entry.Patch != "" || entry.Media != "" || entry.Blob != "" {
+			return false, fmt.Errorf("chunks[%d] has ref alongside another entry kind", i)
 		}
 		refs = append(refs, i)
 	}
@@ -139,15 +160,24 @@ func Resolve(dir, commit string, tour *Tour) (bool, error) {
 	return true, nil
 }
 
-// Chunks returns the full commit hash and one suggested patch fragment per hunk.
-func Chunks(dir, commit string) (string, []string, error) {
-	hashBytes, err := gitOutput(dir, "", nil, "rev-parse", commit+"^{commit}")
+// CommitHash resolves rev to a full commit hash.
+func CommitHash(dir, rev string) (string, error) {
+	hashBytes, err := gitOutput(dir, "", nil, "rev-parse", rev+"^{commit}")
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	hash := strings.TrimSpace(string(hashBytes))
 	if hash == "" || strings.ContainsAny(hash, "\r\n") {
-		return "", nil, fmt.Errorf("git rev-parse returned invalid hash %q", hash)
+		return "", fmt.Errorf("git rev-parse returned invalid hash %q", hash)
+	}
+	return hash, nil
+}
+
+// Chunks returns the full commit hash and one suggested patch fragment per hunk.
+func Chunks(dir, commit string) (string, []string, error) {
+	hash, err := CommitHash(dir, commit)
+	if err != nil {
+		return "", nil, err
 	}
 
 	diff, err := gitOutput(
@@ -327,26 +357,68 @@ func validateTour(tour *Tour) ([]string, []string, error) {
 	if tour.Version != 1 {
 		return nil, nil, fmt.Errorf("version is %d, want 1", tour.Version)
 	}
+	for _, list := range []struct {
+		name  string
+		items []TourItem
+	}{{"decisions", tour.Decisions}, {"questions", tour.Questions}} {
+		for i, item := range list.items {
+			if strings.TrimSpace(item.Title) == "" {
+				return nil, nil, fmt.Errorf("%s[%d] has an empty title", list.name, i)
+			}
+			if strings.ContainsAny(item.Title, "\r\n") {
+				return nil, nil, fmt.Errorf("%s[%d] title spans lines; move detail into body", list.name, i)
+			}
+		}
+	}
 	var warnings, patches []string
 	for i, entry := range tour.Chunks {
-		headerSet := entry.Header != ""
-		patchSet := entry.Patch != ""
-		if headerSet == patchSet {
-			return warnings, nil, fmt.Errorf("chunks[%d] must have exactly one of header and patch", i)
+		kinds := 0
+		for _, set := range []bool{entry.Header != "", entry.Patch != "", entry.Media != "", entry.Blob != ""} {
+			if set {
+				kinds++
+			}
 		}
-		if headerSet {
+		if kinds != 1 {
+			return warnings, nil, fmt.Errorf("chunks[%d] must have exactly one of header, patch, and media", i)
+		}
+		if entry.Blob == "" && (entry.MIME != "" || entry.Name != "" && entry.Media == "") {
+			return warnings, nil, fmt.Errorf("chunks[%d] has mime or name but is not media", i)
+		}
+		if strings.ContainsAny(entry.Name, "\r\n") {
+			return warnings, nil, fmt.Errorf("chunks[%d] media name spans lines", i)
+		}
+		switch {
+		case entry.Header != "":
 			if strings.TrimSpace(entry.Header) == "" {
 				return warnings, nil, fmt.Errorf("chunks[%d] has an empty header", i)
 			}
-			continue
-		}
-		if strings.TrimSpace(entry.Patch) == "" {
-			return warnings, nil, fmt.Errorf("chunks[%d] has an empty patch", i)
-		}
-		patches = append(patches, entry.Patch)
-		if !entry.Trivial && strings.TrimSpace(entry.Comment) == "" {
-			meta := Meta(entry.Patch)
-			warnings = append(warnings, fmt.Sprintf("chunks[%d] (%s %s) is non-trivial but has no comment", i, meta.File, meta.Hunk))
+		case entry.Media != "":
+			return warnings, nil, fmt.Errorf("chunks[%d] has unresolved media %q", i, entry.Media)
+		case entry.Blob != "":
+			if !validBlobHash(entry.Blob) {
+				return warnings, nil, fmt.Errorf("chunks[%d] blob %q is not a full object hash", i, entry.Blob)
+			}
+			if !mediaTypes[entry.MIME] {
+				return warnings, nil, fmt.Errorf("chunks[%d] has unsupported media type %q", i, entry.MIME)
+			}
+			if strings.TrimSpace(entry.Name) == "" {
+				return warnings, nil, fmt.Errorf("chunks[%d] media has no name", i)
+			}
+			if entry.Trivial {
+				return warnings, nil, fmt.Errorf("chunks[%d] media cannot be trivial", i)
+			}
+			if strings.TrimSpace(entry.Comment) == "" {
+				warnings = append(warnings, fmt.Sprintf("chunks[%d] (%s) is media but has no comment", i, entry.Name))
+			}
+		default:
+			if strings.TrimSpace(entry.Patch) == "" {
+				return warnings, nil, fmt.Errorf("chunks[%d] has an empty patch", i)
+			}
+			patches = append(patches, entry.Patch)
+			if !entry.Trivial && strings.TrimSpace(entry.Comment) == "" {
+				meta := Meta(entry.Patch)
+				warnings = append(warnings, fmt.Sprintf("chunks[%d] (%s %s) is non-trivial but has no comment", i, meta.File, meta.Hunk))
+			}
 		}
 	}
 	return warnings, patches, nil
@@ -366,7 +438,9 @@ func ReadNote(dir, commit string) ([]byte, error) {
 	return data, nil
 }
 
-func WriteNote(dir, commit string, data []byte) error {
+// WriteNote stores data as commit's tour note. The given media blobs are
+// pinned in the same update of the notes ref (see pinnedIn).
+func WriteNote(dir, commit string, data []byte, media ...string) error {
 	file, err := os.CreateTemp("", "shelley-tour-*.json")
 	if err != nil {
 		return fmt.Errorf("create tour note file: %w", err)
@@ -380,15 +454,78 @@ func WriteNote(dir, commit string, data []byte) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close tour note file: %w", err)
 	}
-	// Retry on notes-ref lock contention: concurrent attachers (e.g. parallel
-	// subagents annotating different commits) race on refs/notes/<ref>.lock.
-	for attempt := 0; ; attempt++ {
-		_, err = gitOutput(dir, "", nil, "notes", "--ref="+notesRef, "add", "-f", "-F", name, commit)
-		if err == nil || attempt >= 5 || !strings.Contains(err.Error(), ".lock") {
+	return updateNotes(dir, commit, name, media)
+}
+
+// updateNotes adds noteFile as commit's note and pins media, atomically.
+// git notes overwrites its ref without checking the old value, so
+// concurrent writers (parallel subagents annotating different commits)
+// would silently drop each other's notes. Instead the edits run against a
+// private copy of the ref, which is then compare-and-swapped in; on
+// contention the whole update is redone from the new value.
+func updateNotes(dir, commit, noteFile string, media []string) error {
+	deadline := time.Now().Add(15 * time.Second)
+	backoff := 10 * time.Millisecond
+	for {
+		err := tryUpdateNotes(dir, commit, noteFile, media)
+		if err == nil || time.Now().After(deadline) || !strings.Contains(err.Error(), "cannot lock ref") {
 			return err
 		}
-		time.Sleep(time.Duration(50<<attempt) * time.Millisecond)
+		// Jitter keeps writers that lost the same round from colliding again.
+		time.Sleep(backoff/2 + rand.N(backoff))
+		backoff = min(2*backoff, time.Second)
 	}
+}
+
+// tmpNotesRefs numbers this process's private notes refs.
+var tmpNotesRefs atomic.Int64
+
+func tryUpdateNotes(dir, commit, noteFile string, media []string) error {
+	ref := "refs/notes/" + notesRef
+	out, err := gitOutput(dir, "", nil, "for-each-ref", "--format=%(objectname)", ref)
+	if err != nil {
+		return err
+	}
+	old := strings.TrimSpace(string(out))
+	// Unique even against refs left behind by a crashed process that had
+	// this pid.
+	tmp := fmt.Sprintf("%s-tmp-%d-%d-%d", notesRef, os.Getpid(), time.Now().UnixNano(), tmpNotesRefs.Add(1))
+	defer gitOutput(dir, "", nil, "update-ref", "-d", "refs/notes/"+tmp)
+	if old != "" {
+		if _, err := gitOutput(dir, "", nil, "update-ref", "refs/notes/"+tmp, old); err != nil {
+			return err
+		}
+	}
+	for _, blob := range media {
+		pinned, err := pinnedIn(dir, tmp, blob)
+		if err != nil {
+			return err
+		}
+		if pinned {
+			continue
+		}
+		if _, err := gitOutput(dir, "", nil, "notes", "--ref="+tmp, "add", "-f", "-C", blob, blob); err != nil {
+			return err
+		}
+	}
+	if _, err := gitOutput(dir, "", nil, "notes", "--ref="+tmp, "add", "-f", "-F", noteFile, commit); err != nil {
+		return err
+	}
+	out, err = gitOutput(dir, "", nil, "rev-parse", "refs/notes/"+tmp)
+	if err != nil {
+		return err
+	}
+	updated := strings.TrimSpace(string(out))
+	// If something deleted the private ref midway, the edits started from an
+	// empty tree; swapping that in would drop every other note.
+	if old != "" {
+		if _, err := gitOutput(dir, "", nil, "merge-base", "--is-ancestor", old, updated); err != nil {
+			return fmt.Errorf("notes update lost its base %s: %w", old, err)
+		}
+	}
+	// An empty old value requires that the ref still not exist.
+	_, err = gitOutput(dir, "", nil, "update-ref", ref, updated, old)
+	return err
 }
 
 func ListNotes(dir string) (map[string]bool, error) {
@@ -413,7 +550,7 @@ func ListNotes(dir string) (map[string]bool, error) {
 // gitOutput runs git -C dir with a sanitized environment: repo-locating
 // variables are stripped so dir always wins, and index (if non-empty) is used
 // as GIT_INDEX_FILE so plumbing never touches the real index.
-func gitOutput(dir, index string, stdin *strings.Reader, args ...string) ([]byte, error) {
+func gitOutput(dir, index string, stdin io.Reader, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = gitEnv(index)
 	if stdin != nil {
@@ -445,7 +582,8 @@ func gitEnv(index string) []string {
 	if index != "" {
 		env = append(env, "GIT_INDEX_FILE="+index)
 	}
-	return env
+	// Errors are matched on their English text.
+	return append(env, "LC_ALL=C")
 }
 
 func splitLines(text string) []string {

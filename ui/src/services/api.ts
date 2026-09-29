@@ -87,12 +87,28 @@ export interface GitTourPatchEntry {
   trivial?: boolean;
 }
 
-export type GitTourEntry = GitTourHeaderEntry | GitTourPatchEntry;
+/** A screenshot or recording, stored in the repository as a git blob. */
+export interface GitTourMediaEntry {
+  blob: string;
+  mime: string;
+  name: string;
+  comment?: string;
+}
+
+export type GitTourEntry = GitTourHeaderEntry | GitTourPatchEntry | GitTourMediaEntry;
+
+/** A key design decision or a question for the reader. */
+export interface GitTourItem {
+  title: string;
+  body?: string;
+}
 
 export interface GitTour {
   version: 1;
   title?: string;
   intro?: string;
+  decisions?: GitTourItem[];
+  questions?: GitTourItem[];
   chunks: GitTourEntry[];
 }
 
@@ -709,6 +725,10 @@ class ApiService {
     });
     if (!accepted.tour) throw new Error("Commit tour request returned no status");
     return accepted.tour;
+  }
+
+  gitTourMediaURL(cwd: string, blob: string): string {
+    return `${this.baseUrl}/git/tour/media?${new URLSearchParams({ cwd, blob })}`;
   }
 
   async hasGitTour(cwd: string, hash: string): Promise<boolean> {

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -596,5 +597,210 @@ func TestVerifyShallowCloneParent(t *testing.T) {
 	// fail with an error, not silently compare against the empty tree.
 	if _, err := Verify(shallow, hash, tourFor(fragments)); err == nil {
 		t.Fatal("expected error verifying at a shallow boundary")
+	}
+}
+
+// pngBytes is enough of a PNG for content sniffing; tours never decode media.
+var pngBytes = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00")
+
+// mp4Bytes is an ftyp box with an mp4 compatible brand, as browser
+// screencasts produce.
+var mp4Bytes = []byte("\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isommp41\x00\x00\x00\x08free")
+
+func TestResolvePinAndReadMedia(t *testing.T) {
+	dir, git := gitRepo(t)
+	write(t, dir, "f.txt", []byte("a\n"))
+	hash := commit(t, git, "root")
+	_, fragments, err := Chunks(dir, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	media := t.TempDir()
+	shot := filepath.Join(media, "after.png")
+	demo := filepath.Join(media, "demo.mp4")
+	write(t, media, "after.png", pngBytes)
+	write(t, media, "demo.mp4", mp4Bytes)
+
+	tour := tourFor(fragments)
+	tour.Decisions = []TourItem{{Title: "Keep it small", Body: "Because."}}
+	tour.Questions = []TourItem{{Title: "Ship it?"}}
+	tour.Chunks = append(
+		tour.Chunks,
+		TourChunk{Media: shot, Comment: "The new screen."},
+		TourChunk{Media: demo, Comment: "Walkthrough."},
+	)
+	if _, err := Verify(dir, hash, tour); err == nil || !strings.Contains(err.Error(), "unresolved media") {
+		t.Fatalf("Verify with media paths err = %v", err)
+	}
+	shotHash := strings.TrimSpace(git("hash-object", shot))
+	resolved, err := ResolveMedia(dir, tour, false)
+	if err != nil || !resolved {
+		t.Fatalf("ResolveMedia = %v, %v", resolved, err)
+	}
+	if got := git("cat-file", "--batch-check", "--batch-all-objects"); strings.Contains(got, shotHash) {
+		t.Fatal("ResolveMedia without write stored the blob")
+	}
+	png, mp4 := tour.Chunks[1], tour.Chunks[2]
+	if png.Blob != shotHash || png.MIME != "image/png" || png.Name != "after.png" || png.Media != "" {
+		t.Fatalf("png entry = %+v, want blob %s", png, shotHash)
+	}
+	if mp4.MIME != "video/mp4" || mp4.Name != "demo.mp4" {
+		t.Fatalf("mp4 entry = %+v", mp4)
+	}
+	requireVerify(t, dir, hash, tour)
+	// Resolved entries are checked against the store, which verify skipped.
+	if _, err := ResolveMedia(dir, tour, true); err == nil || !strings.Contains(err.Error(), "not a stored blob") {
+		t.Fatalf("ResolveMedia of unstored blobs err = %v", err)
+	}
+	if err := WriteNote(dir, hash, []byte("{}"), tour.MediaBlobs()...); err == nil {
+		t.Fatal("WriteNote pinned blobs that were never stored")
+	}
+
+	// A stored blob is not tour media until a note pins it.
+	tour.Chunks[1].Media, tour.Chunks[2].Media = shot, demo
+	tour.Chunks[1].Blob, tour.Chunks[2].Blob = "", ""
+	tour.Chunks[1].MIME, tour.Chunks[2].MIME = "", ""
+	tour.Chunks[1].Name = "" // The label defaults to the file's base name.
+	tour.Chunks[2].Name = "walkthrough"
+	if _, err := ResolveMedia(dir, tour, true); err != nil {
+		t.Fatal(err)
+	}
+	if tour.Chunks[1].Name != "after.png" || tour.Chunks[2].Name != "walkthrough" {
+		t.Fatalf("names = %q, %q", tour.Chunks[1].Name, tour.Chunks[2].Name)
+	}
+	if resolved, err := ResolveMedia(dir, tour, true); err != nil || resolved {
+		t.Fatalf("ResolveMedia of stored blobs = %v, %v", resolved, err)
+	}
+	lying := *tour
+	lying.Chunks = append([]TourChunk(nil), tour.Chunks...)
+	lying.Chunks[1].MIME = "video/webm"
+	if _, err := ResolveMedia(dir, &lying, true); err == nil || !strings.Contains(err.Error(), "is not video/webm") {
+		t.Fatalf("ResolveMedia of mislabeled blob err = %v", err)
+	}
+	if _, _, err := ReadMedia(dir, png.Blob); !errors.Is(err, ErrNoMedia) {
+		t.Fatalf("ReadMedia before pin err = %v", err)
+	}
+	if err := WriteNote(dir, hash, []byte("{}"), tour.MediaBlobs()...); err != nil {
+		t.Fatal(err)
+	}
+	data, mime, err := ReadMedia(dir, png.Blob)
+	if err != nil || mime != "image/png" || string(data) != string(pngBytes) {
+		t.Fatalf("ReadMedia = %q, %q, %v", data, mime, err)
+	}
+	if _, _, err := ReadMedia(dir, "HEAD"); err == nil || errors.Is(err, ErrNoMedia) {
+		t.Fatalf("ReadMedia accepted a non-hash: %v", err)
+	}
+	// A tour note's commit is annotated but is not itself pinned media.
+	if _, _, err := ReadMedia(dir, hash); !errors.Is(err, ErrNoMedia) {
+		t.Fatalf("ReadMedia of an annotated commit err = %v", err)
+	}
+	// Pins travel with the tour ref and survive an aggressive gc.
+	notes, err := ListNotes(dir)
+	if err != nil || !notes[hash] || !notes[mp4.Blob] {
+		t.Fatalf("ListNotes = %v, %v", notes, err)
+	}
+	git("gc", "-q", "--prune=now")
+	if _, _, err := ReadMedia(dir, mp4.Blob); err != nil {
+		t.Fatalf("ReadMedia after gc: %v", err)
+	}
+}
+
+func TestWriteNoteConcurrent(t *testing.T) {
+	dir, git := gitRepo(t)
+	var commits, blobs []string
+	for i := range 12 {
+		write(t, dir, "f.txt", []byte(fmt.Sprintf("%d\n", i)))
+		commits = append(commits, commit(t, git, fmt.Sprintf("c%d", i)))
+		write(t, dir, fmt.Sprintf("m%d.png", i), append(pngBytes, byte(i)))
+		blobs = append(blobs, strings.TrimSpace(git("hash-object", "-w", fmt.Sprintf("m%d.png", i))))
+	}
+	errs := make(chan error, len(commits))
+	for i := range commits {
+		go func() { errs <- WriteNote(dir, commits[i], []byte(fmt.Sprintf("note %d", i)), blobs[i]) }()
+	}
+	for range commits {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range commits {
+		if note, err := ReadNote(dir, commits[i]); err != nil || strings.TrimSpace(string(note)) != fmt.Sprintf("note %d", i) {
+			t.Errorf("note %d = %q, %v", i, note, err)
+		}
+		if _, _, err := ReadMedia(dir, blobs[i]); err != nil {
+			t.Errorf("media %d: %v", i, err)
+		}
+	}
+	if refs := git("for-each-ref", "refs/notes/"); strings.Count(refs, "\n") != 1 {
+		t.Errorf("leftover notes refs:\n%s", refs)
+	}
+}
+
+func TestResolveMediaRejectsBadFiles(t *testing.T) {
+	dir, git := gitRepo(t)
+	commit(t, git, "root")
+	media := t.TempDir()
+	write(t, media, "notes.txt", []byte("hello"))
+	write(t, media, "logo.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`))
+	write(t, media, "huge.png", append(pngBytes, make([]byte, maxMediaBytes)...))
+	if err := syscall.Mkfifo(filepath.Join(media, "pipe.png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, entry := range map[string]TourChunk{
+		"too large":   {Media: filepath.Join(media, "huge.png")},
+		"fifo":        {Media: filepath.Join(media, "pipe.png")},
+		"missing":     {Media: filepath.Join(media, "gone.png")},
+		"text":        {Media: filepath.Join(media, "notes.txt")},
+		"svg":         {Media: filepath.Join(media, "logo.svg")},
+		"with patch":  {Media: filepath.Join(media, "notes.txt"), Patch: "p"},
+		"with header": {Media: filepath.Join(media, "notes.txt"), Header: "h"},
+		"with mime":   {Media: filepath.Join(media, "notes.txt"), MIME: "image/png"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ResolveMedia(dir, &Tour{Version: 1, Chunks: []TourChunk{entry}}, false); err == nil {
+				t.Fatal("ResolveMedia succeeded")
+			}
+		})
+	}
+}
+
+func TestVerifyMediaAndItems(t *testing.T) {
+	blob := strings.Repeat("a", 40)
+	for name, tour := range map[string]*Tour{
+		"media and blob":    {Version: 1, Chunks: []TourChunk{{Media: "x.png", Blob: blob, MIME: "image/png", Name: "x.png"}}},
+		"blob and patch":    {Version: 1, Chunks: []TourChunk{{Patch: "p", Blob: blob, MIME: "image/png", Name: "x.png"}}},
+		"short blob":        {Version: 1, Chunks: []TourChunk{{Blob: "abc", MIME: "image/png", Name: "x.png"}}},
+		"ref-like blob":     {Version: 1, Chunks: []TourChunk{{Blob: "HEAD", MIME: "image/png", Name: "x.png"}}},
+		"svg blob":          {Version: 1, Chunks: []TourChunk{{Blob: blob, MIME: "image/svg+xml", Name: "x.svg"}}},
+		"nameless blob":     {Version: 1, Chunks: []TourChunk{{Blob: blob, MIME: "image/png"}}},
+		"trivial blob":      {Version: 1, Chunks: []TourChunk{{Blob: blob, MIME: "image/png", Name: "x.png", Trivial: true}}},
+		"untitled decision": {Version: 1, Decisions: []TourItem{{Body: "why"}}},
+		"untitled question": {Version: 1, Questions: []TourItem{{Title: " "}}},
+		"multi-line title":  {Version: 1, Questions: []TourItem{{Title: "Why?\nBecause."}}},
+		"multi-line name":   {Version: 1, Chunks: []TourChunk{{Blob: blob, MIME: "image/png", Name: "x\ny.png"}}},
+		"stray mime":        {Version: 1, Chunks: []TourChunk{{Header: "h", MIME: "image/png"}}},
+		"stray name":        {Version: 1, Chunks: []TourChunk{{Patch: "p", Name: "x.png"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Verify(".", "HEAD", tour); err == nil {
+				t.Fatal("Verify succeeded")
+			}
+		})
+	}
+
+	dir, git := gitRepo(t)
+	hash := commit(t, git, "empty root")
+	tour := &Tour{
+		Version:   1,
+		Decisions: []TourItem{{Title: "Decided"}},
+		Questions: []TourItem{{Title: "Asked", Body: "Context"}},
+		Chunks:    []TourChunk{{Blob: blob, MIME: "video/webm", Name: "demo.webm"}},
+	}
+	warnings, err := Verify(dir, hash, tour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "demo.webm") || !strings.Contains(warnings[0], "no comment") {
+		t.Fatalf("warnings = %v", warnings)
 	}
 }

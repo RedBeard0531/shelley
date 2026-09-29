@@ -1349,10 +1349,12 @@ function handleKeyDown(e: KeyboardEvent) {
     // If Monaco's find widget is open, let Monaco close it.
     const findWidget = editorContainerRef.value?.querySelector(".find-widget.visible");
     if (findWidget) return;
-    // If a nested overlay (commit/dir picker) is open, let it handle Escape.
+    // If a nested overlay (commit/dir picker, or the image annotation view a
+    // tour screenshot opened) is open, let it handle Escape.
     if (
       document.querySelector(".commit-picker-popover") ||
-      document.querySelector(".commit-picker-modal")
+      document.querySelector(".commit-picker-modal") ||
+      document.querySelector(".image-comment-overlay")
     ) {
       return;
     }

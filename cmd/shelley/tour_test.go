@@ -171,6 +171,55 @@ func TestTourCLI(t *testing.T) {
 		t.Fatalf("resolved note = %q", shown)
 	}
 
+	// Media paths resolve to blobs; attach pins them so the note is
+	// self-contained and the blobs survive gc.
+	shotPath := filepath.Join(tempDir, "shot.png")
+	if err := os.WriteFile(shotPath, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mediaData, err := json.Marshal(map[string]any{
+		"version":   1,
+		"decisions": []map[string]string{{"title": "Pin media in git", "body": "So the note stands alone."}},
+		"questions": []map[string]string{{"title": "Keep the old screen?"}},
+		"chunks": []map[string]any{
+			{"media": shotPath, "comment": "After."},
+			{"ref": 0, "comment": "by reference"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaPath := filepath.Join(tempDir, "media.json")
+	if err := os.WriteFile(mediaPath, mediaData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(0, "tour", "verify", "-C", repo, "HEAD", mediaPath)
+	shotHash := strings.TrimSpace(git("hash-object", shotPath))
+	if got := git("cat-file", "--batch-check", "--batch-all-objects"); strings.Contains(got, shotHash) {
+		t.Fatal("verify wrote the media blob")
+	}
+	run(0, "tour", "attach", "-C", repo, "HEAD", mediaPath)
+	shownTour, err := committour.ParseTour([]byte(run(0, "tour", "show", "-C", repo, "HEAD")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot := shownTour.Chunks[0]
+	if shot.Blob != shotHash || shot.Media != "" || shot.MIME != "image/png" || shot.Name != "shot.png" ||
+		len(shownTour.Decisions) != 1 || len(shownTour.Questions) != 1 {
+		t.Fatalf("media note = %+v", shownTour)
+	}
+	git("gc", "-q", "--prune=now")
+	if data, _, err := committour.ReadMedia(repo, shot.Blob); err != nil || !strings.HasPrefix(string(data), "\x89PNG") {
+		t.Fatalf("ReadMedia after attach = %q, %v", data, err)
+	}
+	unsupportedPath := filepath.Join(tempDir, "unsupported.json")
+	if err := os.WriteFile(unsupportedPath, []byte(`{"version":1,"chunks":[{"media":"`+tourPath+`"},{"ref":0}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(1, "tour", "verify", "-C", repo, "HEAD", unsupportedPath); !strings.Contains(got, "unsupported type") {
+		t.Fatalf("unsupported media output = %q", got)
+	}
+
 	badRefData := []byte(`{"version":1,"chunks":[{"ref":7}]}`)
 	badRefPath := filepath.Join(tempDir, "badref.json")
 	if err := os.WriteFile(badRefPath, badRefData, 0o644); err != nil {

@@ -2,15 +2,19 @@
 <template>
   <nav aria-label="Tour contents">
     <ol class="diff-viewer-tour-contents">
-      <li v-if="layout.overview" class="diff-viewer-tour-contents-item overview">
+      <li
+        v-for="item in layout.lead"
+        :key="item.anchor"
+        class="diff-viewer-tour-contents-item overview"
+      >
         <button
           type="button"
-          :data-tour-target="layout.overview.anchor"
-          :title="layout.overview.label"
-          :aria-current="layout.overview.anchor === activeAnchor ? 'location' : undefined"
-          @click="emit('select', layout.overview.anchor)"
+          :data-tour-target="item.anchor"
+          :title="item.label"
+          :aria-current="item.anchor === activeAnchor ? 'location' : undefined"
+          @click="emit('select', item.anchor)"
         >
-          {{ layout.overview.label }}
+          {{ item.label }}
         </button>
       </li>
       <template v-for="group in layout.groups" :key="groupKey(group)">
@@ -37,7 +41,37 @@
               :class="row.kind === 'directory' ? 'tour-file-tree-directory' : 'tour-file-tree-item'"
               role="listitem"
             >
-              <div v-if="row.kind === 'directory'" class="diff-tree-row" :title="row.label">
+              <button
+                v-if="row.kind === 'media'"
+                type="button"
+                :class="['diff-tree-row', { active: row.item.anchor === activeAnchor }]"
+                :data-tour-target="row.item.anchor"
+                :title="row.item.label"
+                :aria-label="`${row.item.video ? 'Video' : 'Image'}: ${row.item.label}`"
+                :aria-current="row.item.anchor === activeAnchor ? 'location' : undefined"
+                @click="emit('select', row.item.anchor)"
+              >
+                <span class="diff-tree-icon" aria-hidden="true">
+                  <svg width="12" height="12" viewBox="0 0 16 16">
+                    <path
+                      v-if="row.item.video"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.2"
+                      d="M1.5 3.5h9v9h-9z M10.5 7l4-2.5v7l-4-2.5"
+                    />
+                    <path
+                      v-else
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.2"
+                      d="M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2-2 4 4 M10.5 5.5h.01"
+                    />
+                  </svg>
+                </span>
+                <span class="diff-tree-label">{{ row.item.label }}</span>
+              </button>
+              <div v-else-if="row.kind === 'directory'" class="diff-tree-row" :title="row.label">
                 <span class="diff-tree-icon" aria-hidden="true">
                   <svg width="12" height="12" viewBox="0 0 16 16">
                     <path

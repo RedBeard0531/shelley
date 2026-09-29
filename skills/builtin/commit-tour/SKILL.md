@@ -63,10 +63,19 @@ chunks JSON into your context for anything beyond a small commit.
      "version": 1,
      "title": "Short plain-text title",
      "intro": "Markdown intro: what this commit does and why.",
+     "decisions": [
+       {"title": "One-line decision", "body": "Markdown: why, and what was rejected."}
+     ],
+     "questions": [
+       {"title": "One-line question for the user?", "body": "Markdown context and options."}
+     ],
      "chunks": [
        {"header": "## The data model"},
        {"ref": 4, "comment": "Why this shape matters."},
        {"patch": "diff --git a/server/model.go b/server/model.go\n...", "comment": "A hand-split slice."},
+       {"header": "## The new screen"},
+       {"media": "/tmp/after.png", "comment": "What to look at in this screenshot."},
+       {"ref": 7, "comment": "The component that renders it."},
        {"header": "## Supporting changes"},
        {"ref": 0, "trivial": true},
        {"ref": 1, "trivial": true}
@@ -74,10 +83,15 @@ chunks JSON into your context for anything beyond a small commit.
    }
    ```
 
-   Every entry has exactly one of `header`, `ref` (a suggested-chunk id), or
-   `patch` (literal patch text, for hand-split hunks). Ref and patch entries
-   may also have `comment` and `trivial`. `attach` stores refs resolved to
-   their patch text, so the note remains self-contained.
+   Every entry has exactly one of `header`, `ref` (a suggested-chunk id),
+   `patch` (literal patch text, for hand-split hunks), or `media` (a path to a
+   screenshot or recording). Ref and patch entries may also have `comment` and
+   `trivial`; media entries may have `comment`, shown as the caption, and
+   `name`, the label readers see (default: the file's base name).
+   `decisions` and `questions` are optional; each item needs a one-line
+   `title` and may have a `body`, both markdown. `attach` stores refs
+   resolved to their patch text and media as git blobs, so the note remains
+   self-contained.
 
    For big commits, edit the scaffold with a short script that maps ids to
    entries (e.g. `add(14, 'comment')`, `header('## ...')`) rather than
@@ -93,7 +107,7 @@ chunks JSON into your context for anything beyond a small commit.
    `verify` applies all entries to the commit's parent tree and requires the
    exact commit tree. Gaps, overlaps, duplicate chunks, edited lines, or bad
    headers fail with Git's error text. `attach` verifies and writes the note
-   (re-running overwrites; concurrent attaches retry ref locks automatically).
+   (re-running overwrites; concurrent attaches are safe).
    `shelley tour show <commit>` prints an existing tour.
 
 ## Writing a good tour
@@ -119,3 +133,39 @@ chunks JSON into your context for anything beyond a small commit.
   the diff; one to three sentences is usually enough.
 - `intro` should state the problem, the approach, and the map of the tour.
 - Amending changes the commit hash; re-attach the tour afterward.
+
+## Decisions, questions, and media
+
+These are optional; include them when they help the reader, and omit them
+rather than padding.
+
+- **Key design decisions** (`decisions`) record the non-obvious choices a
+  reviewer would otherwise have to reverse-engineer or might second-guess: a
+  data format, where state lives, a trade-off taken. Say why in the body and
+  name the alternatives you rejected. Skip choices that follow directly from
+  the task. Readers can comment on each one.
+- **Questions for the user** (`questions`) are things you need the user to
+  decide or confirm: unresolved trade-offs, assumptions you made, behavior
+  you were unsure of. Phrase the title as a question that can be answered on
+  its own, and put options or context in the body. Each question gets an
+  Answer button whose reply lands in the user's message input, quoting it.
+  Do not ask questions you could answer yourself by reading the code.
+- **Screenshots and recordings** (`media` entries) show what a user-visible
+  change looks like. When a commit changes UI, rendering, or other visual
+  output, include the screenshots or short recordings you took while testing
+  it, or that the browser tool can capture cheaply: the new state,
+  before-and-after pairs, or a recording for interactions and animations.
+  Don't build and launch an app only to photograph it. Place each next to the
+  chunks it illustrates, use the comment to say what to look at, and give
+  tool-named files (UUIDs) a descriptive `name`.
+- Media must be PNG, JPEG, GIF, WebP, MP4, or WebM, at most 10 MiB each;
+  keep recordings short. Relative paths resolve against the current
+  directory, not `-C`.
+- Readers comment on screenshots exactly like conversation images (drag a
+  box around a region) and on recordings at the current playback time. Those
+  comments name the git blob; `git -C <repo> cat-file blob <hash>` retrieves
+  the file.
+- `attach` stores media as git blobs pinned in the `shelley-tour` notes ref,
+  so the note is self-contained and the original files may be deleted. Pins
+  are permanent (notes history keeps them), and pushing the notes ref pushes
+  them. Do not commit screenshots to the repository just for a tour.

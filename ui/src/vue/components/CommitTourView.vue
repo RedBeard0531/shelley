@@ -55,6 +55,23 @@
         </header>
       </div>
 
+      <CommitTourItems
+        v-if="tour.tour.decisions?.length"
+        :id="TOUR_DECISIONS_ANCHOR"
+        :data-tour-anchor="TOUR_DECISIONS_ANCHOR"
+        kind="decision"
+        :items="tour.tour.decisions"
+        @comment="(item, index) => openItemComment('decision', item, index)"
+      />
+      <CommitTourItems
+        v-if="tour.tour.questions?.length"
+        :id="TOUR_QUESTIONS_ANCHOR"
+        :data-tour-anchor="TOUR_QUESTIONS_ANCHOR"
+        kind="question"
+        :items="tour.tour.questions"
+        @comment="(item, index) => openItemComment('question', item, index)"
+      />
+
       <template v-for="(entry, position) in tour.tour.chunks" :key="entryKey(entry, position)">
         <MarkdownContent
           v-if="isHeaderEntry(entry)"
@@ -62,6 +79,14 @@
           class="commit-tour-section-heading"
           :data-tour-anchor="tourEntryAnchor(position)"
           :text="entry.header"
+        />
+        <CommitTourMedia
+          v-else-if="isMediaEntry(entry)"
+          :id="tourEntryAnchor(position)"
+          :data-tour-anchor="tourEntryAnchor(position)"
+          :entry="entry"
+          :src="api.gitTourMediaURL(cwd, entry.blob)"
+          @comment="emit('open-comment', $event)"
         />
         <CommitTourChunk
           v-else
@@ -72,7 +97,7 @@
           :theme-type="themeType"
           :side-by-side="sideBySide"
           :overflow="isMobile ? 'wrap' : 'scroll'"
-          :load-file="cwd ? loadFile : undefined"
+          :load-file="loadFile"
           @update:expanded="emit('expand-change', tourEntryAnchor(position), $event)"
           @comment="emit('open-comment', $event)"
           @line-comment="emit('open-comment', $event)"
@@ -103,22 +128,31 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ThemeTypes } from "@pierre/diffs";
 import { api } from "../../services/api";
-import type { GitTourEntry, GitTourHeaderEntry, GitTourResponse } from "../../services/api";
+import type { GitTourEntry, GitTourItem, GitTourResponse } from "../../services/api";
 import type { GitCommitMessage, GitFileDiff } from "../../types";
 import { isDarkModeActive } from "../../services/theme";
 import { useSideBySidePreference } from "../composables/diffViewPreference";
 import type { TourCommentTarget } from "../composables/tourComments";
 import CommitTourChunk from "./CommitTourChunk.vue";
+import CommitTourItems from "./CommitTourItems.vue";
+import CommitTourMedia from "./CommitTourMedia.vue";
 import MarkdownContent from "./MarkdownContent.vue";
-import { TOUR_OVERVIEW_ANCHOR, tourEntryAnchor } from "./commitTourContents";
+import {
+  TOUR_DECISIONS_ANCHOR,
+  TOUR_OVERVIEW_ANCHOR,
+  TOUR_QUESTIONS_ANCHOR,
+  isHeaderEntry,
+  isMediaEntry,
+  tourEntryAnchor,
+} from "./commitTourContents";
 
 const props = defineProps<{
   tour: GitTourResponse;
   commitMessage: GitCommitMessage | null;
   expandedAnchors: Set<string>;
-  // Repository directory the tour was loaded from; needed to fetch whole-file
-  // contents for the chunks' full-file mode.
-  cwd?: string;
+  // Repository directory the tour was loaded from; needed to fetch media and
+  // whole-file contents for the chunks' full-file mode.
+  cwd: string;
 }>();
 const emit = defineEmits<{
   (e: "open-comment", target: TourCommentTarget): void;
@@ -139,7 +173,6 @@ const fileContentsCache = new Map<string, Promise<GitFileDiff>>();
 watch([() => props.tour.hash, () => props.cwd], () => fileContentsCache.clear());
 
 function loadFile(oldPath: string | null, newPath: string | null): Promise<GitFileDiff> {
-  const cwd = props.cwd ?? "";
   const path = newPath ?? oldPath ?? "";
   const key = `${oldPath ?? ""}\0${newPath ?? ""}`;
   let pending = fileContentsCache.get(key);
@@ -148,7 +181,7 @@ function loadFile(oldPath: string | null, newPath: string | null): Promise<GitFi
       .getGitFileDiff(
         props.tour.hash,
         path,
-        cwd,
+        props.cwd,
         "self",
         oldPath && oldPath !== path ? oldPath : undefined,
       )
@@ -229,12 +262,19 @@ function handleTourResize() {
   scheduleActiveAnchor();
 }
 
-function isHeaderEntry(entry: GitTourEntry): entry is GitTourHeaderEntry {
-  return "header" in entry;
+function entryKey(entry: GitTourEntry, position: number): string {
+  const kind = isHeaderEntry(entry) ? "header" : isMediaEntry(entry) ? "media" : "patch";
+  return `${kind}-${position}`;
 }
 
-function entryKey(entry: GitTourEntry, position: number): string {
-  return `${isHeaderEntry(entry) ? "header" : "patch"}-${position}`;
+// Decisions and questions quote their title, so an answer reads on its own:
+// "> commit 1a2b3c4d question 2: Should recordings autoplay?".
+function openItemComment(kind: "decision" | "question", item: GitTourItem, index: number) {
+  emit("open-comment", {
+    where: `${kind === "question" ? "Question" : "Decision"} ${index + 1}`,
+    reference: `commit ${shortHash.value} ${kind} ${index + 1}`,
+    selectedText: item.title,
+  });
 }
 
 function composedClosest(node: Node | null, selector: string): HTMLElement | null {

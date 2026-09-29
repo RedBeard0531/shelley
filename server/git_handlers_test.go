@@ -537,6 +537,91 @@ func TestHandleGitTour(t *testing.T) {
 	})
 }
 
+func TestHandleGitTourMedia(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	dir := setupTestGitRepo(t)
+	hash := strings.TrimSpace(testGitOutput(t, dir, "rev-parse", "HEAD"))
+	_, fragments, err := committour.Chunks(dir, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR-pixels")
+	shot := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(shot, png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tour := &committour.Tour{Version: 1, Chunks: []committour.TourChunk{
+		{Media: shot, Comment: "After"},
+		{Patch: fragments[0], Comment: "Start here"},
+	}}
+	if _, err := committour.ResolveMedia(dir, tour, true); err != nil {
+		t.Fatal(err)
+	}
+	blob := tour.Chunks[0].Blob
+
+	get := func(query string, header http.Header) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/git/tour/media?"+query, nil)
+		for k, v := range header {
+			req.Header[k] = v
+		}
+		w := httptest.NewRecorder()
+		h.server.handleGitTourMedia(w, req)
+		return w
+	}
+	query := url.Values{"cwd": {dir}, "blob": {blob}}.Encode()
+
+	// Written but unpinned blobs are not tour media.
+	if w := get(query, nil); w.Code != http.StatusNotFound {
+		t.Fatalf("unpinned got %d: %s", w.Code, w.Body.String())
+	}
+	note, err := json.Marshal(tour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := committour.WriteNote(dir, hash, note, tour.MediaBlobs()...); err != nil {
+		t.Fatal(err)
+	}
+	w := get(query, nil)
+	if w.Code != http.StatusOK || w.Body.String() != string(png) {
+		t.Fatalf("got %d: %q", w.Code, w.Body.String())
+	}
+	for header, want := range map[string]string{
+		"Content-Type":           "image/png",
+		"X-Content-Type-Options": "nosniff",
+		"Cache-Control":          "private, max-age=31536000, immutable",
+	} {
+		if got := w.Header().Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+	// Recordings seek with range requests.
+	if w := get(query, http.Header{"Range": {"bytes=0-3"}}); w.Code != http.StatusPartialContent || w.Body.String() != string(png[:4]) {
+		t.Fatalf("range got %d: %q", w.Code, w.Body.String())
+	}
+	if w := get(url.Values{"cwd": {dir}, "blob": {"HEAD"}}.Encode(), nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("non-hash blob got %d", w.Code)
+	}
+	if w := get(url.Values{"blob": {blob}}.Encode(), nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing cwd got %d", w.Code)
+	}
+	// A pinned blob that does not sniff as media is refused.
+	text := strings.TrimSpace(testGitOutput(t, dir, "rev-parse", "HEAD:test.txt"))
+	if err := committour.WriteNote(dir, hash, note, text); err != nil {
+		t.Fatal(err)
+	}
+	if w := get(url.Values{"cwd": {dir}, "blob": {text}}.Encode(), nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("pinned text got %d: %s", w.Code, w.Body.String())
+	}
+	// The tour itself still verifies with its media entry.
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/git/tour?cwd=%s&hash=%s", dir, hash), nil)
+	tw := httptest.NewRecorder()
+	h.server.handleGitTour(tw, req)
+	if tw.Code != http.StatusOK || !strings.Contains(tw.Body.String(), blob) {
+		t.Fatalf("tour got %d: %s", tw.Code, tw.Body.String())
+	}
+}
+
 func testGitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
