@@ -383,6 +383,17 @@ var (
 		SupportsImages:     true,
 	}
 
+	GPT61Sol = Model{
+		UserName:           "gpt-6.1-sol",
+		ModelName:          "gpt-6.1-sol",
+		TextVerbosity:      "low",
+		URL:                OpenAIURL,
+		APIKeyEnv:          OpenAIAPIKeyEnv,
+		IsReasoningModel:   true,
+		SupportsApplyPatch: true,
+		SupportsImages:     true,
+	}
+
 	GPT6Sol = Model{
 		UserName:           "gpt-6-sol",
 		ModelName:          "gpt-6-sol",
@@ -599,6 +610,7 @@ func filterReasoningForOrigin(msg llm.Message, origin llm.MessageOrigin) llm.Mes
 var ModelsRegistry = []Model{
 	// Current OpenAI
 	GPT6Astra,
+	GPT61Sol,
 	GPT6Sol,
 	GPT6Luna,
 	GPT56Sol,

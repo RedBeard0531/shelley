@@ -283,6 +283,12 @@ func All() []Model {
 			Build: oaiResponsesSvc(oai.GPT6Astra),
 		},
 		{
+			ID: "gpt-6.1-sol", Provider: ProviderOpenAI,
+			Description: "GPT-6.1 Sol", APIModelName: oai.GPT61Sol.ModelName,
+			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
+			Build: oaiResponsesSvc(oai.GPT61Sol),
+		},
+		{
 			ID: "gpt-6-sol", Provider: ProviderOpenAI,
 			Description: "GPT-6 Sol", APIModelName: oai.GPT6Sol.ModelName,
 			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,

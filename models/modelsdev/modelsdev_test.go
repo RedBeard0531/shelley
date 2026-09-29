@@ -379,6 +379,7 @@ func TestLookupReleaseDate(t *testing.T) {
 		want     string
 	}{
 		{"https://llm.int.exe.xyz/v1/messages", "claude-haiku-4-5", "2025-10-15"},
+		{"https://llm.int.exe.xyz/v1", "gpt-6.1-sol", "2026-09-29"},
 		{"https://llm.int.exe.xyz/v1", "gpt-6-sol", "2026-09-22"},
 		{"https://llm.int.exe.xyz/v1", "gpt-6-luna", "2026-09-22"},
 		{"https://llm.int.exe.xyz/v1", "gpt-5.6-luna", "2026-07-09"},
@@ -408,6 +409,7 @@ func TestLookupCost(t *testing.T) {
 		{"openai dated", "https://llm.int.exe.xyz/v1/responses", "gpt-5.5-2026-04-23", true, Cost{Input: 5, Output: 30, CacheRead: 0.5}},
 		{"openai undated", "", "gpt-5.3-codex", true, Cost{Input: 1.75, Output: 14, CacheRead: 0.175}},
 		{"astra via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6-astra", true, Cost{Input: 10, Output: 50, CacheRead: 1, CacheWrite: 12.5}},
+		{"sol 6.1 via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6.1-sol", true, Cost{Input: 2, Output: 10, CacheRead: 0.1, CacheWrite: 2.5}},
 		{"sol via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6-sol", true, Cost{Input: 2, Output: 10, CacheRead: 0.2, CacheWrite: 2.5}},
 		{"luna via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6-luna", true, Cost{Input: 0.1, Output: 0.5, CacheRead: 0.01, CacheWrite: 0.125}},
 		{"fireworks full path", "", "accounts/fireworks/models/kimi-k2p6", true, Cost{Input: 0.95, Output: 4, CacheRead: 0.16}},
@@ -465,6 +467,7 @@ func TestLookupOutputLimit(t *testing.T) {
 		found    bool
 	}{
 		{"OpenAI endpoint", "https://api.openai.com/v1", "gpt-5.4", 128000, true},
+		{"GPT-6.1 Sol", "https://api.openai.com/v1", "gpt-6.1-sol", 128000, true},
 		{"GPT-6 Luna", "https://api.openai.com/v1", "gpt-6-luna", 128000, true},
 		{"Google endpoint", "https://generativelanguage.googleapis.com/v1beta", "gemini-3-flash-preview", 65536, true},
 		{"Fireworks endpoint", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/gpt-oss-120b", 32768, true},

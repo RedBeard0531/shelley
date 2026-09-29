@@ -49,6 +49,19 @@ func TestAll(t *testing.T) {
 	}
 }
 
+func TestGPT61SolInBuiltInCatalog(t *testing.T) {
+	for _, m := range All() {
+		if m.ID != "gpt-6.1-sol" {
+			continue
+		}
+		if m.APIModelName != "gpt-6.1-sol" || m.Description != "GPT-6.1 Sol" || m.APIType != APITypeOpenAIResponses || m.Build == nil {
+			t.Fatalf("GPT-6.1 Sol = %+v", m)
+		}
+		return
+	}
+	t.Fatal("GPT-6.1 Sol not in built-in catalog")
+}
+
 func TestSonnet55InBuiltInCatalog(t *testing.T) {
 	var found bool
 	for _, m := range All() {

@@ -706,6 +706,8 @@ func TestResponsesReasoningEffortClamps(t *testing.T) {
 		{name: "Astra max verbatim", model: GPT6Astra, reqLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "Astra minimal rounds to low", model: GPT6Astra, reqLevel: llm.ThinkingLevelMinimal, wantEffort: "low"},
 		{name: "Astra off rounds to low", model: GPT6Astra, reqLevel: llm.ThinkingLevelOff, wantEffort: "low"},
+		{name: "GPT-6.1 Sol off rounds to low", model: GPT61Sol, reqLevel: llm.ThinkingLevelOff, wantEffort: "low"},
+		{name: "GPT-6.1 Sol max verbatim", model: GPT61Sol, reqLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "GPT-6 Sol off sends none", model: GPT6Sol, reqLevel: llm.ThinkingLevelOff, wantEffort: "none"},
 		{name: "GPT-6 Luna max verbatim", model: GPT6Luna, reqLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "gpt-5.6 max verbatim", model: GPT56Sol, reqLevel: llm.ThinkingLevelMax, wantEffort: "max"},
