@@ -35,6 +35,10 @@ test.describe("Diff viewer find widget", () => {
     const overlay = page.locator(".diff-viewer-overlay");
     await expect(overlay).toBeVisible({ timeout: 10000 });
 
+    // Changes is the default view; the Monaco editor and file selector only
+    // exist in the files view.
+    await overlay.locator(".diff-viewer-view-switcher button", { hasText: "Files" }).click();
+
     // Select the first non-empty commit if working changes are empty.
     // The diff viewer auto-selects, but we need a file to be loaded.
     // Wait for a file to appear in the file selector. There's only one

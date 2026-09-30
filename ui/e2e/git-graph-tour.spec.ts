@@ -249,12 +249,13 @@ test("diff viewer builds a tour for the commit on screen", async ({ page, reques
     await expect(building.locator(".spinner")).toBeVisible();
     expect(requests).toEqual([`/tour ${hash}\n${repo}`]);
 
-    // A range through the working tree has no tour to build.
+    // A range through the working tree has no tour to build. The view row
+    // stays (Changes and Files still apply), but the Build tour button goes.
     const commitPicker = overlay.getByRole("button", { name: "Commit", exact: true });
     const range = overlay.getByRole("dialog", { name: "Choose commit" });
     await commitPicker.click();
     await range.getByRole("radio", { name: "Through working tree" }).click();
-    await expect(row).toHaveCount(0);
+    await expect(row.getByRole("button", { name: "Build tour" })).toHaveCount(0);
     await range.getByRole("radio", { name: "Single commit" }).click();
     await page.keyboard.press("Escape");
     await expect(range).toHaveCount(0);

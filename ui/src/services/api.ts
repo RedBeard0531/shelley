@@ -95,6 +95,9 @@ export interface GitTourPatchEntry {
   patch: string;
   comment?: string;
   trivial?: boolean;
+  // Why the chunk is mechanical (generated/binary/rename-or-mode/
+  // whitespace-only). Attached tours omit it.
+  reason?: string;
 }
 
 /** A screenshot or recording, stored in the repository as a git blob. */
@@ -775,6 +778,20 @@ class ApiService {
     const response = await fetch(`${this.baseUrl}/git/tour?${params}`);
     if (!response.ok) {
       throw await responseError(response, "Failed to get commit tour");
+    }
+    return response.json();
+  }
+
+  // getGitChunks fetches a diff split into one patch fragment per changed file
+  // with mechanical fragments pre-marked trivial: the same wire shape as a
+  // tour, minus the narration. hash is a commit or "working"; to=working
+  // covers the selected commit's parent through the working tree.
+  async getGitChunks(cwd: string, hash: string, to?: "working" | "self"): Promise<GitTourResponse> {
+    const params = new URLSearchParams({ cwd, hash });
+    if (to === "working") params.set("to", "working");
+    const response = await fetch(`${this.baseUrl}/git/chunks?${params}`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to get changes");
     }
     return response.json();
   }

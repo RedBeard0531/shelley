@@ -462,6 +462,79 @@ func writeGitTourNotFound(w http.ResponseWriter) {
 	json.NewEncoder(w).Encode(map[string]string{"error": "no tour"})
 }
 
+// GitChunksResponse reuses the tour wire shape so the UI can render the
+// fragments with the same chunk components, minus the narration.
+type GitChunksResponse struct {
+	Hash string          `json:"hash"`
+	Tour committour.Tour `json:"tour"`
+}
+
+// handleGitChunks returns a diff split into patch fragments, one per changed
+// file with all its hunks together, with structurally mechanical fragments
+// (generated or lock files, binaries, renames, whitespace-only hunks)
+// pre-marked trivial so the UI can collapse them by default. hash is a commit
+// or "working" for the uncommitted changes. to=working covers the same range
+// the file list shows for the selected commit: its parent through the working
+// tree, so the commit's own changes are part of it.
+func (s *Server) handleGitChunks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cwd := r.URL.Query().Get("cwd")
+	hash := r.URL.Query().Get("hash")
+	if cwd == "" || hash == "" {
+		http.Error(w, "cwd and hash are required", http.StatusBadRequest)
+		return
+	}
+	if hash != "working" && !validCommitTourHash(hash) {
+		http.Error(w, "invalid commit hash", http.StatusBadRequest)
+		return
+	}
+	gitRoot, err := getGitRoot(cwd)
+	if err != nil {
+		http.Error(w, "not a git repository", http.StatusBadRequest)
+		return
+	}
+
+	var responseHash string
+	var fragments []string
+	switch {
+	case hash == "working":
+		responseHash = "working"
+		fragments, err = committour.DiffChunks(gitRoot, "")
+	default:
+		full, resolveErr := committour.ResolveCommit(gitRoot, hash)
+		if resolveErr != nil {
+			http.Error(w, "unknown commit", http.StatusNotFound)
+			return
+		}
+		responseHash = full
+		if r.URL.Query().Get("to") == "working" {
+			// Same range the file list shows for the selected commit: its
+			// parent through the working tree, so the commit's own changes are
+			// part of it. parentRef gives the empty tree for a root commit.
+			fragments, err = committour.DiffChunks(gitRoot, parentRef(gitRoot, full))
+		} else {
+			fragments, err = committour.CommitDiffChunks(gitRoot, full)
+		}
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	chunks := make([]committour.TourChunk, len(fragments))
+	for i, fragment := range fragments {
+		reason := committour.MechanicalReason(fragment)
+		chunks[i] = committour.TourChunk{Patch: fragment, Trivial: reason != "", Reason: reason}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(GitChunksResponse{
+		Hash: responseHash,
+		Tour: committour.Tour{Version: 1, Chunks: chunks},
+	})
+}
+
 // nameStatusEntry is one record from `git diff --name-status -z`: a status code
 // (e.g. "M", "A", "D", "R100") and the path to surface for it (the destination
 // path for renames/copies).

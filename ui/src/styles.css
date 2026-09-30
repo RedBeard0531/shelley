@@ -7963,11 +7963,45 @@ svg {
 
 .diff-viewer-view-switcher {
   flex: 0 0 auto;
+  position: relative;
   display: flex;
   justify-content: center;
   padding: 0.375rem;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
+}
+
+/* Mask the seam between the fixed chrome and the scrolled pane. At fractional
+   zoom levels the compositor rounds the chrome and the scroll content
+   independently, and Firefox can paint a scroller's content a pixel or two
+   above its own top edge (measured there: one device row of diff content —
+   gutter and all — ~1.5 CSS px above the pane, covering this row's border).
+   This strip is the only thing painted z-over the pane's content there, so it
+   straddles the boundary instead of starting at it: 3px of chrome, the row's
+   border line redrawn at the boundary (1px of it is the switcher's own
+   border-bottom, the strip just covers and repaints it), then a short fade
+   into the pane. Above the pane's own z-index 1 so the fade covers the sticky
+   headers that pin beneath it too. */
+.diff-viewer-view-switcher::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% - 3px);
+  height: 10px;
+  background: linear-gradient(
+    to bottom,
+    var(--bg-secondary) 0 3px,
+    var(--border-color) 3px 4px,
+    var(--bg-secondary) 4px 5px,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+.diff-viewer-view-tabs {
+  display: flex;
 }
 
 .diff-viewer-view-btn {
@@ -8002,6 +8036,36 @@ svg {
   border-color: var(--accent-text, #2563eb);
   background: var(--accent-bg, rgba(37, 99, 235, 0.14));
   color: var(--accent-text, #2563eb);
+}
+
+/* Layout toggles for the single-page views, sharing the tab row's height. */
+.diff-viewer-view-toggles {
+  position: absolute;
+  right: 0.375rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 0.375rem;
+}
+
+.diff-viewer-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--font-size-12);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.diff-viewer-view-toggle:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 .diff-viewer-content {

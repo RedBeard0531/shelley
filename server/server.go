@@ -551,6 +551,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.Handle("GET /api/git/tour", compressionHandler(http.HandlerFunc(s.handleGitTour)))
 	api.Handle("GET /api/git/tour/status", compressionHandler(http.HandlerFunc(s.handleCommitTourStatus)))
 	api.HandleFunc("GET /api/git/tour/media", s.handleGitTourMedia) // Already-compressed images and video
+	api.Handle("GET /api/git/chunks", compressionHandler(http.HandlerFunc(s.handleGitChunks)))
 	api.Handle("GET /api/git/graph", compressionHandler(http.HandlerFunc(s.handleGitGraph)))
 	api.Handle("GET /api/git/commit-detail", compressionHandler(http.HandlerFunc(s.handleGitCommitDetail)))
 	api.Handle("GET /api/git/diffs/", compressionHandler(http.HandlerFunc(s.handleGitDiffFiles)))
@@ -575,7 +576,6 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalDelete)
 	api.HandleFunc("POST /api/terminals/{id}/kill", s.handleTerminalDelete)
 	api.HandleFunc("PUT /api/terminals/{id}/scope", s.handleTerminalScope) // Move a terminal between conversation-local and global
-
 	// Custom models API
 	api.HandleFunc("GET /api/custom-models", s.handleListModels)
 	api.HandleFunc("POST /api/custom-models", s.handleCreateModel)

@@ -472,6 +472,137 @@ func TestHandleGitDiffsIncludesRequestedCommit(t *testing.T) {
 	}
 }
 
+func TestHandleGitChunks(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	dir := setupTestGitRepo(t)
+	hash := strings.TrimSpace(testGitOutput(t, dir, "rev-parse", "HEAD"))
+
+	request := func(query string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/git/chunks?"+query, nil)
+		w := httptest.NewRecorder()
+		h.server.handleGitChunks(w, req)
+		return w
+	}
+
+	t.Run("commit", func(t *testing.T) {
+		w := request(fmt.Sprintf("cwd=%s&hash=%s", dir, hash))
+		if w.Code != http.StatusOK {
+			t.Fatalf("got %d: %s", w.Code, w.Body.String())
+		}
+		var response GitChunksResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Hash != hash {
+			t.Fatalf("hash = %q, want %q", response.Hash, hash)
+		}
+		if response.Tour.Version != 1 || len(response.Tour.Chunks) != 1 {
+			t.Fatalf("tour = %+v", response.Tour)
+		}
+		chunk := response.Tour.Chunks[0]
+		if !strings.Contains(chunk.Patch, "+Hello, World!") {
+			t.Fatalf("patch = %q", chunk.Patch)
+		}
+		if chunk.Trivial || chunk.Reason != "" {
+			t.Fatalf("a real edit must not be trivial: %+v", chunk)
+		}
+	})
+
+	t.Run("working", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("Hello again!\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		w := request(fmt.Sprintf("cwd=%s&hash=working", dir))
+		if w.Code != http.StatusOK {
+			t.Fatalf("got %d: %s", w.Code, w.Body.String())
+		}
+		var response GitChunksResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Hash != "working" || len(response.Tour.Chunks) != 1 || !strings.Contains(response.Tour.Chunks[0].Patch, "+Hello again!") {
+			t.Fatalf("response = %+v", response)
+		}
+		// Restore the file so later subtests commit only their own change.
+		if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("Hello, World!\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("generated file is trivial", func(t *testing.T) {
+		// Commit only the lock file: the shared repo has staged and unstaged
+		// test.txt changes from setup that must stay out of this diff.
+		testGit(t, dir, "checkout", "--", "test.txt")
+		if err := os.WriteFile(filepath.Join(dir, "go.sum"), []byte("example.com/mod v1.0.0 h1:abc=\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		testGit(t, dir, "add", "go.sum")
+		testGit(t, dir, "commit", "--no-verify", "-m", "add lock file", "--", "go.sum")
+		lockHash := strings.TrimSpace(testGitOutput(t, dir, "rev-parse", "HEAD"))
+		w := request(fmt.Sprintf("cwd=%s&hash=%s", dir, lockHash))
+		if w.Code != http.StatusOK {
+			t.Fatalf("got %d: %s", w.Code, w.Body.String())
+		}
+		var response GitChunksResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Tour.Chunks) != 1 || !response.Tour.Chunks[0].Trivial {
+			t.Fatalf("response = %+v", response)
+		}
+		if got := response.Tour.Chunks[0].Reason; got != "generated" {
+			t.Fatalf("reason = %q, want %q", got, "generated")
+		}
+	})
+
+	t.Run("through working tree includes the commit", func(t *testing.T) {
+		// to=working covers the same range the file list shows: the selected
+		// commit's parent through the working tree. The commit's own change is
+		// part of it even with a clean tree, which is what the UI's default
+		// "Through working tree" selection relies on.
+		if err := os.WriteFile(filepath.Join(dir, "committed.txt"), []byte("committed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		testGit(t, dir, "add", "committed.txt")
+		testGit(t, dir, "commit", "--no-verify", "-m", "add clean tree file", "--", "committed.txt")
+		head := strings.TrimSpace(testGitOutput(t, dir, "rev-parse", "HEAD"))
+
+		w := request(fmt.Sprintf("cwd=%s&hash=%s&to=working", dir, head))
+		if w.Code != http.StatusOK {
+			t.Fatalf("got %d: %s", w.Code, w.Body.String())
+		}
+		var response GitChunksResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Hash != head {
+			t.Fatalf("hash = %q, want the full hash %q", response.Hash, head)
+		}
+		found := false
+		for _, chunk := range response.Tour.Chunks {
+			if strings.Contains(chunk.Patch, "+committed") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the commit's own change is missing from the range: %+v", response.Tour.Chunks)
+		}
+	})
+
+	t.Run("invalid hash", func(t *testing.T) {
+		if w := request(fmt.Sprintf("cwd=%s&hash=--foo", dir)); w.Code != http.StatusBadRequest {
+			t.Fatalf("got %d, want 400", w.Code)
+		}
+		if w := request("cwd=" + dir); w.Code != http.StatusBadRequest {
+			t.Fatalf("missing hash got %d, want 400", w.Code)
+		}
+		if w := request(fmt.Sprintf("cwd=%s&hash=deadbeefdeadbeef", dir)); w.Code != http.StatusNotFound {
+			t.Fatalf("unknown commit got %d, want 404", w.Code)
+		}
+	})
+}
+
 func TestHandleGitTour(t *testing.T) {
 	t.Parallel()
 	h := NewTestHarness(t)
