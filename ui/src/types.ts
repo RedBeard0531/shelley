@@ -205,6 +205,9 @@ export interface InitData {
   // is_exe_dev picks exe.dev-specific setup advice when model_setup_hint is
   // absent because the catalog emptied after page load.
   is_exe_dev?: boolean;
+  // transcription_available says whether recordings can be transcribed
+  // (a gpt-transcribe route exists, e.g. from OPENAI_API_KEY).
+  transcription_available?: boolean;
   user_email?: string;
   banner?: string; // If set, shown as a top-of-page banner (e.g. to mark demo instances)
 }

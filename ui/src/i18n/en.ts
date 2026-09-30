@@ -148,6 +148,8 @@ export const en: TranslationKeys = {
   recordingStopping: "Finishing recording…",
   recordingTooShort: "The recording was too short to encode. Please try again.",
   recordingFailed: "Recording failed",
+  recordingUnavailable:
+    "Recording needs transcription. Set OPENAI_API_KEY or connect an exe.dev LLM integration, then restart Shelley.",
   recordingRetained: "Recording kept",
   recordingDiscard: "Discard recording",
   recordingInvalidResponse: "The recording server returned an invalid response",

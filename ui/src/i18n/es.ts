@@ -149,6 +149,8 @@ export const es: TranslationKeys = {
   recordingStopping: "Finalizando grabación…",
   recordingTooShort: "La grabación fue demasiado corta para codificarse. Inténtalo de nuevo.",
   recordingFailed: "Error de grabación",
+  recordingUnavailable:
+    "Grabar requiere transcripción. Configura OPENAI_API_KEY o conecta una integración LLM de exe.dev y reinicia Shelley.",
   recordingRetained: "Grabación conservada",
   recordingDiscard: "Descartar grabación",
   recordingInvalidResponse: "El servidor de grabación devolvió una respuesta no válida",

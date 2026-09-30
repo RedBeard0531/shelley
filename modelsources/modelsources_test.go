@@ -1128,3 +1128,51 @@ func TestBuiltAPITypePopulated(t *testing.T) {
 		}
 	}
 }
+
+func TestTranscriptionModelsFromOpenAICredentials(t *testing.T) {
+	routes := func(sources ...Source) []models.TranscriptionModel {
+		return TranscriptionModels(sources)
+	}
+	want := func(endpoint, apiKey, source string) []models.TranscriptionModel {
+		return []models.TranscriptionModel{
+			{Model: "gpt-transcribe", Endpoint: endpoint, APIKey: apiKey, Source: source, FromCredentials: true},
+			{Model: "whisper-1", Endpoint: endpoint, APIKey: apiKey, Source: source, FromCredentials: true},
+		}
+	}
+	for _, tt := range []struct {
+		name string
+		got  []models.TranscriptionModel
+		want []models.TranscriptionModel
+	}{
+		{
+			name: "env key",
+			got:  routes(Env("a", "sk-openai", "g", "f"), Predictable()),
+			want: want("https://api.openai.com/v1/audio/transcriptions", "sk-openai", "$OPENAI_API_KEY"),
+		},
+		{
+			name: "gateway",
+			got:  routes(Gateway("https://gw.example.com", "", "", "")),
+			want: want("https://gw.example.com/openai/v1/audio/transcriptions", "implicit", "exe.dev gateway"),
+		},
+		{
+			name: "gateway with explicit key",
+			got:  routes(Gateway("https://gw.example.com", "", "sk-openai", "")),
+			want: want("https://gw.example.com/openai/v1/audio/transcriptions", "sk-openai", "$OPENAI_API_KEY"),
+		},
+		{
+			name: "no OpenAI credential",
+			got:  routes(Env("a", "", "g", "f"), Predictable()),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.got) != len(tt.want) {
+				t.Fatalf("routes = %+v, want %+v", tt.got, tt.want)
+			}
+			for i := range tt.want {
+				if tt.got[i] != tt.want[i] {
+					t.Fatalf("route %d = %+v, want %+v", i, tt.got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

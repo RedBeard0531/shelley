@@ -1,7 +1,12 @@
 import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
-import { createConversationViaAPIWithDetails, testWorkingDirectory } from "./helpers";
+import {
+  createConversationViaAPIWithDetails,
+  installTranscriptionAvailability,
+  testWorkingDirectory,
+} from "./helpers";
 
-async function installMediaMocks(page: Page, screenCapture = true) {
+async function installMediaMocks(page: Page, screenCapture = true, transcription = true) {
+  await installTranscriptionAvailability(page, transcription);
   await page.addInitScript((screenCaptureAvailable) => {
     const mock = {
       displayRequests: 0,
@@ -2585,6 +2590,17 @@ test("keeps audio recording available without screen capture", async ({ page }) 
   await openRecordingPalette(page);
   await expect(recordingPaletteItem(page, "Record audio")).toBeVisible();
   await expect(recordingPaletteItem(page, "Record audio and screen")).toHaveCount(0);
+});
+
+test("explains missing transcription instead of recording", async ({ page }) => {
+  await installMediaMocks(page, true, false);
+  await page.goto("/new");
+  await page.getByTestId("voice-button").click();
+  await expect(page.locator(".status-error")).toContainText("Set OPENAI_API_KEY");
+  await expect(page.getByTestId("recording-panel")).toHaveCount(0);
+  await recordingShortcut(page, "microphone");
+  await expect(page.getByTestId("recording-panel")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__recordingMock.microphoneRequests)).toBe(0);
 });
 
 test("hides recording palette actions when media recording is unavailable", async ({ page }) => {

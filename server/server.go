@@ -449,7 +449,7 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		exitDelay:               500 * time.Millisecond,
 		exitProcess:             os.Exit,
 		mediaRun:                runMediaCommand,
-		transcriber:             newOpenAIRecordingTranscriber(llmManager),
+		transcriber:             newOpenAIRecordingTranscriber(llmManager, predictableOnly),
 		transcriptionJobs:       make(map[string]transcriptionJob),
 		reflectionEmoji:         cachedReflectionEmoji,
 		commitTourJobs:          make(map[string]*commitTourJob),

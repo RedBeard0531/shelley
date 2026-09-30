@@ -148,6 +148,8 @@ export const vi: TranslationKeys = {
   recordingStopping: "Đang hoàn tất bản ghi…",
   recordingTooShort: "Bản ghi quá ngắn để mã hóa. Vui lòng thử lại.",
   recordingFailed: "Ghi không thành công",
+  recordingUnavailable:
+    "Ghi âm cần chuyển giọng nói thành văn bản. Hãy đặt OPENAI_API_KEY hoặc kết nối tích hợp LLM của exe.dev, rồi khởi động lại Shelley.",
   recordingRetained: "Bản ghi được giữ lại",
   recordingDiscard: "Bỏ bản ghi",
   recordingInvalidResponse: "Máy chủ ghi trả về phản hồi không hợp lệ",

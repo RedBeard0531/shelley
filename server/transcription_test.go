@@ -18,9 +18,12 @@ import (
 	"shelley.exe.dev/claudetool/browse"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/models"
 )
 
 type recordingTranscriberFunc func(context.Context, string, bool) (transcriptionResult, error)
+
+func (recordingTranscriberFunc) Available() error { return nil }
 
 func (f recordingTranscriberFunc) Transcribe(ctx context.Context, path, _ string, timestamps bool) (transcriptionResult, error) {
 	return f(ctx, path, timestamps)
@@ -28,9 +31,9 @@ func (f recordingTranscriberFunc) Transcribe(ctx context.Context, path, _ string
 
 func successfulRecordingTranscriber(text string) recordingTranscriber {
 	return recordingTranscriberFunc(func(_ context.Context, mediaPath string, timestamps bool) (transcriptionResult, error) {
-		result := transcriptionResult{Text: text, Model: openAITranscriptionModel}
+		result := transcriptionResult{Text: text, Model: models.TranscriptionTextModel}
 		if timestamps {
-			result.TimestampsModel = openAITimestampedTranscriptionModel
+			result.TimestampsModel = models.TranscriptionTimestampsModel
 			result.TimestampsPath = mediaPath + ".timestamps.json"
 		}
 		return result, nil
@@ -44,7 +47,7 @@ func TestTranscriptionToolResultAttributesModelFailure(t *testing.T) {
 		transcriptionResult{},
 		now,
 		now,
-		&transcriptionModelError{Model: openAITimestampedTranscriptionModel, Err: errors.New("failed")},
+		&transcriptionModelError{Model: models.TranscriptionTimestampsModel, Err: errors.New("failed")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +56,7 @@ func TestTranscriptionToolResultAttributesModelFailure(t *testing.T) {
 	if err := json.Unmarshal([]byte(message.Content[0].ToolResult[0].Text), &output); err != nil {
 		t.Fatal(err)
 	}
-	if output["model"] != openAITimestampedTranscriptionModel {
+	if output["model"] != models.TranscriptionTimestampsModel {
 		t.Fatalf("output = %#v", output)
 	}
 }
@@ -63,11 +66,13 @@ type promptCapturingTranscriber struct {
 	text   string
 }
 
+func (*promptCapturingTranscriber) Available() error { return nil }
+
 func (t *promptCapturingTranscriber) Transcribe(_ context.Context, mediaPath, prompt string, timestamps bool) (transcriptionResult, error) {
 	t.prompt <- prompt
-	result := transcriptionResult{Text: t.text, Model: openAITranscriptionModel}
+	result := transcriptionResult{Text: t.text, Model: models.TranscriptionTextModel}
 	if timestamps {
-		result.TimestampsModel = openAITimestampedTranscriptionModel
+		result.TimestampsModel = models.TranscriptionTimestampsModel
 		result.TimestampsPath = mediaPath + ".timestamps.json"
 	}
 	return result, nil
@@ -692,6 +697,8 @@ type blockingRecordingTranscriber struct {
 	once      sync.Once
 }
 
+func (*blockingRecordingTranscriber) Available() error { return nil }
+
 func (s *blockingRecordingTranscriber) Transcribe(ctx context.Context, _, _ string, _ bool) (transcriptionResult, error) {
 	s.once.Do(func() { close(s.started) })
 	<-ctx.Done()
@@ -910,6 +917,7 @@ func TestCancelQueuedTranscriptionCancelsWorker(t *testing.T) {
 func TestCancelConversationCancelsQueuedTranscriptionWithoutParentLoop(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
+	server.transcriber = successfulRecordingTranscriber("never reached")
 	started := make(chan struct{})
 	cancelled := make(chan struct{})
 	server.mediaRun = func(ctx context.Context, name string, _ ...string) ([]byte, error) {
@@ -1100,5 +1108,60 @@ func TestTranscriptionCommandRejectsInvalidPathBeforeCreatingChild(t *testing.T)
 	}
 	if messages, err := database.ListMessages(context.Background(), conv.ConversationID); err != nil || len(messages) != 0 {
 		t.Fatalf("parent messages = %#v, %v", messages, err)
+	}
+}
+
+// Without a transcription route, /transcription must fail before it queues
+// a durable item: a failed item would block every later message.
+func TestTranscriptionCommandRejectsUnavailableModelBeforeQueueing(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaPath := transcriptionTestFile(t, "recording.webm")
+	body := fmt.Sprintf(`{"message":%q,"model":"predictable"}`, "/transcription "+mediaPath)
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)), conv.ConversationID)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "OPENAI_API_KEY") {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if queued := queuedMessages(t, database, conv.ConversationID); len(queued) != 0 {
+		t.Fatalf("queued = %#v, want none", queued)
+	}
+	if messages, err := database.ListMessages(t.Context(), conv.ConversationID); err != nil || len(messages) != 0 {
+		t.Fatalf("messages = %#v, %v", messages, err)
+	}
+}
+
+// A failure to look routes up is a server fault, not a missing model.
+func TestTranscriptionCommandReportsRouteLookupFailure(t *testing.T) {
+	server, database, _ := newTestServer(t)
+	server.transcriber = &openAIRecordingTranscriber{resolveModel: func(string) (models.TranscriptionModel, error) {
+		return models.TranscriptionModel{}, errors.New("database is locked")
+	}}
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"message":%q,"model":"predictable"}`, "/transcription "+transcriptionTestFile(t, "recording.webm"))
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)), conv.ConversationID)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if queued := queuedMessages(t, database, conv.ConversationID); len(queued) != 0 {
+		t.Fatalf("queued = %#v, want none", queued)
+	}
+}
+
+func TestIndexInitDataReportsTranscriptionAvailability(t *testing.T) {
+	server, _, _ := newTestServer(t)
+	if got := indexInitData(t, server)["transcription_available"]; got != false {
+		t.Fatalf("transcription_available = %#v, want false without a route", got)
+	}
+	server.transcriber = successfulRecordingTranscriber("words")
+	if got := indexInitData(t, server)["transcription_available"]; got != true {
+		t.Fatalf("transcription_available = %#v, want true", got)
 	}
 }

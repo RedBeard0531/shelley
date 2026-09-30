@@ -148,6 +148,8 @@ export const ru: TranslationKeys = {
   recordingStopping: "Завершение записи…",
   recordingTooShort: "Запись слишком короткая для кодирования. Попробуйте ещё раз.",
   recordingFailed: "Не удалось записать",
+  recordingUnavailable:
+    "Для записи нужна транскрипция. Задайте OPENAI_API_KEY или подключите LLM-интеграцию exe.dev, затем перезапустите Shelley.",
   recordingRetained: "Запись сохранена",
   recordingDiscard: "Удалить запись",
   recordingInvalidResponse: "Сервер записи вернул неверный ответ",

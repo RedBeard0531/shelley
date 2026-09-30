@@ -484,7 +484,7 @@ func buildLLMModelSources(ctx context.Context, global GlobalConfig, config shell
 	fireworksKey := os.Getenv("FIREWORKS_API_KEY")
 	// DEPRECATED: Per-provider env-var credentials are frozen. Do NOT add new
 	// env vars or models here; new models belong to the exe.dev LLM gateway or
-	// an exe.dev LLM integration.
+	// an exe.dev LLM integration. OPENAI_API_KEY also serves transcription.
 
 	var sources []modelsources.Source
 
@@ -594,6 +594,15 @@ func runModels(global GlobalConfig, args []string) {
 	}
 	tw.Flush()
 	fmt.Printf("\n%d models\n", len(llmCfg.Models))
+	if len(llmCfg.TranscriptionModels) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Fprintln(tw, "TRANSCRIPTION MODEL\tENDPOINT\tSOURCE")
+	for _, m := range llmCfg.TranscriptionModels {
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", m.Model, m.Endpoint, m.Source)
+	}
+	tw.Flush()
 }
 
 // systemdListener returns a net.Listener from systemd socket activation.

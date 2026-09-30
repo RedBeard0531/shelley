@@ -956,7 +956,8 @@ const review = useReviewRecording({
   cwd: () => props.cwd,
   conversationId: () => props.recordingConversationId,
 });
-const reviewSupported = reviewRecordingSupported();
+const reviewSupported =
+  reviewRecordingSupported() && !!window.__SHELLEY_INIT__?.transcription_available;
 const recordingLocked = computed(() => review.phase.value !== "idle");
 const closeTooltip = computed(() =>
   recordingLocked.value ? "Stop recording to close" : "Close (Esc)",

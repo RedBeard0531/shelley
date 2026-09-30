@@ -642,6 +642,11 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 
 	userAgentsMdPath, _ := userAgentsMdPath()
 
+	transcriptionErr := s.transcriber.Available()
+	if transcriptionErr != nil && !errors.Is(transcriptionErr, errNoTranscriptionRoute) {
+		s.logger.Error("Failed to resolve transcription models", "error", transcriptionErr)
+	}
+
 	// Note: AGENTS.md content is NOT embedded in init data. It is fetched fresh
 	// via /api/user-agents-md when the editor modal opens so that reopening
 	// after a save shows current disk state, not stale page-load content.
@@ -657,6 +662,9 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 		// model_setup_hint is absent (the catalog can empty AFTER page load, via
 		// a detached integration plus Refresh).
 		"is_exe_dev": isExeDev(),
+		// Recording is pointless without a transcription route; the UI
+		// explains how to get one instead of recording.
+		"transcription_available": transcriptionErr == nil,
 	}
 	// With no models the UI cannot send anything, so tell it WHY. On exe.dev
 	// the usual cause is a missing reflection or llm integration, and each has
@@ -1184,6 +1192,17 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	if isTranscription && existing.Archived {
 		http.Error(w, "conversation is archived", http.StatusConflict)
 		return
+	}
+	// A queued item that can only fail would block every later message.
+	if isTranscription {
+		if err := s.transcriber.Available(); errors.Is(err, errNoTranscriptionRoute) {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		} else if err != nil {
+			s.logger.Error("Failed to resolve transcription models", "conversationID", conversationID, "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// A built-in /btw is a detached child start, not a parent turn. Give an

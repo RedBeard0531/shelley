@@ -148,6 +148,8 @@ export const upgoer5: TranslationKeys = {
   recordingStopping: "Finishing recording…",
   recordingTooShort: "The recording was too short to save. Please try again.",
   recordingFailed: "Recording did not work",
+  recordingUnavailable:
+    "Shelley can not turn your talking into words yet. Set OPENAI_API_KEY or add the exe.dev llm thing, then start Shelley again.",
   recordingRetained: "Your recording is still here",
   recordingDiscard: "Throw away recording",
   recordingInvalidResponse: "The recording computer sent a bad answer",

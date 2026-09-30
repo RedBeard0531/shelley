@@ -148,6 +148,8 @@ export const zhTW: TranslationKeys = {
   recordingStopping: "正在完成錄製…",
   recordingTooShort: "錄音太短，無法編碼。請再試一次。",
   recordingFailed: "錄製失敗",
+  recordingUnavailable:
+    "錄製需要轉寫功能。請設定 OPENAI_API_KEY 或連接 exe.dev LLM 整合，然後重新啟動 Shelley。",
   recordingRetained: "錄製內容已保留",
   recordingDiscard: "捨棄錄製內容",
   recordingInvalidResponse: "錄製伺服器傳回了無效回應",

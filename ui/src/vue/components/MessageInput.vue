@@ -20,6 +20,7 @@
          (e: "draft-send-started"): void
          (e: "draft-cleared"): void
          (e: "recording-unsent", path: string, error: unknown): void
+         (e: "recording-unavailable"): void
        Because send/queue are awaited in React (onSend/onQueue return
        Promises), the parent passes async handlers via the `onSend`/`onQueue`
        *function props* below instead of pure emits — Vue emits can't be
@@ -584,6 +585,7 @@ const emit = defineEmits<{
   (e: "draft-send-started"): void;
   (e: "draft-cleared"): void;
   (e: "recording-unsent", path: string, error: unknown): void;
+  (e: "recording-unavailable"): void;
 }>();
 
 const { t } = useI18n();
@@ -700,6 +702,12 @@ defineExpose({ canRecordAudio, canRecordScreen, beginRecording });
 
 function beginRecording(mode: RecordingMode) {
   if (!(mode === "screen" ? canRecordScreen.value : canRecordAudio.value)) return;
+  // Explain the missing transcription route instead of recording something
+  // the server cannot transcribe.
+  if (!window.__SHELLEY_INIT__?.transcription_available) {
+    emit("recording-unavailable");
+    return;
+  }
   // Acquire media in the initiating key/click handler, before draft I/O.
   // The panel owns the stream and presents acquisition failures.
   const microphone =

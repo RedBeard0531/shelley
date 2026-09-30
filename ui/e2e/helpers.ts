@@ -266,3 +266,18 @@ function crc32(buf: Buffer): number {
   for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
   return (c ^ -1) >>> 0;
 }
+
+// Recording needs a transcription route, which the predictable-only test
+// server never has; specs that record mock the chat endpoint instead.
+export async function installTranscriptionAvailability(page: Page, available: boolean) {
+  await page.addInitScript((transcriptionAvailable) => {
+    let init: Record<string, unknown> | undefined;
+    Object.defineProperty(window, "__SHELLEY_INIT__", {
+      configurable: true,
+      get: () => init,
+      set: (value) => {
+        init = { ...value, transcription_available: transcriptionAvailable };
+      },
+    });
+  }, available);
+}

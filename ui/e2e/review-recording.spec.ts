@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createConversationViaAPI, withTempDir } from "./helpers";
+import { createConversationViaAPI, installTranscriptionAvailability, withTempDir } from "./helpers";
 
 const shelleyBin = resolve(fileURLToPath(new URL("../../bin/shelley", import.meta.url)));
 
@@ -40,7 +40,8 @@ function tourRepo(dir: string): string {
 }
 
 // A microphone and recorder that produce a few bytes per second.
-async function installMicrophone(page: Page) {
+async function installMicrophone(page: Page, transcription = true) {
+  await installTranscriptionAvailability(page, transcription);
   await page.addInitScript(() => {
     class Track extends EventTarget {
       kind = "audio";
@@ -214,6 +215,15 @@ test.describe("Narrated review recording", () => {
       );
       // Stopping is not part of the review.
       expect(events.filter((event) => event.type === "click")).toEqual([]);
+    });
+  });
+
+  test("offers no narrated review without transcription", async ({ page, request }) => {
+    await withTempDir("shelley-review-rec-", async (dir) => {
+      const slug = await createConversationViaAPI(request, "Hello", { cwd: tourRepo(dir) });
+      await installMicrophone(page, false);
+      const overlay = await openTour(page, slug);
+      await expect(overlay.getByTestId("review-record-start")).toHaveCount(0);
     });
   });
 

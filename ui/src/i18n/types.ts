@@ -148,6 +148,7 @@ export interface TranslationKeys {
   recordingStopping: string;
   recordingTooShort: string;
   recordingFailed: string;
+  recordingUnavailable: string;
   recordingRetained: string;
   recordingDiscard: string;
   recordingInvalidResponse: string;

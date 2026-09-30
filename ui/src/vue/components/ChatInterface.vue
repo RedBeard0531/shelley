@@ -399,6 +399,7 @@
       @draft-send-started="handleDraftSendStarted"
       @draft-cleared="handleDraftCleared"
       @recording-unsent="handleRecordingUnsent"
+      @recording-unavailable="error = t('recordingUnavailable')"
       @open-terminal="openInAppTerminal"
     >
       <template v-if="statusSlotInline" #status>
@@ -3254,8 +3255,11 @@ async function sendMessage(message: string) {
     if (!effectiveId && props.onFirstMessage) {
       await sendFirstMessage(message.trim());
     } else if (effectiveId) {
-      await api.sendMessage(effectiveId, request);
+      const accepted = await api.sendMessage(effectiveId, request);
       clearSubmittedDraft(effectiveId, submittedDraft);
+      // A queued message starts no turn (e.g. it waits behind a failed
+      // recording), so drop the optimistic indicator for the server's state.
+      if (accepted.status === "queued") syncTransientFromStore(effectiveId);
     }
   } catch (err) {
     console.error("Failed to send message:", err);

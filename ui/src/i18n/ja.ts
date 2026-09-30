@@ -148,6 +148,8 @@ export const ja: TranslationKeys = {
   recordingStopping: "録画を終了しています…",
   recordingTooShort: "録音が短すぎてエンコードできませんでした。もう一度お試しください。",
   recordingFailed: "録画に失敗しました",
+  recordingUnavailable:
+    "録音には文字起こしが必要です。OPENAI_API_KEY を設定するか exe.dev の LLM インテグレーションを接続し、Shelley を再起動してください。",
   recordingRetained: "録画を保持しています",
   recordingDiscard: "録画を破棄",
   recordingInvalidResponse: "録画サーバーから無効な応答が返されました",
