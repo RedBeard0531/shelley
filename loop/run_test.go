@@ -120,6 +120,107 @@ func TestRunConcurrentToolsPreserveResponseOrder(t *testing.T) {
 	})
 }
 
+func TestRunSequentialToolsPreserveRequestOrder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan string, 4)
+		release := make(chan struct{})
+		runTool := func(_ context.Context, input json.RawMessage) llm.ToolOut {
+			var request struct{ Name string }
+			if err := json.Unmarshal(input, &request); err != nil {
+				return llm.ErrorToolOut(err)
+			}
+			started <- request.Name
+			<-release
+			return llm.ToolOut{LLMContent: llm.TextContent(request.Name)}
+		}
+		tools := []*llm.Tool{
+			{Name: "browser", Sequential: true, Run: runTool},
+			{Name: "bash", Run: runTool},
+		}
+		service := &runTestService{first: []llm.Content{
+			{Type: llm.ContentTypeToolUse, ID: "navigate", ToolName: "browser", ToolInput: json.RawMessage(`{"name":"navigate"}`)},
+			{Type: llm.ContentTypeToolUse, ID: "first", ToolName: "bash", ToolInput: json.RawMessage(`{"name":"first"}`)},
+			{Type: llm.ContentTypeToolUse, ID: "screenshot", ToolName: "browser", ToolInput: json.RawMessage(`{"name":"screenshot"}`)},
+			{Type: llm.ContentTypeToolUse, ID: "second", ToolName: "bash", ToolInput: json.RawMessage(`{"name":"second"}`)},
+		}}
+		done := make(chan error, 1)
+		go func() {
+			done <- Run(t.Context(), RunConfig{LLM: service, Messages: []llm.Message{llm.UserStringMessage("work")}, Tools: tools})
+		}()
+		synctest.Wait()
+		var concurrent []string
+		for len(started) > 0 {
+			concurrent = append(concurrent, <-started)
+		}
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		slices.Sort(concurrent)
+		if want := []string{"first", "navigate", "second"}; !slices.Equal(concurrent, want) {
+			t.Errorf("concurrent calls = %v, want %v before navigation completes", concurrent, want)
+		}
+		results := service.requests[1].Messages[2].Content
+		for i, name := range []string{"navigate", "first", "screenshot", "second"} {
+			if results[i].ToolUseID != name || results[i].ToolResult[0].Text != name {
+				t.Errorf("result %d = %+v, want %s", i, results[i], name)
+			}
+		}
+	})
+}
+
+func TestRunSkipsQueuedSequentialCallAfterCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		started := make(chan string, 2)
+		tool := &llm.Tool{
+			Name: "browser", Sequential: true,
+			Run: func(ctx context.Context, input json.RawMessage) llm.ToolOut {
+				var request struct{ Name string }
+				if err := json.Unmarshal(input, &request); err != nil {
+					return llm.ErrorToolOut(err)
+				}
+				started <- request.Name
+				if request.Name == "navigate" {
+					<-ctx.Done()
+					return llm.ErrorToolOut(ctx.Err())
+				}
+				return llm.ErrorfToolOut("queued sequential call ran after cancellation")
+			},
+		}
+		service := &runTestService{first: []llm.Content{
+			{Type: llm.ContentTypeToolUse, ID: "navigate", ToolName: tool.Name, ToolInput: json.RawMessage(`{"name":"navigate"}`)},
+			{Type: llm.ContentTypeToolUse, ID: "screenshot", ToolName: tool.Name, ToolInput: json.RawMessage(`{"name":"screenshot"}`)},
+		}}
+		var recorded llm.Message
+		done := make(chan error, 1)
+		go func() {
+			done <- Run(ctx, RunConfig{
+				LLM: service, Messages: []llm.Message{llm.UserStringMessage("work")}, Tools: []*llm.Tool{tool},
+				Hooks: Hooks{OnToolResponse: func(_ context.Context, response ToolResponse) error {
+					recorded = response.Message
+					return nil
+				}},
+			})
+		}()
+		synctest.Wait()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want cancellation", err)
+		}
+		if len(started) != 1 || <-started != "navigate" {
+			t.Error("queued sequential call ran after cancellation")
+		}
+		if len(service.requests) != 1 {
+			t.Errorf("model requests = %d, want 1", len(service.requests))
+		}
+		if len(recorded.Content) != 2 || recorded.Content[0].ToolUseID != "navigate" || recorded.Content[1].ToolUseID != "screenshot" || recorded.Content[1].ToolResult[0].Text != notExecutedToolResultText {
+			t.Fatalf("tool results = %+v, want ordered results with screenshot not executed", recorded.Content)
+		}
+	})
+}
+
 type cancellingRunService struct{ entered chan struct{} }
 
 func (s *cancellingRunService) Do(ctx context.Context, _ *llm.Request) (*llm.Response, error) {

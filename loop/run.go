@@ -552,13 +552,29 @@ func (l *RunConfig) executeToolCalls(ctx context.Context, content []llm.Content,
 	ready.Add(len(calls))
 	start := make(chan struct{})
 	run := false
+	sequentialTails := make(map[string]<-chan struct{})
 	for i, call := range calls {
 		tool := l.findTool(call.ToolName)
+		var predecessor <-chan struct{}
+		var successor chan struct{}
+		if tool != nil && tool.Sequential {
+			predecessor = sequentialTails[call.ToolName]
+			successor = make(chan struct{})
+			sequentialTails[call.ToolName] = successor
+		}
 
 		finishedWorkers.Go(func() {
+			if successor != nil {
+				defer close(successor)
+			}
 			ready.Done()
 			<-start
-			if !run {
+			execute := run
+			if execute && predecessor != nil {
+				<-predecessor
+				execute = ctx.Err() == nil
+			}
+			if !execute {
 				toolResults[i].content = llm.Content{
 					Type:       llm.ContentTypeToolResult,
 					ToolUseID:  call.ID,
