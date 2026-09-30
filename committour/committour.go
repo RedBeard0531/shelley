@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -51,6 +52,10 @@ type TourChunk struct {
 	Name    string `json:"name,omitempty"`
 	Comment string `json:"comment,omitempty"`
 	Trivial bool   `json:"trivial,omitempty"`
+	// Reason names why a trivial chunk needs no narration (the
+	// MechanicalReason string). Attached tours don't set it; synthesized
+	// chunk lists do.
+	Reason string `json:"reason,omitempty"`
 }
 
 // FragmentMeta describes a patch fragment for compact listings.
@@ -173,38 +178,108 @@ func CommitHash(dir, rev string) (string, error) {
 	return hash, nil
 }
 
+// diffConfigArgs force the prefixes and submodule settings that splitDiff and
+// Meta expect, regardless of the repository's git configuration.
+var diffConfigArgs = []string{
+	"-c", "diff.noprefix=false",
+	"-c", "diff.mnemonicPrefix=false",
+	"-c", "diff.srcPrefix=a/",
+	"-c", "diff.dstPrefix=b/",
+	"-c", "diff.submodule=short",
+	"-c", "diff.ignoreSubmodules=none",
+}
+
 // Chunks returns the full commit hash and one suggested patch fragment per hunk.
 func Chunks(dir, commit string) (string, []string, error) {
-	hash, err := CommitHash(dir, commit)
+	hash, diff, err := showDiff(dir, commit)
 	if err != nil {
 		return "", nil, err
 	}
-
-	diff, err := gitOutput(
-		dir, "", nil,
-		"-c", "diff.noprefix=false",
-		"-c", "diff.mnemonicPrefix=false",
-		"-c", "diff.srcPrefix=a/",
-		"-c", "diff.dstPrefix=b/",
-		"-c", "diff.submodule=short",
-		"-c", "diff.ignoreSubmodules=none",
-		"-c", "log.showRoot=true",
-		"show", hash,
-		"--format=", "--no-color", "--no-show-signature", "--binary",
-		"--no-ext-diff", "--no-textconv", "--find-renames",
-		"--diff-merges=first-parent", "-O/dev/null",
-	)
-	if err != nil {
-		return "", nil, err
-	}
-	fragments, err := splitDiff(string(diff))
+	fragments, err := splitDiff(diff, false)
 	if err != nil {
 		return "", nil, err
 	}
 	return hash, fragments, nil
 }
 
-func splitDiff(diff string) ([]string, error) {
+// CommitDiffChunks returns one patch fragment per changed file of the commit's
+// own diff (first parent for merges, the empty tree for root commits), with all
+// of the file's hunks together.
+func CommitDiffChunks(dir, commit string) ([]string, error) {
+	_, diff, err := showDiff(dir, commit)
+	if err != nil {
+		return nil, err
+	}
+	return splitDiff(diff, true)
+}
+
+// ResolveCommit returns the full hash of the commit that rev names.
+func ResolveCommit(dir, rev string) (string, error) {
+	hashBytes, err := gitOutput(dir, "", nil, "rev-parse", rev+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	hash := strings.TrimSpace(string(hashBytes))
+	if hash == "" || strings.ContainsAny(hash, "\r\n") {
+		return "", fmt.Errorf("git rev-parse returned invalid hash %q", hash)
+	}
+	return hash, nil
+}
+
+func showDiff(dir, commit string) (string, string, error) {
+	hash, err := ResolveCommit(dir, commit)
+	if err != nil {
+		return "", "", err
+	}
+
+	diff, err := gitOutput(
+		dir, "", nil,
+		slices.Concat(diffConfigArgs, []string{
+			"-c", "log.showRoot=true",
+			"show", hash,
+			"--format=", "--no-color", "--no-show-signature", "--binary",
+			"--no-ext-diff", "--no-textconv", "--find-renames",
+			"--diff-merges=first-parent", "-O/dev/null",
+		})...,
+	)
+	if err != nil {
+		return "", "", err
+	}
+	return hash, string(diff), nil
+}
+
+// DiffChunks returns one patch fragment per changed file, with all of the
+// file's hunks together, for the uncommitted changes relative to base (HEAD
+// when base is empty). Untracked files are not included; they have no base
+// blob to diff against.
+func DiffChunks(dir, base string) ([]string, error) {
+	if base == "" {
+		// A repository with no commits has no HEAD; the diff is empty.
+		if _, err := gitOutput(dir, "", nil, "rev-parse", "--verify", "HEAD"); err != nil {
+			return nil, nil
+		}
+		base = "HEAD"
+	}
+	diff, err := gitOutput(
+		dir, "", nil,
+		slices.Concat(diffConfigArgs, []string{
+			"diff", base, "--no-color", "--binary",
+			"--no-ext-diff", "--no-textconv", "--find-renames", "-O/dev/null",
+		})...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return splitDiff(string(diff), true)
+}
+
+// splitDiff splits a diff into patch fragments. With perFile, each file's
+// changes become one fragment carrying all its hunks; otherwise each hunk is
+// its own fragment, the suggested narration granularity for tours. Renames
+// and copies always stay whole: later hunks target a path that does not exist
+// until the fragment carrying the rename applies, and repeating the rename
+// metadata per hunk breaks git apply.
+func splitDiff(diff string, perFile bool) ([]string, error) {
 	lines := splitLines(diff)
 	files := make([][]string, 0)
 	for _, line := range lines {
@@ -222,6 +297,13 @@ func splitDiff(diff string) ([]string, error) {
 
 	fragments := make([]string, 0)
 	for _, file := range files {
+		// Renames and copies stay whole: later hunks target a path that
+		// does not exist until the fragment carrying the rename applies,
+		// and repeating the rename metadata per hunk breaks git apply.
+		if perFile {
+			fragments = append(fragments, strings.Join(file, ""))
+			continue
+		}
 		var hunks []int
 		renamed := false
 		for i, line := range file {
@@ -232,9 +314,6 @@ func splitDiff(diff string) ([]string, error) {
 				renamed = true
 			}
 		}
-		// Renames and copies stay whole: later hunks target a path that
-		// does not exist until the fragment carrying the rename applies,
-		// and repeating the rename metadata per hunk breaks git apply.
 		if len(hunks) == 0 || renamed {
 			fragments = append(fragments, strings.Join(file, ""))
 			continue
