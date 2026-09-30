@@ -12,6 +12,10 @@ export interface TourPatchInfo {
   newFile: boolean;
   deletedFile: boolean;
   fileLabel: string;
+  // For renames/copies: the source and destination paths. Both null when the
+  // fragment is not a rename/copy.
+  renameFrom: string | null;
+  renameTo: string | null;
   hunkRanges: TourHunkRange[];
   displayRange: [number, number] | null;
   label: string;
@@ -80,10 +84,26 @@ function markerPath(patch: string, marker: "--- " | "+++ "): MarkerPath {
   return { present: true, path };
 }
 
-function hunklessPath(patch: string): string | null {
+// renamePaths extracts the source and destination of a rename/copy from the
+// fragment's header metadata (always before the first hunk: splitDiff keeps
+// renamed files whole, so the metadata and any content hunks share a fragment).
+function renamePaths(patch: string): { from: string | null; to: string | null } {
+  let from: string | null = null;
+  let to: string | null = null;
   for (const line of patch.split("\n")) {
-    if (line.startsWith("rename to ")) return unquoteGitPath(line.slice("rename to ".length));
+    if (HUNK_HEADER.test(line)) break;
+    const match = /^(?:rename|copy) (from|to) (.*)$/.exec(line);
+    if (!match) continue;
+    const path = unquoteGitPath(match[2].trim());
+    if (match[1] === "from") from = path;
+    else to = path;
   }
+  return { from, to };
+}
+
+// diffGitPath is the fallback label when the fragment carries neither path
+// markers nor rename metadata (binary changes, mode-only changes).
+function diffGitPath(patch: string): string | null {
   const quoted = /^diff --git "a\/(.*)" "b\/(.*)"$/m.exec(patch);
   if (quoted) return unquoteGitPath(`"${quoted[2]}"`);
   const git = /^diff --git a\/(.*) b\/(.*)$/m.exec(patch);
@@ -99,7 +119,9 @@ export function analyzeTourPatch(patch: string): TourPatchInfo {
   const newMarker = markerPath(patch, "+++ ");
   const oldPath = oldMarker.path;
   const newPath = newMarker.path;
-  const fileLabel = newPath || oldPath || hunklessPath(patch) || "File change";
+  const renamed = renamePaths(patch);
+  const fileLabel =
+    newPath || oldPath || renamed.to || renamed.from || diffGitPath(patch) || "File change";
 
   const hunkRanges: TourHunkRange[] = [];
   let additions = 0;
@@ -123,8 +145,10 @@ export function analyzeTourPatch(patch: string): TourPatchInfo {
     else if (line.startsWith("-")) deletions++;
   }
 
+  // A range label only makes sense for a single contiguous hunk; per-file
+  // fragments with several hunks would produce a misleading span.
   let displayRange: [number, number] | null = null;
-  if (hunkRanges.length > 0) {
+  if (hunkRanges.length === 1) {
     const useOldSide = hunkRanges.every((range) => range.newCount === 0);
     const first = hunkRanges[0];
     const last = hunkRanges[hunkRanges.length - 1];
@@ -134,15 +158,22 @@ export function analyzeTourPatch(patch: string): TourPatchInfo {
     displayRange = [start, lastStart + Math.max(lastCount, 1) - 1];
   }
 
+  // Renames and copies are labeled "from → to"; everything else by its path.
+  const baseLabel = renamed.to
+    ? `${renamed.from ?? oldPath ?? renamed.to} → ${renamed.to}`
+    : fileLabel;
+
   return {
     oldPath,
     newPath,
     newFile: oldMarker.present && oldPath === null,
     deletedFile: newMarker.present && newPath === null,
     fileLabel,
+    renameFrom: renamed.from,
+    renameTo: renamed.to,
     hunkRanges,
     displayRange,
-    label: displayRange ? `${fileLabel} · ${displayRange[0]}–${displayRange[1]}` : fileLabel,
+    label: displayRange ? `${baseLabel} · ${displayRange[0]}–${displayRange[1]}` : baseLabel,
     additions,
     deletions,
     isHunk: hunkRanges.length > 0,

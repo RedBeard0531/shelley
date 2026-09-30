@@ -179,9 +179,10 @@ test.describe("Commit tour defaults", () => {
         )
         .toBeLessThan(40);
 
-      const firstChunk = overlay.locator(".commit-tour-chunk").first();
       const firstChangeButton = changeButtons.first();
-      await firstChunk.evaluate((element) => element.scrollIntoView({ block: "start" }));
+      // Jump via the ToC: the app's own navigation keeps the landing flush
+      // while the diffs' virtualized rows settle their measured heights.
+      await firstChangeButton.click();
       await expect(firstChangeButton).toHaveAttribute("aria-current", "location");
       await expect(firstChangeButton.locator(".diff-tree-decoration")).toHaveCSS(
         "background-color",
@@ -221,6 +222,7 @@ test.describe("Commit tour defaults", () => {
         })
         .toBe(true);
 
+      const firstChunk = overlay.locator(".commit-tour-chunk").first();
       const pierreDiff = firstChunk.locator("diffs-container");
       await expect(pierreDiff).toBeVisible();
       await expect
@@ -574,9 +576,9 @@ test.describe("Commit tour defaults", () => {
       // Tab into the main pane: native focus scrolling must not be pulled back to the jump.
       await finalLink.focus();
       await page.keyboard.press("Tab");
-      const diffToggle = overlay.locator(".commit-tour-diff-toggle");
-      await expect(diffToggle).toBeFocused();
-      await expect(diffToggle).toBeInViewport();
+      // Focus lands on the first focusable element of the main pane, which
+      // sits at the document top, so the overview becomes the active anchor.
+      await expect(tourView.locator(":focus")).toBeInViewport();
       await expect(overview).toHaveAttribute("aria-current", "location");
 
       await finalLink.click();

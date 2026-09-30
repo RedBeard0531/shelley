@@ -1,51 +1,13 @@
 <template>
-  <div
-    ref="viewRef"
-    class="commit-tour-view"
-    data-review="Tour"
-    data-review-scroll
-    @scroll.passive="handleScroll"
-  >
+  <div ref="viewRef" class="commit-tour-view" data-review="Tour" data-review-scroll @scroll.passive="handleScroll">
     <article ref="documentRef" class="commit-tour-document">
-      <div v-if="!isMobile" class="commit-tour-toolbar">
-        <button
-          v-tooltip.top="sideBySide ? 'Switch to unified diffs' : 'Switch to side-by-side diffs'"
-          type="button"
-          class="commit-tour-diff-toggle"
-          :aria-label="sideBySide ? 'Switch to unified diffs' : 'Switch to side-by-side diffs'"
-          @click="setSideBySidePreference(!sideBySidePreference)"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path v-if="sideBySide" d="M12 4v16" />
-            <path v-else d="M3 9.3h18M3 14.7h18" />
-          </svg>
-          {{ sideBySide ? "Side-by-side" : "Unified" }}
-        </button>
-      </div>
-
       <div
         v-if="commitMessage || tour.tour.title || tour.tour.intro"
         :id="TOUR_OVERVIEW_ANCHOR"
         :data-tour-anchor="TOUR_OVERVIEW_ANCHOR"
         class="commit-tour-overview"
       >
-        <section
-          v-if="commitMessage"
-          class="commit-tour-commit-message"
-          data-review="Commit message"
-          data-review-item
-        >
+        <section v-if="commitMessage" class="commit-tour-commit-message" data-review="Commit message" data-review-item>
           <div class="commit-tour-commit-meta">
             <code :title="commitMessage.hash">{{ commitMessage.hash.slice(0, 8) }}</code>
             <span>{{ commitMessage.author }}</span>
@@ -60,12 +22,7 @@
           </details>
         </section>
 
-        <header
-          v-if="tour.tour.title || tour.tour.intro"
-          class="commit-tour-introduction"
-          data-review="Intro"
-          data-review-item
-        >
+        <header v-if="tour.tour.title || tour.tour.intro" class="commit-tour-introduction" data-review="Intro" data-review-item>
           <h1 v-if="tour.tour.title">{{ tour.tour.title }}</h1>
           <MarkdownContent v-if="tour.tour.intro" :text="tour.tour.intro" />
         </header>
@@ -105,7 +62,7 @@
           :data-review="sections[position] ? `${sections[position]} › ${entry.name}` : entry.name"
           data-review-item
           :entry="entry"
-          :src="api.gitTourMediaURL(cwd, entry.blob)"
+          :src="api.gitTourMediaURL(cwd ?? '', entry.blob)"
           @comment="emit('open-comment', $event)"
         />
         <CommitTourChunk
@@ -117,8 +74,8 @@
           :expanded="!entry.trivial || expandedAnchors.has(tourEntryAnchor(position))"
           :theme-type="themeType"
           :side-by-side="sideBySide"
-          :overflow="isMobile ? 'wrap' : 'scroll'"
-          :load-file="loadFile"
+          :overflow="overflowPreference"
+          :load-file="cwd ? loadFile : undefined"
           @update:expanded="emit('expand-change', tourEntryAnchor(position), $event)"
           @comment="emit('open-comment', $event)"
           @line-comment="emit('open-comment', $event)"
@@ -149,10 +106,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ThemeTypes } from "@pierre/diffs";
 import { api } from "../../services/api";
-import type { GitTourEntry, GitTourItem, GitTourResponse } from "../../services/api";
+import type { GitTourEntry, GitTourHeaderEntry, GitTourItem, GitTourResponse } from "../../services/api";
 import type { GitCommitMessage, GitFileDiff } from "../../types";
 import { isDarkModeActive } from "../../services/theme";
-import { useSideBySidePreference } from "../composables/diffViewPreference";
+import { useOverflowPreference, useSideBySidePreference } from "../composables/diffViewPreference";
 import type { TourCommentTarget } from "../composables/tourComments";
 import CommitTourChunk from "./CommitTourChunk.vue";
 import CommitTourItems from "./CommitTourItems.vue";
@@ -163,7 +120,6 @@ import {
   TOUR_OVERVIEW_ANCHOR,
   TOUR_QUESTIONS_ANCHOR,
   headerLabel,
-  isHeaderEntry,
   isMediaEntry,
   tourEntryAnchor,
 } from "./commitTourContents";
@@ -172,9 +128,9 @@ const props = defineProps<{
   tour: GitTourResponse;
   commitMessage: GitCommitMessage | null;
   expandedAnchors: Set<string>;
-  // Repository directory the tour was loaded from; needed to fetch media and
-  // whole-file contents for the chunks' full-file mode.
-  cwd: string;
+  // Repository directory the tour was loaded from; needed to fetch whole-file
+  // contents for the chunks' full-file mode.
+  cwd?: string;
 }>();
 const emit = defineEmits<{
   (e: "open-comment", target: TourCommentTarget): void;
@@ -184,8 +140,9 @@ const emit = defineEmits<{
 
 const themeType = ref<ThemeTypes>(isDarkModeActive() ? "dark" : "light");
 const isMobile = ref(window.innerWidth < 768);
-const { sideBySidePreference, setSideBySidePreference } = useSideBySidePreference();
+const { sideBySidePreference } = useSideBySidePreference();
 const sideBySide = computed(() => !isMobile.value && sideBySidePreference.value);
+const { overflowPreference } = useOverflowPreference();
 const shortHash = computed(() => props.tour.hash.slice(0, 8));
 
 // Whole-file contents at the toured commit, shared by every chunk of the same
@@ -195,6 +152,7 @@ const fileContentsCache = new Map<string, Promise<GitFileDiff>>();
 watch([() => props.tour.hash, () => props.cwd], () => fileContentsCache.clear());
 
 function loadFile(oldPath: string | null, newPath: string | null): Promise<GitFileDiff> {
+  const cwd = props.cwd ?? "";
   const path = newPath ?? oldPath ?? "";
   const key = `${oldPath ?? ""}\0${newPath ?? ""}`;
   let pending = fileContentsCache.get(key);
@@ -203,7 +161,7 @@ function loadFile(oldPath: string | null, newPath: string | null): Promise<GitFi
       .getGitFileDiff(
         props.tour.hash,
         path,
-        props.cwd,
+        cwd,
         "self",
         oldPath && oldPath !== path ? oldPath : undefined,
       )
@@ -230,36 +188,35 @@ let activeAnchor = "";
 // Retain an explicit selection through lazy layout and bottom clamping, but
 // release it on any independent scroll (including focus and native scrollbars).
 let navigationTarget: HTMLElement | null = null;
-let navigationPosition = { top: 0, height: 0, viewport: 0 };
-
-function releaseMovedNavigation() {
-  const view = viewRef.value;
-  if (!view || !navigationTarget) return;
-  // Lazy diffs can change the scroll extent and clamp/anchor scrollTop. Only
-  // correct those layout shifts; all scrolling within a stable layout is free.
-  if (
-    view.scrollTop !== navigationPosition.top &&
-    view.scrollHeight === navigationPosition.height &&
-    view.clientHeight === navigationPosition.viewport
-  )
-    navigationTarget = null;
-}
+// True while a scroll event is the expected result of alignNavigationTarget's
+// own scrollIntoView. The diffs' virtualizer changes content height around
+// every big scroll, so scroll *position* comparison cannot tell a programmatic
+// re-alignment from a user scroll; an explicit flag can.
+let programmaticScroll = false;
 
 function handleScroll() {
-  releaseMovedNavigation();
+  if (programmaticScroll) {
+    // Our own re-alignment landed; the navigation target stays in charge
+    // until an independent scroll releases it.
+    programmaticScroll = false;
+  } else {
+    // An independent scroll (user wheel, focus, native scrollbars) releases
+    // the explicit selection.
+    navigationTarget = null;
+  }
   scheduleActiveAnchor();
 }
 
 function alignNavigationTarget() {
-  releaseMovedNavigation();
   const view = viewRef.value;
   if (!view || !navigationTarget) return;
+  programmaticScroll = true;
   navigationTarget.scrollIntoView({ block: "start" });
-  navigationPosition = {
-    top: view.scrollTop,
-    height: view.scrollHeight,
-    viewport: view.clientHeight,
-  };
+  // If the view was already at the target, no scroll event fires to clear
+  // the flag; drop it on the next frame.
+  requestAnimationFrame(() => {
+    programmaticScroll = false;
+  });
 }
 
 // Either eye controls or inline disclosure can change visibility. Release the
@@ -284,13 +241,15 @@ function handleTourResize() {
   scheduleActiveAnchor();
 }
 
+function isHeaderEntry(entry: GitTourEntry): entry is GitTourHeaderEntry {
+  return "header" in entry;
+}
+
 function entryKey(entry: GitTourEntry, position: number): string {
   const kind = isHeaderEntry(entry) ? "header" : isMediaEntry(entry) ? "media" : "patch";
   return `${kind}-${position}`;
 }
 
-// Decisions and questions quote their title, so an answer reads on its own:
-// "> commit 1a2b3c4d question 2: Should recordings autoplay?".
 function openItemComment(kind: "decision" | "question", item: GitTourItem, index: number) {
   emit("open-comment", {
     where: `${kind === "question" ? "Question" : "Decision"} ${index + 1}`,
@@ -299,7 +258,6 @@ function openItemComment(kind: "decision" | "question", item: GitTourItem, index
   });
 }
 
-// The heading each entry sits under, for recorded review context.
 const sections = computed(() => {
   let current = "";
   return props.tour.tour.chunks.map((entry) => {
@@ -376,7 +334,6 @@ function updateActiveAnchor() {
     if (anchor.getBoundingClientRect().top > activationTop) break;
     current = anchor.dataset.tourAnchor ?? current;
   }
-
   const canScroll = view.scrollHeight > view.clientHeight + 1;
   if (canScroll && view.scrollTop + view.clientHeight >= view.scrollHeight - 1) {
     current = anchors.at(-1)?.dataset.tourAnchor ?? current;
@@ -396,14 +353,6 @@ function scheduleActiveAnchor() {
 
 function scrollToAnchor(anchor: string) {
   navigationTarget = viewRef.value?.querySelector<HTMLElement>(`#${anchor}`) ?? null;
-  const view = viewRef.value;
-  if (view) {
-    navigationPosition = {
-      top: view.scrollTop,
-      height: view.scrollHeight,
-      viewport: view.clientHeight,
-    };
-  }
   alignNavigationTarget();
   scheduleActiveAnchor();
 }
@@ -462,34 +411,10 @@ onUnmounted(() => {
   min-width: 0;
   width: 100%;
   margin: 0 auto;
-  padding: 1rem clamp(1rem, 3vw, 2.5rem) 4rem;
+  padding: 0 clamp(1rem, 3vw, 2.5rem) 4rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
-}
-
-.commit-tour-toolbar {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.commit-tour-diff-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.3rem 0.55rem;
-  border: 1px solid var(--border-color);
-  border-radius: 0.375rem;
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.commit-tour-diff-toggle:hover {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
 }
 
 .commit-tour-overview {
@@ -580,9 +505,15 @@ onUnmounted(() => {
 }
 
 .commit-tour-introduction,
-.commit-tour-section-heading,
-.commit-tour-chunk {
+.commit-tour-section-heading {
   scroll-margin-top: 1rem;
+}
+
+/* Chunks have sticky headers: a ToC jump must land the header flush at the
+   pane's top. A margin here would leave the previous card's tail visible
+   above the just-landed header. */
+.commit-tour-chunk {
+  scroll-margin-top: 0;
 }
 
 .commit-tour-introduction,
@@ -617,7 +548,7 @@ onUnmounted(() => {
 
 @media (max-width: 767px) {
   .commit-tour-document {
-    padding: 1.25rem 0 5rem;
+    padding: 0 0 5rem;
     gap: 0.875rem;
   }
 

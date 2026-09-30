@@ -15,16 +15,16 @@
         @click="emit('update:expanded', !expanded)"
       >
         <ToolChevron :expanded="expanded" />
-        <span class="tour-trivial-label">trivial</span>
+        <span class="tour-trivial-label">{{ trivialLabel }}</span>
         <code :title="chunkLabel">{{ chunkLabel }}</code>
-        <span class="commit-tour-chunk-stats">
+        <span v-if="isHunk" class="commit-tour-chunk-stats">
           <span class="commit-tour-additions">+{{ chunkStats.additions }}</span>
           <span class="commit-tour-deletions">−{{ chunkStats.deletions }}</span>
         </span>
       </button>
       <template v-else>
         <code :title="chunkLabel">{{ chunkLabel }}</code>
-        <span class="commit-tour-chunk-stats">
+        <span v-if="isHunk" class="commit-tour-chunk-stats">
           <span class="commit-tour-additions">+{{ chunkStats.additions }}</span>
           <span class="commit-tour-deletions">−{{ chunkStats.deletions }}</span>
         </span>
@@ -189,6 +189,22 @@ const chunkStats = computed(() => ({
   additions: patchInfo.value.additions,
   deletions: patchInfo.value.deletions,
 }));
+// Why the chunk starts collapsed. The server classifies structurally; a
+// rename is distinguished from a mode-only change by the patch metadata.
+const trivialLabel = computed(() => {
+  switch (props.entry.reason) {
+    case "rename-or-mode":
+      return patchInfo.value.renameTo ? "renamed" : "mode change";
+    case "generated":
+      return "generated";
+    case "binary":
+      return "binary";
+    case "whitespace-only":
+      return "whitespace-only";
+    default:
+      return "trivial";
+  }
+});
 const isHunk = computed(() => patchInfo.value.isHunk);
 const isBinary = computed(() => patchInfo.value.isBinary);
 
@@ -427,13 +443,25 @@ const { rendered } = useFileDiffInstance(diffHostEl, () => {
 
 <style scoped>
 .commit-tour-chunk {
-  overflow: hidden;
+  /* clip, not hidden: a sticky header inside an overflow: hidden ancestor
+     would stick to that ancestor's never-scrolling scrollport and stay put
+     instead of pinning to the pane. clip keeps the rounded-card clipping
+     without creating a scroll container. */
+  overflow: clip;
   border: 1px solid var(--border-color);
   border-radius: 0.5rem;
   background: var(--bg-base);
 }
 
 .commit-tour-chunk-header {
+  /* Sticky within the chunk: the filename stays at the pane's top while any
+     part of the card is on screen, and the next card's header pushes it away.
+     The 1px negative offset covers the sub-pixel seam at fractional zoom
+     levels, where the diff scrolled behind would otherwise show through just
+     above the header. */
+  position: sticky;
+  top: -1px;
+  z-index: 1;
   min-height: 2.5rem;
   display: flex;
   align-items: center;

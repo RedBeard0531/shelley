@@ -149,9 +149,14 @@ export function buildTourContents(tour: GitTour, includeOverview: boolean): Tour
       return;
     }
     const patch = analyzeTourPatch(entry.patch);
+    // One range only reads as a line range when the fragment is one contiguous
+    // hunk; a per-file fragment with several hunks says how many instead of
+    // claiming a span that covers unmodified lines.
     const decoration = patch.displayRange
       ? `L${patch.displayRange[0]}${patch.displayRange[0] === patch.displayRange[1] ? "" : `–${patch.displayRange[1]}`}`
-      : undefined;
+      : patch.hunkRanges.length > 1
+        ? `${patch.hunkRanges.length} hunks`
+        : undefined;
     contents.push({
       anchor: tourEntryAnchor(position),
       label: `${patch.label}${patch.additions ? ` +${patch.additions}` : ""}${patch.deletions ? ` −${patch.deletions}` : ""}`,

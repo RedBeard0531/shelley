@@ -311,37 +311,111 @@
       />
 
       <div
-        v-if="tourAvailable"
+        v-if="selectedDiff"
         class="diff-viewer-view-switcher"
         role="group"
         aria-label="Diff view"
       >
-        <button
-          type="button"
-          :class="['diff-viewer-view-btn', { active: diffView === 'tour' }]"
-          :aria-pressed="diffView === 'tour'"
-          @click="diffView = 'tour'"
-        >
-          Tour
-        </button>
-        <button
-          type="button"
-          :class="['diff-viewer-view-btn', { active: diffView === 'files' }]"
-          :aria-pressed="diffView === 'files'"
-          @click="diffView = 'files'"
-        >
-          Files
-        </button>
-      </div>
-      <!-- Once built, the tour appears in place of this (see CommitTourAction). -->
-      <div v-else-if="isOpen && tourCommit" class="diff-viewer-view-switcher">
+        <div class="diff-viewer-view-tabs">
+          <button
+            v-if="tourAvailable"
+            type="button"
+            :class="['diff-viewer-view-btn', { active: diffView === 'tour' }]"
+            :aria-pressed="diffView === 'tour'"
+            @click="diffView = 'tour'"
+          >
+            Tour
+          </button>
+          <button
+            type="button"
+            :class="['diff-viewer-view-btn', { active: diffView === 'changes' }]"
+            :aria-pressed="diffView === 'changes'"
+            @click="diffView = 'changes'"
+          >
+            Changes
+          </button>
+          <button
+            type="button"
+            :class="['diff-viewer-view-btn', { active: diffView === 'files' }]"
+            :aria-pressed="diffView === 'files'"
+            @click="diffView = 'files'"
+          >
+            Files
+          </button>
+        </div>
+        <!-- A single commit with no tour yet: ask for one, shared with the git
+             graph (see CommitTourAction). Ranges and the working tree cannot
+             have tours. -->
         <CommitTourAction
+          v-if="!tourAvailable && isOpen && tourCommit"
           :cwd="cwd"
           :hash="tourCommit.id"
           :conversation-id="tourConversationId ?? null"
           :navigate="openTourWorker"
           @present="markTour"
         />
+        <div v-if="diffView !== 'files'" class="diff-viewer-view-toggles">
+          <button
+            v-if="!isMobile"
+            v-tooltip.top="
+              sideBySidePreference ? 'Switch to unified diffs' : 'Switch to side-by-side diffs'
+            "
+            type="button"
+            class="diff-viewer-view-toggle"
+            :aria-label="
+              sideBySidePreference ? 'Switch to unified diffs' : 'Switch to side-by-side diffs'
+            "
+            @click="setSideBySidePreference(!sideBySidePreference)"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path v-if="sideBySidePreference" d="M12 4v16" />
+              <path v-else d="M3 9.3h18M3 14.7h18" />
+            </svg>
+            {{ sideBySidePreference ? "Side-by-side" : "Unified" }}
+          </button>
+          <button
+            v-tooltip.top="overflowPreference === 'wrap' ? 'Scroll long lines' : 'Wrap long lines'"
+            type="button"
+            class="diff-viewer-view-toggle"
+            :aria-label="overflowPreference === 'wrap' ? 'Scroll long lines' : 'Wrap long lines'"
+            :aria-pressed="overflowPreference === 'wrap'"
+            @click="setOverflowPreference(overflowPreference === 'wrap' ? 'scroll' : 'wrap')"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <template v-if="overflowPreference === 'wrap'">
+                <path d="M3 6h18" />
+                <path d="M3 12h13a3 3 0 1 1 0 6H7" />
+                <path d="m10 15-3 3 3 3" />
+              </template>
+              <template v-else>
+                <path d="m8 8-4 4 4 4M16 8l4 4-4 4" />
+                <path d="M4 12h16" />
+              </template>
+            </svg>
+            {{ overflowPreference === "wrap" ? "Wrap" : "Scroll" }}
+          </button>
+        </div>
       </div>
 
       <!-- Error banner -->
@@ -414,24 +488,26 @@
           </div>
           <div
             class="diff-viewer-sidebar-section diff-viewer-sidebar-files"
-            :data-review="diffView === 'tour' ? 'Tour contents' : 'Changed files'"
+            :data-review="diffView === 'tour' ? 'Tour contents' : diffView === 'changes' ? 'Changes contents' : 'Changed files'"
           >
-            <template v-if="diffView === 'tour'">
+            <template v-if="diffView !== 'files'">
               <div class="diff-viewer-sidebar-label"><span>Table of Contents</span></div>
               <div ref="tourContentsScrollRef" class="diff-viewer-sidebar-tour-scroll">
-                <div v-if="tourLoading" class="diff-viewer-file-list-empty">Loading tour...</div>
-                <div v-else-if="tourError" class="diff-viewer-file-list-empty">
-                  Tour unavailable
+                <div v-if="page.loading" class="diff-viewer-file-list-empty">
+                  {{ page.labels.loading }}
+                </div>
+                <div v-else-if="page.error" class="diff-viewer-file-list-empty">
+                  {{ page.labels.error }}
                 </div>
                 <CommitTourContents
-                  v-else-if="tourContents.length > 0"
-                  :items="tourContents"
+                  v-else-if="page.contents.length > 0"
+                  :items="page.contents"
                   :active-anchor="activeTourAnchor"
-                  :expanded-anchors="expandedTourAnchors"
+                  :expanded-anchors="page.expanded"
                   @select="scrollToTourAnchor"
-                  @expand-change="setTourExpanded"
+                  @expand-change="setAnchorExpanded"
                 />
-                <div v-else class="diff-viewer-file-list-empty">No tour sections</div>
+                <div v-else class="diff-viewer-file-list-empty">{{ page.labels.empty }}</div>
               </div>
             </template>
             <template v-else>
@@ -457,20 +533,22 @@
           </div>
         </aside>
         <div ref="mainRef" class="diff-viewer-main">
-          <div v-if="diffView === 'tour'" class="diff-viewer-tour-pane">
-            <div v-if="tourLoading" class="diff-viewer-loading">
+          <!-- Tour and Changes are the same page shape; the key remounts the
+               view on a switch so each starts at the top. -->
+          <div v-if="diffView !== 'files'" :key="diffView" class="diff-viewer-tour-pane">
+            <div v-if="page.loading" class="diff-viewer-loading">
               <div class="spinner"></div>
-              <span>Loading tour...</span>
+              <span>{{ page.labels.loading }}</span>
             </div>
-            <div v-else-if="tourError" class="diff-viewer-tour-error">{{ tourError }}</div>
+            <div v-else-if="page.error" class="diff-viewer-tour-error">{{ page.error }}</div>
             <CommitTourView
-              v-else-if="tourResponse"
-              ref="tourViewRef"
-              :tour="tourResponse"
-              :commit-message="selectedTourCommitMessage"
-              :expanded-anchors="expandedTourAnchors"
+              v-else-if="page.response"
+              ref="singlePageViewRef"
+              :tour="page.response"
+              :commit-message="page.commitMessage"
+              :expanded-anchors="page.expanded"
               :cwd="cwd"
-              @expand-change="setTourExpanded"
+              @expand-change="setAnchorExpanded"
               @active-anchor-change="handleTourActiveAnchor"
               @open-comment="openTourComment"
             />
@@ -600,7 +678,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  ref,
+  shallowRef,
+  watch,
+  type ComputedRef,
+  type Ref,
+} from "vue";
 import type * as Monaco from "monaco-editor";
 import { api, type GitTourResponse } from "../../services/api";
 import { loadMonaco } from "../../services/monaco";
@@ -642,8 +730,9 @@ import {
   pushBackButtonDismiss,
 } from "../composables/backButtonDismiss";
 import { COMMIT_MESSAGES_DIR, treeRealPathOrder, type DiffFileTreeEntry } from "./diffFileTree";
-import { buildTourContents } from "./commitTourContents";
+import { buildTourContents, type TourContentsItem } from "./commitTourContents";
 import { defaultDiffSelection, workingChangesStatus } from "./diffViewerModel";
+import { useOverflowPreference, useSideBySidePreference } from "../composables/diffViewPreference";
 import type { GitDiffInfo, GitFileInfo, GitFileDiff, GitCommitMessage } from "../../types";
 
 const props = defineProps<{
@@ -720,15 +809,11 @@ const hasMoreCommits = ref(false);
 const showDirPicker = ref(false);
 const selectedDiff = ref<string | null>(null);
 const selectedTo = ref<"working" | "self">("working");
-const diffView = ref<"tour" | "files">("files");
-const tourResponse = ref<GitTourResponse | null>(null);
-const tourViewRef = ref<{ scrollToAnchor: (anchor: string) => void } | null>(null);
+const diffView = ref<"tour" | "changes" | "files">("changes");
+const singlePageViewRef = ref<{ scrollToAnchor: (anchor: string) => void } | null>(null);
 const tourContentsScrollRef = ref<HTMLElement | null>(null);
 const activeTourAnchor = ref<string | null>(null);
-const expandedTourAnchors = ref(new Set<string>());
 let tourContentsResizeObserver: ResizeObserver | null = null;
-const tourLoading = ref(false);
-const tourError = ref<string | null>(null);
 const files = ref<GitFileInfo[]>([]);
 const selectedFile = ref<string | null>(null);
 let pendingInitialFile: string | undefined;
@@ -740,10 +825,6 @@ const currentChangeIndex = ref(-1);
 const saveStatus = ref<"idle" | "saving" | "saved" | "error">("idle");
 const mode = ref<ViewMode>("comment");
 const commitMessages = ref<GitCommitMessage[]>([]);
-const selectedTourCommitMessage = computed(() => {
-  const hash = tourResponse.value?.hash;
-  return hash ? (commitMessages.value.find((message) => message.hash === hash) ?? null) : null;
-});
 const amendStatus = ref<"idle" | "saving" | "saved" | "error">("idle");
 const showKeyboardHint = ref(false);
 const isMobile = ref(window.innerWidth < 768);
@@ -757,6 +838,8 @@ watch(diffView, (view) => {
   if (view === "tour") showKeyboardHint.value = false;
 });
 const [vimEnabledRef, setVimEnabledFn] = useVimEnabled();
+const { sideBySidePreference, setSideBySidePreference } = useSideBySidePreference();
+const { overflowPreference, setOverflowPreference } = useOverflowPreference();
 const vimEnabled = vimEnabledRef;
 function setVimEnabled(v: boolean) {
   setVimEnabledFn(v);
@@ -793,6 +876,114 @@ function markTour(hash: string) {
   const diff = diffs.value.find((d) => d.id === hash);
   if (diff) diff.hasTour = true;
 }
+
+// The two single-page views (Tour and Changes) render the same components from
+// a tour-shaped response; they differ only in how it is fetched and in their
+// sidebar labels. One object per view keeps its state, its load bookkeeping,
+// and the sidebar/commit-message projections of the response together.
+interface SinglePageLabels {
+  loading: string;
+  error: string;
+  empty: string;
+  failure: string;
+}
+
+interface SinglePage {
+  labels: SinglePageLabels;
+  response: Ref<GitTourResponse | null>;
+  loading: Ref<boolean>;
+  error: Ref<string | null>;
+  expanded: Ref<Set<string>>;
+  contents: ComputedRef<TourContentsItem[]>;
+  commitMessage: ComputedRef<GitCommitMessage | null>;
+  /** Fetches key's response (always, resetting the previous one). */
+  load(key: string, fetchPage: () => Promise<GitTourResponse>): Promise<void>;
+  /** Whether key's response is already loaded and need not be refetched. */
+  isLoaded(key: string): boolean;
+  reset(): void;
+}
+
+function createSinglePage(labels: SinglePageLabels): SinglePage {
+  const response = ref<GitTourResponse | null>(null);
+  const loading = ref(false);
+  const error = ref<string | null>(null);
+  const expanded = ref(new Set<string>());
+  let loadedKey = "";
+  let requestId = 0;
+  // The commit message card is shown when the response names a real commit.
+  const commitMessage = computed(() => {
+    const hash = response.value?.hash;
+    return hash && hash !== "working"
+      ? (commitMessages.value.find((message) => message.hash === hash) ?? null)
+      : null;
+  });
+  return {
+    labels,
+    response,
+    loading,
+    error,
+    expanded,
+    commitMessage,
+    contents: computed(() =>
+      response.value ? buildTourContents(response.value.tour, commitMessage.value !== null) : [],
+    ),
+    isLoaded: (key: string) => key === loadedKey && response.value !== null,
+    reset() {
+      loadedKey = "";
+      response.value = null;
+      loading.value = false;
+      error.value = null;
+      expanded.value = new Set();
+    },
+    async load(key, fetchPage) {
+      const id = ++requestId;
+      loadedKey = key;
+      response.value = null;
+      loading.value = true;
+      error.value = null;
+      expanded.value = new Set();
+      try {
+        const loaded = await fetchPage();
+        if (id !== requestId) return;
+        response.value = loaded;
+      } catch (err) {
+        if (id !== requestId) return;
+        error.value = `${labels.failure}: ${String(err)}`;
+      } finally {
+        if (id === requestId) loading.value = false;
+      }
+    },
+  };
+}
+
+const tourPage = createSinglePage({
+  loading: "Loading tour...",
+  error: "Tour unavailable",
+  empty: "No tour sections",
+  failure: "Failed to load commit tour",
+});
+const changesPage = createSinglePage({
+  loading: "Loading changes...",
+  error: "Changes unavailable",
+  empty: "No changes",
+  failure: "Failed to load changes",
+});
+
+// Whatever the single-page views read in the template: the active page's state,
+// unwrapped. A fresh object per evaluation is what keeps the template reactive
+// to these refs.
+const page = computed(() => {
+  const active = diffView.value === "changes" ? changesPage : tourPage;
+  return {
+    labels: active.labels,
+    response: active.response.value,
+    loading: active.loading.value,
+    error: active.error.value,
+    expanded: active.expanded.value,
+    contents: active.contents.value,
+    commitMessage: active.commitMessage.value,
+  };
+});
 
 const tourSelectionKey = computed(() =>
   props.isOpen && tourAvailable.value && selectedDiff.value
@@ -983,41 +1174,52 @@ const startsConversation = computed(() =>
   recordingLocked.value ? review.startsConversation.value : !props.recordingConversationId,
 );
 
-// After recordingLocked: the immediate run may read it.
-let tourRequestId = 0;
+// After recordingLocked: the immediate run may read it. Tour and Changes share
+// one state object per view (see createSinglePage); load() resets the previous
+// page and ignores a response that a newer load has superseded.
 watch(
   tourSelectionKey,
   async (key) => {
-    const requestId = ++tourRequestId;
-    tourResponse.value = null;
     activeTourAnchor.value = null;
-    expandedTourAnchors.value = new Set();
-    tourError.value = null;
-    tourLoading.value = false;
     tourCommentTarget.value = null;
     tourCommentText.value = "";
     if (!key || !selectedDiff.value) {
-      diffView.value = "files";
+      // No tour for this selection: the single-page default is Changes.
+      diffView.value = "changes";
       return;
     }
-
     // A tour landing mid-recording (selection is locked then) waits for a
     // click rather than yanking the view out from under the narration.
     if (!recordingLocked.value) diffView.value = "tour";
-    tourLoading.value = true;
-    try {
-      const response = await api.getGitTour(props.cwd, selectedDiff.value);
-      if (requestId !== tourRequestId) return;
-      tourResponse.value = response;
-    } catch (err) {
-      if (requestId !== tourRequestId) return;
-      tourError.value = `Failed to load commit tour: ${String(err)}`;
-    } finally {
-      if (requestId === tourRequestId) tourLoading.value = false;
-    }
+    await tourPage.load(key, () => api.getGitTour(props.cwd, selectedDiff.value ?? ""));
   },
   { immediate: true },
 );
+
+// Changes is loaded lazily, the first time the view is shown for a selection,
+// and reused while that selection stays selected.
+const changesSelectionKey = computed(() =>
+  props.isOpen && selectedDiff.value
+    ? `${props.cwd}\n${selectedDiff.value}\n${selectedTo.value}`
+    : "",
+);
+
+watch(
+  [changesSelectionKey, diffView],
+  async ([key, view]) => {
+    if (view !== "changes" || !key || !selectedDiff.value) return;
+    if (changesPage.isLoaded(key)) return;
+    await changesPage.load(key, () =>
+      api.getGitChunks(
+        props.cwd,
+        selectedDiff.value ?? "",
+        selectedDiff.value === "working" ? undefined : selectedTo.value,
+      ),
+    );
+  },
+  { immediate: true },
+);
+
 const closeTooltip = computed(() =>
   recordingLocked.value ? "Stop recording to close" : "Close (Esc)",
 );
@@ -1150,6 +1352,9 @@ watch(
   () => {
     if (props.isOpen && props.cwd) {
       pendingInitialFile = props.initialFile;
+      // A caller that names a file (git-graph diffstat link, ?file= deep link)
+      // wants to land on that file, which only the Files view renders.
+      if (props.initialFile) diffView.value = "files";
       loadDiffs();
     } else if (!props.isOpen) {
       fileDiff.value = null;
@@ -1164,6 +1369,8 @@ watch(
       resetComments();
       tourCommentTarget.value = null;
       tourCommentText.value = "";
+      tourPage.reset();
+      changesPage.reset();
       commitMessages.value = [];
       amendStatus.value = "idle";
       if (amendTimeout) {
@@ -1691,7 +1898,7 @@ function handleKeyDown(e: KeyboardEvent) {
     }
     return;
   }
-  if (diffView.value === "tour") return;
+  if (diffView.value !== "files") return;
   if ((e.ctrlKey || e.metaKey) && e.key === "s") {
     e.preventDefault();
     saveImmediately();
@@ -1804,19 +2011,14 @@ const treeEntries = computed<DiffFileTreeEntry[]>(() => {
 const navOrder = computed(() => treeRealPathOrder(treeEntries.value));
 watch(navOrder, (v) => (navOrderRef.value = v), { immediate: true });
 
-const tourContents = computed(() =>
-  tourResponse.value
-    ? buildTourContents(tourResponse.value.tour, selectedTourCommitMessage.value !== null)
-    : [],
-);
-
 function scrollToTourAnchor(anchor: string) {
-  tourViewRef.value?.scrollToAnchor(anchor);
+  singlePageViewRef.value?.scrollToAnchor(anchor);
 }
 
-function setTourExpanded(anchor: string, expanded: boolean) {
-  if (expanded) expandedTourAnchors.value.add(anchor);
-  else expandedTourAnchors.value.delete(anchor);
+function setAnchorExpanded(anchor: string, expanded: boolean) {
+  const anchors = page.value.expanded;
+  if (expanded) anchors.add(anchor);
+  else anchors.delete(anchor);
 }
 
 function handleTourActiveAnchor(anchor: string) {
@@ -1851,8 +2053,8 @@ watch(layout, () => nextTick(revealActiveTourContents), { flush: "post" });
 
 // Title for the sidebar layout's header.
 const currentTitleText = computed<string | null>(() => {
-  if (diffView.value === "tour") {
-    return tourResponse.value?.tour.title || selectedDiff.value?.slice(0, 8) || null;
+  if (diffView.value !== "files") {
+    return page.value.response?.tour.title || selectedDiff.value?.slice(0, 8) || null;
   }
   const sf = selectedFile.value;
   if (!sf) return null;
@@ -1865,9 +2067,10 @@ const currentTitleText = computed<string | null>(() => {
   return sf;
 });
 const currentTitleTooltip = computed<string | null>(() => {
-  if (diffView.value === "tour") {
-    const commit = diffs.value.find((diff) => diff.id === selectedDiff.value);
-    return commit ? `${commit.id}\n\n${commit.message}` : selectedDiff.value;
+  if (diffView.value !== "files") {
+    const hash = page.value.response?.hash;
+    const commit = diffs.value.find((diff) => diff.id === (hash ?? selectedDiff.value));
+    return commit ? `${commit.id}\n\n${commit.message}` : (selectedDiff.value ?? hash ?? null);
   }
   const sf = selectedFile.value;
   if (!sf) return null;
