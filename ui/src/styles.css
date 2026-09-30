@@ -9957,47 +9957,21 @@ kbd {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-/* System Prompt View */
-.system-prompt-view {
-  display: contents;
-}
-
-.system-prompt-header {
-  grid-column: 2;
+/* The model and system prompt items are both [icon tile] [label value] and
+ * share these rules, so restyle them here rather than per component. */
+.generation-context-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.5rem;
   min-width: 0;
   min-height: 3.5rem;
   padding: 0.75rem 1rem;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
   user-select: none;
 }
 
-.system-prompt-header:hover {
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
-}
-
-.system-prompt-header:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: -2px;
-}
-
-.system-prompt-summary {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.system-prompt-icon {
+.generation-context-icon {
   display: grid;
   place-items: center;
   width: 2rem;
@@ -10008,7 +9982,7 @@ kbd {
   font-size: 1rem;
 }
 
-.system-prompt-copy {
+.generation-context-copy {
   display: flex;
   align-items: baseline;
   gap: 0.4rem;
@@ -10016,7 +9990,7 @@ kbd {
   overflow: hidden;
 }
 
-.system-prompt-label {
+.generation-context-label {
   flex-shrink: 0;
   color: var(--text-primary);
   font-family: var(--font-mono);
@@ -10024,17 +9998,95 @@ kbd {
   font-weight: 600;
 }
 
-.system-prompt-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
+.generation-context-value {
   min-width: 0;
   overflow: hidden;
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.875rem;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.model-bar {
+  grid-column: 1;
+  grid-row: 1;
+  max-width: 45vw;
+}
+
+/* The model name ellipsizes; ", <reasoning>" after it always stays visible. */
+.model-bar-value {
+  display: flex;
+}
+
+.model-bar-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-bar-reasoning {
+  flex-shrink: 0;
+}
+
+@media (max-width: 700px) {
+  .generation-context {
+    grid-template-columns: minmax(0, 42%) minmax(0, 58%);
+  }
+
+  .generation-context-item {
+    gap: 0.35rem;
+    padding: 0.65rem 0.6rem;
+  }
+
+  .generation-context-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .generation-context-icon {
+    width: 1.5rem;
+    height: 1.5rem;
+    font-size: 0.8rem;
+  }
+
+  .generation-context-value {
+    font-size: 0.7rem;
+  }
+}
+
+/* System Prompt View */
+.system-prompt-view {
+  display: contents;
+}
+
+.system-prompt-header {
+  grid-column: 2;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.system-prompt-header .tool-toggle {
+  margin-left: auto;
+}
+
+.system-prompt-header:hover {
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+
+.system-prompt-header:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 
 .system-prompt-content {
@@ -12689,112 +12741,6 @@ kbd {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-}
-
-.model-bar {
-  grid-column: 1;
-  grid-row: 1;
-  max-width: 45vw;
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-}
-
-.model-bar-summary {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-width: 0;
-  min-height: 3.5rem;
-  padding: 0.75rem 1rem;
-  overflow: hidden;
-  white-space: nowrap;
-  user-select: none;
-}
-
-.model-bar-icon {
-  display: grid;
-  place-items: center;
-  width: 2rem;
-  height: 2rem;
-  margin-right: 0.25rem;
-  flex-shrink: 0;
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-  font-size: 1rem;
-}
-
-.model-bar-label {
-  flex-shrink: 0;
-  color: var(--text-primary);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.model-bar-name {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.875rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-bar-comma,
-.model-bar-reasoning {
-  flex-shrink: 0;
-}
-
-@media (max-width: 700px) {
-  .generation-context {
-    grid-template-columns: minmax(0, 42%) minmax(0, 58%);
-  }
-
-  .model-bar-summary,
-  .system-prompt-header {
-    gap: 0.25rem;
-    padding: 0.65rem 0.6rem;
-  }
-
-  .model-bar-label,
-  .system-prompt-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  .model-bar-icon,
-  .system-prompt-icon {
-    display: grid;
-    width: 1.5rem;
-    height: 1.5rem;
-    margin-right: 0.1rem;
-    font-size: 0.8rem;
-  }
-
-  .model-bar-name,
-  .system-prompt-meta {
-    font-size: 0.7rem;
-  }
-
-  .model-bar-label,
-  .system-prompt-label {
-    font-size: 0.7rem;
-  }
-
-  .system-prompt-copy {
-    gap: 0.25rem;
-  }
 }
 
 /* Floating toolbar shown above/below a text selection inside a commentable

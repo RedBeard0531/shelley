@@ -3,18 +3,15 @@
   <div v-if="systemPromptText" class="system-prompt-view">
     <button
       type="button"
-      class="system-prompt-header"
+      class="system-prompt-header generation-context-item"
       :aria-expanded="isExpanded"
       @click="isExpanded = !isExpanded"
     >
-      <span class="system-prompt-summary">
-        <span class="system-prompt-icon" aria-hidden="true">📋</span>
-        <span class="system-prompt-copy">
-          <span class="system-prompt-label">System Prompt:</span>
-          <span class="system-prompt-meta">
-            <span>{{ countLabel(tools.length, "tool") }},</span>
-            <span>{{ countLabel(skills.length, "skill") }}</span>
-          </span>
+      <span class="generation-context-icon" aria-hidden="true">📋</span>
+      <span class="generation-context-copy">
+        <span class="generation-context-label">System Prompt:</span>
+        <span class="generation-context-value">
+          {{ countLabel(tools.length, "tool") }}, {{ countLabel(skills.length, "skill") }}
         </span>
       </span>
       <span class="sr-only">{{ isExpanded ? "Collapse" : "Expand" }}</span>

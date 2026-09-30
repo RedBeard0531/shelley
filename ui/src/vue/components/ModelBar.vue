@@ -1,13 +1,14 @@
 <!-- Compact one-line generation metadata rendered inside the shared context card. -->
 <template>
-  <div v-if="model" class="model-bar">
-    <div class="model-bar-summary">
-      <span class="model-bar-icon" aria-hidden="true">🤖</span>
-      <span class="model-bar-label">Model:</span>
-      <span class="model-bar-name" :title="modelTitle">{{ displayName }}</span>
-      <span class="model-bar-comma" aria-hidden="true">,</span>
-      <span class="model-bar-name model-bar-reasoning">{{ effectiveReasoning }}</span>
-    </div>
+  <div v-if="model" class="model-bar generation-context-item">
+    <span class="generation-context-icon" aria-hidden="true">🤖</span>
+    <span class="generation-context-copy">
+      <span class="generation-context-label">Model:</span>
+      <span class="generation-context-value model-bar-value">
+        <span class="model-bar-name" :title="modelTitle">{{ displayName }}</span>
+        <span class="model-bar-reasoning">, {{ effectiveReasoning }}</span>
+      </span>
+    </span>
   </div>
 </template>
 
