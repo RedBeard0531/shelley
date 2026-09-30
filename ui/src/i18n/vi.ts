@@ -153,6 +153,8 @@ export const vi: TranslationKeys = {
   recordingInvalidResponse: "Máy chủ ghi trả về phản hồi không hợp lệ",
   recordingScreenEnded: "Chia sẻ màn hình đã kết thúc trước khi bắt đầu ghi",
   recordingScreenAction: "Ghi màn hình/cửa sổ",
+  recordingVoiceOption: "Giọng nói",
+  recordingVoiceScreenOption: "Giọng nói và màn hình",
   recordingTranscribing: "Đang chuyển thành văn bản…",
   dropFilesHere: "Kéo thả file vào đây",
   uploading: "Đang tải lên...",

@@ -2235,6 +2235,78 @@ test.describe("media recording composer", () => {
     expect(uploadedFilenames[1]).toBe("screen.webm.json");
   });
 
+  test("hovering the record button offers Voice & Screen with a single screen request", async ({
+    page,
+  }) => {
+    await page.goto("/new");
+    const menu = page.getByTestId("record-menu");
+    await expect(menu).toHaveCount(0);
+    await page.getByTestId("voice-button").hover();
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole("button")).toHaveCount(2);
+    await expect(menu.getByRole("button").first()).toHaveAccessibleName("Voice");
+    await expect(menu.getByRole("button").last()).toHaveAccessibleName("Voice & Screen");
+
+    // Moving away closes it.
+    await page.getByTestId("attach-button").hover();
+    await expect(menu).toHaveCount(0);
+
+    await page.getByTestId("voice-button").hover();
+    await menu.getByRole("button", { name: "Voice & Screen" }).click();
+    await expect(page.getByTestId("recording-panel")).toHaveAttribute("data-mode", "screen");
+    await expect(page.getByTestId("recording-status")).toHaveText("Recording screen + microphone…");
+    expect(
+      await page.evaluate(() => ({
+        display: window.__recordingMock.displayRequests,
+        synchronous: window.__recordingMock.synchronousDisplayRequests,
+        microphone: window.__recordingMock.microphoneRequests,
+      })),
+    ).toEqual({ display: 1, synchronous: 1, microphone: 1 });
+  });
+
+  test("long-pressing the record button opens the menu without starting a recording", async ({
+    page,
+  }) => {
+    await page.clock.install();
+    await page.goto("/new");
+    const button = page.getByTestId("voice-button");
+    const menu = page.getByTestId("record-menu");
+    await button.dispatchEvent("pointerdown", { pointerType: "touch", button: 0, isPrimary: true });
+    await page.clock.runFor(200);
+    await expect(menu).toHaveCount(0);
+    await page.clock.runFor(400);
+    await expect(menu).toBeVisible();
+    // The click that ends a long press must not also start voice recording.
+    await button.dispatchEvent("pointerup", { pointerType: "touch", button: 0, isPrimary: true });
+    await button.dispatchEvent("click", { detail: 1 });
+    await expect(page.getByTestId("recording-panel")).toHaveCount(0);
+    await expect(menu).toBeVisible();
+
+    await menu.getByRole("button", { name: "Voice", exact: true }).click();
+    await expect(page.getByTestId("recording-panel")).toHaveAttribute("data-mode", "microphone");
+    expect(await page.evaluate(() => window.__recordingMock.displayRequests)).toBe(0);
+  });
+
+  test("keyboard focus reveals the record choices and Escape returns focus to the button", async ({
+    page,
+  }) => {
+    await page.goto("/new");
+    const button = page.getByTestId("voice-button");
+    const menu = page.getByTestId("record-menu");
+    await page.getByTestId("attach-button").focus();
+    await page.keyboard.press("Tab");
+    await expect(button).toBeFocused();
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await expect(menu.getByRole("button", { name: "Voice & Screen" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(button).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("recording-panel")).toHaveAttribute("data-mode", "microphone");
+  });
+
   test("uses the recorder lifetime when screen sharing ends during pre-roll", async ({ page }) => {
     await page.clock.install();
     const captureStartedAt = new Date(await page.evaluate(() => Date.now() + 1000));
@@ -2502,10 +2574,14 @@ test.describe("media recording composer", () => {
 
 test("keeps audio recording available without screen capture", async ({ page }) => {
   await installMediaMocks(page, false);
+  await page.clock.install();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/new");
   await expect(page.getByTestId("voice-microphone-icon")).toBeVisible();
   await expect(page.getByTestId("voice-video-icon")).toHaveCount(0);
+  await page.getByTestId("voice-button").hover();
+  await page.clock.runFor(1000);
+  await expect(page.getByTestId("record-menu")).toHaveCount(0);
   await openRecordingPalette(page);
   await expect(recordingPaletteItem(page, "Record audio")).toBeVisible();
   await expect(recordingPaletteItem(page, "Record audio and screen")).toHaveCount(0);

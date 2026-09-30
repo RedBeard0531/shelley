@@ -154,6 +154,8 @@ export const es: TranslationKeys = {
   recordingInvalidResponse: "El servidor de grabación devolvió una respuesta no válida",
   recordingScreenEnded: "La pantalla dejó de compartirse antes de iniciar la grabación",
   recordingScreenAction: "Grabar pantalla/ventana",
+  recordingVoiceOption: "Voz",
+  recordingVoiceScreenOption: "Voz y pantalla",
   recordingTranscribing: "Transcribiendo…",
   dropFilesHere: "Suelte los archivos aquí",
   uploading: "Subiendo...",

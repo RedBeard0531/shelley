@@ -155,6 +155,8 @@ export const fr: TranslationKeys = {
   recordingInvalidResponse: "Le serveur d’enregistrement a renvoyé une réponse non valide",
   recordingScreenEnded: "Le partage d’écran s’est arrêté avant le début de l’enregistrement",
   recordingScreenAction: "Enregistrer l’écran/la fenêtre",
+  recordingVoiceOption: "Voix",
+  recordingVoiceScreenOption: "Voix et écran",
   recordingTranscribing: "Transcription…",
   dropFilesHere: "Déposez les fichiers ici",
   uploading: "Téléversement...",

@@ -3573,6 +3573,43 @@ diffs-container {
   opacity: 0.4;
 }
 
+/* Hover/long-press menu over the record button (shares .queue-menu). */
+.message-record {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.message-record .message-voice-btn {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.record-menu {
+  min-width: 0;
+}
+
+/* Touch devices have no keyboard to use the hints with. */
+@media (hover: none) {
+  .record-menu .overflow-menu-shortcut {
+    display: none;
+  }
+}
+
+/* Bridge the gap above the button so hover survives the trip up. */
+.record-menu::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
+
+.queue-menu-item:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
 /* Inline media recording takeover */
 /* Detached controls retain the same recorder while another chat is selected.
    At 32rem the card always lands in the icon-only tier below: it is a compact

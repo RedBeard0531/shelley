@@ -153,6 +153,8 @@ export const zhCN: TranslationKeys = {
   recordingInvalidResponse: "录制服务器返回了无效响应",
   recordingScreenEnded: "屏幕共享在录制开始前已结束",
   recordingScreenAction: "录制屏幕/窗口",
+  recordingVoiceOption: "语音",
+  recordingVoiceScreenOption: "语音和屏幕",
   recordingTranscribing: "正在转录…",
   dropFilesHere: "拖放文件到此处",
   uploading: "上传中...",

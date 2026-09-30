@@ -153,6 +153,8 @@ export const upgoer5: TranslationKeys = {
   recordingInvalidResponse: "The recording computer sent a bad answer",
   recordingScreenEnded: "Screen sharing stopped before recording started",
   recordingScreenAction: "Record screen/window",
+  recordingVoiceOption: "Voice",
+  recordingVoiceScreenOption: "Voice and screen",
   recordingTranscribing: "Turning sound into words…",
   dropFilesHere: "Drop stuff here",
   uploading: "Sending up...",

@@ -152,6 +152,8 @@ export interface TranslationKeys {
   recordingDiscard: string;
   recordingInvalidResponse: string;
   recordingScreenAction: string;
+  recordingVoiceOption: string;
+  recordingVoiceScreenOption: string;
   recordingTranscribing: string;
   recordingScreenEnded: string;
   dropFilesHere: string;

@@ -153,6 +153,8 @@ export const ru: TranslationKeys = {
   recordingInvalidResponse: "Сервер записи вернул неверный ответ",
   recordingScreenEnded: "Демонстрация экрана завершилась до начала записи",
   recordingScreenAction: "Записать экран/окно",
+  recordingVoiceOption: "Голос",
+  recordingVoiceScreenOption: "Голос и экран",
   recordingTranscribing: "Расшифровка…",
   dropFilesHere: "Перетащите файлы сюда",
   uploading: "Загрузка...",

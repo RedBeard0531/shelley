@@ -322,43 +322,12 @@
             />
           </svg>
         </button>
-        <button
+        <RecordButton
           v-if="mediaRecordingAvailable"
-          type="button"
-          :disabled="!canRecordAudio"
-          class="message-voice-btn"
-          :aria-label="t('recordingTitle')"
-          :title="`${t('recordingTitle')} (${menuShortcutLabel('recordAudio')})`"
-          data-testid="voice-button"
-          @click="beginRecording('microphone')"
-        >
-          <svg
-            v-if="screenRecordingAvailable"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            viewBox="0 0 24 24"
-            width="20"
-            height="20"
-            data-testid="voice-video-icon"
-          >
-            <rect x="3" y="5" width="13" height="14" rx="2" />
-            <path stroke-linecap="round" stroke-linejoin="round" d="m16 10 5-3v10l-5-3z" />
-          </svg>
-          <svg
-            v-else
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            viewBox="0 0 24 24"
-            width="20"
-            height="20"
-            data-testid="voice-microphone-icon"
-          >
-            <rect x="9" y="3" width="6" height="11" rx="3" />
-            <path stroke-linecap="round" d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" />
-          </svg>
-        </button>
+          :can-record-audio="canRecordAudio"
+          :screen-available="screenRecordingAvailable"
+          @record="beginRecording"
+        />
         <div ref="queueMenuRef" class="message-send-wrapper">
           <!-- Slack-style split button: [Send | ▾] — always same width -->
           <div
@@ -519,10 +488,10 @@ import {
   type ComposerSubmissionIntent,
 } from "./composerDispatch";
 import { isImeComposing } from "../../utils/imeComposing";
+import RecordButton from "./RecordButton.vue";
 import RecordingPanel from "./RecordingPanel.vue";
 import type { RecordingDestination, RecordingMode, RecordingPreparation } from "./recordingDestination";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
-import { menuShortcutLabel } from "../../utils/menuShortcuts";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,

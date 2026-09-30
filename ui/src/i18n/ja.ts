@@ -153,6 +153,8 @@ export const ja: TranslationKeys = {
   recordingInvalidResponse: "録画サーバーから無効な応答が返されました",
   recordingScreenEnded: "録画開始前に画面共有が終了しました",
   recordingScreenAction: "画面またはウィンドウを録画",
+  recordingVoiceOption: "音声",
+  recordingVoiceScreenOption: "音声と画面",
   recordingTranscribing: "文字起こし中…",
   dropFilesHere: "ここにファイルをドロップ",
   uploading: "アップロード中...",

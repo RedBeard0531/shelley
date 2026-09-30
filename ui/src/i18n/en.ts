@@ -153,6 +153,8 @@ export const en: TranslationKeys = {
   recordingInvalidResponse: "The recording server returned an invalid response",
   recordingScreenEnded: "Screen sharing ended before recording started",
   recordingScreenAction: "Record screen/window",
+  recordingVoiceOption: "Voice",
+  recordingVoiceScreenOption: "Voice & Screen",
   recordingTranscribing: "Transcribing…",
   dropFilesHere: "Drop files here",
   uploading: "Uploading...",

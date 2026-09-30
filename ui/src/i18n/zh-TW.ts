@@ -153,6 +153,8 @@ export const zhTW: TranslationKeys = {
   recordingInvalidResponse: "錄製伺服器傳回了無效回應",
   recordingScreenEnded: "螢幕分享在錄製開始前已結束",
   recordingScreenAction: "錄製螢幕/視窗",
+  recordingVoiceOption: "語音",
+  recordingVoiceScreenOption: "語音和螢幕",
   recordingTranscribing: "正在轉錄…",
   dropFilesHere: "拖放檔案至此處",
   uploading: "上傳中...",
