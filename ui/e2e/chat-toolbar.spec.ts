@@ -232,6 +232,9 @@ for (const viewport of [
       await openWorkspaceTool(page, "Diffs");
       const diff = page.locator(".diff-viewer-overlay");
       await expect(diff).toBeVisible();
+      // Changes is the customized default view; the file select lives in
+      // the Files view.
+      await diff.locator(".diff-viewer-view-tabs button", { hasText: "Files" }).click();
       await expect(diff.locator("select.diff-viewer-select").first()).toHaveValue(
         "toolbar-fixture.txt",
       );

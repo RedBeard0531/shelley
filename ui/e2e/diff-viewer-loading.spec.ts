@@ -46,6 +46,9 @@ test.describe("Diff viewer loading", () => {
       const overlay = page.locator(".diff-viewer-overlay");
       const fileSelect = overlay.locator("select.diff-viewer-select").first();
       await expect(overlay).toBeVisible();
+      // Changes is the customized default view; the file select lives in
+      // the Files view.
+      await overlay.locator(".diff-viewer-view-tabs button", { hasText: "Files" }).click();
       await filesRequest;
       await expect(fileSelect).toHaveValue(/^commit-message:/);
       await expect(overlay.locator(".diff-viewer-editor .editor.modified .view-lines")).toContainText(

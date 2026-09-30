@@ -804,3 +804,88 @@ func TestVerifyMediaAndItems(t *testing.T) {
 		t.Fatalf("warnings = %v", warnings)
 	}
 }
+
+func TestGeneratedPath(t *testing.T) {
+	for path, want := range map[string]bool{
+		"go.sum":                      true,
+		"ui/pnpm-lock.yaml":           true,
+		"db/generated/queries.sql.go": true,
+		"api/v1/service.pb.go":        true,
+		"vendor/lib/x.go":             true,
+		"execore/server.go":           false,
+		"docs/generated-notes.md":     false,
+		"locksmith/go.sum.bak":        false,
+	} {
+		if got := GeneratedPath(path); got != want {
+			t.Errorf("GeneratedPath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestMechanicalReason(t *testing.T) {
+	hunk := func(file, body string) string {
+		return "diff --git a/" + file + " b/" + file + "\n--- a/" + file + "\n+++ b/" + file + "\n@@ -1,3 +1,3 @@\n" + body
+	}
+	for name, tc := range map[string]struct{ fragment, want string }{
+		"go import":      {hunk("a.go", " import (\n+\t\"errors\"\n \t\"fmt\"\n"), ""},
+		"whitespace":     {hunk("a.go", "-\tx :=  f( a,b )\n+\tx := f(a, b)\n"), "whitespace-only"},
+		"generated":      {hunk("db/generated/q.sql.go", "+\tFoo int\n"), "generated"},
+		"rename":         {"diff --git a/x.go b/y.go\nsimilarity index 100%\nrename from x.go\nrename to y.go\n", "rename-or-mode"},
+		"binary":         {"diff --git a/i.png b/i.png\nBinary files a/i.png and b/i.png differ\n", "binary"},
+		"one-line edit":  {hunk("a.ts", "+  contention.value = summarize(missed(), pending());\n"), ""},
+		"removed const":  {hunk("a.ts", "-const DIRTY_PREFIX = \"dirty:\";\n"), ""},
+		"string in list": {hunk("a.go", " names := []string{\n+\t\"errors\",\n }\n"), ""},
+		"real change":    {hunk("a.go", "-\tif x > 1 {\n+\tif x >= 1 {\n"), ""},
+	} {
+		if got := MechanicalReason(tc.fragment); got != tc.want {
+			t.Errorf("%s: MechanicalReason = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestDiffChunksGroupsByFile(t *testing.T) {
+	dir, git := gitRepo(t)
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	write(t, dir, "a.txt", []byte(strings.Join(lines, "\n")+"\n"))
+	write(t, dir, "b.txt", []byte("b\n"))
+	commit(t, git, "base")
+
+	lines[2] = "line 3 changed"
+	lines[12] = "line 13 changed"
+	write(t, dir, "a.txt", []byte(strings.Join(lines, "\n")+"\n"))
+	write(t, dir, "b.txt", []byte("b changed\n"))
+
+	perFile, err := DiffChunks(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(perFile) != 2 {
+		t.Fatalf("DiffChunks fragments = %d, want 2 (one per file)", len(perFile))
+	}
+	if !strings.HasPrefix(perFile[0], "diff --git a/a.txt") ||
+		strings.Count(perFile[0], "\n@@") != 2 {
+		t.Fatalf("a.txt fragment must carry both hunks: %q", perFile[0])
+	}
+
+	// A second commit freezes the working tree; DiffChunks against it yields
+	// only the remaining uncommitted change, still grouped by file.
+	hash := commit(t, git, "edit")
+	_, chunks, err := Chunks(dir, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 3 {
+		t.Fatalf("Chunks fragments = %d, want 3 (a.txt's two hunks + b.txt)", len(chunks))
+	}
+	write(t, dir, "b.txt", []byte("b changed again\n"))
+	working, err := DiffChunks(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(working) != 1 || !strings.Contains(working[0], "b changed again") {
+		t.Fatalf("working DiffChunks = %v", working)
+	}
+}

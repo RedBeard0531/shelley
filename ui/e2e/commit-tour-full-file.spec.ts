@@ -125,7 +125,7 @@ test.describe("Commit tour full file", () => {
       const renamedChunk = chunks.nth(0);
       const bottomChunk = chunks.nth(3);
       await expect(renamedChunk.locator(".commit-tour-chunk-header code")).toHaveText(
-        /^new_name\.go · \d+–\d+$/,
+        /^old_name\.go → new_name\.go · \d+–\d+$/,
       );
       await expect(bottomChunk.locator(".commit-tour-chunk-header code")).toHaveText(
         /^src\/example\.ts · 196–202$/,
