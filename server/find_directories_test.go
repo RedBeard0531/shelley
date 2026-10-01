@@ -380,45 +380,22 @@ func TestFindFilesUntrackedNestedRepoIsOneDirectory(t *testing.T) {
 
 func TestCombineGitFilesAndDirectories(t *testing.T) {
 	t.Parallel()
-	paths, truncated := combineGitFilesAndDirectories(
+	paths := combineGitFilesAndDirectories(
 		[]string{"file.txt", "file.txt", "modules/demo", "nested/"},
 		[]string{"modules/", "modules/demo/", "nested/", "nested/"},
-		findFilesMaxCandidates,
 	)
 	want := []string{"file.txt", "modules/", "modules/demo/", "nested/"}
-	if !slices.Equal(paths, want) || truncated {
-		t.Fatalf("paths=%v truncated=%v, want %v false", paths, truncated, want)
+	if !slices.Equal(paths, want) {
+		t.Fatalf("paths=%v, want %v", paths, want)
 	}
 
-	paths, truncated = combineGitFilesAndDirectories([]string{"a", "b"}, []string{"c/"}, 2)
-	if !slices.Equal(paths, []string{"a", "c/"}) || !truncated {
-		t.Fatalf("fair bounded paths=%v truncated=%v", paths, truncated)
-	}
-
-	// A saturated Git file listing must yield borrowed capacity when directory
-	// candidates arrive, rather than consuming all 50k slots before them.
-	files := make([]string, findFilesMaxCandidates)
+	files := make([]string, findFilesMaxCandidates+1)
 	for i := range files {
 		files[i] = fmt.Sprintf("file-%05d", i)
 	}
-	paths, truncated = combineGitFilesAndDirectories(files, []string{"folder/"}, findFilesMaxCandidates)
-	if len(paths) != findFilesMaxCandidates || !slices.Contains(paths, "folder/") || !truncated {
-		t.Fatalf("saturated paths=%d hasFolder=%v truncated=%v", len(paths), slices.Contains(paths, "folder/"), truncated)
-	}
-
-	dirs := make([]string, findFilesMaxCandidates)
-	for i := range dirs {
-		dirs[i] = fmt.Sprintf("folder-%05d/", i)
-	}
-	paths, truncated = combineGitFilesAndDirectories(files, dirs, findFilesMaxCandidates)
-	dirCount := 0
-	for _, path := range paths {
-		if strings.HasSuffix(path, "/") {
-			dirCount++
-		}
-	}
-	if len(paths) != findFilesMaxCandidates || dirCount != findFilesMaxCandidates/2 || !truncated {
-		t.Fatalf("fair saturation paths=%d dirs=%d truncated=%v", len(paths), dirCount, truncated)
+	paths = combineGitFilesAndDirectories(files, []string{"folder/"})
+	if len(paths) != len(files)+1 || !slices.Equal(paths[:len(files)], files) || paths[len(files)] != "folder/" {
+		t.Fatal("Git files were truncated when combined with directories")
 	}
 }
 
