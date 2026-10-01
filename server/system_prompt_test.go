@@ -197,6 +197,17 @@ func TestSystemPromptIncludesUserEmail(t *testing.T) {
 	}
 }
 
+func TestSystemPromptExplainsSandboxDownloadLinks(t *testing.T) {
+	t.Parallel()
+	prompt, err := GenerateSystemPrompt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "](sandbox:/") {
+		t.Error("system prompt should explain sandbox: download links")
+	}
+}
+
 // TestSystemPromptDeduplicatesIdenticalGuidanceFiles verifies that when multiple
 // user-level AGENTS.md files have identical content (or are symlinks to the same
 // file), only one copy appears in the system prompt.

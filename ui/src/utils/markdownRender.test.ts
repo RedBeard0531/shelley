@@ -155,6 +155,31 @@ assert(
 const withoutId = renderMarkdownToSafeHTML("![alt](out/plot.png)");
 assert(!withoutId.includes("<img"), "local image dropped with no messageId to authorize it");
 
+// sandbox: links (a ChatGPT convention the system prompt adopts) download the
+// file through the per-message download endpoint.
+{
+  const root = document.createElement("div");
+  root.innerHTML = renderMarkdownToSafeHTML("[get it](<sandbox:/tmp/out/a b.mp4>)", "msg-1");
+  const a = root.querySelector("a");
+  assert(
+    a?.getAttribute("href") === "/api/message/msg-1/download?path=%2Ftmp%2Fout%2Fa%20b.mp4" &&
+      a?.getAttribute("download") === "" &&
+      !a?.hasAttribute("target") &&
+      a?.textContent === "get it",
+    "sandbox: link rewritten to a same-tab download",
+  );
+  root.innerHTML = renderMarkdownToSafeHTML("[get it](sandbox:/tmp/a.mp4)");
+  assert(
+    root.querySelector("a")?.hasAttribute("href") === false,
+    "sandbox: link is inert with no messageId to authorize it",
+  );
+  root.innerHTML = renderMarkdownToSafeHTML('<a href="/x" download="evil.sh">x</a>', "msg-1");
+  assert(
+    root.querySelector("a")?.hasAttribute("download") === false,
+    "raw HTML cannot mark arbitrary links as downloads",
+  );
+}
+
 const exeDevLinks = { isExeDev: true, hostname: "demo.exe.xyz" };
 const rewrittenMarkdownLink = renderMarkdownToSafeHTML(
   "[Open app](http://localhost:3000/path?q=one#two)",

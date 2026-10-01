@@ -17,6 +17,7 @@ require (
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/samber/slog-http v1.12.1
 	github.com/sashabaranov/go-openai v1.42.0
+	github.com/yuin/goldmark v1.8.5
 	go.skia.org/infra v0.0.0-20260902043405-c28f9d005ea1
 	golang.org/x/crypto v0.56.0
 	golang.org/x/image v0.45.0
