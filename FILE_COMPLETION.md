@@ -38,8 +38,11 @@ normal searches. Path queries can
 change the search scope; results are resolved against the API's `search_dir`.
 Requests are debounced and cancelled when their input or context changes;
 server-side listing, content search, and Git subprocesses share the request's cancellation.
-At the candidate limit, mixed searches reserve capacity for both files and
-folders, borrowing unused slots without letting either kind crowd out the other.
+Git-listed files are cached in full and fuzzy-filtered before the result limit is
+applied. Directory crawls and non-Git searches remain bounded to 50,000 candidates,
+12 directory levels, and a three-second budget. Mixed non-Git searches reserve
+capacity for both files and folders, borrowing unused slots without letting either
+kind crowd out the other.
 Errors and empty results leave normal keyboard input available.
 
 ## Tests

@@ -1449,3 +1449,52 @@ func mustGitInit(t *testing.T, dir string) {
 		}
 	}
 }
+
+func TestFindFilesGitBeyondCandidateLimit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	mustGitInit(t, dir)
+	blob := exec.Command("git", "hash-object", "-w", "--stdin")
+	blob.Dir = dir
+	blob.Stdin = strings.NewReader("x\n")
+	out, err := blob.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.TrimSpace(string(out))
+	var index strings.Builder
+	for i := 0; i < findFilesMaxCandidates; i++ {
+		fmt.Fprintf(&index, "100644 %s\tfile-%05d\n", hash, i)
+	}
+	fmt.Fprintf(&index, "100644 %s\tzz-needle.txt\n", hash)
+	cmd := exec.Command("git", "update-index", "--index-info")
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(index.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git update-index: %v: %s", err, out)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := NewTestHarness(t)
+	for _, includeDirs := range []bool{false, true} {
+		var resp FindFilesResponse
+		if includeDirs {
+			resp = findFilesWithDirs(t, h, dir, "needle", "skip")
+		} else {
+			resp = findFilesMode(t, h, dir, "needle", "skip")
+		}
+		if !hasPath(resp.Matches, "zz-needle.txt") || resp.Truncated {
+			t.Fatalf("includeDirs=%v: match beyond crawl cap missing or truncated: %+v", includeDirs, resp)
+		}
+		// Repeat through the cache to ensure it retains the complete listing.
+		if includeDirs {
+			resp = findFilesWithDirs(t, h, dir, "needle", "skip")
+		} else {
+			resp = findFilesMode(t, h, dir, "needle", "skip")
+		}
+		if !hasPath(resp.Matches, "zz-needle.txt") {
+			t.Fatalf("includeDirs=%v: cached listing lost match", includeDirs)
+		}
+	}
+}

@@ -23,8 +23,8 @@ const (
 	findFilesDefaultLimit = 100
 	// findFilesMaxLimit is the hard ceiling on the requested limit.
 	findFilesMaxLimit = 500
-	// findFilesMaxCandidates bounds how many files we hold in memory /
-	// fuzzy-match against, so a giant non-git tree can't blow up the server.
+	// findFilesMaxCandidates bounds filesystem crawls. Git-listed files are
+	// kept in full so fuzzy matching cannot miss paths beyond the crawl cap.
 	findFilesMaxCandidates = 50000
 	// findFilesWalkDepth bounds filesystem walk recursion for non-git dirs.
 	findFilesWalkDepth = 12
@@ -36,7 +36,7 @@ const (
 	fileListCacheMaxDirs = 64
 	// fileListCacheMaxFiles caps the total paths the cache retains across all
 	// directories. A typed path re-roots the search per keystroke, so the
-	// directory count alone doesn't bound memory: a few 50k-file listings are
+	// directory count alone doesn't bound memory: a few large Git listings are
 	// worth far more than dozens of small ones.
 	fileListCacheMaxFiles = 200000
 	// findFilesWalkBudget bounds the time spent listing a directory.
@@ -1161,22 +1161,18 @@ func listWorkingDirPaths(ctx context.Context, dir string, includeDirs bool) (pat
 			return nil, false, err
 		}
 		if !ignored {
-			filesTruncated := len(gitFiles) > findFilesMaxCandidates
-			if filesTruncated {
-				gitFiles = gitFiles[:findFilesMaxCandidates]
-			}
 			if !includeDirs {
-				return gitFiles, filesTruncated, nil
+				return gitFiles, false, nil
 			}
 			dirs, dirsTruncated, err := listGitDirectories(ctx, dir, gitFiles, findFilesMaxCandidates)
 			if err != nil {
 				return nil, true, err
 			}
-			paths, combinedTruncated := combineGitFilesAndDirectories(gitFiles, dirs, findFilesMaxCandidates)
+			paths := combineGitFilesAndDirectories(gitFiles, dirs)
 			if err := ctx.Err(); err != nil {
 				return nil, true, err
 			}
-			return paths, filesTruncated || dirsTruncated || combinedTruncated, nil
+			return paths, dirsTruncated, nil
 		}
 	}
 	return walkPaths(ctx, dir, includeDirs, findFilesMaxCandidates)
@@ -1245,7 +1241,7 @@ func (c *boundedPathCandidates) paths() []string {
 // and the directory walk. Gitlinks are file-shaped in `git ls-files`, while
 // untracked nested repositories may be printed with a trailing slash; when the
 // walk confirms either is a real directory, its directory representation wins.
-func combineGitFilesAndDirectories(files, dirs []string, limit int) (paths []string, truncated bool) {
+func combineGitFilesAndDirectories(files, dirs []string) []string {
 	directoryBases := make(map[string]struct{}, len(dirs))
 	uniqueDirs := make([]string, 0, len(dirs))
 	for _, dir := range dirs {
@@ -1257,8 +1253,8 @@ func combineGitFilesAndDirectories(files, dirs []string, limit int) (paths []str
 		uniqueDirs = append(uniqueDirs, dir)
 	}
 
-	candidates := newBoundedPathCandidates(limit)
-	seenFiles := make(map[string]struct{}, min(limit, len(files)))
+	paths := make([]string, 0, len(files)+len(uniqueDirs))
+	seenFiles := make(map[string]struct{}, len(files))
 	for _, file := range files {
 		if _, isDirectory := directoryBases[strings.TrimSuffix(file, "/")]; isDirectory {
 			continue
@@ -1267,12 +1263,9 @@ func combineGitFilesAndDirectories(files, dirs []string, limit int) (paths []str
 			continue
 		}
 		seenFiles[file] = struct{}{}
-		candidates.add(file, false)
+		paths = append(paths, file)
 	}
-	for _, dir := range uniqueDirs {
-		candidates.add(dir, true)
-	}
-	return candidates.paths(), candidates.truncated
+	return append(paths, uniqueDirs...)
 }
 
 // gitIgnores reports whether dir is itself excluded by the repo's ignore
