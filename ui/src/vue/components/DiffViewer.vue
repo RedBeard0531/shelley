@@ -79,23 +79,25 @@
           <ReviewRecordingStatus
             v-if="recordingLocked"
             :phase="review.phase.value"
-            :levels="review.levels.value"
-            :current="review.current.value"
+            :levels="review.levels"
+            :current="review.current"
           />
         </div>
         <ReviewRecordButton
-          v-if="(recordingConversationId && reviewSupported) || review.phase.value !== 'idle'"
+          v-if="canRecord || review.phase.value !== 'idle'"
           :phase="review.phase.value"
-          :elapsed-ms="review.elapsedMs.value"
+          :starts-conversation="startsConversation"
+          :elapsed-ms="review.elapsedMs"
           @start="review.start"
           @stop="review.stop"
+          @cancel="review.cancel"
         />
         <button
-          v-tooltip.top="`Git directory: ${cwd}\nClick to change`"
+          v-tooltip.top="dirTooltip"
           class="diff-viewer-dir-btn"
           :aria-label="`Git directory: ${cwd}. Click to change`"
-          :disabled="recordingLocked"
-          @click="showDirPicker = true"
+          :aria-disabled="recordingLocked"
+          @click="openDirPicker"
         >
           <span v-html="DIR_ICON" />
         </button>
@@ -103,7 +105,7 @@
           v-tooltip.top="closeTooltip"
           class="diff-viewer-close"
           :aria-label="closeTooltip"
-          :disabled="recordingLocked"
+          :aria-disabled="recordingLocked"
           @click="requestClose"
         >
           ×
@@ -197,8 +199,8 @@
             <ReviewRecordingStatus
               v-if="recordingLocked"
               :phase="review.phase.value"
-              :levels="review.levels.value"
-              :current="review.current.value"
+              :levels="review.levels"
+              :current="review.current"
             />
           </div>
 
@@ -263,18 +265,20 @@
               <VimToggle :enabled="vimEnabled" @change="setVimEnabled" />
             </template>
             <ReviewRecordButton
-              v-if="(recordingConversationId && reviewSupported) || review.phase.value !== 'idle'"
+              v-if="canRecord || review.phase.value !== 'idle'"
               :phase="review.phase.value"
-              :elapsed-ms="review.elapsedMs.value"
+              :starts-conversation="startsConversation"
+              :elapsed-ms="review.elapsedMs"
               @start="review.start"
               @stop="review.stop"
+              @cancel="review.cancel"
             />
             <button
-              v-tooltip.top="`Git directory: ${cwd}\nClick to change`"
+              v-tooltip.top="dirTooltip"
               class="diff-viewer-dir-btn"
               :aria-label="`Git directory: ${cwd}. Click to change`"
-              :disabled="recordingLocked"
-              @click="showDirPicker = true"
+              :aria-disabled="recordingLocked"
+              @click="openDirPicker"
             >
               <span v-html="DIR_ICON" />
             </button>
@@ -282,7 +286,7 @@
               v-tooltip.top="closeTooltip"
               class="diff-viewer-close"
               :aria-label="closeTooltip"
-              :disabled="recordingLocked"
+              :aria-disabled="recordingLocked"
               @click="requestClose"
             >
               ×
@@ -310,7 +314,7 @@
       >
         <button
           type="button"
-          :class="{ active: diffView === 'tour' }"
+          :class="['diff-viewer-view-btn', { active: diffView === 'tour' }]"
           :aria-pressed="diffView === 'tour'"
           @click="diffView = 'tour'"
         >
@@ -318,12 +322,22 @@
         </button>
         <button
           type="button"
-          :class="{ active: diffView === 'files' }"
+          :class="['diff-viewer-view-btn', { active: diffView === 'files' }]"
           :aria-pressed="diffView === 'files'"
           @click="diffView = 'files'"
         >
           Files
         </button>
+      </div>
+      <!-- Once built, the tour appears in place of this (see CommitTourAction). -->
+      <div v-else-if="isOpen && tourCommit" class="diff-viewer-view-switcher">
+        <CommitTourAction
+          :cwd="cwd"
+          :hash="tourCommit.id"
+          :conversation-id="tourConversationId ?? null"
+          :navigate="openTourWorker"
+          @present="markTour"
+        />
       </div>
 
       <!-- Error banner -->
@@ -603,6 +617,8 @@ import RangeToggle from "./RangeToggle.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
 import DiffFileTree from "./DiffFileTree.vue";
 import ReviewRecordButton from "./ReviewRecordButton.vue";
+import CommitTourAction from "./CommitTourAction.vue";
+import { navigateToConversationSlug } from "../composables/subagentLive";
 import ReviewRecordingBar from "./ReviewRecordingBar.vue";
 import ReviewRecordingStatus from "./ReviewRecordingStatus.vue";
 import {
@@ -612,7 +628,11 @@ import {
   type ReviewSide,
   type ReviewTarget,
 } from "./reviewCapture";
-import { reviewRecordingSupported, useReviewRecording } from "./useReviewRecording";
+import {
+  reviewRecordingSupported,
+  useReviewRecording,
+  type ReviewConversationStart,
+} from "./useReviewRecording";
 import { COMMIT_MESSAGES_DIR, treeRealPathOrder, type DiffFileTreeEntry } from "./diffFileTree";
 import { buildTourContents } from "./commitTourContents";
 import { defaultDiffSelection, workingChangesStatus } from "./diffViewerModel";
@@ -625,8 +645,14 @@ const props = defineProps<{
   // File to select once initialCommit's file list loads (e.g. from the git
   // graph diffstat). Consumed on the first load only.
   initialFile?: string;
-  // Conversation that receives narrated review recordings; none hides Record.
+  // Conversation that receives narrated review recordings. Without one, each
+  // recording starts a conversation (startReviewConversation), shown once the
+  // recording is sent (followReviewConversation); with neither, no Record.
   recordingConversationId?: string;
+  startReviewConversation?: () => ReviewConversationStart;
+  followReviewConversation?: () => (conversationId: string) => void;
+  // Conversation that builds tours on request; none hides Build tour.
+  tourConversationId?: string;
 }>();
 const emit = defineEmits<{
   (e: "close"): void;
@@ -740,50 +766,23 @@ function setLayout(v: "header" | "sidebar") {
   }
 }
 
-const tourAvailable = computed(() => {
-  if (!selectedDiff.value || selectedDiff.value === "working" || selectedTo.value !== "self") {
-    return false;
-  }
-  return !!diffs.value.find((diff) => diff.id === selectedDiff.value)?.hasTour;
-});
+// Tours cover a single commit, not a range through the working tree.
+const tourCommit = computed(() =>
+  selectedDiff.value && selectedDiff.value !== "working" && selectedTo.value === "self"
+    ? diffs.value.find((diff) => diff.id === selectedDiff.value)
+    : undefined,
+);
+const tourAvailable = computed(() => !!tourCommit.value?.hasTour);
+
+function markTour(hash: string) {
+  const diff = diffs.value.find((d) => d.id === hash);
+  if (diff) diff.hasTour = true;
+}
 
 const tourSelectionKey = computed(() =>
   props.isOpen && tourAvailable.value && selectedDiff.value
     ? `${props.cwd}\n${selectedDiff.value}`
     : "",
-);
-
-let tourRequestId = 0;
-watch(
-  tourSelectionKey,
-  async (key) => {
-    const requestId = ++tourRequestId;
-    tourResponse.value = null;
-    activeTourAnchor.value = null;
-    expandedTourAnchors.value = new Set();
-    tourError.value = null;
-    tourLoading.value = false;
-    tourCommentTarget.value = null;
-    tourCommentText.value = "";
-    if (!key || !selectedDiff.value) {
-      diffView.value = "files";
-      return;
-    }
-
-    diffView.value = "tour";
-    tourLoading.value = true;
-    try {
-      const response = await api.getGitTour(props.cwd, selectedDiff.value);
-      if (requestId !== tourRequestId) return;
-      tourResponse.value = response;
-    } catch (err) {
-      if (requestId !== tourRequestId) return;
-      tourError.value = `Failed to load commit tour: ${String(err)}`;
-    } finally {
-      if (requestId === tourRequestId) tourLoading.value = false;
-    }
-  },
-  { immediate: true },
 );
 
 // The vim adapter attaches to the modified (right-hand) code editor.
@@ -955,16 +954,87 @@ const review = useReviewRecording({
   context: reviewContext,
   cwd: () => props.cwd,
   conversationId: () => props.recordingConversationId,
+  startConversation: () => props.startReviewConversation?.(),
+  followConversation: () => props.followReviewConversation?.() ?? (() => {}),
 });
 const reviewSupported =
   reviewRecordingSupported() && !!window.__SHELLEY_INIT__?.transcription_available;
+const canRecord = computed(
+  () => reviewSupported && !!(props.recordingConversationId || props.startReviewConversation),
+);
 const recordingLocked = computed(() => review.phase.value !== "idle");
+// Where the recording in progress goes was settled when it started.
+const startsConversation = computed(() =>
+  recordingLocked.value ? review.startsConversation.value : !props.recordingConversationId,
+);
+
+// After recordingLocked: the immediate run may read it.
+let tourRequestId = 0;
+watch(
+  tourSelectionKey,
+  async (key) => {
+    const requestId = ++tourRequestId;
+    tourResponse.value = null;
+    activeTourAnchor.value = null;
+    expandedTourAnchors.value = new Set();
+    tourError.value = null;
+    tourLoading.value = false;
+    tourCommentTarget.value = null;
+    tourCommentText.value = "";
+    if (!key || !selectedDiff.value) {
+      diffView.value = "files";
+      return;
+    }
+
+    // A tour landing mid-recording (selection is locked then) waits for a
+    // click rather than yanking the view out from under the narration.
+    if (!recordingLocked.value) diffView.value = "tour";
+    tourLoading.value = true;
+    try {
+      const response = await api.getGitTour(props.cwd, selectedDiff.value);
+      if (requestId !== tourRequestId) return;
+      tourResponse.value = response;
+    } catch (err) {
+      if (requestId !== tourRequestId) return;
+      tourError.value = `Failed to load commit tour: ${String(err)}`;
+    } finally {
+      if (requestId === tourRequestId) tourLoading.value = false;
+    }
+  },
+  { immediate: true },
+);
 const closeTooltip = computed(() =>
   recordingLocked.value ? "Stop recording to close" : "Close (Esc)",
 );
 
+// Locked controls use aria-disabled, not disabled, so they keep pointer events
+// and focus for the tooltip that says why. Tooltips here also depend on this
+// template not re-rendering while one is open (PrimeVue's tooltip removes
+// itself on update), which is why the live recording values go to their
+// components as refs.
+const dirTooltip = computed(() =>
+  recordingLocked.value
+    ? "Stop recording to change directory"
+    : `Git directory: ${props.cwd}\nClick to change`,
+);
+
 function requestClose() {
   if (!recordingLocked.value) emit("close");
+}
+
+// The worker's conversation replaces this one underneath, so leave first;
+// while a recording locks the viewer, open it alongside instead.
+function openTourWorker(slug: string) {
+  if (recordingLocked.value) {
+    window.open(`/c/${slug}`, "_blank", "noopener");
+    return;
+  }
+  emit("close");
+  navigateToConversationSlug(slug);
+}
+
+function openDirPicker() {
+  if (!recordingLocked.value) showDirPicker.value = true;
 }
 
 function emitComment(block: string) {

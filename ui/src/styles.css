@@ -7115,9 +7115,16 @@ svg {
   padding: 0;
 }
 
-.diff-viewer-dir-btn:hover {
+.diff-viewer-dir-btn:hover:not([aria-disabled="true"]) {
   background: var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+/* Locked while a narrated review records; the tooltip says why. */
+.diff-viewer-dir-btn[aria-disabled="true"],
+.diff-viewer-close[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.35;
 }
 
 /* Narrated review recording (ReviewRecordButton, ReviewRecordingStatus,
@@ -7156,6 +7163,18 @@ svg {
   font-size: var(--font-size-13);
   font-variant-numeric: tabular-nums;
   font-weight: 600;
+}
+
+.review-record-btn-cancel {
+  padding: 0 0.5rem;
+  font-size: var(--font-size-13);
+  font-weight: 500;
+}
+
+.review-record-btn-cancel.armed,
+.review-record-btn-cancel.armed:hover:not(:disabled) {
+  color: var(--error-text);
+  box-shadow: inset 0 0 0 1px currentColor;
 }
 
 .review-recording-bar {
@@ -7201,13 +7220,17 @@ svg {
 }
 
 /* On phones the red Stop button already says "recording"; the breadcrumb
-   needs the room more than the dot does. */
+   needs the room more than the dot (or the quoted text) does. */
 .diff-viewer-header-mobile .review-recording-status {
   gap: 0.375rem;
   padding: 0 0.5rem;
 }
 
-.diff-viewer-header-mobile .review-recording-status .recording-status-dot.recording {
+/* Also the view-switcher row while the CommitTourAction it holds before
+   a tour exists renders nothing. */
+.diff-viewer-header-mobile .review-recording-status .recording-status-dot.recording,
+.diff-viewer-header-mobile .review-recording-said,
+.diff-viewer-view-switcher:empty {
   display: none;
 }
 
@@ -7243,7 +7266,7 @@ svg {
 .review-recording-where {
   display: flex;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   font-family: var(--font-mono, monospace);
   font-size: var(--font-size-12);
   white-space: nowrap;
@@ -7266,6 +7289,17 @@ svg {
   content: " › ";
   white-space: pre;
   color: var(--text-tertiary, var(--text-secondary));
+}
+
+/* The text under the pointer, after the breadcrumb: the line or sentence the
+   recording pins "this" to. Hidden on phones (above). */
+.review-recording-said {
+  flex: 1 1 8em;
+  min-width: 3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-12);
+  font-style: italic;
 }
 
 .review-recording-error {
@@ -7300,7 +7334,7 @@ svg {
   flex-shrink: 0;
 }
 
-.diff-viewer-close:hover {
+.diff-viewer-close:hover:not([aria-disabled="true"]) {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
@@ -7364,7 +7398,7 @@ svg {
   background: var(--bg-secondary);
 }
 
-.diff-viewer-view-switcher button {
+.diff-viewer-view-btn {
   min-width: 4.5rem;
   padding: 0.3rem 0.75rem;
   border: 1px solid var(--border-color);
@@ -7376,21 +7410,21 @@ svg {
   cursor: pointer;
 }
 
-.diff-viewer-view-switcher button:first-child {
+.diff-viewer-view-btn:first-child {
   border-radius: 0.375rem 0 0 0.375rem;
 }
 
-.diff-viewer-view-switcher button:last-child {
+.diff-viewer-view-btn:last-child {
   margin-left: -1px;
   border-radius: 0 0.375rem 0.375rem 0;
 }
 
-.diff-viewer-view-switcher button:hover:not(.active) {
+.diff-viewer-view-btn:hover:not(.active) {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
-.diff-viewer-view-switcher button.active {
+.diff-viewer-view-btn.active {
   position: relative;
   z-index: 1;
   border-color: var(--accent-text, #2563eb);
@@ -11509,7 +11543,8 @@ kbd {
   color: var(--error-text);
 }
 
-.git-graph-tour-action {
+/* CommitTourAction: git graph details and the diff viewer. */
+.commit-tour-action {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -11525,16 +11560,16 @@ kbd {
   text-decoration: none;
 }
 
-.git-graph-tour-action:hover:not(:disabled) {
+.commit-tour-action:hover:not(:disabled) {
   background: var(--bg-secondary);
 }
 
-.git-graph-tour-action:disabled {
+.commit-tour-action:disabled {
   cursor: default;
   opacity: 0.65;
 }
 
-.git-graph-tour-action .spinner {
+.commit-tour-action .spinner {
   width: 11px;
   height: 11px;
   border-width: 1.5px;

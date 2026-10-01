@@ -182,11 +182,7 @@
                 :chunk="chunk"
                 :conversation-id="conversationId"
                 :on-open-diff-viewer="handleOpenDiffViewer"
-                :can-request-tour="
-                  !!currentConversation &&
-                  !currentConversation.parent_conversation_id &&
-                  !currentConversation.is_draft
-                "
+                :can-request-tour="canRequestTour"
                 :on-comment-text-change="setDiffCommentText"
                 :on-fork="forkHandler"
               />
@@ -442,11 +438,7 @@
       :covered="showDiffViewer"
       :can-open-diff="true"
       :conversation-id="conversationId"
-      :can-request-tour="
-        !!currentConversation &&
-        !currentConversation.parent_conversation_id &&
-        !currentConversation.is_draft
-      "
+      :can-request-tour="canRequestTour"
       @close="
         showGitGraph = false;
         focusMessageInputIfUnfocused();
@@ -483,6 +475,9 @@
           ? (conversationId ?? undefined)
           : undefined
       "
+      :start-review-conversation="startReviewConversation"
+      :follow-review-conversation="followReviewConversation"
+      :tour-conversation-id="canRequestTour ? (conversationId ?? undefined) : undefined"
       @close="onDiffViewerClose"
       @comment-text-change="(text) => (diffCommentText = text)"
       @cwd-change="(cwd) => (diffViewerCwd = cwd)"
@@ -625,6 +620,7 @@ import SystemPromptView from "./SystemPromptView.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
 import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
 import DiffViewer from "./DiffViewer.vue";
+import type { ReviewConversationStart } from "./useReviewRecording";
 import ImageCommentModal from "./ImageCommentModal.vue";
 import GitGraphViewer from "./GitGraphViewer.vue";
 import AgentsMdEditorModal from "./AgentsMdEditorModal.vue";
@@ -758,6 +754,15 @@ const lastMessageId = computed(() => {
   return null;
 });
 provide("lastMessageId", lastMessageId);
+
+// Tours are built by subagents, which only started top-level conversations
+// can spawn (server/commit_tour_request.go).
+const canRequestTour = computed(
+  () =>
+    !!props.currentConversation &&
+    !props.currentConversation.parent_conversation_id &&
+    !props.currentConversation.is_draft,
+);
 
 // When more than one distinct human user (by exe.dev email) has participated in
 // a conversation, descendant Message components show each user message's author
@@ -2853,6 +2858,56 @@ function buildConversationOptions(): ChatRequest["conversation_options"] | undef
   return {
     ...(hasOverrides ? { tool_overrides: { ...toolOverrides.value } } : {}),
     ...(explicitThinking ? { thinking_level: explicitThinking } : {}),
+  };
+}
+
+// A narrated review recorded outside a live conversation goes, like a
+// composer recording, to this page's draft; if the page has moved on by the
+// time it's sent (or is archived), elsewhere (see ReviewConversationStart).
+function startReviewConversation(): ReviewConversationStart {
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+    throw new Error(noModelErrorMessage());
+  }
+  const sessionVersion = draftSessionVersion;
+  const archived = !!props.currentConversation?.archived;
+  const onPage = () => !archived && sessionVersion === draftSessionVersion;
+  const settings = () => ({
+    model: selectedModel.value,
+    conversation_options: buildConversationOptions(),
+  });
+  return {
+    settings: settings(),
+    draft: () => (onPage() ? (draftConvId ?? undefined) : undefined),
+    async resolve(cwd) {
+      if (!onPage()) return undefined;
+      // Read before waiting: the page may change while the draft is made.
+      const now = settings();
+      const conversationId = await ensureDraftConversation(inflightDraft?.text ?? draftText, {
+        model: now.model,
+        cwd,
+      });
+      return { conversationId, settings: now };
+    },
+  };
+}
+
+// Shows the conversation a sent review started, unless the user is in a
+// conversation of their own or has moved on since the send began.
+function followReviewConversation() {
+  const sessionVersion = draftSessionVersion;
+  const wanted = (id: string) => {
+    const viewed = props.currentConversation;
+    const inConversation = !!viewed && !viewed.is_draft && !viewed.archived;
+    return !inConversation && sessionVersion === draftSessionVersion && props.conversationId !== id;
+  };
+  return (id: string) => {
+    if (!wanted(id)) return;
+    api
+      .getConversationBySlug(id)
+      .then((started) => {
+        if (started && wanted(id)) props.onSelectConversation?.(started);
+      })
+      .catch((err) => console.error("Failed to open the review's conversation:", err));
   };
 }
 

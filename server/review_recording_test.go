@@ -92,7 +92,7 @@ No speech was detected.
 }
 
 func TestReviewTimelineLines(t *testing.T) {
-	long := strings.Repeat("x", 130)
+	long := strings.Repeat("x", 210)
 	tests := []struct {
 		name     string
 		duration float64
@@ -258,7 +258,7 @@ func TestReviewTimelineLines(t *testing.T) {
 			},
 			want: []string{
 				"00:00.0    on screen: 1; 2; 3; 4; 5; 6; 7; 8; …+2 more",
-				"00:01.0    pointer: long — `" + long[:120] + "…`",
+				"00:01.0    pointer: long — `" + long[:200] + "…`",
 				`00:02.0    pointer: tick — "a ` + "`b`" + ` c"`,
 				`00:04.0    selected: sel — "one⏎two⏎` + strings.Repeat("y", 492) + `…"`,
 			},

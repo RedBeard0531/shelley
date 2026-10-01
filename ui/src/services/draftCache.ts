@@ -102,6 +102,23 @@ export function pickDraft(server: DraftCandidate, local: CachedDraft | null): Dr
   return server;
 }
 
+// Promoting a draft clears its server copy, and a conversation's composer
+// reads only this browser's mirror; leave the newer of the two there so text
+// written elsewhere (or not yet synced) outlives the promotion, and text
+// cleared elsewhere stays cleared.
+export function keepDraftThroughPromotion(draft: {
+  conversation_id: string;
+  draft: string;
+  updated_at: string;
+}): void {
+  const kept = pickDraft(
+    { value: draft.draft, updatedAt: draft.updated_at },
+    loadCachedDraft(draft.conversation_id),
+  );
+  if (kept.value) saveCachedDraft(draft.conversation_id, kept.value, draft.updated_at);
+  else clearCachedDraft(draft.conversation_id);
+}
+
 // reconcileComposerDraft decides what (if anything) the message composer should
 // be (re)seeded with when the focused conversation, its draft text, or its
 // server `updated_at` changes. It is the pure core of ChatInterface's draft

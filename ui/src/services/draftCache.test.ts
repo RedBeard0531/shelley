@@ -7,6 +7,7 @@ import {
   saveCachedDraft,
   clearCachedDraft,
   pickDraft,
+  keepDraftThroughPromotion,
   reconcileComposerDraft,
   type ComposerReconcileInput,
 } from "./draftCache";
@@ -229,6 +230,23 @@ run("reconcile seeds a non-draft conversation from its authoritative cache once"
     }),
   );
   assert(echo === null, "non-draft echo does not clobber edits");
+});
+
+run("keeps the newer draft text through promotion", () => {
+  const server = { conversation_id: "p1", draft: "from elsewhere", updated_at: "t2" };
+  keepDraftThroughPromotion(server);
+  assert(loadCachedDraft("p1")?.value === "from elsewhere", "server text is kept");
+  saveCachedDraft("p2", "typed here", "t2");
+  keepDraftThroughPromotion({ ...server, conversation_id: "p2" });
+  assert(loadCachedDraft("p2")?.value === "typed here", "unsynced local text wins");
+  saveCachedDraft("p3", "stale", "t1");
+  keepDraftThroughPromotion({ ...server, conversation_id: "p3" });
+  assert(loadCachedDraft("p3")?.value === "from elsewhere", "stale local text loses");
+  keepDraftThroughPromotion({ conversation_id: "p4", draft: "", updated_at: "t2" });
+  assert(loadCachedDraft("p4") === null, "nothing to keep");
+  saveCachedDraft("p5", "cleared elsewhere", "t1");
+  keepDraftThroughPromotion({ conversation_id: "p5", draft: "", updated_at: "t2" });
+  assert(loadCachedDraft("p5") === null, "text cleared elsewhere stays cleared");
 });
 
 console.log("draftCache: all tests passed");

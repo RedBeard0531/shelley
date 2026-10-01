@@ -197,3 +197,125 @@ test("git graph links to the builder and exposes the tour on return", async ({ p
     await expect(page.locator(".commit-tour-introduction h1")).toHaveText("Graph tour");
   });
 });
+
+test("diff viewer builds a tour for the commit on screen", async ({ page, request }) => {
+  await withTempDir("shelley-diff-tour-request-", async (tempDir) => {
+    const repo = join(tempDir, "repo");
+    mkdirSync(repo);
+    initGitRepo(repo);
+    writeFileSync(join(repo, "example.txt"), "before\n");
+    git(repo, "add", "example.txt");
+    git(repo, "commit", "-m", "Base commit");
+    writeFileSync(join(repo, "example.txt"), "after\n");
+    git(repo, "commit", "-am", "Tour from the diff viewer");
+    const hash = git(repo, "rev-parse", "HEAD");
+
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(request, "Hello", {
+      cwd: repo,
+    });
+    const { slug: builderSlug } = await createConversationViaAPIWithDetails(request, "Hello", {
+      cwd: repo,
+    });
+    let state: "absent" | "building" | "present" = "absent";
+    await page.route("**/api/git/tour/status?*", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: state,
+          hash,
+          worker_slug: state === "building" ? builderSlug : undefined,
+        }),
+      }),
+    );
+    const requests: string[] = [];
+    await page.route(`**/api/conversation/${conversationId}/chat`, async (route) => {
+      const body = route.request().postDataJSON() as { message?: string };
+      if (!body.message?.startsWith("/tour ")) return route.continue();
+      requests.push(body.message);
+      state = "building";
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "accepted",
+          tour: { status: "building", hash, worker_slug: builderSlug },
+        }),
+      });
+    });
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/c/${slug}?diff=${hash}&cwd=${encodeURIComponent(repo)}`);
+    const overlay = page.locator(".diff-viewer-overlay");
+    const row = overlay.locator(".diff-viewer-view-switcher");
+    await row.getByRole("button", { name: "Build tour" }).click({ timeout: 30_000 });
+    const building = row.getByRole("link", { name: "Building tour" });
+    await expect(building).toHaveAttribute("href", `/c/${builderSlug}`);
+    await expect(building.locator(".spinner")).toBeVisible();
+    expect(requests).toEqual([`/tour ${hash}\n${repo}`]);
+
+    // A range through the working tree has no tour to build.
+    const commitPicker = overlay.getByRole("button", { name: "Commit", exact: true });
+    const range = overlay.getByRole("dialog", { name: "Choose commit" });
+    await commitPicker.click();
+    await range.getByRole("radio", { name: "Through working tree" }).click();
+    await expect(row).toHaveCount(0);
+    await range.getByRole("radio", { name: "Single commit" }).click();
+    await page.keyboard.press("Escape");
+    await expect(range).toHaveCount(0);
+    await expect(building).toBeVisible();
+
+    // Once the subagent attaches it, the tour takes over the viewer.
+    const scaffold = JSON.parse(
+      execFileSync(shelleyBin, ["tour", "scaffold", "-C", repo, hash], { encoding: "utf8" }),
+    );
+    const tourPath = join(tempDir, "tour.json");
+    writeFileSync(
+      tourPath,
+      JSON.stringify({
+        ...scaffold,
+        title: "Requested tour",
+        chunks: scaffold.chunks.map((chunk: { ref: number }) => ({
+          ...chunk,
+          comment: "The guided change.",
+        })),
+      }),
+    );
+    execFileSync(shelleyBin, ["tour", "attach", "-C", repo, hash, tourPath]);
+    state = "present";
+    await expect(row.locator("button.active")).toHaveText("Tour");
+    await expect(overlay.locator(".commit-tour-introduction h1")).toHaveText("Requested tour");
+  });
+});
+
+test("diff viewer's building link leaves for the worker", async ({ page, request }) => {
+  await withTempDir("shelley-diff-tour-worker-", async (tempDir) => {
+    const repo = join(tempDir, "repo");
+    mkdirSync(repo);
+    initGitRepo(repo);
+    writeFileSync(join(repo, "example.txt"), "before\n");
+    git(repo, "add", "example.txt");
+    git(repo, "commit", "-m", "Tour already building");
+    const hash = git(repo, "rev-parse", "HEAD");
+
+    const { slug } = await createConversationViaAPIWithDetails(request, "Hello", { cwd: repo });
+    const { slug: builderSlug } = await createConversationViaAPIWithDetails(request, "Hello", {
+      cwd: repo,
+    });
+    await page.route("**/api/git/tour/status?*", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ status: "building", hash, worker_slug: builderSlug }),
+      }),
+    );
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/c/${slug}?diff=${hash}&cwd=${encodeURIComponent(repo)}`);
+    const overlay = page.locator(".diff-viewer-overlay");
+    await overlay
+      .locator(".diff-viewer-view-switcher")
+      .getByRole("link", { name: "Building tour" })
+      .click({ timeout: 30_000 });
+    await expect(page).toHaveURL(new RegExp(`/c/${builderSlug}$`));
+    await expect(overlay).toHaveCount(0);
+  });
+});
