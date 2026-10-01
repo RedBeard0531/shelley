@@ -155,6 +155,7 @@ const BASH_CATEGORIES = [
   "bash:build/test",
   "bash:script/query",
   "bash:system",
+  "bash:skills",
   "bash:other",
 ] as const;
 
@@ -180,6 +181,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   "bash:build/test": "bash · build/test",
   "bash:script/query": "bash · script/query",
   "bash:system": "bash · system",
+  "bash:skills": "bash · skills",
   "repo/read": "repo/read",
   "repo/edit": "repo/edit",
   "bash:other": "bash · general",
@@ -201,6 +203,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   "bash:build/test": "hsl(234 75% 59%)",
   "bash:script/query": "hsl(350 66% 56%)",
   "bash:system": "hsl(27 96% 57%)",
+  "bash:skills": "hsl(297 65% 60%)",
   "repo/read": "hsl(190 55% 50%)",
   "repo/edit": "hsl(45 80% 54%)",
   "bash:other": "hsl(0 0% 54%)",

@@ -145,6 +145,9 @@ function commandFromInput(input: unknown) {
 
 function bashCommandIntentDetails(command: string): { family: string; command: string } {
   for (const invocation of bashCommandInvocations(command)) {
+    if (invocation.name === "shelley" && invocation.args[0] === "skill") {
+      return { family: "skills", command: "shelley skill" };
+    }
     if (invocation.name === "git") {
       const subcommand = gitSubcommand(invocation.args);
       return {
@@ -159,20 +162,26 @@ function bashCommandIntentDetails(command: string): { family: string; command: s
 }
 
 function bashCommandFamily(name: string): string | null {
-  if (["rm", "mkdir", "gofmt", "chmod", "mv", "cp", "touch", "ln", "install", "patch"].includes(name))
+  if (["rm", "mkdir", "chmod", "mv", "cp", "touch", "ln", "install", "patch"].includes(name))
     return "repo/edit";
-  if (["rg", "grep", "find", "fd", "ag", "ack"].includes(name)) return "code search";
+  if (["rg", "grep", "find", "fd", "ag", "ack", "semble"].includes(name)) return "code search";
   if (
     [
-      "cat", "sed", "head", "tail", "awk", "ls", "pwd", "less", "more", "tree", "stat", "file",
+      "cat", "nl", "sed", "head", "tail", "awk", "ls", "pwd", "less", "more", "tree", "stat", "file",
       "readlink", "realpath", "wc", "cut", "sort", "uniq", "column", "diff", "strings",
     ].includes(name)
   )
     return "file read";
+  // Build systems, test runners, compilers, linters and formatters. Task
+  // runners that execute arbitrary commands (`npx`, `tsx`, `uvx`) are
+  // deliberately absent: their argument says nothing about the intent.
   if (
     [
       "go", "pnpm", "npm", "yarn", "make", "cargo", "pytest", "jest", "vitest", "bun", "uv",
       "ruff", "mypy", "eslint", "tsc", "biome", "gradle", "mvn",
+      "deno", "poetry", "tox", "black", "gofmt", "goimports", "golangci-lint",
+      "rustc", "rustfmt", "clippy", "cmake", "ninja", "meson", "ctest", "bazel",
+      "gcc", "g++", "clang", "clang++", "cc",
     ].includes(name)
   )
     return "build/test";

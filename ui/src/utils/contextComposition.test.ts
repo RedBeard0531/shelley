@@ -122,6 +122,60 @@ run("tool args and results land on the tool band, args split by bytes", () => {
   assert(p2.parts.assistant === 50 + 20, "text keeps the rest");
 });
 
+run("bash command families: semble searches, nl reads, shelley skill is skills", () => {
+  const family = (command: string) => {
+    const points = buildCompositionPoints([
+      msg("system", 1, [text("s".repeat(400))]),
+      msg("user", 1, [text("u".repeat(400))]),
+      msg("agent", 1, [text("a".repeat(400)), toolUse("t1", "bash", JSON.stringify({ command }))], usage(1000, 100)),
+      msg("user", 1, [toolResult("t1", "r".repeat(400))]),
+      msg("agent", 1, [text("done")], usage(1500, 20)),
+    ]);
+    return Object.keys(points[1].parts).find((key) => key.startsWith("bash:"));
+  };
+  assert(family('semble search "auth flow" .') === "bash:code search", "semble is code search");
+  assert(family("nl -ba src/app.ts") === "bash:file read", "nl is a file read");
+  assert(family("shelley skill cat semble") === "bash:skills", "shelley skill is skills");
+  assert(family("shelley skill cat semble | head -40") === "bash:skills", "piped shelley skill is skills");
+});
+
+run("build/test covers compilers, build systems and formatters", () => {
+  const family = (command: string) => {
+    const points = buildCompositionPoints([
+      msg("system", 1, [text("s".repeat(400))]),
+      msg("user", 1, [text("u".repeat(400))]),
+      msg("agent", 1, [text("a".repeat(400)), toolUse("t1", "bash", JSON.stringify({ command }))], usage(1000, 100)),
+      msg("user", 1, [toolResult("t1", "r".repeat(400))]),
+      msg("agent", 1, [text("done")], usage(1500, 20)),
+    ]);
+    return Object.keys(points[1].parts).find((key) => key.startsWith("bash:"));
+  };
+  for (const tool of [
+    "cmake -B build",
+    "ninja -C build",
+    "meson setup build",
+    "ctest --output-on-failure",
+    "bazel test //server/...",
+    "rustc --edition 2021 main.rs",
+    "rustfmt src/main.rs",
+    "clippy --all-targets",
+    "gcc -o demo demo.c",
+    "clang++ -std=c++20 -o demo demo.cc",
+    "deno test",
+    "poetry run pytest",
+    "tox -e py312",
+    "black --check .",
+    "golangci-lint run ./...",
+  ])
+    assert(family(tool) === "bash:build/test", `${tool} is build/test`);
+  // gofmt is a formatter, not a repo edit.
+  assert(family("gofmt -w ./server") === "bash:build/test", "gofmt is build/test");
+  assert(family("goimports -w .") === "bash:build/test", "goimports is build/test");
+  // Task runners run arbitrary commands, so they stay general.
+  assert(family("npx tsc --noEmit") === "bash:other", "npx stays general");
+  assert(family("tsx src/utils/foo.test.ts") === "bash:other", "tsx stays general");
+});
+
 run("reported reasoning tokens pin the reasoning band exactly", () => {
   const points = buildCompositionPoints([
     msg("system", 1, [text("s".repeat(400))]),
