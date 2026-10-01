@@ -266,7 +266,7 @@ import {
   type ConversationListPatchEvent,
   type DiskSpaceStatus,
 } from "../types";
-import { api } from "../services/api";
+import { api, ApiError } from "../services/api";
 import { btwStore } from "../services/btwStore";
 import { messageStore } from "../services/messageStore";
 import {
@@ -383,9 +383,14 @@ const error = ref<string | null>(null);
 const ephemeralTerminals = ref<EphemeralTerminal[]>([]);
 const streamStatus = ref<StreamStatus>("connected");
 // Server-wide low-disk notice; the server sends a snapshot on every (re)connect.
+// Revisions only order statuses from one server process: a transition that
+// could not be persisted (e.g. the disk was full) is lost on restart, so a
+// snapshot is accepted even when its revision is older.
 const diskSpaceStatus = ref<DiskSpaceStatus | null>(null);
-function applyDiskSpaceStatus(status: DiskSpaceStatus) {
-  if (diskSpaceStatus.value && status.revision < diskSpaceStatus.value.revision) return;
+function applyDiskSpaceStatus(status: DiskSpaceStatus, snapshot = false) {
+  if (!snapshot && diskSpaceStatus.value && status.revision < diskSpaceStatus.value.revision) {
+    return;
+  }
   diskSpaceStatus.value = status;
 }
 const reconnectNonce = ref(0);
@@ -601,7 +606,8 @@ async function loadConversations() {
     }
   } catch (err) {
     console.error("Failed to load conversations:", err);
-    error.value = "Failed to load conversations. Please refresh the page.";
+    // The server's reason (e.g. a full disk) beats a generic line.
+    error.value = err instanceof ApiError ? err.message : t("failedToLoadConversations");
   } finally {
     loading.value = false;
   }

@@ -9,20 +9,20 @@
     <button class="status-button status-button-primary" @click="onUnarchive">Unarchive</button>
   </template>
 
-  <!-- Disconnected -->
-  <template v-else-if="streamStatus === 'disconnected'">
-    <span class="status-message status-warning">Disconnected</span>
-  </template>
-
-  <!-- Reconnecting -->
-  <template v-else-if="streamStatus === 'reconnecting'">
-    <span class="status-message status-reconnecting">
+  <!-- Error, with the connection state beside it: the stream may be failing
+       for the same reason (e.g. a full disk), so neither hides the other. -->
+  <template v-else-if="error">
+    <span
+      v-if="streamStatus === 'disconnected'"
+      class="status-message status-warning status-connection"
+      >Disconnected</span
+    >
+    <span
+      v-else-if="streamStatus === 'reconnecting'"
+      class="status-message status-reconnecting status-connection"
+    >
       Reconnecting<span class="reconnecting-dots">...</span>
     </span>
-  </template>
-
-  <!-- Error -->
-  <template v-else-if="error">
     <span :class="['status-message', models.length === 0 ? 'status-no-models' : 'status-error']">{{
       error
     }}</span>
@@ -36,6 +36,18 @@
         />
       </svg>
     </button>
+  </template>
+
+  <!-- Disconnected -->
+  <template v-else-if="streamStatus === 'disconnected'">
+    <span class="status-message status-warning">Disconnected</span>
+  </template>
+
+  <!-- Reconnecting -->
+  <template v-else-if="streamStatus === 'reconnecting'">
+    <span class="status-message status-reconnecting">
+      Reconnecting<span class="reconnecting-dots">...</span>
+    </span>
   </template>
 
   <!-- Agent working -->
@@ -254,10 +266,7 @@ const props = defineProps<{
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration: () => Promise<void> | void;
   onSelectModel: (model: string) => void;
-  onSelectCombination: (
-    model: string,
-    level: Exclude<ThinkingLevel, "default"> | null,
-  ) => void;
+  onSelectCombination: (model: string, level: Exclude<ThinkingLevel, "default"> | null) => void;
   /** Model / reasoning-level picks from the status readout, which only renders
    *  for an existing conversation — different operations from onSelectModel and
    *  onThinkingChange, which are client-side only (see sendModelCommand in

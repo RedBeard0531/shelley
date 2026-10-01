@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -382,7 +383,7 @@ type Server struct {
 	// events to every /api/stream2 subscriber. Events are tagged with their
 	// ConversationID so clients can route them.
 	streamPub         *subpub.SubPub[StreamResponse]
-	diskSpace         *diskSpaceMonitor
+	diskSpace         atomic.Pointer[diskSpaceMonitor]
 	shutdownCh        chan struct{} // Signals background routines to stop
 	listenPort        int           // TCP port the server is listening on
 	terminals         *TerminalSessions
@@ -486,6 +487,7 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 	// the single source of truth for the patch stream — no caller needs to
 	// invoke notifyConversationListChanged for ordinary database writes.
 	database.Pool().OnCommit(s.notifyConversationListChanged)
+	database.Pool().OnDiskFull(s.onDiskFull)
 
 	// Set up subagent support
 	s.toolSetConfig.SubagentRunner = NewSubagentRunner(s)
@@ -1970,7 +1972,12 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 	// upgrade-with-restart hands back the conversations that were mid-turn so we
 	// can resume them once the server is up.
 	resumeTurns, err := s.db.ConsumeResumeAfterUpgrade(context.Background())
-	if err != nil {
+	if db.IsDiskFull(err) {
+		// Serve anyway, or the user only sees the proxy's bare 502 instead of
+		// the full disk. The next start retries; until then, conversations
+		// left mid-turn still look busy.
+		s.logger.Error("Failed to recover agent_working state; serving anyway", "error", err)
+	} else if err != nil {
 		s.logger.Error("Failed to recover agent_working state", "error", err)
 		return err
 	}

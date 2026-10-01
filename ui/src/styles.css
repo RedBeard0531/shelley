@@ -4430,6 +4430,12 @@ select:disabled {
   font-weight: 500;
 }
 
+/* Connection state shown beside an error; the error takes the rest. */
+.status-message.status-connection {
+  flex: none;
+  white-space: nowrap;
+}
+
 .reconnecting-dots {
   display: inline-block;
   animation: reconnecting-pulse 1.5s ease-in-out infinite;

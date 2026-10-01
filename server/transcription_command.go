@@ -223,8 +223,7 @@ func validateTranscriptionCommand(message string) (mediaPath, context string, is
 func (s *Server) queueTranscription(ctx context.Context, w http.ResponseWriter, manager *ConversationManager, mediaPath, transcriptionContext, modelID string) {
 	userData, err := marshalTurnUserData(ctx)
 	if err != nil {
-		s.logger.Error("Failed to marshal transcription user data", "conversationID", manager.conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to marshal transcription user data", err, "conversationID", manager.conversationID)
 		return
 	}
 	queued := db.QueuedMessage{
@@ -242,8 +241,7 @@ func (s *Server) queueTranscription(ctx context.Context, w http.ResponseWriter, 
 	}
 	queued, err = manager.QueueTranscription(ctx, s, queued)
 	if err != nil {
-		s.logger.Error("Failed to queue transcription", "conversationID", manager.conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to queue transcription", err, "conversationID", manager.conversationID)
 		return
 	}
 	s.launchQueuedTranscription(manager.conversationID, queued)
@@ -658,8 +656,7 @@ func (s *Server) handleRetryQueued(w http.ResponseWriter, r *http.Request, paren
 		return
 	}
 	if _, err := s.getOrCreateConversationManager(r.Context(), parentID, r.Header.Get("X-ExeDev-Email")); err != nil {
-		s.logger.Error("Failed to initialize transcription parent for retry", "parent", parentID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to initialize transcription parent for retry", err, "parent", parentID)
 		return
 	}
 
@@ -673,8 +670,7 @@ func (s *Server) handleRetryQueued(w http.ResponseWriter, r *http.Request, paren
 		case errors.Is(err, db.ErrQueuedMessageNotRetryable):
 			http.Error(w, err.Error(), http.StatusConflict)
 		default:
-			s.logger.Error("Failed to retry queued transcription", "parent", parentID, "queued_id", queuedID, "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to retry queued transcription", err, "parent", parentID, "queued_id", queuedID)
 		}
 		return
 	}

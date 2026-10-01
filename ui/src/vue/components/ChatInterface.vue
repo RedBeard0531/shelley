@@ -502,7 +502,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, useId, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  provide,
+  reactive,
+  ref,
+  useId,
+  watch,
+} from "vue";
 import Button from "primevue/button";
 import PvMessage from "primevue/message";
 import {
@@ -523,7 +533,7 @@ import {
   queuedTranscriptionPath,
   queuedTranscriptionTaskState,
 } from "../../types";
-import { api } from "../../services/api";
+import { api, ApiError } from "../../services/api";
 import { btwStore } from "../../services/btwStore";
 import { messageStore } from "../../services/messageStore";
 import { cacheDiag } from "../../services/cacheDiag";
@@ -2727,7 +2737,7 @@ async function loadMessages(focusedId: string) {
   } catch (err) {
     if (!isCurrent()) return;
     console.error("Failed to load messages:", err);
-    error.value = "Failed to load messages";
+    error.value = err instanceof ApiError ? err.message : "Failed to load messages";
     clearConversationLoading();
   }
 }
@@ -3076,7 +3086,10 @@ async function sendMessage(message: string) {
         message: trimmedMessage,
         model: selectedModel.value,
       });
-      const cwd = trimmedMessage.split("\n")[1]?.trim() || props.currentConversation?.cwd || selectedCwd.value;
+      const cwd =
+        trimmedMessage.split("\n")[1]?.trim() ||
+        props.currentConversation?.cwd ||
+        selectedCwd.value;
       if (accepted.tour && cwd) {
         applyCommitTourStatus(cwd, accepted.tour.hash, accepted.tour);
         if (accepted.tour.status === "present") {
@@ -4871,13 +4884,15 @@ onMounted(() => {
   document.addEventListener("keydown", handleScrollKeyDown);
   document.addEventListener("keydown", handleMenuShortcut);
   unsubscribeTourRequests = subscribeCommitTourRequests(watchRequestedTour);
-  for (const event of tourActivityEvents) document.addEventListener(event, markTourUserActivity, true);
+  for (const event of tourActivityEvents)
+    document.addEventListener(event, markTourUserActivity, true);
 });
 
 onUnmounted(() => {
   unsubscribeTourRequests?.();
   for (const stop of activeTourRequests.values()) stop();
-  for (const event of tourActivityEvents) document.removeEventListener(event, markTourUserActivity, true);
+  for (const event of tourActivityEvents)
+    document.removeEventListener(event, markTourUserActivity, true);
   teardownSubscriptions();
   stopBottomPin();
   tailSweepToken++; // cancel any in-flight background mount sweep

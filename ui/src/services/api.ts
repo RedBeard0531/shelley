@@ -150,7 +150,7 @@ class ApiService {
   async getConversations(): Promise<ConversationWithState[]> {
     const response = await fetch(`${this.baseUrl}/conversations`);
     if (!response.ok) {
-      throw new Error(`Failed to get conversations: ${response.statusText}`);
+      throw await responseError(response, "Failed to get conversations");
     }
     return response.json();
   }
@@ -161,7 +161,7 @@ class ApiService {
   }> {
     const response = await fetch(`${this.baseUrl}/conversations/snapshot`);
     if (!response.ok) {
-      throw new Error(`Failed to get conversations snapshot: ${response.statusText}`);
+      throw await responseError(response, "Failed to load conversations");
     }
     return response.json();
   }
@@ -169,7 +169,7 @@ class ApiService {
   async getModels(): Promise<AvailableModel[]> {
     const response = await fetch(`${this.baseUrl}/models`);
     if (!response.ok) {
-      throw new Error(`Failed to get models: ${response.statusText}`);
+      throw await responseError(response, "Failed to get models");
     }
     return response.json();
   }
@@ -230,7 +230,7 @@ class ApiService {
   }> {
     const response = await fetch(`${this.baseUrl}/tools`);
     if (!response.ok) {
-      throw new Error(`Failed to get tools: ${response.statusText}`);
+      throw await responseError(response, "Failed to get tools");
     }
     return response.json();
   }
@@ -244,7 +244,7 @@ class ApiService {
     const params = new URLSearchParams({ q: query });
     const response = await fetch(`${this.baseUrl}/conversations/search?${params}`, { signal });
     if (!response.ok) {
-      throw new Error(`Failed to search conversations: ${response.statusText}`);
+      throw await responseError(response, "Failed to search conversations");
     }
     return response.json();
   }
@@ -323,7 +323,7 @@ class ApiService {
       }),
     });
     if (!response.ok) {
-      throw new Error(`Failed to distill into new generation: ${response.statusText}`);
+      throw await responseError(response, "Failed to distill into new generation");
     }
     return response.json();
   }
@@ -333,7 +333,7 @@ class ApiService {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to start new generation: ${response.statusText}`);
+      throw await responseError(response, "Failed to start new generation");
     }
     return response.json();
   }
@@ -411,7 +411,7 @@ class ApiService {
       `${this.baseUrl}/conversation/${conversationId}?last_sequence_id=${sinceSequenceId}`,
     );
     if (!response.ok) {
-      throw new Error(`Failed to get messages since ${sinceSequenceId}: ${response.statusText}`);
+      throw await responseError(response, `Failed to get messages since ${sinceSequenceId}`);
     }
     return response.json();
   }
@@ -570,7 +570,7 @@ class ApiService {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to cancel conversation: ${response.statusText}`);
+      throw await responseError(response, "Failed to cancel conversation");
     }
   }
 
@@ -579,7 +579,7 @@ class ApiService {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to cancel queued messages: ${response.statusText}`);
+      throw await responseError(response, "Failed to cancel queued messages");
     }
   }
 
@@ -600,7 +600,7 @@ class ApiService {
       { method: "POST" },
     );
     if (!response.ok) {
-      throw new Error(`Failed to cancel queued message: ${response.statusText}`);
+      throw await responseError(response, "Failed to cancel queued message");
     }
   }
 
@@ -618,7 +618,7 @@ class ApiService {
   async validateCwd(path: string): Promise<{ valid: boolean; error?: string }> {
     const response = await fetch(`${this.baseUrl}/validate-cwd?path=${encodeURIComponent(path)}`);
     if (!response.ok) {
-      throw new Error(`Failed to validate cwd: ${response.statusText}`);
+      throw await responseError(response, "Failed to validate cwd");
     }
     return response.json();
   }
@@ -641,7 +641,7 @@ class ApiService {
       : `${this.baseUrl}/list-directory`;
     const response = await fetch(url);
     if (!response.ok) {
-      throw new Error(`Failed to list directory: ${response.statusText}`);
+      throw await responseError(response, "Failed to list directory");
     }
     return response.json();
   }
@@ -653,7 +653,7 @@ class ApiService {
       body: JSON.stringify({ path }),
     });
     if (!response.ok) {
-      throw new Error(`Failed to create directory: ${response.statusText}`);
+      throw await responseError(response, "Failed to create directory");
     }
     return response.json();
   }
@@ -661,7 +661,7 @@ class ApiService {
   async getArchivedConversations(): Promise<ConversationWithParticipants[]> {
     const response = await fetch(`${this.baseUrl}/conversations/archived`);
     if (!response.ok) {
-      throw new Error(`Failed to get archived conversations: ${response.statusText}`);
+      throw await responseError(response, "Failed to get archived conversations");
     }
     return response.json();
   }
@@ -671,7 +671,7 @@ class ApiService {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to archive conversation: ${response.statusText}`);
+      throw await responseError(response, "Failed to archive conversation");
     }
     return response.json();
   }
@@ -681,7 +681,7 @@ class ApiService {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to unarchive conversation: ${response.statusText}`);
+      throw await responseError(response, "Failed to unarchive conversation");
     }
     return response.json();
   }
@@ -691,7 +691,7 @@ class ApiService {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to delete conversation: ${response.statusText}`);
+      throw await responseError(response, "Failed to delete conversation");
     }
   }
 
@@ -703,7 +703,7 @@ class ApiService {
       return null;
     }
     if (!response.ok) {
-      throw new Error(`Failed to get conversation by slug: ${response.statusText}`);
+      throw await responseError(response, "Failed to get conversation by slug");
     }
     return response.json();
   }
@@ -799,7 +799,7 @@ class ApiService {
       `${this.baseUrl}/git/diffs/${diffId}/files?cwd=${encodeURIComponent(cwd)}${toParam}`,
     );
     if (!response.ok) {
-      throw new Error(`Failed to get diff files: ${response.statusText}`);
+      throw await responseError(response, "Failed to get diff files");
     }
     return response.json();
   }
@@ -821,7 +821,7 @@ class ApiService {
       `${this.baseUrl}/git/file-diff/${diffId}/${encodedPath}?cwd=${encodeURIComponent(cwd)}${toParam}${oldPathParam}`,
     );
     if (!response.ok) {
-      throw new Error(`Failed to get file diff: ${response.statusText}`);
+      throw await responseError(response, "Failed to get file diff");
     }
     return response.json();
   }
@@ -836,7 +836,7 @@ class ApiService {
       `${this.baseUrl}/git/commit-messages?cwd=${encodeURIComponent(cwd)}&from=${encodeURIComponent(from)}${toParam}`,
     );
     if (!response.ok) {
-      throw new Error(`Failed to get commit messages: ${response.statusText}`);
+      throw await responseError(response, "Failed to get commit messages");
     }
     return response.json();
   }
@@ -950,7 +950,7 @@ class ApiService {
       body: JSON.stringify({ tags }),
     });
     if (!response.ok) {
-      throw new Error(`Failed to update tags: ${response.statusText}`);
+      throw await responseError(response, "Failed to update tags");
     }
     return response.json();
   }
@@ -958,7 +958,7 @@ class ApiService {
   async getSubagents(conversationId: string): Promise<Conversation[]> {
     const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/subagents`);
     if (!response.ok) {
-      throw new Error(`Failed to get subagents: ${response.statusText}`);
+      throw await responseError(response, "Failed to get subagents");
     }
     return response.json();
   }
@@ -968,7 +968,7 @@ class ApiService {
     const url = forceRefresh ? "/version-check?refresh=true" : "/version-check";
     const response = await fetch(url);
     if (!response.ok) {
-      throw new Error(`Failed to check version: ${response.statusText}`);
+      throw await responseError(response, "Failed to check version");
     }
     return response.json();
   }
@@ -977,7 +977,7 @@ class ApiService {
     const params = new URLSearchParams({ current: currentTag, latest: latestTag });
     const response = await fetch(`/version-changelog?${params}`);
     if (!response.ok) {
-      throw new Error(`Failed to get changelog: ${response.statusText}`);
+      throw await responseError(response, "Failed to get changelog");
     }
     return response.json();
   }
@@ -1012,7 +1012,7 @@ class ApiService {
       method: "POST",
     });
     if (!response.ok) {
-      throw new Error(`Failed to exit: ${response.statusText}`);
+      throw await responseError(response, "Failed to exit");
     }
     return response.json();
   }
@@ -1020,7 +1020,7 @@ class ApiService {
   async getSettings(): Promise<Record<string, string>> {
     const response = await fetch("/settings");
     if (!response.ok) {
-      throw new Error(`Failed to get settings: ${response.statusText}`);
+      throw await responseError(response, "Failed to get settings");
     }
     return response.json();
   }
@@ -1073,7 +1073,7 @@ export interface FeatureFlag {
 export const featureFlagsApi = {
   async list(): Promise<FeatureFlag[]> {
     const r = await fetch("/feature-flags");
-    if (!r.ok) throw new Error(`Failed to load feature flags: ${r.statusText}`);
+    if (!r.ok) throw await responseError(r, "Failed to load feature flags");
     return r.json();
   },
   async set(name: string, value: unknown): Promise<void> {
@@ -1117,7 +1117,7 @@ export const modelCostsApi = {
         headers: { "Content-Type": "application/json", "X-Shelley-Request": "1" },
         body: JSON.stringify({ models: missing }),
       });
-      if (!r.ok) throw new Error(`Failed to load model costs: ${r.statusText}`);
+      if (!r.ok) throw await responseError(r, "Failed to load model costs");
       const data = (await r.json()) as { costs: Record<string, ModelCostDTO | null> };
       for (const m of missing) modelCostCache.set(m.model, data.costs[m.model] ?? null);
     }
@@ -1158,7 +1158,7 @@ export const subagentUsageApi = {
       headers: { "X-Shelley-Request": "1" },
       signal,
     });
-    if (!r.ok) throw new Error(`Failed to load subagent usage: ${r.statusText}`);
+    if (!r.ok) throw await responseError(r, "Failed to load subagent usage");
     return (await r.json()) as SubagentUsageDTO;
   },
 };

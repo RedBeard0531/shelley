@@ -280,8 +280,7 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 
 	manager, err := s.getOrCreateConversationManager(ctx, req.SourceConversationID, "")
 	if err != nil {
-		s.logger.Error("Failed to create conversation manager for distill-new-generation", "conversationID", req.SourceConversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to create conversation manager for distill-new-generation", err, "conversationID", req.SourceConversationID)
 		return
 	}
 	// Acquire the distilling state before any mutation so a rejected
@@ -299,15 +298,13 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 
 	if req.Cwd != "" && (sourceConv.Cwd == nil || *sourceConv.Cwd != req.Cwd) {
 		if err := s.db.UpdateConversationCwd(ctx, req.SourceConversationID, req.Cwd); err != nil {
-			s.logger.Error("Failed to update cwd for new generation", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to update cwd for new generation", err)
 			return
 		}
 	}
 	if sourceConv.Model == nil || *sourceConv.Model != modelID {
 		if err := s.db.ForceUpdateConversationModel(ctx, req.SourceConversationID, modelID); err != nil {
-			s.logger.Error("Failed to update model for new generation", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to update model for new generation", err)
 			return
 		}
 	}
@@ -316,8 +313,7 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 		return q.IncrementConversationGeneration(ctx, req.SourceConversationID)
 	})
 	if err != nil {
-		s.logger.Error("Failed to increment generation", "conversationID", req.SourceConversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to increment generation", err, "conversationID", req.SourceConversationID)
 		return
 	}
 	manager.ResetLoop()
@@ -342,21 +338,19 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 		ExcludedFromContext: true,
 	})
 	if err != nil {
-		s.logger.Error("Failed to create status message", "conversationID", req.SourceConversationID, "error", err)
 		// WithoutCancel: a client disconnect mid-setup must not strand the
 		// conversation on the just-created empty generation.
 		s.rollbackCompactionFailure(context.WithoutCancel(ctx), s.logger, req.SourceConversationID, "Compaction failed during setup", sourceGeneration, sourceTurnInterrupted)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to create status message", err, "conversationID", req.SourceConversationID)
 		return
 	}
 	go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), req.SourceConversationID, statusMsg)
 
 	if err := manager.Hydrate(ctx); err != nil {
-		s.logger.Error("Failed to hydrate new generation", "conversationID", req.SourceConversationID, "error", err)
 		// WithoutCancel: a client disconnect mid-setup must not strand the
 		// conversation on the just-created empty generation.
 		s.rollbackCompactionFailure(context.WithoutCancel(ctx), s.logger, req.SourceConversationID, "Compaction failed during setup", sourceGeneration, sourceTurnInterrupted)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to hydrate new generation", err, "conversationID", req.SourceConversationID)
 		return
 	}
 	if fresh, ferr := s.db.GetConversationByID(ctx, req.SourceConversationID); ferr == nil {
