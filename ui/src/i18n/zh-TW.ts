@@ -264,6 +264,13 @@ export const zhTW: TranslationKeys = {
   addOne: "新增一個",
   edit: "編輯",
 
+  // Favicon Emoji Modal
+  faviconEmoji: "網站圖示表情",
+  pickFaviconEmoji: "選擇此分頁顯示的表情",
+  faviconEmojiSaving: "正在儲存…",
+  faviconEmojiFromExe: "此 VM 的表情來自 exe.dev。",
+  faviconEmojiChangeOnExe: "在 exe.dev 上修改",
+
   // Integrations Modal
   slackDestination: "目標頻道",
   slackWebhookTestDescription: "僅適用於傳入 Webhook。此測試不支援 Slack 機器人。",

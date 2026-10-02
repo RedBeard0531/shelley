@@ -79,6 +79,9 @@ importers:
       dompurify:
         specifier: ^3.3.1
         version: 3.3.1
+      emoji-picker-element:
+        specifier: ^1.29.1
+        version: 1.29.1
       idb:
         specifier: ^8.0.3
         version: 8.0.3
@@ -1593,6 +1596,9 @@ packages:
 
   elkjs@0.9.3:
     resolution: {integrity: sha512-f/ZeWvW/BCXbhGEf1Ujp29EASo/lk1FDnETgNKwJrsVvGZhUWCZyg3xLJjAsxfOmt8KjswHmI5EwCQcPMpOYhQ==}
+
+  emoji-picker-element@1.29.1:
+    resolution: {integrity: sha512-TOiHzu9Dqib3x4MwcAi3wi3RdyT4SoeB4b15AvH1ks4SBwTl7DeebhZ0d3x6dNi4XfNU7IGRZ7NBQllj0RqwrQ==}
 
   entities@6.0.1:
     resolution: {integrity: sha512-aN97NXWF6AWBTahfVOIrB/NShkzi5H7F9r1s9mD3cDj4Ko5f2qhhVoYMibXF7GlLveb/D2ioWay8lxI97Ven3g==}
@@ -4126,6 +4132,8 @@ snapshots:
       gopd: 1.2.0
 
   elkjs@0.9.3: {}
+
+  emoji-picker-element@1.29.1: {}
 
   entities@6.0.1: {}
 

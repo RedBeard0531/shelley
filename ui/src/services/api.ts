@@ -1094,6 +1094,31 @@ export const featureFlagsApi = {
   },
 };
 
+// The favicon emoji comes from exe.dev when the VM has one; otherwise it is
+// Shelley's own stored emoji, which set() changes. href is the favicon data URI.
+export interface FaviconEmoji {
+  emoji: string;
+  source: "exe.dev" | "shelley";
+  href: string;
+}
+
+export const faviconEmojiApi = {
+  async get(): Promise<FaviconEmoji> {
+    const r = await fetch("/api/favicon-emoji");
+    if (!r.ok) throw await responseError(r, "Failed to load favicon emoji");
+    return r.json();
+  },
+  async set(emoji: string): Promise<FaviconEmoji> {
+    const r = await fetch("/api/favicon-emoji", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Shelley-Request": "1" },
+      body: JSON.stringify({ emoji }),
+    });
+    if (!r.ok) throw await responseError(r, "Failed to save favicon emoji");
+    return r.json();
+  },
+};
+
 // models.dev pricing, USD per million tokens. null = model known but unpriced.
 export interface ModelCostDTO {
   input: number;

@@ -264,6 +264,13 @@ export const ja: TranslationKeys = {
   addOne: "追加する",
   edit: "編集",
 
+  // Favicon Emoji Modal
+  faviconEmoji: "ファビコンの絵文字",
+  pickFaviconEmoji: "このタブに表示する絵文字を選択",
+  faviconEmojiSaving: "保存中…",
+  faviconEmojiFromExe: "この VM の絵文字は exe.dev で設定されています。",
+  faviconEmojiChangeOnExe: "exe.dev で変更",
+
   // Integrations Modal
   slackDestination: "送信先",
   slackWebhookTestDescription:

@@ -267,6 +267,13 @@ export const es: TranslationKeys = {
   addOne: "Agregar uno",
   edit: "Editar",
 
+  // Favicon Emoji Modal
+  faviconEmoji: "Emoji del favicon",
+  pickFaviconEmoji: "Elige el emoji que se muestra en esta pestaña",
+  faviconEmojiSaving: "Guardando…",
+  faviconEmojiFromExe: "El emoji de esta VM viene de exe.dev.",
+  faviconEmojiChangeOnExe: "Cámbialo en exe.dev",
+
   // Integrations Modal
   slackDestination: "Destino",
   slackWebhookTestDescription: "Solo para webhooks entrantes. Esta prueba no admite bots de Slack.",

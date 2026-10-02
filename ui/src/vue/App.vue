@@ -161,6 +161,12 @@
             commandPaletteOpen = false;
           }
         "
+        @open-favicon-emoji-picker="
+          () => {
+            faviconEmojiPickerOpen = true;
+            commandPaletteOpen = false;
+          }
+        "
         @next-conversation="navigateToNextConversation"
         @previous-conversation="navigateToPreviousConversation"
         @next-user-message="navigateToNextUserMessage"
@@ -214,6 +220,16 @@
         "
       />
 
+      <FaviconEmojiPicker
+        :is-open="faviconEmojiPickerOpen"
+        @close="
+          () => {
+            faviconEmojiPickerOpen = false;
+            focusMessageInputIfUnfocused();
+          }
+        "
+      />
+
       <FileFinderModal
         :is-open="fileFinderOpen"
         :initial-dir="finderDir"
@@ -253,6 +269,7 @@ import ModelsModal from "./components/ModelsModal.vue";
 import IntegrationsModal from "./components/IntegrationsModal.vue";
 import NotificationsModal from "./components/NotificationsModal.vue";
 import FeatureFlagsModal from "./components/FeatureFlagsModal.vue";
+import FaviconEmojiPicker from "./components/FaviconEmojiPicker.vue";
 import FileFinderModal from "./components/FileFinderModal.vue";
 import EditableFileModal from "./components/EditableFileModal.vue";
 import Button from "primevue/button";
@@ -368,6 +385,7 @@ const modelsModalOpen = ref(false);
 const integrationsModalOpen = ref(false);
 const notificationsModalOpen = ref(false);
 const featureFlagsModalOpen = ref(false);
+const faviconEmojiPickerOpen = ref(false);
 // Fuzzy file finder (Cmd/Ctrl+P) + the generic editor it opens.
 const fileFinderOpen = ref(false);
 const editorFilePath = ref<string | null>(null);

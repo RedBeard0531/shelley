@@ -293,7 +293,8 @@ body {
   color: white;
 }
 
-.text-error {
+.text-error,
+.favicon-emoji-status.error {
   color: var(--error-text);
 }
 
@@ -14570,6 +14571,42 @@ kbd {
 
 .citation-source-link:hover {
   text-decoration: underline;
+}
+
+/* Favicon emoji picker: emoji-picker-element themed with Shelley's colors,
+   which .dark already flips. */
+.favicon-emoji-popover {
+  width: 352px;
+  max-width: 100%;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+.favicon-emoji-picker {
+  width: 100%;
+  height: min(400px, 70svh);
+  --background: var(--bg-base);
+  --border-color: var(--border);
+  --input-border-color: var(--border);
+  --input-background-color: var(--bg-secondary);
+  --input-font-color: var(--text-primary);
+  --input-placeholder-color: var(--text-tertiary);
+  --button-hover-background: var(--bg-hover);
+  --button-active-background: var(--bg-tertiary);
+  --indicator-color: var(--primary);
+  --category-font-color: var(--text-secondary);
+  --num-columns: 8;
+}
+.favicon-emoji-status {
+  padding: 0.5rem 0.75rem;
+  font-size: var(--font-size-12);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
 }
 
 /* Feature flags modal */

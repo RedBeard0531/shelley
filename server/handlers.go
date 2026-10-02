@@ -14,7 +14,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -595,14 +594,6 @@ func (s *Server) staticHandler(fsys http.FileSystem) http.Handler {
 	})
 }
 
-const defaultFaviconEmoji = "🐚"
-
-func generateEmojiFaviconSVG(emoji string) string {
-	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
-<text x="200" y="200" text-anchor="middle" dominant-baseline="central" font-size="320" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif">%s</text>
-</svg>`, html.EscapeString(emoji))
-}
-
 // serveIndexWithInit serves index.html with injected initialization data
 func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs http.FileSystem) {
 	// Read index.html from the filesystem
@@ -707,15 +698,12 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 		return
 	}
 
-	// Use the VM's reflection emoji, or Shelley's universal emoji when
-	// reflection metadata is unavailable (for example, standalone installs).
-	emoji := s.reflectionEmoji(r.Context())
-	if emoji == "" {
-		emoji = defaultFaviconEmoji
+	fe, err := s.currentFaviconEmoji(r.Context())
+	if err != nil {
+		s.internalError(w, "Failed to get favicon emoji", err)
+		return
 	}
-	faviconSVG := generateEmojiFaviconSVG(emoji)
-	faviconDataURI := "data:image/svg+xml," + url.PathEscape(faviconSVG)
-	faviconLink := fmt.Sprintf(`<link rel="icon" type="image/svg+xml" href="%s"/>`, html.EscapeString(faviconDataURI))
+	faviconLink := fmt.Sprintf(`<link rel="icon" type="image/svg+xml" href="%s"/>`, html.EscapeString(faviconHref(fe.Emoji)))
 
 	// Inject the script tag and favicon before </head>
 	initScript := fmt.Sprintf(`<script>window.__SHELLEY_INIT__=%s;</script>`, initJSON)

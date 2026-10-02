@@ -265,6 +265,13 @@ export const upgoer5: TranslationKeys = {
   addOne: "Add one",
   edit: "Change",
 
+  // Favicon Emoji Modal
+  faviconEmoji: "Tab Picture",
+  pickFaviconEmoji: "Pick the little picture on this tab",
+  faviconEmojiSaving: "Keeping it…",
+  faviconEmojiFromExe: "exe.dev sets the little picture for this VM.",
+  faviconEmojiChangeOnExe: "Change it on exe.dev",
+
   // Integrations Modal
   slackDestination: "Send to",
   slackWebhookTestDescription: "For one-way hooks only. This test does not work with Slack bots.",

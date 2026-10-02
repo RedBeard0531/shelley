@@ -266,6 +266,13 @@ export const ru: TranslationKeys = {
   addOne: "Добавить",
   edit: "Редактировать",
 
+  // Favicon Emoji Modal
+  faviconEmoji: "Эмодзи значка вкладки",
+  pickFaviconEmoji: "Выберите эмодзи для этой вкладки",
+  faviconEmojiSaving: "Сохранение…",
+  faviconEmojiFromExe: "Эмодзи этой ВМ задаётся в exe.dev.",
+  faviconEmojiChangeOnExe: "Изменить в exe.dev",
+
   // Integrations Modal
   slackDestination: "Получатель",
   slackWebhookTestDescription:

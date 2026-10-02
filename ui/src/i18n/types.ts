@@ -257,6 +257,13 @@ export interface TranslationKeys {
   addOne: string;
   edit: string;
 
+  // Favicon Emoji Modal
+  faviconEmoji: string;
+  pickFaviconEmoji: string;
+  faviconEmojiSaving: string;
+  faviconEmojiFromExe: string;
+  faviconEmojiChangeOnExe: string;
+
   // Integrations Modal
   slackDestination: string;
   slackWebhookTestDescription: string;

@@ -2690,6 +2690,24 @@ func (db *DB) SetSetting(ctx context.Context, key, value string) error {
 	})
 }
 
+// InitSetting returns the value stored for key, first storing value if the
+// key is unset. Concurrent callers all see the same winning value.
+func (db *DB) InitSetting(ctx context.Context, key, value string) (string, error) {
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		stored, err := q.GetSetting(ctx, key)
+		if err == nil {
+			value = stored
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		return q.SetSetting(ctx, generated.SetSettingParams{Key: key, Value: value})
+	})
+	return value, err
+}
+
 // GetAllSettings retrieves all settings
 func (db *DB) GetAllSettings(ctx context.Context) (map[string]string, error) {
 	var rows []generated.GetAllSettingsRow

@@ -265,6 +265,13 @@ export const vi: TranslationKeys = {
   addOne: "Thêm",
   edit: "Tùy chỉnh",
 
+  // Favicon Emoji Modal
+  faviconEmoji: "Emoji favicon",
+  pickFaviconEmoji: "Chọn emoji hiển thị trên tab này",
+  faviconEmojiSaving: "Đang lưu…",
+  faviconEmojiFromExe: "Emoji của VM này đến từ exe.dev.",
+  faviconEmojiChangeOnExe: "Đổi trên exe.dev",
+
   // Integrations Modal
   slackDestination: "Đích đến",
   slackWebhookTestDescription: "Chỉ dành cho webhook đến. Phép thử này không hỗ trợ bot Slack.",
