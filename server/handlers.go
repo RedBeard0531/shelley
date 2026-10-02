@@ -527,9 +527,9 @@ func (s *Server) staticHandler(fsys http.FileSystem) http.Handler {
 			return
 		}
 
-		// For JS, CSS, and source-map files, serve from .gz files (only the .gz
-		// versions are embedded to keep the binary small).
-		if strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") || strings.HasSuffix(r.URL.Path, ".map") {
+		// For JS, CSS, source-map and font files, serve from .gz files (only the
+		// .gz versions are embedded to keep the binary small).
+		if strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") || strings.HasSuffix(r.URL.Path, ".map") || strings.HasSuffix(r.URL.Path, ".woff2") {
 			gzPath := r.URL.Path + ".gz"
 			gzFile, err := fsys.Open(gzPath)
 			if err != nil {
@@ -561,9 +561,12 @@ func (s *Server) staticHandler(fsys http.FileSystem) http.Handler {
 			}
 
 			contentType := mime.TypeByExtension(filepath.Ext(r.URL.Path))
-			if contentType == "" && strings.HasSuffix(r.URL.Path, ".map") {
-				// Source maps are JSON; mime has no registered type for .map.
+			// Go's builtin mime table has neither; don't depend on the host's.
+			switch filepath.Ext(r.URL.Path) {
+			case ".map":
 				contentType = "application/json; charset=utf-8"
+			case ".woff2":
+				contentType = "font/woff2"
 			}
 			w.Header().Set("Content-Type", contentType)
 			w.Header().Set("Vary", "Accept-Encoding")

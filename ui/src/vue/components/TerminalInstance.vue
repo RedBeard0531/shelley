@@ -21,6 +21,7 @@ import { onMounted, onUnmounted, ref, watch } from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import type { EphemeralTerminal } from "./terminalTypes";
 import { getTerminalTheme, base64ToUint8Array, type TermStatus } from "./terminalHelpers";
 
@@ -43,6 +44,8 @@ const emit = defineEmits<{
 
 const containerRef = ref<HTMLDivElement | null>(null);
 let xtermInst: Terminal | null = null;
+const FONT_FAMILY = 'Consolas, "Liberation Mono", Menlo, Courier, monospace';
+const ICON_FONT = '"Symbols Nerd Font Mono"'; // see src/styles.css
 let fitAddon: FitAddon | null = null;
 let ws: WebSocket | null = null;
 let ro: ResizeObserver | null = null;
@@ -65,13 +68,32 @@ function fitAndNotifyServer() {
   }
 }
 
+// The WebGL renderer draws box-drawing, block and powerline characters itself,
+// filling the cell, so powerline status bars join up seamlessly; the DOM
+// renderer can only use the font's glyphs. Without WebGL2 the terminal stays
+// on the DOM renderer. It also returns to it when a lost context isn't
+// restored (browsers cap live contexts, about 16 in Chrome, and drop the
+// oldest), and then refits, because the DOM renderer's cells differ in width.
+function loadWebgl(xterm: Terminal) {
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => {
+      webgl.dispose();
+      fitAndNotifyServer();
+    });
+    xterm.loadAddon(webgl);
+  } catch (err) {
+    console.warn("terminal: WebGL2 unavailable, using the DOM renderer", err);
+  }
+}
+
 onMounted(() => {
   if (!containerRef.value) return;
 
   const xterm = new Terminal({
     cursorBlink: true,
     fontSize: 14,
-    fontFamily: 'Consolas, "Liberation Mono", Menlo, Courier, monospace',
+    fontFamily: FONT_FAMILY,
     theme: getTerminalTheme(props.isDark),
     scrollback: 10000,
     // Kitty keyboard protocol — clients opt in via `CSI = u` so this is safe to leave on.
@@ -100,7 +122,15 @@ onMounted(() => {
   xterm.loadAddon(new WebLinksAddon());
 
   xterm.open(containerRef.value);
+  loadWebgl(xterm);
   fitAndNotifyServer();
+  // xterm caches each glyph once (its width in the DOM renderer, its bitmap in
+  // WebGL), so the icon font must be loaded before it joins the stack;
+  // otherwise icons are cached as fallback glyphs, which in the DOM renderer
+  // also push the rest of their row off the cell grid.
+  void document.fonts.load(`14px ${ICON_FONT}`, "\ue0a0").then(() => {
+    if (xtermInst === xterm) xterm.options.fontFamily = `${FONT_FAMILY}, ${ICON_FONT}`;
+  });
   emit("register", props.term.id, xterm, fitAndNotifyServer);
 
   // Mobile soft-keyboard fix: on touch devices the xterm helper textarea
@@ -198,6 +228,7 @@ onUnmounted(() => {
   }
   ws?.close();
   xtermInst?.dispose();
+  xtermInst = null;
   emit("unregister", props.term.id);
 });
 

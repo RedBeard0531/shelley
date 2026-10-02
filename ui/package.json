@@ -38,6 +38,7 @@
     "@tiptap/vue-3": "^3.30.5",
     "@xterm/addon-fit": "0.12.0-beta.213",
     "@xterm/addon-web-links": "0.13.0-beta.213",
+    "@xterm/addon-webgl": "0.20.0-beta.212",
     "@xterm/xterm": "6.1.0-beta.213",
     "ansi_up": "^6.0.6",
     "dompurify": "^3.3.1",
@@ -73,7 +74,8 @@
     "tsx": "^4.21.0",
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.43.0",
-    "vue-tsc": "^2.2.12"
+    "vue-tsc": "^2.2.12",
+    "wawoff2": "2.0.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

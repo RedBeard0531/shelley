@@ -67,6 +67,9 @@ importers:
       '@xterm/addon-web-links':
         specifier: 0.13.0-beta.213
         version: 0.13.0-beta.213(@xterm/xterm@6.1.0-beta.213)
+      '@xterm/addon-webgl':
+        specifier: 0.20.0-beta.212
+        version: 0.20.0-beta.212(@xterm/xterm@6.1.0-beta.213)
       '@xterm/xterm':
         specifier: 6.1.0-beta.213
         version: 6.1.0-beta.213
@@ -161,6 +164,9 @@ importers:
       vue-tsc:
         specifier: ^2.2.12
         version: 2.2.12(typescript@5.9.3)
+      wawoff2:
+        specifier: 2.0.1
+        version: 2.0.1
 
 packages:
 
@@ -1213,6 +1219,11 @@ packages:
 
   '@xterm/addon-web-links@0.13.0-beta.213':
     resolution: {integrity: sha512-SNMLWgcVxchXTSxIzqZkQ7xennu0YVpmtDMVZi3K03JyFXw8NDu57B0O01JR8d7Rlk+EWk+B/aMxIehnCSgX6Q==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.213
+
+  '@xterm/addon-webgl@0.20.0-beta.212':
+    resolution: {integrity: sha512-RzaTYeukTXTJth+Sl7FzCmb8AqiyDrNWNnqG+/300qJbfHYfCMmBlBVZ0yCTSZIWMdgFbgkhmnmBN7Yzs6xoBA==}
     peerDependencies:
       '@xterm/xterm': ^6.1.0-beta.213
 
@@ -2654,6 +2665,10 @@ packages:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
     engines: {node: '>=18'}
 
+  wawoff2@2.0.1:
+    resolution: {integrity: sha512-r0CEmvpH63r4T15ebFqeOjGqU4+EgTx4I510NtK35EMciSdcTxCw3Byy3JnBonz7iyIFZ0AbVo0bbFpEVuhCYA==}
+    hasBin: true
+
   web-worker@1.5.0:
     resolution: {integrity: sha512-RiMReJrTAiA+mBjGONMnjVDP2u3p9R1vkcGz6gDIrOMT3oGuYwX2WRMYI9ipkphSuE5XKEhydbhNEJh4NY9mlw==}
 
@@ -3737,6 +3752,10 @@ snapshots:
       '@xterm/xterm': 6.1.0-beta.213
 
   '@xterm/addon-web-links@0.13.0-beta.213(@xterm/xterm@6.1.0-beta.213)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.213
+
+  '@xterm/addon-webgl@0.20.0-beta.212(@xterm/xterm@6.1.0-beta.213)':
     dependencies:
       '@xterm/xterm': 6.1.0-beta.213
 
@@ -5339,6 +5358,10 @@ snapshots:
   w3c-xmlserializer@5.0.0:
     dependencies:
       xml-name-validator: 5.0.0
+
+  wawoff2@2.0.1:
+    dependencies:
+      argparse: 2.0.1
 
   web-worker@1.5.0: {}
 

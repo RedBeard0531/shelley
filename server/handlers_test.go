@@ -520,3 +520,26 @@ func TestHandleTools(t *testing.T) {
 		t.Fatalf("bash missing from registry")
 	}
 }
+
+// The Nerd Font is 1.2MB; browsers must be able to revalidate it (ETag/304)
+// rather than download it on every page load that renders an icon.
+func TestStaticFontRevalidates(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	mux := http.NewServeMux()
+	h.server.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/SymbolsNerdFontMono.woff2", nil))
+	etag := rec.Header().Get("ETag")
+	if rec.Code != http.StatusOK || etag == "" || rec.Header().Get("Content-Type") != "font/woff2" {
+		t.Fatalf("status %d, ETag %q, Content-Type %q", rec.Code, etag, rec.Header().Get("Content-Type"))
+	}
+	req := httptest.NewRequest("GET", "/SymbolsNerdFontMono.woff2", nil)
+	req.Header.Set("If-None-Match", etag)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("revalidation status %d, want 304", rec.Code)
+	}
+}
