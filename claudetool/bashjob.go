@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"shelley.exe.dev/llm"
 )
 
 // BackgroundJob is a bash command that outlived its tool call. Its process
@@ -187,4 +190,73 @@ func logTail(path string, n int) string {
 		lines[i] = truncateLine(l)
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// readTailString returns up to maxBytes from the end of the file (best-effort).
+func readTailString(path string, maxBytes int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Sprintf("(could not open log: %v)", err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return fmt.Sprintf("(could not stat log: %v)", err)
+	}
+	size := st.Size()
+	if size == 0 {
+		return ""
+	}
+	start := int64(0)
+	truncated := false
+	if size > maxBytes {
+		start = size - maxBytes
+		truncated = true
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return fmt.Sprintf("(could not seek log: %v)", err)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return fmt.Sprintf("(could not read log: %v)", err)
+	}
+	out := string(b)
+	if truncated {
+		// Drop a possibly-partial first line.
+		if i := strings.IndexByte(out, '\n'); i >= 0 && i < len(out)-1 {
+			out = out[i+1:]
+		}
+	}
+	return out
+}
+
+const logProgressInterval = 500 * time.Millisecond
+
+// logProgressLoop reports the tail of the log at path to progress every
+// logProgressInterval while it changes, and once more when stop closes.
+func logProgressLoop(progress llm.ToolProgressFunc, toolID, toolName, path string, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(logProgressInterval)
+	defer ticker.Stop()
+	last := ""
+	emit := func() {
+		t := readTailString(path, progressMaxBytes)
+		if t != last {
+			last = t
+			progress(llm.ToolProgress{
+				ToolUseID: toolID,
+				ToolName:  toolName,
+				Output:    t,
+			})
+		}
+	}
+	for {
+		select {
+		case <-stop:
+			emit()
+			return
+		case <-ticker.C:
+			emit()
+		}
+	}
 }

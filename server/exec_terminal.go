@@ -107,7 +107,7 @@ func (s *Server) handleExecWS(w http.ResponseWriter, r *http.Request) {
 
 // buildTerminalEnv returns the SHELLEY_* environment variables to inject into
 // ephemeral / persistent terminals spawned from the UI. It shares the same
-// claudetool.ShelleyEnv used by the agent's bash/shell tools so interactive
+// claudetool.ShelleyEnv used by the agent's bash tool so interactive
 // "!" commands and agent-run commands see an identical environment.
 func buildTerminalEnv(conversationID, slug, model, userEmail, cwd string, listenPort int) []string {
 	return claudetool.ShelleyEnv{

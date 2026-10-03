@@ -42,7 +42,6 @@ export function toolEmoji(name: string | undefined | null, input?: unknown): str
     case "openai_audio_transcription":
       return "🎙️";
     case "bash":
-    case "shell":
       return "🛠️";
     case "patch":
       return "🖋️";
@@ -324,7 +323,6 @@ export function toolHeadline(
 
   switch (n) {
     case "bash":
-    case "shell":
       return bashHeadline(summary, maxLen);
     case "patch":
     case "openai_audio_transcription":
@@ -362,7 +360,6 @@ function inputSummary(name: string | undefined | null, input: unknown): string {
   };
   switch (name) {
     case "bash":
-    case "shell":
       return pick("command");
     case "patch":
     case "change_dir":

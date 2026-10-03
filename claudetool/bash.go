@@ -329,7 +329,7 @@ func (b *BashTool) executeBashInDir(ctx context.Context, req bashInput, wd strin
 	stopProgress := func() {}
 	if progressFn := GetToolProgress(ctx); progressFn != nil && job.ToolUseID != "" {
 		stop, done := make(chan struct{}), make(chan struct{})
-		go shellProgressLoop(progressFn, job.ToolUseID, bashName, job.LogPath, stop, done)
+		go logProgressLoop(progressFn, job.ToolUseID, bashName, job.LogPath, stop, done)
 		stopProgress = func() {
 			close(stop)
 			<-done

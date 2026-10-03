@@ -50,13 +50,12 @@ test.describe('Tool Component Verification', () => {
       await expect(card.first().locator('.tool-emoji')).toHaveText(emoji);
     };
 
-    // bash and shell both render the BashTool card, with the command in the header.
-    for (const command of ["echo 'hello from bash'", "echo 'hello from shell'"]) {
-      const bashCard = page.locator('.bash-tool').filter({ hasText: command }).first();
-      await expect(bashCard).toBeAttached();
-      await expect(bashCard.locator('.bash-tool-emoji')).toBeAttached();
-      await expect(bashCard.locator('.bash-tool-command')).toContainText(command);
-    }
+    // bash renders the BashTool card, with the command in the header.
+    const command = "echo 'hello from bash'";
+    const bashCard = page.locator('.bash-tool').filter({ hasText: command }).first();
+    await expect(bashCard).toBeAttached();
+    await expect(bashCard.locator('.bash-tool-emoji')).toBeAttached();
+    await expect(bashCard.locator('.bash-tool-command')).toContainText(command);
 
     // Thinking content appears inline (not a tool card).
     const thinkingContent = page.locator('.thinking-content').filter({ hasText: "I'm thinking about the best approach" });

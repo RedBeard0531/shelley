@@ -190,7 +190,6 @@ usePerfLifecycle("toolCall");
 const TOOL_COMPONENTS: Record<string, any> = {
   openai_audio_transcription: AudioTranscriptionTool,
   bash: BashTool,
-  shell: BashTool,
   patch: PatchTool,
   apply_patch: PatchTool,
   browser: BrowserTool,

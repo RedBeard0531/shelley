@@ -12,7 +12,7 @@ import (
 // runs as SHELLEY_* environment variables. It is the single source of truth for
 // both code paths that run shell commands:
 //
-//   - the agent's bash and shell tools, and
+//   - the agent's bash tool, and
 //   - interactive "!" terminals spawned from the UI (see buildTerminalEnv).
 //
 // Keeping the logic in one place ensures the same variables are injected

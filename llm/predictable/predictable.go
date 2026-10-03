@@ -1129,15 +1129,6 @@ func (s *Service) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response 
 		ToolInput: json.RawMessage(screencastInput),
 	})
 
-	// shell tool (yielding successor to bash; should reuse BashTool widget)
-	shellInput, _ := json.Marshal(map[string]string{"command": "echo 'hello from shell'"})
-	content = append(content, llm.Content{
-		ID:        fmt.Sprintf("tool_shell_%d", (baseNano+15)%1000),
-		Type:      llm.ContentTypeToolUse,
-		ToolName:  "shell",
-		ToolInput: json.RawMessage(shellInput),
-	})
-
 	return &llm.Response{
 		ID:         fmt.Sprintf("pred-smorgasbord-%d", baseNano),
 		Type:       "message",
