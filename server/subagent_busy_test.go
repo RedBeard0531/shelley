@@ -19,6 +19,7 @@ import (
 
 func TestSubagentBusy(t *testing.T) {
 	t.Run("DeliversMidTurn", testSubagentBusy_DeliversMidTurn)
+	t.Run("DeliversDurableInjectionMidTurn", testSubagentBusy_DeliversDurableInjectionMidTurn)
 }
 
 // list_subagents reports each delegated subagent's slug, working state, and
@@ -87,14 +88,6 @@ func TestSubagentRunner_PersistsReasoning(t *testing.T) {
 	}
 }
 
-// pendingBatchCount returns the number of queued pending batches (test-only,
-// reads under the manager lock).
-func pendingBatchCount(cm *ConversationManager) int {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	return len(cm.pendingBatches)
-}
-
 // hasCancelledMessage reports whether the subagent recorded an
 // "[Operation cancelled]" end-of-turn message (the cancel-path artifact we
 // want to be sure no longer appears on the resend path).
@@ -137,6 +130,38 @@ func testSubagentBusy_DeliversMidTurn(t *testing.T) {
 	if !strings.Contains(res, "current turn") {
 		t.Fatalf("expected a mid-turn delivery status, got %q", res)
 	}
+	requireSteeredMidTurn(t, f)
+}
+
+// A steering message is injectable because the durable queue says so, not
+// because the manager that queued it is still in memory: an injected entry
+// that a fresh manager finds in queued_messages (as after a restart) still
+// reaches the running turn at its next LLM round.
+func testSubagentBusy_DeliversDurableInjectionMidTurn(t *testing.T) {
+	f := newSubagentDoneFixture(t, "irrelevant")
+	defer stopActiveConversationLoops(f.server)
+	runner := NewSubagentRunner(f.server)
+
+	if _, err := runner.RunSubagent(t.Context(), f.subagentID, "bash: sleep 1", "predictable", ""); err != nil {
+		t.Fatalf("RunSubagent(start): %v", err)
+	}
+	if _, err := f.database.AppendQueuedMessage(t.Context(), f.subagentID, db.QueuedMessage{
+		ID:        "durable-steer",
+		Llm:       []byte(`{"Role":0,"Content":[{"Type":2,"Text":"echo: steered"}]}`),
+		CreatedAt: time.Now().UTC(),
+		Model:     "predictable",
+		Inject:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	requireSteeredMidTurn(t, f)
+}
+
+// requireSteeredMidTurn waits for the subagent's turn to end and requires that
+// the "echo: steered" message was recorded right after the running tool's
+// result, without cancelling the turn, and left nothing queued.
+func requireSteeredMidTurn(t *testing.T, f *subagentDoneFixture) {
+	t.Helper()
 	select {
 	case <-f.subagentMgr.idle():
 	case <-time.After(10 * time.Second):
@@ -166,7 +191,7 @@ func testSubagentBusy_DeliversMidTurn(t *testing.T) {
 	if prev.Role != llm.MessageRoleUser || len(prev.Content) == 0 || prev.Content[0].Type != llm.ContentTypeToolResult {
 		t.Fatalf("steering message should follow the running tool's result, got %+v", prev)
 	}
-	if n := pendingBatchCount(f.subagentMgr); n != 0 {
-		t.Fatalf("expected no queued batches, got %d", n)
+	if q := queuedMessages(t, f.database, f.subagentID); len(q) != 0 {
+		t.Fatalf("expected no queued messages, got %+v", q)
 	}
 }

@@ -1361,7 +1361,12 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// Decide whether this message will be queued or accepted immediately.
 	// The chat-message hook is told which path it will take so it can react
 	// accordingly.
-	willQueue := req.Queue || manager.IsDistilling() || manager.HasQueuedMessages()
+	hasQueued, err := manager.HasQueuedMessages(ctx)
+	if err != nil {
+		s.internalError(w, "Failed to read queued messages", err, "conversationID", conversationID)
+		return
+	}
+	willQueue := req.Queue || manager.IsDistilling() || hasQueued
 
 	// Run chat-message hook; the hook may rewrite the message text. Hook
 	// failures abort the request — the user's message is not delivered.

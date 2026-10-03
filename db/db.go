@@ -590,6 +590,9 @@ type QueuedMessage struct {
 	// UserData is message provenance and other presentation metadata captured at
 	// queue time. It is copied to messages.user_data when the item drains.
 	UserData json.RawMessage `json:"user_data,omitempty"`
+	// Inject lets a running turn take the message at its next LLM round
+	// instead of waiting for the turn to end.
+	Inject bool `json:"inject,omitempty"`
 	// ID, CreatedAt, Model, UserEmail, and UserData are shared queue metadata.
 	// Kind, State, Transcription, Error, and the optional ready Llm payload form
 	// the specialized-work variant.

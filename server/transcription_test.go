@@ -383,39 +383,6 @@ func TestTranscriptionCommandPersistsBeforeDetachedWork(t *testing.T) {
 	}
 }
 
-func TestOrphanedTranscriptionBarrierSelfHeals(t *testing.T) {
-	server, database, _ := newTestServer(t)
-	defer stopActiveConversationLoops(server)
-	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	message := llm.UserStringMessage("echo: after orphan")
-	llmJSON, err := json.Marshal(message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queued := db.QueuedMessage{ID: "after-orphan", Llm: llmJSON, CreatedAt: time.Now().UTC(), Model: "predictable"}
-	if _, err := database.AppendQueuedMessage(t.Context(), conversation.ConversationID, queued); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager.mu.Lock()
-	manager.pendingBatches = []pendingBatch{
-		{Kind: pendingBatchTranscription, MessageIDs: []string{"already-cancelled"}, ModelID: "predictable"},
-		{Kind: pendingBatchUser, MessageIDs: []string{queued.ID}, Messages: []llm.Message{message}, ModelID: "predictable"},
-	}
-	manager.mu.Unlock()
-
-	manager.drainPendingMessages(server)
-	if !userMessageRowExists(t, database, conversation.ConversationID, "after orphan") {
-		t.Fatal("orphaned transcription barrier blocked the following user message")
-	}
-}
-
 func TestQueuedTranscriptionPreservesFIFOAndVideoPaths(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)

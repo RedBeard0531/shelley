@@ -15,7 +15,7 @@ import (
 )
 
 func TestPendingDrainCoalescesWakeup(t *testing.T) {
-	manager := &ConversationManager{pendingBatches: []pendingBatch{{Kind: pendingBatchUser}}}
+	manager := &ConversationManager{}
 	owner, done := manager.beginPendingDrain()
 	if !owner {
 		t.Fatal("first drain did not claim ownership")

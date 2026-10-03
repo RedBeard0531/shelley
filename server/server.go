@@ -1013,6 +1013,9 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		manager := NewConversationManager(conversationID, s.db, s.logger, config, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
 		manager.role = role
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
+		manager.recordDrainedQueued = func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) error {
+			return s.recordDrainedQueuedMessages(ctx, conversationID, qm.ID, messages, qm.UserEmail, qm.UserData)
+		}
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
 		switch role {
@@ -1641,11 +1644,10 @@ func (s *Server) Cleanup() {
 		// stale lastActivity looks: long-running tool calls (e.g. a shell
 		// command that runs for an hour) don't Touch the manager. Evicting it would tear down the loop context mid-flight,
 		// cancelling in-flight tool calls and LLM requests and orphaning the
-		// turn. Same for managers still holding queued work.
+		// turn. Queued work lives in the DB, so it does not pin a manager.
 		manager.mu.Lock()
 		lastActivity := manager.lastActivity
-		busy := manager.agentWorking || manager.distilling || manager.draining ||
-			len(manager.pendingBatches) > 0
+		busy := manager.agentWorking || manager.distilling || manager.draining
 		manager.mu.Unlock()
 		if !busy && now.Sub(lastActivity) > 30*time.Minute {
 			toCleanup = append(toCleanup, manager)
