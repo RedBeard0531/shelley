@@ -126,6 +126,10 @@ func testSubagentBusy_DeliversMidTurn(t *testing.T) {
 	if !f.subagentMgr.IsAgentWorking() {
 		t.Fatal("subagent should be working on its first turn")
 	}
+	// Steer only once the tool is running. Injected messages are taken before
+	// every LLM request, so steering earlier can land ahead of the turn's first
+	// request instead of after the tool result.
+	waitForToolUseRecorded(t, f.database, f.subagentID)
 	res, err := runner.RunSubagent(t.Context(), f.subagentID, "echo: steered", "predictable", "")
 	if err != nil {
 		t.Fatalf("RunSubagent(steer): %v", err)
