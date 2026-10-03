@@ -365,9 +365,7 @@
       :on-start-recording="prepareRecording"
       :recording-inline-available="!currentConversation?.archived"
       :on-queue="queueMessage"
-      :on-compact="
-        conversationId && onDistillNewGeneration ? handleDistillCompactNewGeneration : undefined
-      "
+      :on-compact-and-queue="conversationId && onDistillNewGeneration ? compactAndQueue : undefined"
       :show-queue-option="!!conversationId"
       :can-queue="canQueue"
       :auto-queue="autoQueue"
@@ -2755,27 +2753,32 @@ const pendingQueuedMessages: {
 }[] = [];
 
 async function queueMessage(message: string) {
-  if (!message.trim() || !props.conversationId) return;
+  if (!props.conversationId) return;
+  await queueMessageTo(props.conversationId, selectedModel.value, message);
+}
+
+async function queueMessageTo(conversationId: string, model: string, message: string) {
+  if (!message.trim()) return;
   // Same guard as sendMessage: a queued turn runs the LLM later, so an
   // unavailable model just defers the confusing "Unsupported model" error.
   // Throws (not returns) so MessageInput's catch restores the composer text.
-  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+  if (!canSendWithModel(model, readyModelIds.value)) {
     const err = new Error(noModelErrorMessage());
     error.value = err.message;
     throw err;
   }
   const pending = {
-    conversationId: props.conversationId,
+    conversationId,
     text: message,
     controller: new AbortController(),
   };
   pendingQueuedMessages.push(pending);
   try {
     await api.sendMessage(
-      props.conversationId,
+      conversationId,
       {
         message: message.trim(),
-        model: selectedModel.value,
+        model,
         queue: true,
       },
       pending.controller.signal,
@@ -3390,6 +3393,19 @@ async function handleDistillCompactNewGeneration(instructions?: string) {
     "compact",
     instructions,
   );
+}
+
+/** Compact, then queue `message` behind the compaction (queued messages drain
+ * once distillation ends). The user may switch conversations while the
+ * compaction request is in flight, so pin the queue to the conversation and
+ * model that were active when they clicked. */
+async function compactAndQueue(message: string) {
+  const conversationId = props.conversationId;
+  if (!conversationId || !props.onDistillNewGeneration) return;
+  const model = selectedModel.value;
+  const cwd = props.currentConversation?.cwd || selectedCwd.value || undefined;
+  await props.onDistillNewGeneration(conversationId, model, cwd, "compact");
+  await queueMessageTo(conversationId, model, message);
 }
 
 async function handleStartNewGeneration() {

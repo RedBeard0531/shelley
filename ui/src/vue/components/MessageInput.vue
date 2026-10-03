@@ -525,10 +525,12 @@ const props = withDefaults(
     recordingInlineAvailable?: boolean;
     /** Async queue handler (awaited). Mirrors React's onQueue prop. */
     onQueue?: (message: string) => Promise<void> | void;
-    /** Async compaction handler (awaited). When provided, the send-options
-     * menu offers "Compact and send": it compacts the conversation and then
-     * queues the composed message so it runs once compaction finishes. */
-    onCompact?: () => Promise<void> | void;
+    /** Async compact-and-queue handler (awaited). When provided, the
+     * send-options menu offers "Compact and send": it compacts the
+     * conversation and then queues the composed message so it runs once
+     * compaction finishes. One handler, so the parent can pin both halves to
+     * the same conversation even if the user navigates away mid-compaction. */
+    onCompactAndQueue?: (message: string) => Promise<void> | void;
     /** Show the split send button with queue chevron (e.g. when in a conversation) */
     showQueueOption?: boolean;
     /** Whether queuing is available right now (agent is working) */
@@ -593,7 +595,7 @@ const { t } = useI18n();
 const hasQueueHandler = computed(() => props.onQueue !== undefined);
 // The "Compact and send" option is available whenever a compaction handler is
 // wired and we're not already mid-compaction (autoQueue signals distilling).
-const canCompact = computed(() => props.onCompact !== undefined && !props.autoQueue);
+const canCompact = computed(() => props.onCompactAndQueue !== undefined && !props.autoQueue);
 const sendSelectedLevel = ref<ContextUsageLevel>("");
 
 const message = ref(props.draftSeed?.value ?? "");
@@ -1039,7 +1041,6 @@ const isCommand = computed(() => /^[!/]/.test(message.value.trimStart()));
 const preferCompactAndSend = computed(
   () =>
     canCompact.value &&
-    hasQueueHandler.value &&
     !isCommand.value &&
     props.compactSendLevel !== "" &&
     sendSelectedLevel.value !== props.compactSendLevel,
@@ -1384,7 +1385,7 @@ async function handleCompactAndSend() {
     await handleSendNow();
     return;
   }
-  if (hasContent.value && props.onCompact && props.onQueue) {
+  if (hasContent.value && props.onCompactAndQueue) {
     const messageToQueue = composeMessageWithAttachments(message.value).trim();
     const origin = composerOrigin();
     setMessage("");
@@ -1392,10 +1393,7 @@ async function handleCompactAndSend() {
     emit("draft-cleared");
     showQueueMenu.value = false;
     try {
-      // Start compaction first so the conversation enters the distilling
-      // state, then queue — enqueued messages drain after distillation ends.
-      await props.onCompact();
-      await props.onQueue(messageToQueue);
+      await props.onCompactAndQueue(messageToQueue);
     } catch {
       guardComposerClear(origin, composerOrigin, () => setMessage(messageToQueue));
     }
