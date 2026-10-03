@@ -82,14 +82,17 @@ type ConversationState struct {
 // fetch. PreviewUpdatedAt is the agent message's CreatedAt (RFC 3339).
 type ConversationWithState struct {
 	generated.Conversation
-	Working          bool   `json:"working"`
-	GitRepoRoot      string `json:"git_repo_root,omitempty"`
-	GitWorktreeRoot  string `json:"git_worktree_root,omitempty"`
-	GitCommit        string `json:"git_commit,omitempty"`
-	GitSubject       string `json:"git_subject,omitempty"`
-	SubagentCount    int64  `json:"subagent_count"`
-	Preview          string `json:"preview,omitempty"`
-	PreviewUpdatedAt string `json:"preview_updated_at,omitempty"`
+	Working         bool   `json:"working"`
+	GitRepoRoot     string `json:"git_repo_root,omitempty"`
+	GitWorktreeRoot string `json:"git_worktree_root,omitempty"`
+	GitCommit       string `json:"git_commit,omitempty"`
+	GitSubject      string `json:"git_subject,omitempty"`
+	SubagentCount   int64  `json:"subagent_count"`
+	// RunningBackgroundJobs counts this conversation's backgrounded bash
+	// commands that have not exited.
+	RunningBackgroundJobs int64  `json:"running_background_jobs"`
+	Preview               string `json:"preview,omitempty"`
+	PreviewUpdatedAt      string `json:"preview_updated_at,omitempty"`
 	// MaxSequenceID is the highest message sequence_id stored for this
 	// conversation. Clients use it to decide whether their cached snapshot
 	// is up to date without a separate /api/conversation/<id> roundtrip.
@@ -355,10 +358,14 @@ type ConversationListUpdate struct {
 
 // Server manages the HTTP API and active conversations
 type Server struct {
-	db                       *db.DB
-	llmManager               LLMProvider
-	toolSetConfig            claudetool.ToolSetConfig
-	activeConversations      map[string]*ConversationManager
+	db                  *db.DB
+	llmManager          LLMProvider
+	toolSetConfig       claudetool.ToolSetConfig
+	activeConversations map[string]*ConversationManager
+	backgroundJobsMu    sync.Mutex
+	// runningBackgroundJobs holds the background jobs that have not exited,
+	// by conversation ID and job ID.
+	runningBackgroundJobs    map[string]map[string]claudetool.BackgroundJob
 	mu                       sync.Mutex
 	deletingConversations    map[string]bool
 	logger                   *slog.Logger
@@ -438,6 +445,7 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		llmManager:              llmManager,
 		toolSetConfig:           toolSetConfig,
 		activeConversations:     make(map[string]*ConversationManager),
+		runningBackgroundJobs:   make(map[string]map[string]claudetool.BackgroundJob),
 		deletingConversations:   make(map[string]bool),
 		logger:                  logger,
 		predictableOnly:         predictableOnly,

@@ -117,6 +117,7 @@ export interface ConversationWithStateForTS {
   git_commit?: string;
   git_subject?: string;
   subagent_count: number;
+  running_background_jobs: number;
   preview?: string;
   preview_updated_at?: string;
   search_snippet?: string;

@@ -3,8 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -208,5 +211,105 @@ func TestBackgroundJobRecoveryAfterRestart(t *testing.T) {
 	waitForIdle(t, server, id)
 	if n := len(backgroundJobNotices(t, database, id)); n != 3 {
 		t.Fatalf("%d notices, want 3", n)
+	}
+}
+
+// waitForListJobCount reads conversation list patch events until one sets
+// the running background job count of the conversation at index 0 to want.
+func waitForListJobCount(t *testing.T, next func() (ConversationListPatchEvent, bool), want int) {
+	t.Helper()
+	for {
+		ev, ok := next()
+		if !ok {
+			t.Fatalf("list stream ended before running_background_jobs became %d", want)
+		}
+		for _, op := range ev.Patch {
+			if op.Path == "/0/running_background_jobs" && string(op.Value) == strconv.Itoa(want) {
+				return
+			}
+		}
+	}
+}
+
+// The conversation list counts a conversation's running background jobs;
+// killing one through the API ends it with exactly one notice and drops
+// the count.
+func TestBackgroundJobsListedAndKilled(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir()) // keep the job log out of /tmp
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+	call := func(method, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(method, path, nil))
+		return w
+	}
+
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := conv.ConversationID
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	_, next, release, err := server.conversationListStream.connect(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	gate := filepath.Join(t.TempDir(), "gate")
+	if err := syscall.Mkfifo(gate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	postChatMessage(t, server, id, "bash-bg: echo started; read -r _ < "+gate)
+	waitForListJobCount(t, next, 1)
+
+	w := call("GET", "/api/conversation/"+id+"/background-jobs")
+	var jobs []BackgroundJobInfo
+	if err := json.NewDecoder(w.Body).Decode(&jobs); err != nil {
+		t.Fatalf("decode %q: %v", w.Body.String(), err)
+	}
+	if len(jobs) != 1 || !strings.Contains(jobs[0].Command, gate) || jobs[0].PGID == 0 || jobs[0].LogPath == "" {
+		t.Fatalf("background jobs = %+v", jobs)
+	}
+	job := jobs[0]
+
+	if w := call("POST", "/api/conversation/"+id+"/background-jobs/"+job.JobID+"/kill"); w.Code != http.StatusNoContent {
+		t.Fatalf("kill: %d %s", w.Code, w.Body.String())
+	}
+	waitForListJobCount(t, next, 0)
+	waitFor(t, 10*time.Second, func() bool { return len(backgroundJobNotices(t, database, id)) == 1 })
+	if notice := backgroundJobNotices(t, database, id)[0]; notice.BackgroundJobID != job.JobID || !strings.Contains(notice.Text, "finished: exit 143") {
+		t.Errorf("notice = %+v", notice)
+	}
+
+	// The job is gone now, and an unknown job never existed.
+	for _, jobID := range []string{job.JobID, "unknown"} {
+		if w := call("POST", "/api/conversation/"+id+"/background-jobs/"+jobID+"/kill"); w.Code != http.StatusNotFound {
+			t.Errorf("kill %s: %d %s, want 404", jobID, w.Code, w.Body.String())
+		}
+	}
+	waitForIdle(t, server, id)
+	if n := len(backgroundJobNotices(t, database, id)); n != 1 {
+		t.Fatalf("%d notices, want 1", n)
+	}
+}
+
+// A job whose PID now names another process is never signalled.
+func TestKillBackgroundJobWithReusedPID(t *testing.T) {
+	server, _, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+	job := claudetool.BackgroundJob{ID: "stale", ConversationID: "c", PID: os.Getpid(), StartTime: 1}
+	server.setBackgroundJobRunning(job, true)
+	defer server.setBackgroundJobRunning(job, false)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/conversation/c/background-jobs/stale/kill", nil))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "no longer running") {
+		t.Fatalf("kill: %d %s, want 409", w.Code, w.Body.String())
 	}
 }

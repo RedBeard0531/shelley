@@ -838,18 +838,20 @@ func (s *Server) decorateConversations(ctx context.Context, conversations []db.C
 		subagentCounts = make(map[string]int64)
 	}
 
+	runningJobs := s.runningBackgroundJobCounts()
 	now := time.Now()
 	result := make([]ConversationWithState, len(conversations))
 	for i, item := range conversations {
 		conv := item.Conversation
 		cws := ConversationWithState{
-			Conversation:     conv,
-			Working:          conv.AgentWorking,
-			SubagentCount:    subagentCounts[conv.ConversationID],
-			Preview:          item.Preview,
-			PreviewUpdatedAt: item.PreviewUpdatedAt,
-			MaxSequenceID:    item.MaxSequenceID,
-			Participants:     item.Participants,
+			Conversation:          conv,
+			Working:               conv.AgentWorking,
+			SubagentCount:         subagentCounts[conv.ConversationID],
+			RunningBackgroundJobs: runningJobs[conv.ConversationID],
+			Preview:               item.Preview,
+			PreviewUpdatedAt:      item.PreviewUpdatedAt,
+			MaxSequenceID:         item.MaxSequenceID,
+			Participants:          item.Participants,
 		}
 		if conv.Cwd != nil {
 			entry, ok := s.conversationListGitCache.get(*conv.Cwd, now)
@@ -942,6 +944,12 @@ func (s *Server) conversationMux() *http.ServeMux {
 	})
 	mux.HandleFunc("GET /{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
 		s.handleGetSubagents(w, r, r.PathValue("id"))
+	})
+	mux.HandleFunc("GET /{id}/background-jobs", func(w http.ResponseWriter, r *http.Request) {
+		s.handleListBackgroundJobs(w, r, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /{id}/background-jobs/{jobID}/kill", func(w http.ResponseWriter, r *http.Request) {
+		s.handleKillBackgroundJob(w, r, r.PathValue("id"), r.PathValue("jobID"))
 	})
 	mux.HandleFunc("POST /{id}/send-queued", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSendQueuedNow(w, r, r.PathValue("id"))

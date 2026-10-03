@@ -38,6 +38,15 @@ async function responseError(response: Response, prefix: string): Promise<ApiErr
   return new ApiError(`${prefix}: ${detail}`, response.status);
 }
 
+// A backgrounded bash command that has not exited (server BackgroundJobInfo).
+export interface BackgroundJob {
+  job_id: string;
+  command: string;
+  pgid: number;
+  log_path: string;
+  started_at: string;
+}
+
 export interface AvailableModel {
   id: string;
   display_name?: string;
@@ -953,6 +962,26 @@ class ApiService {
       throw await responseError(response, "Failed to update tags");
     }
     return response.json();
+  }
+
+  async getBackgroundJobs(conversationId: string): Promise<BackgroundJob[]> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${encodeURIComponent(conversationId)}/background-jobs`,
+    );
+    if (!response.ok) {
+      throw await responseError(response, "Failed to get background jobs");
+    }
+    return response.json();
+  }
+
+  async killBackgroundJob(conversationId: string, jobId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${encodeURIComponent(conversationId)}/background-jobs/${encodeURIComponent(jobId)}/kill`,
+      { method: "POST" },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "Failed to kill background job");
+    }
   }
 
   async getSubagents(conversationId: string): Promise<Conversation[]> {

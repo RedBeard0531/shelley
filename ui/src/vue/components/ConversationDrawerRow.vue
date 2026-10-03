@@ -230,6 +230,11 @@
           </svg>
           {{ terminalCount }}
         </span>
+        <BackgroundJobsBadge
+          v-if="!isDraft && convState.running_background_jobs > 0"
+          :conversation-id="conversation.conversation_id"
+          :count="convState.running_background_jobs"
+        />
         <button
           v-if="showParticipantBadge"
           type="button"
@@ -379,6 +384,11 @@
           <span class="conversation-date drawer-subagent-date">{{
             ctx.formatDate(sub.updated_at)
           }}</span>
+          <BackgroundJobsBadge
+            v-if="sub.running_background_jobs > 0"
+            :conversation-id="sub.conversation_id"
+            :count="sub.running_background_jobs"
+          />
         </div>
       </div>
     </div>
@@ -401,6 +411,7 @@ import Button from "primevue/button";
 import Menu from "primevue/menu";
 import type { MenuItem } from "primevue/menuitem";
 import OverflowDotsIcon from "./OverflowDotsIcon.vue";
+import BackgroundJobsBadge from "./BackgroundJobsBadge.vue";
 import type { Conversation, ConversationWithState } from "../../types";
 import { isImeComposing } from "../../utils/imeComposing";
 import { highlightSearchMatches } from "../../utils/searchHighlight";

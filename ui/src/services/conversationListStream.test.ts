@@ -26,6 +26,7 @@ function conv(id: string, slug: string, working = false): ConversationWithState 
     queued_messages: "[]",
     working,
     subagent_count: 0,
+    running_background_jobs: 0,
     max_sequence_id: 0,
   };
 }

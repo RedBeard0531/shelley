@@ -112,26 +112,41 @@ func waitBashJob(cmd *exec.Cmd, exitPath string, exited chan<- struct{}) {
 	}
 }
 
+// ErrBackgroundJobGone reports that a job's wrapper has exited, or that
+// its PID now names another process.
+var ErrBackgroundJobGone = errors.New("background job is no longer running")
+
+// pidfd opens a pidfd for j's wrapper, or fails with ErrBackgroundJobGone.
+// The pidfd pins the process identity: if the start time read after opening
+// it matches, the pidfd refers to the wrapper.
+func (j BackgroundJob) pidfd() (int, error) {
+	fd, err := unix.PidfdOpen(j.PID, 0)
+	if errors.Is(err, unix.ESRCH) {
+		return -1, ErrBackgroundJobGone
+	}
+	if err != nil {
+		return -1, fmt.Errorf("pidfd_open %d: %w", j.PID, err)
+	}
+	if st, err := processStartTime(j.PID); err != nil || st != j.StartTime {
+		unix.Close(fd)
+		return -1, ErrBackgroundJobGone
+	}
+	return fd, nil
+}
+
 // Exited returns a channel closed when j's wrapper process has exited. It
 // is for jobs this process did not start, so it waits with a pidfd. A
 // wrapper that is already gone, or whose PID now names another process,
 // yields an already-closed channel.
 func (j BackgroundJob) Exited() (<-chan struct{}, error) {
 	exited := make(chan struct{})
-	fd, err := unix.PidfdOpen(j.PID, 0)
-	if errors.Is(err, unix.ESRCH) {
+	fd, err := j.pidfd()
+	if errors.Is(err, ErrBackgroundJobGone) {
 		close(exited)
 		return exited, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("pidfd_open %d: %w", j.PID, err)
-	}
-	// The pidfd pins the process identity: if the start time read after
-	// opening it matches, the pidfd refers to the wrapper.
-	if st, err := processStartTime(j.PID); err != nil || st != j.StartTime {
-		unix.Close(fd)
-		close(exited)
-		return exited, nil
+		return nil, err
 	}
 	go func() {
 		defer close(exited)
@@ -145,6 +160,22 @@ func (j BackgroundJob) Exited() (<-chan struct{}, error) {
 		}
 	}()
 	return exited, nil
+}
+
+// Kill sends SIGTERM to j's process group, as `kill -- -PGID` would, once
+// it has checked that j's wrapper, the group leader, is still j's. The
+// wrapper survives the signal and records the command's exit status.
+func (j BackgroundJob) Kill() error {
+	fd, err := j.pidfd()
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	err = syscall.Kill(-j.PID, syscall.SIGTERM)
+	if errors.Is(err, syscall.ESRCH) {
+		return ErrBackgroundJobGone
+	}
+	return err
 }
 
 const jobNoticeTailLines = 20
