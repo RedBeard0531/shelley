@@ -1346,7 +1346,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		if msgs, lerr := s.db.ListMessages(ctx, conversationID); lerr == nil {
 			for i := range msgs {
 				if msgs[i].Type == string(db.MessageTypeSystem) {
-					s.notifySubscribersNewMessage(ctx, conversationID, &msgs[i])
+					s.notifySubscribers(ctx, conversationID, msgs[i])
 				}
 			}
 		} else {
@@ -4197,7 +4197,7 @@ func (s *Server) startNewGeneration(ctx context.Context, conversationID string) 
 	if err == nil {
 		for i := range messages {
 			if messages[i].Generation == conversation.CurrentGeneration {
-				s.notifySubscribersNewMessage(ctx, conversationID, &messages[i])
+				s.notifySubscribers(ctx, conversationID, messages[i])
 			}
 		}
 	}

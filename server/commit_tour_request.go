@@ -865,7 +865,7 @@ func (s *Server) handleCommitTourCommand(ctx context.Context, w http.ResponseWri
 			http.Error(w, "failed to record commit tour request", http.StatusInternalServerError)
 			return true
 		}
-		go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), conversation.ConversationID, marker)
+		go s.notifySubscribers(context.WithoutCancel(ctx), conversation.ConversationID, *marker)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if started {

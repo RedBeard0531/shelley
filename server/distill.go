@@ -344,7 +344,7 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 		s.internalError(w, "Failed to create status message", err, "conversationID", req.SourceConversationID)
 		return
 	}
-	go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), req.SourceConversationID, statusMsg)
+	go s.notifySubscribers(context.WithoutCancel(ctx), req.SourceConversationID, *statusMsg)
 
 	if err := manager.Hydrate(ctx); err != nil {
 		// WithoutCancel: a client disconnect mid-setup must not strand the
@@ -360,7 +360,7 @@ func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Reque
 		for i := range currentMessages {
 			msg := &currentMessages[i]
 			if msg.Generation == conversation.CurrentGeneration && msg.Type == string(db.MessageTypeSystem) && msg.UserData == nil {
-				go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), req.SourceConversationID, msg)
+				go s.notifySubscribers(context.WithoutCancel(ctx), req.SourceConversationID, *msg)
 			}
 		}
 	}

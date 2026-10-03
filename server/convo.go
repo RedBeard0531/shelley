@@ -1427,7 +1427,7 @@ func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, mode
 	}
 	if midTurn {
 		batch.recordMidTurn = func(ctx context.Context) error {
-			return s.recordDrainedQueuedMessage(ctx, cm.conversationID, qm.ID, message, qm.UserEmail, qm.UserData)
+			return s.recordDrainedQueuedMessages(ctx, cm.conversationID, qm.ID, []llm.Message{message}, qm.UserEmail, qm.UserData)
 		}
 	}
 	cm.enqueueBatch(s, batch)
@@ -1663,7 +1663,7 @@ func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loop
 			if i < len(b.MessageIDs) {
 				queuedID = b.MessageIDs[i]
 			}
-			if err := s.recordDrainedQueuedMessage(ctx, cm.conversationID, queuedID, msg, b.UserEmail, b.UserData); err != nil {
+			if err := s.recordDrainedQueuedMessages(ctx, cm.conversationID, queuedID, []llm.Message{msg}, b.UserEmail, b.UserData); err != nil {
 				if errors.Is(err, db.ErrQueuedMessageNotFound) {
 					cm.logger.Info("Skipping cancelled queued message", "queued_id", queuedID)
 					return true, false
@@ -1675,7 +1675,7 @@ func (cm *ConversationManager) processBatch(ctx context.Context, s *Server, loop
 				s.generateSlugAsync(cm.conversationID, messageText(msg), b.ModelID)
 			}
 		}
-		// notifySubscribersNewMessage (fired by recordDrainedQueuedMessage)
+		// notifySubscribers (fired by recordDrainedQueuedMessages)
 		// already carried the cleaned array, so the ghost clears live; no extra
 		// broadcast needed.
 		loopInstance.QueueMessages(modelMessages...)
@@ -1710,7 +1710,7 @@ func (s *Server) generateSlugAsync(conversationID, source, modelID string) {
 		defer cancel()
 		_, marker, err := slug.GenerateSlug(ctx, s.llmManager, s.db, s.logger, conversationID, source, modelID)
 		if marker != nil {
-			s.notifySubscribersNewMessage(ctx, conversationID, marker)
+			s.notifySubscribers(ctx, conversationID, *marker)
 		}
 		if err != nil {
 			s.logger.Warn("Failed to generate slug for conversation", "conversationID", conversationID, "error", err)

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1224,64 +1225,42 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 	if err != nil {
 		return err
 	}
-	// Bump updated_at in the same Tx as the INSERT so the conversation
-	// re-sorts to the top on a single commit, rather than a second
-	// UpdateConversationTimestamp Tx (which fired a redundant full-list
-	// recompute on its own commit hook).
-	params.BumpTimestamp = true
-	markAgentDone := params.MarkAgentDone
-	createdMsg, err := s.db.CreateMessage(ctx, params)
+	_, err = s.insertMessages(ctx, conversationID, []db.CreateMessageParams{params})
+	return err
+}
+
+// insertMessages is the one way recorded rows enter a conversation. It writes
+// params in a single transaction (one commit hook, one list recompute, and a
+// timestamp bump), then syncs the active manager and publishes the rows to
+// subscribers. An end-of-turn row already wrote agent_working=false in that
+// transaction via MarkAgentDone, so the manager syncs its in-memory flag
+// without writing it again.
+func (s *Server) insertMessages(ctx context.Context, conversationID string, params []db.CreateMessageParams) ([]generated.Message, error) {
+	created, err := s.db.CreateMessages(ctx, params)
 	if err != nil {
-		return fmt.Errorf("failed to create message: %w", err)
+		return nil, fmt.Errorf("failed to create messages: %w", err)
 	}
-	// Sync the conversation manager's in-memory agentWorking flag and fire
-	// onStateChange / onDone now that the DB has committed. The persisted
-	// agent_working=false was already written in the message-INSERT Tx above
-	// (via MarkAgentDone), so syncAgentWorking deliberately skips the DB write
-	// — re-writing it would only cost an extra commit + full-list recompute.
-	if markAgentDone {
-		s.mu.Lock()
-		mgr := s.activeConversations[conversationID]
-		s.mu.Unlock()
-		if mgr != nil {
+	s.mu.Lock()
+	mgr := s.activeConversations[conversationID]
+	s.mu.Unlock()
+	if mgr != nil {
+		if slices.ContainsFunc(params, func(p db.CreateMessageParams) bool { return p.MarkAgentDone }) {
 			mgr.syncAgentWorking(false)
 		}
-	}
-
-	// Touch active manager activity time if present and bump its max sequence ID.
-	s.mu.Lock()
-	mgr, ok := s.activeConversations[conversationID]
-	s.mu.Unlock()
-	if ok {
 		mgr.Touch()
 	}
-
-	// Notify subscribers with only the new message - use WithoutCancel because
-	// the HTTP request context may be cancelled after the handler returns, but
-	// we still want the notification to complete so SSE clients see the message immediately
-	go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), conversationID, createdMsg)
-
-	return nil
+	// WithoutCancel: the request may end before subscribers are told.
+	go s.notifySubscribers(context.WithoutCancel(ctx), conversationID, created...)
+	return created, nil
 }
 
-// recordDrainedQueuedMessage records a queued user message at drain time as a
-// real, immutable user row AND removes its entry from the conversation's
-// queued_messages array in the SAME Tx (via CreateMessageParams.RemoveQueuedID).
-// This atomicity is the whole point: if the insert+removal Tx aborts (crash,
-// ctx cancel, error), neither the row nor the array change persists, so Hydrate
-// can't re-feed an already-delivered message as a duplicate. Mirrors
-// recordMessage's manager-sync + notify tail.
-//
-// userEmail and userData are provenance captured at queue time (drain runs on
-// a background context, so it can't read the original request). For a
-// transcription batch, only the final user row receives them; synthetic audit
-// rows remain unattributed and carry no sender metadata.
-func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID, queuedID string, message llm.Message, userEmail string, userData json.RawMessage) error {
-	return s.recordDrainedQueuedMessages(ctx, conversationID, queuedID, []llm.Message{message}, userEmail, userData)
-}
-
-// recordDrainedQueuedMessages writes the batch in one Tx; the first row removes
-// the queued entry and the last row carries the user provenance.
+// recordDrainedQueuedMessages records a queued item at drain time as real,
+// immutable rows AND removes it from the conversation's queued_messages array
+// in the SAME Tx (via CreateMessageParams.RemoveQueuedID). If the Tx aborts,
+// neither the rows nor the array change persists, so the item cannot be fed
+// twice. The first row removes the queued entry; the last row carries the
+// user provenance captured at queue time (drain runs on a background
+// context). Synthetic transcription audit rows stay unattributed.
 func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID, queuedID string, messages []llm.Message, userEmail string, userData json.RawMessage) error {
 	paramsList := make([]db.CreateMessageParams, 0, len(messages))
 	for i, message := range messages {
@@ -1293,7 +1272,6 @@ func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID
 		if err != nil {
 			return err
 		}
-		params.BumpTimestamp = true
 		if i == 0 {
 			params.RemoveQueuedID = queuedID
 		}
@@ -1302,19 +1280,8 @@ func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID
 		}
 		paramsList = append(paramsList, params)
 	}
-	created, err := s.db.CreateMessages(ctx, paramsList)
-	if err != nil {
-		return fmt.Errorf("failed to create drained queued messages: %w", err)
-	}
-
-	s.mu.Lock()
-	mgr, ok := s.activeConversations[conversationID]
-	s.mu.Unlock()
-	if ok {
-		mgr.Touch()
-	}
-	go s.notifySubscribersNewMessages(context.WithoutCancel(ctx), conversationID, created)
-	return nil
+	_, err := s.insertMessages(ctx, conversationID, paramsList)
+	return err
 }
 
 // userEmailContextKey carries the authenticated exe.dev account (from the
@@ -1389,34 +1356,22 @@ func (s *Server) recordTurnStartMessage(ctx context.Context, conversationID stri
 		return nil, err
 	}
 	params.MarkAgentStart = true
-	params.BumpTimestamp = true
 	// Attribute the turn-start user row to its author. recordTurnStartMessage
 	// is only ever called with a genuine user message (AcceptUserMessage's
 	// turn-start recorder), so unlike buildCreateMessageParams — which also
 	// serves tool_result rows that carry MessageRoleUser — it's safe to stamp
 	// the email here unconditionally.
 	params.UserEmail = userEmailFromContext(ctx)
-	createdMsg, err := s.db.CreateMessage(ctx, params)
+	created, err := s.insertMessages(ctx, conversationID, []db.CreateMessageParams{params})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create turn-start message: %w", err)
+		return nil, err
 	}
-
-	s.mu.Lock()
-	mgr, ok := s.activeConversations[conversationID]
-	s.mu.Unlock()
-	if ok {
-		mgr.Touch()
-	}
-
-	go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), conversationID, createdMsg)
-	return createdMsg, nil
+	return &created[0], nil
 }
 
-// recordMessages records several messages for one conversation in a SINGLE DB
-// transaction (one commit hook → one conversation-list recompute) and emits a
-// single SSE notification carrying all of them. This is the bulk counterpart to
-// recordMessage; compaction uses it to copy a whole tail of messages forward
-// without paying a full-list recompute per message.
+// recordMessages records several messages for one conversation in a single
+// transaction and one stream event. Compaction uses it to copy a whole tail
+// of messages forward.
 func (s *Server) recordMessages(ctx context.Context, conversationID string, msgs []recordMessageInput) error {
 	if len(msgs) == 0 {
 		return nil
@@ -1429,36 +1384,8 @@ func (s *Server) recordMessages(ctx context.Context, conversationID string, msgs
 		}
 		paramsList = append(paramsList, params)
 	}
-	// Whether any message ends the turn — used to sync the manager's in-memory
-	// agentWorking flag below, mirroring recordMessage. CreateMessages already
-	// wrote agent_working=false in the same Tx for these (via MarkAgentDone).
-	markAgentDone := false
-	for i := range paramsList {
-		if paramsList[i].MarkAgentDone {
-			markAgentDone = true
-			break
-		}
-	}
-	created, err := s.db.CreateMessages(ctx, paramsList)
-	if err != nil {
-		return fmt.Errorf("failed to create messages: %w", err)
-	}
-
-	s.mu.Lock()
-	mgr, ok := s.activeConversations[conversationID]
-	s.mu.Unlock()
-	if ok {
-		// Sync the in-memory flag / fire onStateChange now that the DB committed,
-		// same as recordMessage. The DB value is already false from the batch Tx,
-		// so the recompute finds no change and emits no extra patch.
-		if markAgentDone {
-			mgr.SetAgentWorking(false)
-		}
-		mgr.Touch()
-	}
-
-	go s.notifySubscribersNewMessages(context.WithoutCancel(ctx), conversationID, created)
-	return nil
+	_, err := s.insertMessages(ctx, conversationID, paramsList)
+	return err
 }
 
 // recordMessageInput is one message to record via recordMessages.
@@ -1507,19 +1434,17 @@ func convertToLLMMessage(msg generated.Message) (llm.Message, error) {
 	return llmMsg, nil
 }
 
-// notifySubscribers sends conversation metadata updates (e.g., slug changes) to subscribers.
-// This is used when only the conversation data changes, not the messages.
-// Uses Broadcast instead of Publish to avoid racing with message sequence IDs.
-func (s *Server) notifySubscribers(ctx context.Context, conversationID string) {
+// notifySubscribers publishes newMsgs, or with none just the conversation's
+// metadata (e.g. a slug change), to the conversation's subscribers and the
+// conversation list.
+func (s *Server) notifySubscribers(ctx context.Context, conversationID string, newMsgs ...generated.Message) {
 	s.mu.Lock()
 	manager, exists := s.activeConversations[conversationID]
 	s.mu.Unlock()
-
 	if !exists {
 		return
 	}
 
-	// Get conversation data only (no messages needed for metadata-only updates)
 	var conversation generated.Conversation
 	err := s.db.Queries(ctx, func(q *generated.Queries) error {
 		var err error
@@ -1531,129 +1456,30 @@ func (s *Server) notifySubscribers(ctx context.Context, conversationID string) {
 		return
 	}
 
-	// Broadcast conversation update with no new messages.
-	// Using Broadcast instead of Publish ensures this metadata-only update
-	// doesn't race with notifySubscribersNewMessage which uses Publish with sequence IDs.
-	streamData := StreamResponse{
-		Messages:     nil, // No new messages, just conversation update
-		Conversation: &conversation,
-	}
-	manager.broadcastStream(streamData)
-
-	// Also notify conversation list subscribers (e.g., slug change)
-	s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: &conversation,
-	})
-}
-
-// notifySubscribersNewMessage sends a single new message to all subscribers.
-// This is more efficient than re-sending all messages on each update.
-func (s *Server) notifySubscribersNewMessage(ctx context.Context, conversationID string, newMsg *generated.Message) {
-	s.mu.Lock()
-	manager, exists := s.activeConversations[conversationID]
-	s.mu.Unlock()
-
-	if !exists {
-		return
-	}
-
-	// Get conversation data for the response
-	var conversation generated.Conversation
-	err := s.db.Queries(ctx, func(q *generated.Queries) error {
-		var err error
-		conversation, err = q.GetConversation(ctx, conversationID)
-		return err
-	})
-	if err != nil {
-		s.logger.Error("Failed to get conversation data for notification", "conversationID", conversationID, "error", err)
-		return
-	}
-
-	// Convert the single new message to API format
-	apiMessages := toAPIMessages([]generated.Message{*newMsg})
-
-	// End-of-turn agent_working flip already happened in recordMessage,
-	// in the same Tx as the message INSERT, so its list-patch already
-	// carries working=false. Just drain any queued messages now that
-	// we're idle.
-	if isAgentEndOfTurn(newMsg) {
-		go manager.drainPendingMessages(s)
-	}
-
-	// Publish only the new message
-	streamData := StreamResponse{
-		Messages:     apiMessages,
-		Conversation: &conversation,
-		// ContextWindowSize: 0 for messages without usage data (user/tool messages).
-		// With omitempty, 0 is omitted from JSON, so the UI keeps its cached value.
-		// Only agent messages have usage data, so context window updates when they arrive.
-		ContextWindowSize: calculateContextWindowSizeFromMsg(newMsg),
-	}
-	manager.publishStream(newMsg.SequenceID, streamData)
-
-	// Also notify conversation list subscribers about the update (updated_at changed)
-	s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: &conversation,
-	})
-}
-
-// notifySubscribersNewMessages publishes several new messages in a single SSE
-// frame. The bulk counterpart to notifySubscribersNewMessage; used by
-// recordMessages so a batch insert (e.g. compaction copying a tail forward)
-// produces one stream event instead of one per message.
-func (s *Server) notifySubscribersNewMessages(ctx context.Context, conversationID string, newMsgs []generated.Message) {
 	if len(newMsgs) == 0 {
-		return
-	}
-	s.mu.Lock()
-	manager, exists := s.activeConversations[conversationID]
-	s.mu.Unlock()
-	if !exists {
-		return
-	}
-
-	var conversation generated.Conversation
-	err := s.db.Queries(ctx, func(q *generated.Queries) error {
-		var err error
-		conversation, err = q.GetConversation(ctx, conversationID)
-		return err
-	})
-	if err != nil {
-		s.logger.Error("Failed to get conversation data for notification", "conversationID", conversationID, "error", err)
-		return
-	}
-
-	apiMessages := toAPIMessages(newMsgs)
-
-	// If any message ends the turn, drain queued messages once.
-	for i := range newMsgs {
-		if isAgentEndOfTurn(&newMsgs[i]) {
+		// Broadcast, not Publish: a metadata-only update has no sequence id and
+		// must not race the sequenced message publications.
+		manager.broadcastStream(StreamResponse{Conversation: &conversation})
+	} else {
+		// The end-of-turn agent_working flip already happened in the INSERT
+		// Tx. Drain any queued messages now that we're idle.
+		if slices.ContainsFunc(newMsgs, func(m generated.Message) bool { return isAgentEndOfTurn(&m) }) {
 			go manager.drainPendingMessages(s)
-			break
 		}
-	}
-
-	// Context window from the last message that carries usage (others are 0,
-	// omitted via omitempty so the client keeps its cached value otherwise).
-	var ctxSize uint64
-	for i := len(newMsgs) - 1; i >= 0; i-- {
-		if sz := calculateContextWindowSizeFromMsg(&newMsgs[i]); sz > 0 {
-			ctxSize = sz
-			break
+		// Context window from the last message that carries usage. Zero is
+		// omitted from JSON, so the client keeps its cached value.
+		var ctxSize uint64
+		for i := len(newMsgs) - 1; i >= 0 && ctxSize == 0; i-- {
+			ctxSize = calculateContextWindowSizeFromMsg(&newMsgs[i])
 		}
+		// Publish at the highest sequence id so resuming subscribers advance
+		// past all of them.
+		manager.publishStream(newMsgs[len(newMsgs)-1].SequenceID, StreamResponse{
+			Messages:          toAPIMessages(newMsgs),
+			Conversation:      &conversation,
+			ContextWindowSize: ctxSize,
+		})
 	}
-
-	streamData := StreamResponse{
-		Messages:          apiMessages,
-		Conversation:      &conversation,
-		ContextWindowSize: ctxSize,
-	}
-	// Publish at the highest sequence id in the batch so resuming subscribers
-	// advance past all of them.
-	maxSeq := newMsgs[len(newMsgs)-1].SequenceID
-	manager.publishStream(maxSeq, streamData)
 
 	s.publishConversationListUpdate(ConversationListUpdate{
 		Type:         "update",

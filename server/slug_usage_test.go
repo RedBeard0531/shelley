@@ -304,8 +304,7 @@ func TestSlugMarkerReachesUnifiedStream(t *testing.T) {
 			}
 		case <-time.After(time.Until(deadline)):
 			t.Fatal("slug marker never arrived on the unified stream; GenerateSlug's caller must " +
-				"publish it via notifySubscribersNewMessage — notifySubscribers is metadata-only " +
-				"and sends Messages: nil")
+				"publish it with notifySubscribers and the marker message")
 		}
 	}
 }
