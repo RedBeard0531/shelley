@@ -183,6 +183,34 @@ func (r *SubagentRunner) ListSubagents(ctx context.Context, parentConversationID
 	return out, nil
 }
 
+// MessageParent implements claudetool.ParentMessenger. The message is stored
+// in the parent as a user row whose user_data names the sending subagent, so
+// the model sees it wrapped in <subagent_message> and the UI attributes it.
+func (r *SubagentRunner) MessageParent(ctx context.Context, conversationID, text string) error {
+	s := r.server
+	conv, err := s.db.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		return fmt.Errorf("load conversation: %w", err)
+	}
+	if !isManagedChild(*conv) || isBtwReader(*conv) || db.ParseConversationOptions(conv.ConversationOptions).Kind != "" {
+		return fmt.Errorf("conversation %s is not a subagent", conversationID)
+	}
+	parent, err := s.getOrCreateConversationManager(ctx, *conv.ParentConversationID, "")
+	if err != nil {
+		return fmt.Errorf("load parent conversation: %w", err)
+	}
+	parent.mu.Lock()
+	modelID := parent.modelID
+	parent.mu.Unlock()
+	ctx = contextWithTurnUserData(ctx, senderMessageUserData{
+		SenderConversationID: conversationID,
+		SenderSlug:           derefString(conv.Slug),
+		SenderRelationship:   senderRelationshipSubagent,
+		Text:                 text,
+	})
+	return parent.InjectMessage(ctx, s, modelID, llm.UserStringMessage(text))
+}
+
 // dropStaleParentNotification removes any queued subagent-done notification
 // for the given subagent from its parent's pending-batch queue. RunSubagent
 // calls it before sending new work: the new prompt supersedes the earlier
@@ -520,7 +548,10 @@ func (s *Server) lastAgentText(ctx context.Context, conversationID string) (stri
 }
 
 // Ensure SubagentRunner implements claudetool.SubagentRunner.
-var _ claudetool.SubagentRunner = (*SubagentRunner)(nil)
+var (
+	_ claudetool.SubagentRunner  = (*SubagentRunner)(nil)
+	_ claudetool.ParentMessenger = (*SubagentRunner)(nil)
+)
 
 // cancelSubagentTree cancels the active turns of all subagent conversations
 // beneath parentID (children, grandchildren, ...). When the user cancels a

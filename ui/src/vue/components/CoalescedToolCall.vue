@@ -141,6 +141,7 @@ import GenericToolWarning from "./tools/GenericToolWarning.vue";
 import RunningToolTime from "./tools/RunningToolTime.vue";
 import KeywordSearchTool from "./tools/KeywordSearchTool.vue";
 import ChangeDirTool from "./tools/ChangeDirTool.vue";
+import MessageParentTool from "./tools/MessageParentTool.vue";
 import ListSubagentsTool from "./tools/ListSubagentsTool.vue";
 import SubagentTool from "./tools/SubagentTool.vue";
 import LLMOneShotTool from "./tools/LLMOneShotTool.vue";
@@ -198,6 +199,7 @@ const TOOL_COMPONENTS: Record<string, any> = {
   keyword_search: KeywordSearchTool,
   change_dir: ChangeDirTool,
   subagent: SubagentTool,
+  message_parent: MessageParentTool,
   list_subagents: ListSubagentsTool,
   output_iframe: OutputIframeTool,
   llm_one_shot: LLMOneShotTool,

@@ -69,6 +69,9 @@ type ToolSetConfig struct {
 	SubagentRunner SubagentRunner
 	// SubagentDB is the database for subagent conversations.
 	SubagentDB SubagentDB
+	// ParentMessenger, if set, provides the message_parent tool. The server
+	// sets it only for delegated subagents.
+	ParentMessenger ParentMessenger
 	// ParentConversationID is the ID of the parent conversation (for subagent tool).
 	ParentConversationID string
 	// ConversationID is the ID of the conversation these tools belong to.
@@ -253,6 +256,10 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 			ParentReasoning:      cfg.ReasoningLevel,
 		}
 		tools = append(tools, subagentTool.Tool(), subagentTool.ListTool())
+	}
+	if cfg.ParentMessenger != nil {
+		messageParentTool := &MessageParentTool{Messenger: cfg.ParentMessenger, ConversationID: cfg.ConversationID}
+		tools = append(tools, messageParentTool.Tool())
 	}
 
 	// Add LLM one-shot tool if LLM provider is configured

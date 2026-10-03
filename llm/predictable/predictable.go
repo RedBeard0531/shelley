@@ -306,6 +306,10 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 			return s.makeBashToolResponse(cmd, inputTokens), nil
 		}
 
+		if text, ok := strings.CutPrefix(inputText, "message_parent: "); ok {
+			return s.makeMessageParentToolResponse(text, inputTokens), nil
+		}
+
 		if path, ok := strings.CutPrefix(inputText, "change_dir: "); ok {
 			return s.makeChangeDirToolResponse(path, inputTokens), nil
 		}
@@ -807,6 +811,24 @@ func (s *Service) makeChangeDirToolResponse(path string, inputTokens uint64) *ll
 			OutputTokens: outputTokens,
 			CostUSD:      0.001,
 		},
+	}
+}
+
+func (s *Service) makeMessageParentToolResponse(text string, inputTokens uint64) *llm.Response {
+	toolInput, _ := json.Marshal(map[string]string{"text": text})
+	return &llm.Response{
+		ID:    fmt.Sprintf("pred-message_parent-%d", time.Now().UnixNano()),
+		Type:  "message",
+		Role:  llm.MessageRoleAssistant,
+		Model: "predictable-v1",
+		Content: []llm.Content{{
+			ID:        fmt.Sprintf("tool_%d", time.Now().UnixNano()%1000),
+			Type:      llm.ContentTypeToolUse,
+			ToolName:  "message_parent",
+			ToolInput: toolInput,
+		}},
+		StopReason: llm.StopReasonToolUse,
+		Usage:      llm.Usage{InputTokens: inputTokens, OutputTokens: uint64(len(toolInput)/4 + 1), CostUSD: 0.001},
 	}
 }
 

@@ -490,8 +490,10 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 	database.Pool().OnDiskFull(s.onDiskFull)
 
 	// Set up subagent support
-	s.toolSetConfig.SubagentRunner = NewSubagentRunner(s)
+	subagentRunner := NewSubagentRunner(s)
+	s.toolSetConfig.SubagentRunner = subagentRunner
 	s.toolSetConfig.SubagentDB = &db.SubagentDBAdapter{DB: database}
+	s.toolSetConfig.ParentMessenger = subagentRunner
 	s.toolSetConfig.MaxSubagentDepth = 1 // Only top-level conversations can spawn subagents
 
 	return s

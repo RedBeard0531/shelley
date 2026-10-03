@@ -42,7 +42,7 @@ func registeredToolName(name string) string {
 	switch name {
 	case ApplyPatchName:
 		return PatchName
-	case listSubagentsName:
+	case listSubagentsName, messageParentName:
 		return subagentName
 	}
 	return name

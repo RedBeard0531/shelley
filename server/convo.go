@@ -680,6 +680,10 @@ func (cm *ConversationManager) Hydrate(ctx context.Context) error {
 	// in the display_data tools list when generating system prompt.
 	// This is also set in ensureLoop, but must be set here for Hydrate's system prompt creation.
 	cm.toolSetConfig.ParentConversationID = cm.conversationID
+	if !managedChild || isBtwReader(*conversation) || cm.conversationOptions.Kind != "" {
+		// Only delegated subagents may message their parent.
+		cm.toolSetConfig.ParentMessenger = nil
+	}
 
 	// Generate system prompt if missing:
 	// - For user-initiated conversations: full system prompt
