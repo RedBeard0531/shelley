@@ -975,11 +975,22 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		}
 		s.mu.Unlock()
 
-		// BTW readers use the ordinary conversation entry point but need their
-		// restricted tool depth and request decorator before hydration.
+		// The row decides the manager's role, so every entry point builds
+		// the same manager for a conversation.
 		conversation, err := s.db.GetConversationByID(ctx, conversationID)
 		if err != nil {
 			return nil, err
+		}
+		role := conversationRoleOf(*conversation)
+		btwIdentity, _ := db.ManagedBtwReaderIdentity(*conversation)
+		parentDeleting := func() bool {
+			return role == roleBtwReader && s.deletingConversations[btwIdentity.ParentConversationID]
+		}
+		s.mu.Lock()
+		deleting := parentDeleting()
+		s.mu.Unlock()
+		if deleting {
+			return nil, errConversationDeleting
 		}
 
 		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
@@ -988,26 +999,24 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
 			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
 		}
-
-		btwIdentity, btwReader := db.ManagedBtwReaderIdentity(*conversation)
-		s.mu.Lock()
-		parentDeleting := btwReader && s.deletingConversations[btwIdentity.ParentConversationID]
-		s.mu.Unlock()
-		if parentDeleting {
-			return nil, errConversationDeleting
-		}
 		onStateChange := func(state ConversationState) { s.publishConversationState(state) }
 
-		managerConfig := s.toolSetConfig
-		if btwReader {
-			managerConfig.SubagentDepth++
+		config := s.toolSetConfig
+		if role != roleTopLevel {
+			// Only top-level conversations can spawn subagents.
+			config.SubagentDepth++
 		}
-		manager := NewConversationManager(conversationID, s.db, s.logger, managerConfig, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
+		if role != roleSubagent {
+			config.ParentMessenger = nil
+		}
+		manager := NewConversationManager(conversationID, s.db, s.logger, config, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
+		manager.role = role
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
-		manager.btwReader = btwReader
-		if btwReader {
+		switch role {
+		case roleSubagent:
+		case roleBtwReader:
 			manager.decorateService = func(service llm.Service) (llm.Service, error) {
 				return newBtwService(context.Background(), s.db, btwIdentity.ParentConversationID, btwIdentity.ParentPointer, btwReaderParentHistoryLimit, service)
 			}
@@ -1020,66 +1029,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		}
 
 		s.mu.Lock()
-		if s.deletingConversations[conversationID] ||
-			(btwReader && s.deletingConversations[btwIdentity.ParentConversationID]) {
-			s.mu.Unlock()
-			manager.stopLoop()
-			return nil, errConversationDeleting
-		}
-		if existing, ok := s.activeConversations[conversationID]; ok {
-			s.mu.Unlock()
-			existing.Touch()
-			return existing, nil
-		}
-		s.activeConversations[conversationID] = manager
-		s.mu.Unlock()
-		return manager, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return manager, nil
-}
-
-// getOrCreateSubagentConversationManager is like getOrCreateConversationManager but
-// uses a toolSetConfig with SubagentDepth incremented by 1, preventing subagents
-// from spawning their own subagents (when MaxSubagentDepth is 1). Only this
-// subagent-tool entry point wires parent completion notification.
-func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, conversationID string) (*ConversationManager, error) {
-	manager, err, _ := s.conversationGroup.Do(conversationID, func() (*ConversationManager, error) {
-		s.mu.Lock()
-		if s.deletingConversations[conversationID] {
-			s.mu.Unlock()
-			return nil, errConversationDeleting
-		}
-		if manager, exists := s.activeConversations[conversationID]; exists {
-			s.mu.Unlock()
-			manager.Touch()
-			return manager, nil
-		}
-		s.mu.Unlock()
-
-		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
-			return s.recordMessage(ctx, conversationID, message, usage, otherUsage)
-		}
-		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
-			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
-		}
-
-		onStateChange := func(state ConversationState) { s.publishConversationState(state) }
-
-		subagentConfig := s.toolSetConfig
-		subagentConfig.SubagentDepth++
-		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
-		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
-		manager.serverPort = s.listenPort
-		// See getOrCreateConversationManager for why we don't hold s.mu here.
-		if err := manager.Hydrate(ctx); err != nil {
-			return nil, err
-		}
-
-		s.mu.Lock()
-		if s.deletingConversations[conversationID] {
+		if s.deletingConversations[conversationID] || parentDeleting() {
 			s.mu.Unlock()
 			manager.stopLoop()
 			return nil, errConversationDeleting

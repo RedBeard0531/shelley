@@ -31,6 +31,32 @@ var (
 	errQueuedMessagesPending     = errors.New("queued messages pending")
 )
 
+// conversationRole is what a conversation is for, as recorded on its row.
+type conversationRole int
+
+const (
+	roleTopLevel conversationRole = iota
+	// roleSubagent is a child delegated by the subagent tool.
+	roleSubagent
+	// roleBtwReader is a /btw side discussion of its parent.
+	roleBtwReader
+	// roleWorker is an internal child such as a commit tour.
+	roleWorker
+)
+
+func conversationRoleOf(conv generated.Conversation) conversationRole {
+	switch {
+	case !isManagedChild(conv):
+		return roleTopLevel
+	case isBtwReader(conv):
+		return roleBtwReader
+	case db.ParseConversationOptions(conv.ConversationOptions).Kind != "":
+		return roleWorker
+	default:
+		return roleSubagent
+	}
+}
+
 // pendingBatchKind discriminates the sources of queued work.
 type pendingBatchKind int
 
@@ -78,9 +104,8 @@ type pendingBatch struct {
 type ConversationManager struct {
 	conversationID      string
 	conversationOptions db.ConversationOptions
-	managedChild        bool
+	role                conversationRole
 	decorateService     func(llm.Service) (llm.Service, error)
-	btwReader           bool
 	db                  *db.DB
 	loop                *loop.Loop
 	loopCancel          context.CancelFunc
@@ -556,16 +581,11 @@ func (cm *ConversationManager) Hydrate(ctx context.Context) error {
 
 	// Load conversation options
 	cm.conversationOptions = db.ParseConversationOptions(conversation.ConversationOptions)
-	managedChild := isManagedChild(*conversation)
-	cm.managedChild = managedChild
 
 	// Set ParentConversationID on toolSetConfig so that subagent tool is included
 	// in the display_data tools list when generating system prompt.
 	// This is also set in ensureLoop, but must be set here for Hydrate's system prompt creation.
 	cm.toolSetConfig.ParentConversationID = cm.conversationID
-	if !isDelegatedSubagent(*conversation) {
-		cm.toolSetConfig.ParentMessenger = nil
-	}
 
 	// Generate system prompt if missing:
 	// - For user-initiated conversations: full system prompt
@@ -583,9 +603,9 @@ func (cm *ConversationManager) Hydrate(ctx context.Context) error {
 	if !hasSystemMessage(messages) {
 		var systemMsg *generated.Message
 		var err error
-		if cm.btwReader {
+		if cm.role == roleBtwReader {
 			systemMsg, err = cm.recreateBtwReaderSystemPrompt(ctx)
-		} else if managedChild {
+		} else if cm.role != roleTopLevel {
 			systemMsg, err = cm.createSubagentSystemPrompt(ctx)
 		} else if conversation.UserInitiated {
 			systemMsg, err = cm.createSystemPrompt(ctx)
@@ -698,7 +718,7 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 	}
 
 	cm.mu.Lock()
-	if !cm.managedChild && cm.hasPersistedQueuedBatchesLocked() {
+	if cm.role == roleTopLevel && cm.hasPersistedQueuedBatchesLocked() {
 		cm.mu.Unlock()
 		return false, "", errQueuedMessagesPending
 	}
@@ -2435,7 +2455,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 	toolSetConfig := cm.toolSetConfig
 	conversationID := cm.conversationID
 	conversationOpts := cm.conversationOptions
-	managedChild := cm.managedChild
+	role := cm.role
 	database := cm.db
 	toolSetConfig.Env = claudetool.ShelleyEnv{
 		ConversationSlug: cm.slug,
@@ -2505,7 +2525,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 	toolSetConfig.ToolOverrides = conversationOpts.ToolOverrides
 	toolSetConfig.DisableAllTools = conversationOpts.DisableAllTools
 	toolSetConfig.ReasoningLevel = conversationOpts.ThinkingLevel
-	if cm.btwReader {
+	if role == roleBtwReader {
 		toolSetConfig.EnableJITInstall = false
 		toolSetConfig.EnableBrowser = true
 		toolSetConfig.DisableAllTools = true
@@ -2530,7 +2550,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		return fmt.Errorf("decorate LLM service: %w", err)
 	}
 	promptCacheKey := ""
-	if managedChild && !cm.btwReader {
+	if role == roleSubagent || role == roleWorker {
 		promptCacheKey = subagentPromptCacheKey(system, modelID)
 	}
 	loopInstance := loop.NewLoop(loop.Config{

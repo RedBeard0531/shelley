@@ -73,8 +73,7 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		}
 	}
 
-	// Get or create conversation manager for the subagent, with incremented depth
-	manager, err := s.getOrCreateSubagentConversationManager(ctx, conversationID)
+	manager, err := s.getOrCreateConversationManager(ctx, conversationID, "")
 	if err != nil {
 		return "", fmt.Errorf("failed to get conversation manager: %w", err)
 	}
@@ -171,7 +170,7 @@ func (r *SubagentRunner) MessageParent(ctx context.Context, conversationID, text
 // subagent tool, as opposed to a /btw reader or an internal worker
 // (transcription, commit tour).
 func isDelegatedSubagent(conv generated.Conversation) bool {
-	return isManagedChild(conv) && !isBtwReader(conv) && db.ParseConversationOptions(conv.ConversationOptions).Kind == ""
+	return conversationRoleOf(conv) == roleSubagent
 }
 
 // messageParent queues text in the parent of the delegated subagent conv. It

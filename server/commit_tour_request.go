@@ -473,7 +473,7 @@ func (s *Server) runCommitTourSubagent(ctx context.Context, job *commitTourJob, 
 	if _, err := NewSubagentRunner(s).RunSubagent(ctx, job.childID, prompt, job.model, job.reasoning); err != nil {
 		return err
 	}
-	manager, err := s.getOrCreateSubagentConversationManager(ctx, job.childID)
+	manager, err := s.getOrCreateConversationManager(ctx, job.childID, "")
 	if err != nil {
 		return err
 	}
@@ -485,7 +485,7 @@ func (s *Server) resumeCommitTourSubagent(ctx context.Context, job *commitTourJo
 	if err != nil {
 		return fmt.Errorf("load commit tour model: %w", err)
 	}
-	manager, err := s.getOrCreateSubagentConversationManager(ctx, job.childID)
+	manager, err := s.getOrCreateConversationManager(ctx, job.childID, "")
 	if err != nil {
 		return fmt.Errorf("restore commit tour worker: %w", err)
 	}

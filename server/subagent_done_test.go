@@ -12,8 +12,8 @@ import (
 )
 
 // subagentDoneFixture sets up a parent conversation with an active manager and
-// a child subagent conversation whose manager has the onDone callback wired up
-// by getOrCreateSubagentConversationManager. It records a final assistant text
+// a child subagent conversation whose manager comes from
+// getOrCreateConversationManager. It records a final assistant text
 // message into the subagent's DB as the subagent's latest response.
 type subagentDoneFixture struct {
 	t        *testing.T
@@ -47,14 +47,14 @@ func newSubagentDoneFixture(t *testing.T, subResponse string) *subagentDoneFixtu
 	}
 
 	// Subagent conversation, parented to the above. Use CreateSubagentConversation
-	// so ParentConversationID is set; that's what notifyParentSubagentIdle keys off.
+	// so ParentConversationID is set.
 	slug := "sub-test"
 	subConv, err := database.CreateSubagentConversation(ctx, slug, parentConv.ConversationID, nil)
 	if err != nil {
 		t.Fatalf("create subagent conv: %v", err)
 	}
 
-	subagentMgr, err := server.getOrCreateSubagentConversationManager(ctx, subConv.ConversationID)
+	subagentMgr, err := server.getOrCreateConversationManager(ctx, subConv.ConversationID, "")
 	if err != nil {
 		t.Fatalf("get subagent manager: %v", err)
 	}
@@ -180,5 +180,57 @@ func TestCleanupSkipsWorkingConversations(t *testing.T) {
 	}
 	if idleKept {
 		t.Fatalf("Cleanup kept a stale idle conversation; want evicted")
+	}
+}
+
+// requestWithText returns the most recent request the predictable service
+// received whose messages contain text.
+func requestWithText(t *testing.T, ps *predictable.Service, text string) *llm.Request {
+	t.Helper()
+	requests := ps.GetRecentRequests()
+	for i := len(requests) - 1; i >= 0; i-- {
+		if requestHasText(requests[i], text) {
+			return requests[i]
+		}
+	}
+	t.Fatalf("no LLM request contained %q", text)
+	return nil
+}
+
+// A subagent whose manager was first loaded by something other than the
+// subagent tool (the user opening it, a background job notice, reload after
+// eviction) is still a subagent: it cannot spawn subagents, and it can
+// message its parent.
+func TestSubagentLoadedOutsideSubagentToolKeepsItsRole(t *testing.T) {
+	t.Parallel()
+	server, database, ps := newTestServer(t)
+	ctx := t.Context()
+	parent, err := database.CreateConversation(ctx, nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := database.CreateSubagentConversation(ctx, "worker", parent.ConversationID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.getOrCreateConversationManager(ctx, sub.ConversationID, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewSubagentRunner(server).RunSubagent(ctx, sub.ConversationID, "echo: delegated work", "predictable", ""); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 15*time.Second, func() bool {
+		return countByType(listMessages(t, database, sub.ConversationID), db.MessageTypeAgent) == 1 && !server.IsAgentWorking(sub.ConversationID)
+	})
+	tools := map[string]bool{}
+	for _, tool := range requestWithText(t, ps, "echo: delegated work").Tools {
+		tools[tool.Name] = true
+	}
+	if tools["subagent"] {
+		t.Error("subagent was offered the subagent tool")
+	}
+	if !tools["message_parent"] {
+		t.Error("subagent lacks the message_parent tool")
 	}
 }
