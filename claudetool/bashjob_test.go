@@ -22,6 +22,18 @@ type backgroundedJob struct {
 	exited <-chan struct{}
 }
 
+func (bg backgroundedJob) cleanup(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		select {
+		case <-bg.exited:
+		default:
+			syscall.Kill(-bg.job.PID, syscall.SIGKILL)
+			waitClosed(t, bg.exited, "job cleanup")
+		}
+	})
+}
+
 // recordingJobs is a BackgroundJobs that hands each job to the test.
 type recordingJobs chan backgroundedJob
 
@@ -123,14 +135,7 @@ func TestBashBackgroundsLongCommand(t *testing.T) {
 	}
 	bg := <-jobs
 	job := bg.job
-	t.Cleanup(func() {
-		select {
-		case <-bg.exited:
-		default:
-			syscall.Kill(-job.PID, syscall.SIGKILL)
-			waitClosed(t, bg.exited, "job cleanup")
-		}
-	})
+	bg.cleanup(t)
 	if job.ConversationID != "conv-1" || job.ToolUseID != "toolu_1" || job.Command != command {
 		t.Errorf("job = %+v, want conversation, tool use, and command recorded", job)
 	}
@@ -295,6 +300,46 @@ func TestBackgroundJobRecovery(t *testing.T) {
 		}
 		if got := job.Outcome().Notice(); !strings.HasPrefix(got, "Background job j finished: exit 0, ") {
 			t.Errorf("notice = %q", got)
+		}
+	})
+}
+
+func TestBackgroundJobKill(t *testing.T) {
+	t.Run("reused PID", func(t *testing.T) {
+		job := BackgroundJob{PID: os.Getpid(), StartTime: 1}
+		if err := job.Kill(); !errors.Is(err, ErrBackgroundJobGone) {
+			t.Fatalf("Kill = %v, want ErrBackgroundJobGone", err)
+		}
+	})
+
+	t.Run("running then exited", func(t *testing.T) {
+		t.Setenv("TMPDIR", t.TempDir())
+		jobs := make(recordingJobs, 1)
+		tool := (&BashTool{WorkingDir: NewMutableWorkingDir(t.TempDir()), Jobs: jobs}).Tool()
+		g := newGate(t)
+		input, _ := json.Marshal(bashInput{Command: g.wait(), Background: true})
+		out := tool.Run(t.Context(), input)
+		if out.Error != nil {
+			t.Fatal(out.Error)
+		}
+		bg := <-jobs
+		bg.cleanup(t)
+		g.writer(t)
+		if err := bg.job.Kill(); err != nil {
+			t.Fatal(err)
+		}
+		waitClosed(t, bg.exited, "terminated job")
+		outcome := bg.job.Outcome()
+		if outcome.ExitCode == nil || *outcome.ExitCode != 128+int(syscall.SIGTERM) {
+			t.Fatalf("outcome = %+v, want SIGTERM exit status", outcome)
+		}
+		exited, err := bg.job.Exited()
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitClosed(t, exited, "already-exited job")
+		if err := bg.job.Kill(); !errors.Is(err, ErrBackgroundJobGone) {
+			t.Fatalf("Kill = %v, want ErrBackgroundJobGone", err)
 		}
 	})
 }
