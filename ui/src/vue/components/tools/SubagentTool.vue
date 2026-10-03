@@ -51,8 +51,6 @@
         <div class="tool-label">
           Prompt to '{{ slug }}':
           <span v-if="model" class="tool-badge subagent-model-badge">{{ model }}</span>
-          <span v-if="!wait" class="tool-badge">fire-and-forget</span>
-          <span v-if="timeout !== 60" class="tool-badge">timeout: {{ timeout }}s</span>
         </div>
         <div class="tool-code">{{ prompt || "(no prompt)" }}</div>
       </div>
@@ -90,8 +88,6 @@ interface SubagentInput {
   slug?: string;
   prompt?: string;
   model?: string;
-  timeout_seconds?: number;
-  wait?: boolean;
 }
 
 const props = defineProps<{
@@ -117,8 +113,6 @@ const input = computed<SubagentInput>(() =>
 const slug = computed(() => props.displayData?.slug || input.value.slug || "subagent");
 const prompt = computed(() => input.value.prompt || "");
 const model = computed(() => input.value.model || "");
-const wait = computed(() => input.value.wait !== false);
-const timeout = computed(() => input.value.timeout_seconds || 60);
 
 // Live subagent state (working flag + current activity), joined from the
 // conversation list + messageStore via the injected app context.
@@ -126,9 +120,8 @@ const { conv, working, activity } = useSubagentLive(
   slug,
   computed(() => props.displayData?.conversation_id),
 );
-// The subagent can still be working after this tool call completed
-// (wait=false, or a wait timeout returned a progress summary), so the strip
-// keys off the conversation's working flag, not the tool-call state.
+// The subagent keeps working after this tool call completes (the call only
+// acknowledges dispatch), so the strip keys off the conversation's working flag, not the tool-call state.
 const showLive = computed(() => working.value || (!!props.isRunning && !!conv.value));
 const liveSlug = computed(() => conv.value?.slug || slug.value);
 
@@ -158,13 +151,13 @@ const isComplete = computed(() => !props.isRunning && props.toolResult !== undef
 
 // Mirror the React JSX text exactly:
 //   Subagent '{slug}'{model ? ` (${model})` : ""}{" "}
-//   {isRunning ? (wait ? "running..." : "started") : ""}
+//   {isRunning ? "starting..." : ""}
 //   {displayPrompt && !isRunning && ` ${displayPrompt}`}
 const commandText = computed(() => {
   let s = `Subagent '${slug.value}'`;
   if (model.value) s += ` (${model.value})`;
   s += " ";
-  s += props.isRunning ? (wait.value ? "running..." : "started") : "";
+  s += props.isRunning ? "starting..." : "";
   if (displayPrompt.value && !props.isRunning) s += ` ${displayPrompt.value}`;
   return s;
 });

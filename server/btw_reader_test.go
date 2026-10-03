@@ -798,10 +798,9 @@ func TestBtwLeavesOrdinaryChatBehaviorUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, err := NewSubagentRunner(server).RunSubagent(
-		t.Context(), child.ConversationID, "echo: ordinary child",
-		false, time.Second, "predictable", "",
+		t.Context(), child.ConversationID, "echo: ordinary child", "predictable", "",
 	)
-	if err != nil || !strings.Contains(status, "started processing") {
+	if err != nil || !strings.Contains(status, "message sent") {
 		t.Fatalf("ordinary subagent status=%q err=%v", status, err)
 	}
 	if call := held.waitCall(t, "echo: ordinary child"); requestHasText(call.request, btwFrozenReferenceBegin) {
@@ -942,11 +941,9 @@ func TestSubagentRunnerRejectsBtwReaderReuse(t *testing.T) {
 		t.Fatalf("slug reuse id=%q want=%q err=%v", reusedID, reader.ConversationID, err)
 	}
 	runner := NewSubagentRunner(server)
-	for _, wait := range []bool{false, true} {
-		if _, err := runner.RunSubagent(t.Context(), reader.ConversationID, "delegated work", wait, time.Second, "predictable", ""); err == nil ||
-			!strings.Contains(err.Error(), "cannot be used as delegated subagent work") {
-			t.Fatalf("wait=%t error=%v", wait, err)
-		}
+	if _, err := runner.RunSubagent(t.Context(), reader.ConversationID, "delegated work", "predictable", ""); err == nil ||
+		!strings.Contains(err.Error(), "cannot be used as delegated subagent work") {
+		t.Fatalf("error=%v", err)
 	}
 	if got := len(listMessages(t, database, reader.ConversationID)); got != before {
 		t.Fatalf("rejected subagent work wrote messages: before=%d after=%d", before, got)

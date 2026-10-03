@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 type lockCheckingSubagentRunner struct {
@@ -16,7 +15,7 @@ type lockCheckingSubagentRunner struct {
 	slug string
 }
 
-func (r *lockCheckingSubagentRunner) RunSubagent(context.Context, string, string, bool, time.Duration, string, string) (string, error) {
+func (r *lockCheckingSubagentRunner) RunSubagent(context.Context, string, string, string, string) (string, error) {
 	value, ok := r.tool.slugLocks.Load(r.slug)
 	if !ok {
 		return "", errors.New("slug lock was not created")
@@ -74,13 +73,11 @@ type mockSubagentRunner struct {
 	err           error
 	lastModelID   string // Capture for assertions
 	lastReasoning string // Capture for assertions
-	lastWait      bool
 }
 
-func (m *mockSubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt string, wait bool, timeout time.Duration, modelID, reasoning string) (string, error) {
+func (m *mockSubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt, modelID, reasoning string) (string, error) {
 	m.lastModelID = modelID
 	m.lastReasoning = reasoning
-	m.lastWait = wait
 	if m.err != nil {
 		return "", m.err
 	}
@@ -154,30 +151,6 @@ func TestSubagentTool_Run(t *testing.T) {
 	}
 	if displayData.Slug != "test-task" {
 		t.Errorf("expected slug 'test-task', got %q", displayData.Slug)
-	}
-	if !runner.lastWait {
-		t.Fatal("subagents should wait by default")
-	}
-}
-
-func TestSubagentToolExplicitNoWait(t *testing.T) {
-	wait := false
-	runner := &mockSubagentRunner{response: "done"}
-	tool := &SubagentTool{
-		DB:                   newMockSubagentDB(),
-		ParentConversationID: "parent-123",
-		WorkingDir:           NewMutableWorkingDir("/tmp"),
-		Runner:               runner,
-	}
-	input, err := json.Marshal(subagentInput{Slug: "nowait", Prompt: "do something", Wait: &wait})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result := tool.Tool().Run(t.Context(), input); result.Error != nil {
-		t.Fatal(result.Error)
-	}
-	if runner.lastWait {
-		t.Fatal("explicit wait=false was ignored")
 	}
 }
 

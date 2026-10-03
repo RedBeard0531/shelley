@@ -453,7 +453,7 @@ func (s *Server) runCommitTourJob(ctx context.Context, job *commitTourJob, resum
 			if s.commitTourRun != nil {
 				err = s.commitTourRun(ctx, job.childID, job.target, prompt, job.model, job.reasoning)
 			} else {
-				_, err = NewSubagentRunner(s).RunSubagent(ctx, job.childID, prompt, true, commitTourTimeout, job.model, job.reasoning)
+				err = s.runCommitTourSubagent(ctx, job, prompt)
 			}
 		}
 	}
@@ -473,6 +473,17 @@ func (s *Server) runCommitTourJob(ctx context.Context, job *commitTourJob, resum
 	s.finishCommitTourJob(job, err)
 }
 
+func (s *Server) runCommitTourSubagent(ctx context.Context, job *commitTourJob, prompt string) error {
+	if _, err := NewSubagentRunner(s).RunSubagent(ctx, job.childID, prompt, job.model, job.reasoning); err != nil {
+		return err
+	}
+	manager, err := s.getOrCreateSubagentConversationManager(ctx, job.childID)
+	if err != nil {
+		return err
+	}
+	return awaitCommitTourWorker(ctx, manager)
+}
+
 func (s *Server) resumeCommitTourSubagent(ctx context.Context, job *commitTourJob) error {
 	service, err := s.llmManager.GetService(job.model)
 	if err != nil {
@@ -482,21 +493,21 @@ func (s *Server) resumeCommitTourSubagent(ctx context.Context, job *commitTourJo
 	if err != nil {
 		return fmt.Errorf("restore commit tour worker: %w", err)
 	}
-	runner := NewSubagentRunner(s)
-	manager.registerSubagentWaiter()
 	if err := manager.ResumeInterruptedTurn(ctx, service, job.model); err != nil {
-		runner.endWait(manager, job.childID, true)
 		return fmt.Errorf("resume commit tour worker: %w", err)
 	}
-	done, err := runner.waitForIdle(ctx, manager, job.childID, time.Now().Add(commitTourTimeout))
-	runner.endWait(manager, job.childID, true)
-	if err != nil {
-		return err
+	return awaitCommitTourWorker(ctx, manager)
+}
+
+// awaitCommitTourWorker waits for the worker's current turn to end. The job
+// context carries the commit tour deadline.
+func awaitCommitTourWorker(ctx context.Context, manager *ConversationManager) error {
+	select {
+	case <-manager.idle():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if !done {
-		return errors.New("commit tour worker timed out")
-	}
-	return nil
 }
 
 func (s *Server) finishCommitTourJob(job *commitTourJob, runErr error) {

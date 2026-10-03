@@ -182,25 +182,15 @@ func (f *subagentDoneFixture) buildSyntheticPair() (use, result llm.Message) {
 }
 
 func TestSubagentDone(t *testing.T) {
-	t.Run("HappyPath_WaitFalse_NotifiesIdleParent", testSubagentDone_HappyPath)
-	t.Run("SuppressedWhileWaiterActive", testSubagentDone_SuppressedWhileWaiterActive)
-	t.Run("SuppressedDespiteSlugRename", testSubagentDone_SuppressedDespiteSlugRename)
-	t.Run("WaiterTimeoutAfterFinishNotifies", testSubagentDone_WaiterTimeoutAfterFinishNotifies)
-	t.Run("WaiterTimeoutBeforeFinishNotifiesOnce", testSubagentDone_WaiterTimeoutBeforeFinishNotifiesOnce)
+	t.Run("HappyPath_NotifiesIdleParent", testSubagentDone_HappyPath)
 	t.Run("CancellationDoesNotNotifyParent", testSubagentDone_CancellationDoesNotNotifyParent)
 	t.Run("QueuedDuringDistillation", testSubagentDone_QueuedDuringDistillation)
 	t.Run("WakesIdleParentLoop", testSubagentDone_WakesIdleLoop)
 	t.Run("StaleNotificationCoalescedWhileParentBusy", testSubagentDone_StaleNotificationCoalesced)
 	t.Run("InjectedMidTurn", testSubagentDone_InjectedMidTurn)
 	t.Run("InjectionSkippedWhileDistilling", testSubagentDone_InjectionSkippedWhileDistilling)
-	t.Run("StaleQueuedNotificationDroppedAfterSyncDelivery", testSubagentDone_StaleQueuedNotificationDroppedAfterSyncDelivery)
-	t.Run("StaleQueuedNotificationDroppedOnWaitFalseSend", testSubagentDone_StaleQueuedNotificationDroppedOnWaitFalseSend)
-	t.Run("StaleQueuedNotificationDroppedOnWaitTrueReprompt", testSubagentDone_StaleQueuedNotificationDroppedOnWaitTrueReprompt)
-	t.Run("RepromptThenTimeoutStillDropsStale", testSubagentDone_RepromptThenTimeoutStillDropsStale)
-	t.Run("NotificationEnqueuedMidWaitDroppedAtDelivery", testSubagentDone_NotificationEnqueuedMidWaitDroppedAtDelivery)
-	t.Run("TimeoutDoesNotDropQueuedNotification", testSubagentDone_TimeoutDoesNotDropQueuedNotification)
-	t.Run("StragglerNotifierSkipsAfterSyncDelivery", testSubagentDone_StragglerNotifierSkipsAfterSyncDelivery)
-	t.Run("StragglerNotifierSkipsAfterWaitFalseSupersede", testSubagentDone_StragglerNotifierSkipsAfterWaitFalseSupersede)
+	t.Run("StaleQueuedNotificationDroppedOnSend", testSubagentDone_StaleQueuedNotificationDroppedOnSend)
+	t.Run("StragglerNotifierSkipsAfterSupersede", testSubagentDone_StragglerNotifierSkipsAfterSupersede)
 	t.Run("DelayedNotifierCannotReannounceInjectedResponse", testSubagentDone_DelayedNotifierCannotReannounceInjectedResponse)
 	t.Run("DelayedNotifierSkipsWhileNewTurnRunning", testSubagentDone_DelayedNotifierSkipsWhileNewTurnRunning)
 	t.Run("ToolResultCorrectness", testSubagentDone_ToolResultCorrectness)
@@ -284,8 +274,8 @@ func testSubagentDone_EvictedParentManagerStillNotified(t *testing.T) {
 }
 
 // Cleanup must never evict a conversation manager whose agent is mid-turn
-// (agentWorking=true). Tool calls — e.g. a wait=true subagent call that
-// blocks for many minutes — do not Touch the manager, so lastActivity goes
+// (agentWorking=true). Tool calls — e.g. a shell command that runs
+// for many minutes — do not Touch the manager, so lastActivity goes
 // stale even though the conversation is very much alive. Evicting it tears
 // down the loop context mid-flight (cancelling in-flight tool calls and LLM
 // requests) and orphans the turn.
@@ -424,161 +414,12 @@ func toolResultText(c llm.Content) string {
 	return sb.String()
 }
 
-// Suppression is now decided by an in-memory synchronous-waiter slot on the
-// subagent's ConversationManager (subagentWaitOwners), consulted atomically
-// inside SetAgentWorking. These tests drive that mechanism directly. Note
-// that the slot is keyed by the manager (immutable conversation ID), so
-// suppression is correct even when the requested slug differs from the
-// subagent conversation's actual (uniqueness-renamed) slug — the bug that
-// the old history-parsing suppression could not handle.
-
-// While a synchronous waiter holds a slot, a subagent finishing must NOT fire
-// the async onDone notification: the waiter delivers the response via the
-// tool's return value, so a synthetic pair would duplicate it.
-func testSubagentDone_SuppressedWhileWaiterActive(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newSubagentDoneFixture(t, "Synchronous response.")
-		defer stopActiveConversationLoops(f.server)
-
-		f.subagentMgr.registerSubagentWaiter()
-
-		before := len(f.parentMessages())
-		f.fireOnDone() // subagent finishes while the waiter holds its slot
-
-		// Let any (erroneous) async notification land.
-		synctest.Wait()
-		if got := len(f.parentMessages()); got != before {
-			t.Fatalf("expected no new parent messages while a synchronous waiter is active, got %d new", got-before)
-		}
-		if hasSyntheticDonePair(t, f.parentMessages()) {
-			t.Fatalf("expected no synthetic pair while a synchronous waiter is active")
-		}
-
-		// The waiter delivers the result itself, so finishing reports no owed
-		// async notification.
-		if owed := f.subagentMgr.finishSubagentWait(true); owed {
-			t.Fatalf("finishSubagentWait(delivered=true) reported notifyOwed=true; want false")
-		}
-		synctest.Wait()
-		if hasSyntheticDonePair(t, f.parentMessages()) {
-			t.Fatalf("expected no synthetic pair after the waiter delivered the result")
-		}
-	})
-}
-
-// Regression for the original duplicate-completion bug: the parent records a
-// subagent tool_use under the REQUESTED slug ("rev1"), but the subagent
-// conversation was renamed for uniqueness ("rev1-4"). The old suppression
-// matched the parent's recorded slug against the renamed conversation slug,
-// never matched, and so fired a duplicate async completion on top of the
-// wait=true tool return. The waiter-slot mechanism is keyed by the manager
-// (conversation ID), so the mismatch is irrelevant and suppression holds.
-func testSubagentDone_SuppressedDespiteSlugRename(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newSubagentDoneFixture(t, "Synchronous response.")
-		defer stopActiveConversationLoops(f.server)
-
-		// Record a parent tool_use whose requested slug differs from the
-		// subagent's actual (renamed) slug. This is exactly what the buggy
-		// history-parsing suppression keyed off.
-		requestedSlug := f.subSlug + "-DIFFERENT-REQUESTED"
-		pendingInput, _ := json.Marshal(map[string]any{"slug": requestedSlug, "prompt": "go", "wait": true})
-		if err := f.server.recordMessage(t.Context(), f.parentID, llm.Message{
-			Role: llm.MessageRoleAssistant,
-			Content: []llm.Content{{
-				Type:      llm.ContentTypeToolUse,
-				ID:        "toolu_renamed_pending",
-				ToolName:  "subagent",
-				ToolInput: pendingInput,
-			}},
-		}, llm.Usage{}, nil); err != nil {
-			t.Fatalf("record pending tool_use: %v", err)
-		}
-
-		// A real wait=true call would hold a slot; simulate that.
-		f.subagentMgr.registerSubagentWaiter()
-
-		before := len(f.parentMessages())
-		f.fireOnDone()
-		synctest.Wait()
-		if got := len(f.parentMessages()); got != before {
-			t.Fatalf("expected no new parent messages despite slug rename, got %d new", got-before)
-		}
-		if hasSyntheticDonePair(t, f.parentMessages()) {
-			t.Fatalf("expected no synthetic pair despite slug rename")
-		}
-		if owed := f.subagentMgr.finishSubagentWait(true); owed {
-			t.Fatalf("finishSubagentWait(delivered=true) reported notifyOwed=true; want false")
-		}
-	})
-}
-
-// If the subagent finishes while a waiter holds its slot (onDone suppressed),
-// but the waiter then gives up WITHOUT delivering (the timeout path returns
-// only a progress summary), finishSubagentWait must report notifyOwed=true so
-// the caller fires the async completion. This is the finish/timeout race the
-// old timeout-map tried to cover.
-func testSubagentDone_WaiterTimeoutAfterFinishNotifies(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Finished right as the wait timed out.")
-
-	f.subagentMgr.registerSubagentWaiter()
-	f.fireOnDone() // subagent finishes; onDone suppressed by the active slot
-
-	owed := f.subagentMgr.finishSubagentWait(false) // timeout: not delivered
-	if !owed {
-		t.Fatalf("finishSubagentWait(delivered=false) after a suppressed finish reported notifyOwed=false; want true")
-	}
-
-	// The caller (endWait) fires the notification when owed.
-	f.notifySubagentDone(f.subagentID)
-	waitFor(t, 5*time.Second, func() bool {
-		return hasSyntheticDonePair(t, f.parentMessages())
-	})
-}
-
-// If the waiter times out BEFORE the subagent finishes, nothing is owed yet —
-// the subagent is still working. When it later finishes (no slot held), the
-// normal onDone path fires exactly one notification.
-func testSubagentDone_WaiterTimeoutBeforeFinishNotifiesOnce(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Finished after the wait already timed out.")
-
-	f.subagentMgr.registerSubagentWaiter()
-	// Subagent is still working; mark it so SetAgentWorking has a real
-	// working->idle transition to make later.
-	f.subagentMgr.SetAgentWorking(true)
-
-	if owed := f.subagentMgr.finishSubagentWait(false); owed {
-		t.Fatalf("finishSubagentWait(delivered=false) while still working reported notifyOwed=true; want false")
-	}
-
-	// Now the subagent actually finishes: no slot held, onDone fires.
-	f.subagentMgr.SetAgentWorking(false)
-	waitFor(t, 5*time.Second, func() bool {
-		return hasSyntheticDonePair(t, f.parentMessages())
-	})
-
-	// Exactly one synthetic completion fires (the parent loop may append its
-	// own reply afterward, which is why we count synthetic pairs rather than
-	// raw message deltas).
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if n := countSyntheticDonePairs(t, f.parentMessages()); n > 1 {
-			t.Fatalf("expected exactly one synthetic done pair after late finish, got %d", n)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if n := countSyntheticDonePairs(t, f.parentMessages()); n != 1 {
-		t.Fatalf("expected exactly one synthetic done pair after late finish, got %d", n)
-	}
-}
-
 // Cancelling a subagent's in-flight turn (e.g. a resend to a busy subagent, or
 // a user-initiated stop) records a synthetic "[Operation cancelled]"
 // end-of-turn message that flips agentWorking→idle. That transition must NOT
 // fire onDone: a cancellation is not a completion, and notifying the parent
 // here produces a spurious subagent-done pair (and, when a resend's new turn
-// later finishes, a duplicate). With no waiter slot held during cancel, the
-// only thing keeping onDone quiet is the cancelling guard.
+// later finishes, a duplicate). The cancelling guard keeps onDone quiet.
 func testSubagentDone_CancellationDoesNotNotifyParent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newSubagentDoneFixture(t, "Should never reach the parent.")
@@ -938,7 +779,7 @@ func testSubagentDone_InjectedMidTurn(t *testing.T) {
 
 // testSubagentDone_InjectionSkippedWhileDistilling verifies that mid-turn
 // injection stays hands-off while the conversation is being rewritten by
-// distillation: takeInjectableSubagentDone returns nothing and leaves the
+// distillation: takeInjectable returns nothing and leaves the
 // batch queued for the post-distillation drain (whose delivery is covered by
 // QueuedDuringDistillation).
 func testSubagentDone_InjectionSkippedWhileDistilling(t *testing.T) {
@@ -956,7 +797,7 @@ func testSubagentDone_InjectionSkippedWhileDistilling(t *testing.T) {
 	f.parentMgr.mu.Lock()
 	generation := f.parentMgr.loopGeneration
 	f.parentMgr.mu.Unlock()
-	if msgs := f.parentMgr.takeInjectableSubagentDone(ctx, generation); len(msgs) != 0 {
+	if msgs := f.parentMgr.takeInjectable(ctx, generation); len(msgs) != 0 {
 		t.Fatalf("expected no injectable messages while distilling, got %d", len(msgs))
 	}
 	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 1 {
@@ -964,74 +805,14 @@ func testSubagentDone_InjectionSkippedWhileDistilling(t *testing.T) {
 	}
 }
 
-// testSubagentDone_StaleQueuedNotificationDroppedAfterSyncDelivery reproduces
-// the "late subagent reply wastes a parent turn" bug observed in production:
-//
-//  1. The parent is mid-turn when the subagent finishes, so the completion
-//     notification is queued on the parent's pending-batch queue (it cannot
-//     drain until the parent's turn ends — potentially much later).
-//  2. Still within the same turn, the parent polls the subagent with a
-//     wait=true tool call ("status check — give me your findings") and
-//     receives the full response synchronously via the tool result.
-//  3. When the parent's turn finally ends, the queued notification drains
-//     anyway, splicing a synthetic "subagent finished" pair into history and
-//     burning a full LLM turn (plus a user-facing notification) for the
-//     parent to say "that's the same answer I already have; nothing to do."
-//
-// Once the response has been delivered synchronously, the queued notification
-// is stale — the same supersession policy enqueueBatch already applies when a
-// newer notification for the same subagent arrives. It must be dropped.
-func testSubagentDone_StaleQueuedNotificationDroppedAfterSyncDelivery(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newSubagentDoneFixture(t, "first-turn response")
-		defer stopActiveConversationLoops(f.server)
-		ctx := t.Context()
-
-		// Parent is mid-turn: enqueued subagent-done batches wait in
-		// pendingBatches rather than draining immediately.
-		f.parentMgr.SetAgentWorking(true)
-
-		// Subagent finishes while the parent is busy -> queued notification.
-		f.notifySubagentDone(f.subagentID)
-		waitFor(t, 5*time.Second, func() bool {
-			return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
-		})
-
-		// Parent (still mid-turn) polls the subagent with wait=true and gets the
-		// response synchronously via the tool result.
-		runner := NewSubagentRunner(f.server)
-		res, err := runner.RunSubagent(ctx, f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
-		if err != nil {
-			t.Fatalf("RunSubagent(wait=true): %v", err)
-		}
-		if !strings.Contains(res, "foo") {
-			t.Fatalf("expected synchronous response 'foo', got %q", res)
-		}
-
-		// The queued notification is now stale — the parent already has the
-		// subagent's answer — and must have been dropped.
-		if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-			t.Fatalf("expected stale queued subagent-done batch to be dropped after synchronous delivery, still have %d", n)
-		}
-
-		// Parent's turn ends. Draining must not splice a synthetic done pair.
-		f.parentMgr.SetAgentWorking(false)
-		go f.parentMgr.drainPendingMessages(f.server)
-		synctest.Wait() // let any erroneous pair land
-		if n := countSyntheticDonePairs(t, f.parentMessages()); n != 0 {
-			t.Fatalf("expected no synthetic done pairs on parent after synchronous delivery, got %d", n)
-		}
-	})
-}
-
-// testSubagentDone_StaleQueuedNotificationDroppedOnWaitFalseSend covers the
-// wait=false flavor of the same staleness: a notification for the subagent's
+// testSubagentDone_StaleQueuedNotificationDroppedOnSend covers
+// supersession staleness: a notification for the subagent's
 // PREVIOUS turn is queued on the busy parent, and the parent then sends the
-// subagent new work (wait=false to a busy subagent). The new work supersedes
+// subagent new work (a busy subagent). The new work supersedes
 // the queued notification — the same "only the newest matters" policy
 // enqueueBatch applies between two queued notifications — so it must be
 // dropped; the new turn's completion will enqueue a fresh one.
-func testSubagentDone_StaleQueuedNotificationDroppedOnWaitFalseSend(t *testing.T) {
+func testSubagentDone_StaleQueuedNotificationDroppedOnSend(t *testing.T) {
 	f := newSubagentDoneFixture(t, "previous-turn response")
 
 	// Parent is mid-turn.
@@ -1044,265 +825,35 @@ func testSubagentDone_StaleQueuedNotificationDroppedOnWaitFalseSend(t *testing.T
 	})
 
 	// The subagent is now busy on another turn (simulated), and the parent
-	// queues new work for it with wait=false.
+	// queues new work for it.
 	if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
 		t.Fatalf("ensureLoop subagent: %v", err)
 	}
 	f.subagentMgr.SetAgentWorking(true)
 
 	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(t.Context(), f.subagentID, "do the next thing", false, time.Minute, "predictable", "")
+	res, err := runner.RunSubagent(t.Context(), f.subagentID, "do the next thing", "predictable", "")
 	if err != nil {
-		t.Fatalf("RunSubagent(wait=false): %v", err)
+		t.Fatalf("RunSubagent: %v", err)
 	}
-	if !strings.Contains(res, "queued") {
-		t.Fatalf("expected a queued status, got %q", res)
+	if !strings.Contains(res, "current turn") {
+		t.Fatalf("expected a mid-turn delivery status, got %q", res)
 	}
 
 	// The stale previous-turn notification must be gone.
 	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected stale queued subagent-done batch to be dropped on wait=false send, still have %d", n)
+		t.Fatalf("expected stale queued subagent-done batch to be dropped on send, still have %d", n)
 	}
 }
 
-// testSubagentDone_StaleQueuedNotificationDroppedOnWaitTrueReprompt covers
-// the wait=true re-prompt path: a notification for the subagent's previous
-// turn is queued on the busy parent, the subagent is busy with another turn,
-// and the parent sends a follow-up with wait=true. Once the follow-up is
-// accepted it supersedes the queued notification, which must be dropped
-// before waitForResponse delivers (or times out on) the new turn.
-func testSubagentDone_StaleQueuedNotificationDroppedOnWaitTrueReprompt(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newSubagentDoneFixture(t, "previous-turn response")
-		defer stopActiveConversationLoops(f.server)
-
-		// Parent is mid-turn.
-		f.parentMgr.SetAgentWorking(true)
-
-		// Subagent finished its previous turn while the parent was busy.
-		f.notifySubagentDone(f.subagentID)
-		waitFor(t, 5*time.Second, func() bool {
-			return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
-		})
-
-		// The subagent is busy with another (simulated) turn that finishes
-		// shortly; the parent re-prompts with wait=true.
-		if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-			t.Fatalf("ensureLoop subagent: %v", err)
-		}
-		f.subagentMgr.SetAgentWorking(true)
-		go func() {
-			time.Sleep(200 * time.Millisecond)
-			f.subagentMgr.SetAgentWorking(false)
-		}()
-
-		runner := NewSubagentRunner(f.server)
-		res, err := runner.RunSubagent(t.Context(), f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
-		if err != nil {
-			t.Fatalf("RunSubagent(wait=true): %v", err)
-		}
-		if !strings.Contains(res, "foo") {
-			t.Fatalf("expected the follow-up response 'foo', got %q", res)
-		}
-
-		// The stale previous-turn notification must be gone.
-		if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-			t.Fatalf("expected stale queued subagent-done batch to be dropped on wait=true re-prompt, still have %d", n)
-		}
-	})
-}
-
-// testSubagentDone_RepromptThenTimeoutStillDropsStale pins the wait=true
-// re-prompt drop specifically: the follow-up is sent (superseding the queued
-// previous-turn notification) but the wait then TIMES OUT, so the
-// synchronous-delivery drop never runs. The stale notification must already
-// be gone — the parent asked for the new turn's outcome, which will arrive
-// as a fresh notification when that turn finishes.
-func testSubagentDone_RepromptThenTimeoutStillDropsStale(t *testing.T) {
-	f := newSubagentDoneFixture(t, "previous-turn response")
-
-	// Parent is mid-turn.
-	f.parentMgr.SetAgentWorking(true)
-
-	// Subagent finished its previous turn while the parent was busy.
-	f.notifySubagentDone(f.subagentID)
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
-	})
-
-	// Re-prompt with wait=true. The follow-up turn (predictable "delay: 4")
-	// outlives the 1s deadline, so waitForResponse returns a progress summary
-	// without ever reaching the delivery path.
-	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(t.Context(), f.subagentID, "delay: 4", true, time.Second, "predictable", "")
-	if err != nil {
-		t.Fatalf("RunSubagent(wait=true, timeout): %v", err)
-	}
-	if !strings.Contains(res, "still working") {
-		t.Fatalf("expected a timeout/progress response, got %q", res)
-	}
-
-	// The stale previous-turn notification must have been dropped when the
-	// follow-up was accepted, even though nothing was delivered. (The
-	// follow-up turn is still running — its fresh notification arrives only
-	// when it finishes, well after this check.)
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected stale queued subagent-done batch to be dropped on re-prompt despite timeout, still have %d", n)
-	}
-}
-
-// testSubagentDone_NotificationEnqueuedMidWaitDroppedAtDelivery pins the
-// synchronous-delivery drop in waitForResponse: a notification that lands on
-// the parent's queue AFTER the wait=true call has already sent its prompt
-// (e.g. an in-flight notifyParentSubagentDone goroutine scheduled just before
-// the waiter slot was registered) must still be scrubbed when the call
-// delivers the final answer. The other two (pre-send) drop sites have already
-// run by then and cannot help.
-func testSubagentDone_NotificationEnqueuedMidWaitDroppedAtDelivery(t *testing.T) {
-	f := newSubagentDoneFixture(t, "previous-turn response")
-
-	// Parent is mid-turn, so injected notifications stay queued.
-	f.parentMgr.SetAgentWorking(true)
-
-	// Kick off a wait=true call whose turn takes ~1s (predictable "delay:").
-	type result struct {
-		res string
-		err error
-	}
-	done := make(chan result, 1)
-	runner := NewSubagentRunner(f.server)
-	go func() {
-		res, err := runner.RunSubagent(t.Context(), f.subagentID, "delay: 1", true, 10*time.Second, "predictable", "")
-		done <- result{res, err}
-	}()
-
-	// Wait until the subagent's turn is running AND the re-prompt has
-	// recorded its supersession watermark (which happens just after
-	// AcceptUserMessage returns — agentWorking flips true slightly earlier,
-	// inside AcceptUserMessage, so waiting on the watermark avoids racing
-	// the gap between the two).
-	waitFor(t, 5*time.Second, func() bool {
-		return f.subagentMgr.IsAgentWorking() && f.subagentMgr.handledSeq() > 0
-	})
-
-	// A straggler notifier goroutine for the PREVIOUS turn lands mid-wait.
-	// The re-prompt already recorded the supersession watermark, so the
-	// straggler is skipped at enqueue time (producer-side invalidation) —
-	// nothing may appear in the queue.
-	f.notifySubagentDone(f.subagentID)
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected mid-wait straggler notification to be skipped at enqueue, have %d queued", n)
-	}
-
-	// Separately pin the delivery-time scrub (drop site 3): force a batch
-	// past the producer-side check (nil isStale — e.g. a notifier built
-	// before the subagent manager was active) while the wait is in flight.
-	use, res := f.buildSyntheticPair()
-	f.parentMgr.EnqueueSubagentDone(f.server, "predictable", f.subagentID, use, res, nil)
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
-	})
-
-	r := <-done
-	if r.err != nil {
-		t.Fatalf("RunSubagent(wait=true): %v", r.err)
-	}
-	if !strings.Contains(r.res, "Delayed") {
-		t.Fatalf("expected the delayed response, got %q", r.res)
-	}
-
-	// The mid-wait notification is stale relative to the just-delivered
-	// response and must have been dropped at delivery time.
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected mid-wait queued subagent-done batch to be dropped at delivery, still have %d", n)
-	}
-}
-
-// testSubagentDone_TimeoutDoesNotDropQueuedNotification is the negative case:
-// a wait=true call that TIMES OUT delivers only a progress summary — the
-// parent does NOT have the subagent's answer — so a queued notification for
-// this subagent must survive the call.
-func testSubagentDone_TimeoutDoesNotDropQueuedNotification(t *testing.T) {
-	f := newSubagentDoneFixture(t, "previous-turn response")
-
-	// Parent is mid-turn.
-	f.parentMgr.SetAgentWorking(true)
-
-	// Subagent finished its previous turn while the parent was busy.
-	f.notifySubagentDone(f.subagentID)
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
-	})
-
-	// The subagent is busy with a long-running turn; the parent polls with
-	// wait=true and a deadline that expires while the turn is in flight.
-	if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-		t.Fatalf("ensureLoop subagent: %v", err)
-	}
-	f.subagentMgr.SetAgentWorking(true)
-	defer f.subagentMgr.SetAgentWorking(false)
-
-	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(t.Context(), f.subagentID, "echo: foo", true, 700*time.Millisecond, "predictable", "")
-	if err != nil {
-		t.Fatalf("RunSubagent(wait=true, timeout): %v", err)
-	}
-	if !strings.Contains(res, "still working") {
-		t.Fatalf("expected a timeout/progress response, got %q", res)
-	}
-
-	// The queued notification still carries information the parent never
-	// received; it must NOT have been dropped.
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 1 {
-		t.Fatalf("expected queued subagent-done batch to survive a timed-out wait, have %d", n)
-	}
-}
-
-// testSubagentDone_StragglerNotifierSkipsAfterSyncDelivery pins the
-// producer-side invalidation: a notifyParentSubagentDone goroutine that is
-// delayed until AFTER a wait=true call has delivered the same response (and
-// after every queue-scrub has run) must not enqueue a duplicate. The
-// wait=true delivery records the response's sequence id on the subagent
-// manager (markSyncDelivered); the straggler's isStale closure sees it at
-// enqueue time and discards the batch.
-func testSubagentDone_StragglerNotifierSkipsAfterSyncDelivery(t *testing.T) {
-	f := newSubagentDoneFixture(t, "the response")
-	ctx := t.Context()
-
-	// Parent is mid-turn, so any enqueued notification would stay queued.
-	f.parentMgr.SetAgentWorking(true)
-
-	// The parent polls the subagent with wait=true and receives the response
-	// synchronously. This marks the response's sequence id as delivered and
-	// scrubs the (empty) queue.
-	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(ctx, f.subagentID, "echo: foo", true, 10*time.Second, "predictable", "")
-	if err != nil {
-		t.Fatalf("RunSubagent(wait=true): %v", err)
-	}
-	if !strings.Contains(res, "foo") {
-		t.Fatalf("expected synchronous response, got %q", res)
-	}
-
-	// Straggler: a delayed notifier goroutine for the previous turn fires
-	// only now — after all drop points have run. It must skip enqueueing.
-	f.notifySubagentDone(f.subagentID)
-
-	// notifyParentSubagentDone runs synchronously here, so the queue state is
-	// final: nothing may be queued.
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected straggler notification to be skipped after sync delivery, have %d queued", n)
-	}
-}
-
-// testSubagentDone_StragglerNotifierSkipsAfterWaitFalseSupersede pins the
-// producer-side invalidation for the wait=false supersession path with the
+// testSubagentDone_StragglerNotifierSkipsAfterSupersede pins the
+// producer-side invalidation for the supersession path with the
 // worst-case interleaving: the completion for the PREVIOUS turn was already
 // CAPTURED (dispatch time — identity fixed) but its enqueue is delayed until
 // after the parent has sent the subagent new work (which scrubbed the queue
 // and recorded the supersession watermark). The late enqueue must skip: the
 // watermark covers the captured response's sequence id.
-func testSubagentDone_StragglerNotifierSkipsAfterWaitFalseSupersede(t *testing.T) {
+func testSubagentDone_StragglerNotifierSkipsAfterSupersede(t *testing.T) {
 	f := newSubagentDoneFixture(t, "previous-turn response")
 	ctx := t.Context()
 
@@ -1316,17 +867,17 @@ func testSubagentDone_StragglerNotifierSkipsAfterWaitFalseSupersede(t *testing.T
 		t.Fatalf("expected capture to succeed while subagent idle")
 	}
 
-	// Parent sends the subagent new work (wait=false). This records the
+	// Parent sends the subagent new work. This records the
 	// supersession watermark for the existing response and scrubs the queue.
 	runner := NewSubagentRunner(f.server)
-	if _, err := runner.RunSubagent(ctx, f.subagentID, "delay: 5", false, 0, "predictable", ""); err != nil {
-		t.Fatalf("RunSubagent(wait=false): %v", err)
+	if _, err := runner.RunSubagent(ctx, f.subagentID, "delay: 5", "predictable", ""); err != nil {
+		t.Fatalf("RunSubagent: %v", err)
 	}
 
 	// The stalled notifier finally enqueues. The watermark must reject it.
 	f.server.notifyParentSubagentDone(f.subagentID, response, seq)
 	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected straggler notification to be skipped after wait=false supersede, have %d queued", n)
+		t.Fatalf("expected straggler notification to be skipped after supersede, have %d queued", n)
 	}
 }
 
@@ -1394,8 +945,8 @@ func testSubagentDone_DelayedNotifierSkipsWhileNewTurnRunning(t *testing.T) {
 
 // testSubagentDone_StaleNotificationCoalesced reproduces the "stray duplicate
 // subagent notifications" bug: a subagent that finishes MORE THAN ONCE while
-// the parent is busy (e.g. the parent hit its wait=true timeout, re-prompted
-// the subagent, and the subagent finished each turn) must not leave multiple
+// the parent is busy (e.g. the parent re-prompted the subagent and the
+// subagent finished each turn) must not leave multiple
 // subagent-done batches queued for the parent. Only ONE notification per
 // subagent conversation should remain pending — the newest — so that when the
 // parent's turn ends it drains a single "subagent finished" pair instead of a

@@ -241,8 +241,7 @@ func TestSubagentNotificationViaStream(t *testing.T) {
 	// This should trigger the notification to all SSE streams
 	subagentRunner := server.NewSubagentRunner(svr)
 	go func() {
-		// Call RunSubagent with wait=false so it returns quickly
-		subagentRunner.RunSubagent(ctx, subConv.ConversationID, "Test prompt", false, 10*time.Second, "predictable", "")
+		subagentRunner.RunSubagent(ctx, subConv.ConversationID, "Test prompt", "predictable", "")
 	}()
 
 	// Wait for notification
@@ -331,9 +330,16 @@ func TestSubagentNoExternalNotification(t *testing.T) {
 
 	// Run the subagent to completion
 	subagentRunner := server.NewSubagentRunner(svr)
-	_, err = subagentRunner.RunSubagent(ctx, subConv.ConversationID, "Test prompt", true, 10*time.Second, "predictable", "")
+	_, err = subagentRunner.RunSubagent(ctx, subConv.ConversationID, "Test prompt", "predictable", "")
 	if err != nil {
 		t.Fatalf("RunSubagent failed: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for svr.IsAgentWorking(subConv.ConversationID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if svr.IsAgentWorking(subConv.ConversationID) {
+		t.Fatal("subagent did not finish")
 	}
 
 	// Subagent finished — should NOT have dispatched to external channels
@@ -353,7 +359,7 @@ func TestSubagentNoExternalNotification(t *testing.T) {
 	resp.Body.Close()
 
 	// Wait for the parent conversation to finish working
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		parentEvents := recorder.eventsForConversation(parentConv.ConversationID)
 		if len(parentEvents) > 0 {
