@@ -1,15 +1,19 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -230,67 +234,88 @@ func TestCustomCommits(t *testing.T) {
 }
 
 func TestVersionCheckerCache(t *testing.T) {
-	t.Parallel()
-	// Create a mock server
-	callCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		release := ReleaseInfo{
-			TagName:     "v0.10.0",
-			Version:     "0.10.0",
-			PublishedAt: time.Now().Add(-10 * 24 * time.Hour).Format(time.RFC3339),
-			DownloadURLs: map[string]string{
-				"linux_amd64":  "https://example.com/linux_amd64",
-				"darwin_arm64": "https://example.com/darwin_arm64",
-			},
+	synctest.Test(t, func(t *testing.T) {
+		// Keep this test serial: the metadata requests use http.DefaultClient.
+		oldClient := http.DefaultClient
+		t.Cleanup(func() { http.DefaultClient = oldClient })
+
+		requests := 0
+		latestTag := "v0.10.0"
+		platform := runtime.GOOS + "_" + runtime.GOARCH
+		const downloadURL = "https://example.com/shelley"
+		http.DefaultClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || req.URL.String() != staticMetadataURL+"/release.json" {
+				return nil, fmt.Errorf("unexpected metadata request: %s %s", req.Method, req.URL)
+			}
+			requests++
+			body, err := json.Marshal(ReleaseInfo{
+				TagName:      latestTag,
+				DownloadURLs: map[string]string{platform: downloadURL},
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+		})}
+
+		vc := &VersionChecker{}
+		check := func(force bool, wantTag string, wantRequests int) {
+			t.Helper()
+			info, err := vc.Check(t.Context(), force)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Error != "" {
+				t.Fatalf("Check returned error: %s", info.Error)
+			}
+			if info.LatestTag != wantTag || info.DownloadURL != downloadURL {
+				t.Fatalf("Check = tag %q, download %q; want %q, %q", info.LatestTag, info.DownloadURL, wantTag, downloadURL)
+			}
+			if requests != wantRequests {
+				t.Fatalf("metadata requests = %d, want %d", requests, wantRequests)
+			}
 		}
-		json.NewEncoder(w).Encode(release)
-	}))
-	defer server.Close()
 
-	// Create version checker without skip
-	vc := &VersionChecker{
-		skipCheck:   false,
-		githubOwner: "test",
-		githubRepo:  "test",
-	}
-
-	// Override the fetch function by checking the cache behavior
-	ctx := t.Context()
-
-	// First call - should not use cache
-	_, err := vc.Check(ctx, false)
-	// Will fail because we're not actually calling the static site, but that's OK for this test
-	// The important thing is that it tried to fetch
-
-	// Second call immediately after - should use cache if first succeeded
-	_, err = vc.Check(ctx, false)
-	_ = err // Ignore error, we're just testing the cache logic
-
-	// Force refresh should bypass cache
-	_, err = vc.Check(ctx, true)
-	_ = err
+		check(false, "v0.10.0", 1)
+		latestTag = "v0.11.0"
+		check(false, "v0.10.0", 1) // A fresh cache must not fetch the newer release.
+		check(true, "v0.11.0", 2)  // A forced check must fetch and replace the cache.
+		latestTag = "v0.12.0"
+		check(false, "v0.11.0", 2)
+		time.Sleep(6 * time.Hour)  // synctest advances fake time, not wall time.
+		check(false, "v0.12.0", 3) // An expired cache must fetch without forcing.
+	})
 }
 
 func TestFindDownloadURL(t *testing.T) {
 	t.Parallel()
-	vc := &VersionChecker{}
-
-	release := &ReleaseInfo{
-		TagName: "v0.1.0",
-		DownloadURLs: map[string]string{
-			"linux_amd64":  "https://example.com/linux_amd64",
-			"linux_arm64":  "https://example.com/linux_arm64",
-			"darwin_amd64": "https://example.com/darwin_amd64",
-			"darwin_arm64": "https://example.com/darwin_arm64",
+	platform := runtime.GOOS + "_" + runtime.GOARCH
+	tests := []struct {
+		name string
+		urls map[string]string
+		want string
+	}{
+		{
+			name: "current platform",
+			urls: map[string]string{
+				platform:                  "https://example.com/current",
+				runtime.GOOS + "_other":   "https://example.com/other-arch",
+				"other_" + runtime.GOARCH: "https://example.com/other-os",
+			},
+			want: "https://example.com/current",
 		},
+		{name: "different architecture", urls: map[string]string{runtime.GOOS + "_other": "https://example.com/other-arch"}},
+		{name: "different OS", urls: map[string]string{"other_" + runtime.GOARCH: "https://example.com/other-os"}},
+		{name: "no downloads"},
 	}
-
-	url := vc.findDownloadURL(release)
-	// The result depends on runtime.GOOS and runtime.GOARCH
-	// Just verify it doesn't panic and returns something for known platforms
-	if url == "" {
-		t.Log("No matching download URL found for current platform - this is expected on some platforms")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vc := &VersionChecker{}
+			got := vc.findDownloadURL(&ReleaseInfo{DownloadURLs: tt.urls})
+			if got != tt.want {
+				t.Errorf("findDownloadURL = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
