@@ -2,10 +2,7 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/db"
@@ -103,129 +100,9 @@ func (f *subagentDoneFixture) parentMessages() []generated.Message {
 	return msgs
 }
 
-// idleNotices returns the parent's user messages that announce this
-// subagent went idle, attributed to it through sender user_data.
-func (f *subagentDoneFixture) idleNotices() []generated.Message {
-	f.t.Helper()
-	var out []generated.Message
-	for _, m := range f.parentMessages() {
-		if m.Type != string(db.MessageTypeUser) || m.UserData == nil || m.LlmData == nil {
-			continue
-		}
-		data, ok, err := parseSenderMessageUserData([]byte(*m.UserData))
-		if err != nil || !ok || data.SenderConversationID != f.subagentID || data.SenderRelationship != senderRelationshipSubagent {
-			continue
-		}
-		var msg llm.Message
-		if err := json.Unmarshal([]byte(*m.LlmData), &msg); err != nil {
-			f.t.Fatal(err)
-		}
-		if strings.Contains(messageText(msg), "is idle") {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-// fireOnDone simulates the agent transitioning from working to not working
-// (which is what triggers the onDone callback wired in convo.go's
-// SetAgentWorking). We toggle through true->false to exercise the real path.
-func (f *subagentDoneFixture) fireOnDone() {
-	f.subagentMgr.SetAgentWorking(true)
-	f.subagentMgr.SetAgentWorking(false)
-}
-
-func TestSubagentDone(t *testing.T) {
-	t.Run("NotifiesParentWithoutCopyingResponse", testSubagentDone_NotifiesParentWithoutCopyingResponse)
-	t.Run("CancellationDoesNotNotifyParent", testSubagentDone_CancellationDoesNotNotifyParent)
-	t.Run("EvictedParentManagerStillNotified", testSubagentDone_EvictedParentManagerStillNotified)
-}
-
-// When a subagent's turn ends, the parent gets one attributed notice that the
-// subagent is idle, and its turn starts. The subagent's reply is not copied.
-func testSubagentDone_NotifiesParentWithoutCopyingResponse(t *testing.T) {
-	f := newSubagentDoneFixture(t, "SECRET-RESULT-TEXT")
-	defer stopActiveConversationLoops(f.server)
-
-	f.fireOnDone()
-
-	waitFor(t, 5*time.Second, func() bool { return len(f.idleNotices()) == 1 })
-	for _, m := range f.parentMessages() {
-		if m.LlmData != nil && strings.Contains(*m.LlmData, "SECRET-RESULT-TEXT") {
-			t.Fatalf("subagent response was copied into the parent: %s", *m.LlmData)
-		}
-	}
-	waitFor(t, 5*time.Second, func() bool {
-		for _, req := range f.llmSvc.GetRecentRequests() {
-			for _, msg := range req.Messages {
-				if strings.Contains(messageText(msg), `<subagent_message conversation_id="`+f.subagentID+`" slug="sub-test">`) {
-					return true
-				}
-			}
-		}
-		return false
-	})
-}
-
-// Cancelling a subagent's in-flight turn (e.g. a resend to a busy subagent, or
-// a user-initiated stop) records a synthetic "[Operation cancelled]"
-// end-of-turn message that flips agentWorking→idle. That transition must NOT
-// fire onDone: a cancellation is not a completion, and notifying the parent
-// here produces a spurious subagent-done pair (and, when a resend's new turn
-// later finishes, a duplicate). The cancelling guard keeps onDone quiet.
-func testSubagentDone_CancellationDoesNotNotifyParent(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newSubagentDoneFixture(t, "Should never reach the parent.")
-		defer stopActiveConversationLoops(f.server)
-
-		// Bring the subagent's loop up so CancelConversation has something to tear
-		// down (it returns early when loop==nil).
-		if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-			t.Fatalf("ensureLoop subagent: %v", err)
-		}
-		f.subagentMgr.SetAgentWorking(true)
-
-		before := len(f.parentMessages())
-		if err := f.subagentMgr.CancelConversation(t.Context()); err != nil {
-			t.Fatalf("CancelConversation: %v", err)
-		}
-
-		// Let any (erroneous) async notification land on the parent.
-		synctest.Wait()
-		if got := len(f.parentMessages()); got != before {
-			t.Fatalf("cancellation added %d parent message(s); want 0", got-before)
-		}
-
-		// The subagent itself must be idle after cancel.
-		if f.subagentMgr.IsAgentWorking() {
-			t.Fatalf("subagent still working after CancelConversation")
-		}
-	})
-}
-
-// Cleanup may evict an idle parent's manager while its subagent works; the
-// subagent's idle notice must recreate it rather than be dropped.
-func testSubagentDone_EvictedParentManagerStillNotified(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Finished after the parent manager was evicted.")
-	defer stopActiveConversationLoops(f.server)
-
-	f.server.mu.Lock()
-	delete(f.server.activeConversations, f.parentID)
-	f.server.mu.Unlock()
-	f.parentMgr.stopLoop()
-
-	f.fireOnDone()
-
-	waitFor(t, 5*time.Second, func() bool { return len(f.idleNotices()) == 1 })
-	f.server.mu.Lock()
-	_, ok := f.server.activeConversations[f.parentID]
-	f.server.mu.Unlock()
-	if !ok {
-		t.Fatal("expected parent manager to be recreated in activeConversations")
-	}
-}
-
-func TestManualSubagentTurnDoesNotNotifyParent(t *testing.T) {
+// A subagent's turn ending does not message or wake its parent; subagents
+// report only through message_parent.
+func TestSubagentTurnEndDoesNotNotifyParent(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
 	ctx := t.Context()
 	parentManager, err := server.getOrCreateConversationManager(ctx, parent.ConversationID, "")
@@ -248,9 +125,6 @@ func TestManualSubagentTurnDoesNotNotifyParent(t *testing.T) {
 	server.mu.Unlock()
 	if childManager == nil {
 		t.Fatal("manual child turn did not create a manager")
-	}
-	if childManager.onDone != nil {
-		t.Fatal("generic child manager wired parent completion notification")
 	}
 
 	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, "echo: manual child turn"))

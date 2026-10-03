@@ -123,12 +123,12 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		if err := manager.InjectMessage(ctx, s, modelID, userMessage); err != nil {
 			return "", fmt.Errorf("failed to send message to busy subagent: %w", err)
 		}
-		return "message sent into the subagent's current turn; you will be told when it is idle.", nil
+		return "message sent into the subagent's current turn; it reports back with message_parent.", nil
 	}
 	if _, err := manager.AcceptUserMessage(ctx, llmService, modelID, userMessage); err != nil {
 		return "", fmt.Errorf("failed to accept user message: %w", err)
 	}
-	return "message sent; the subagent works in the background and you will be told when it is idle.", nil
+	return "message sent; the subagent works in the background and reports back with message_parent.", nil
 }
 
 // ListSubagents implements claudetool.SubagentRunner. It lists delegated
@@ -196,36 +196,6 @@ func (s *Server) messageParent(ctx context.Context, conv generated.Conversation,
 		Text:                 text,
 	})
 	return parent.InjectMessage(ctx, s, modelID, llm.UserStringMessage(text))
-}
-
-// notifyParentSubagentIdle tells the parent that a delegated subagent
-// finished its turn. It runs from the subagent manager's onDone, which is
-// suppressed for cancellations. The reply itself is not copied into the
-// parent: the subagent reports results with message_parent, and the parent
-// can preview its latest response with list_subagents.
-func (s *Server) notifyParentSubagentIdle(subagentConversationID string) {
-	s.mu.Lock()
-	subMgr, active := s.activeConversations[subagentConversationID]
-	s.mu.Unlock()
-	if active && subMgr.IsAgentWorking() {
-		// A newer turn already started; its own end will notify.
-		return
-	}
-	go func() {
-		ctx := context.Background()
-		conv, err := s.db.GetConversationByID(ctx, subagentConversationID)
-		if err != nil {
-			s.logger.Error("Failed to load subagent for idle notice", "subagent", subagentConversationID, "error", err)
-			return
-		}
-		if !isDelegatedSubagent(*conv) {
-			return // /btw readers and internal workers never notify their parent
-		}
-		text := fmt.Sprintf("Subagent %q finished its turn and is idle.", derefString(conv.Slug))
-		if err := s.messageParent(ctx, *conv, text); err != nil {
-			s.logger.Error("Failed to notify parent that subagent is idle", "subagent", subagentConversationID, "error", err)
-		}
-	}()
 }
 
 // lastAgentText returns the concatenated text content of the most recent

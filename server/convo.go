@@ -202,10 +202,6 @@ type ConversationManager struct {
 	// This allows the server to broadcast state changes to all subscribers.
 	onStateChange func(state ConversationState)
 
-	// onDone is called when the agent finishes working (transitions to not working).
-	// Used by subagents to notify their parent conversation.
-	onDone func()
-
 	// onTurnStartRejected restarts pending-batch draining after a failed
 	// turn-start write rolls the manager back to idle.
 	onTurnStartRejected func()
@@ -214,12 +210,8 @@ type ConversationManager struct {
 	idleWaiters []chan struct{}
 
 	// cancelling is true while CancelConversation is tearing down the current
-	// turn. The cancel path records a synthetic "[Operation cancelled]"
-	// end-of-turn message, which flips agentWorking→idle and would otherwise
-	// fire onDone — delivering a spurious subagent-completion notification to
-	// the parent for a turn the user (or a resend) cut short. A cancellation
-	// is not a completion, so we suppress onDone for its working→idle
-	// transition. Guarded by cm.mu.
+	// turn; batches arriving meanwhile are dropped and nothing is injected.
+	// Guarded by cm.mu.
 	// preservePendingOnCancel keeps batches that arrive during a Send now
 	// interruption; full cancellation still drops them. Guarded by cm.mu.
 	preservePendingOnCancel bool
@@ -398,12 +390,8 @@ func (cm *ConversationManager) setAgentWorking(working, persist bool) {
 	}
 	cm.agentWorking = working
 	onStateChange := cm.onStateChange
-	onDone := cm.onDone
 	convID := cm.conversationID
 	modelID := cm.modelID
-	// A cancellation's working→idle transition is not a completion: suppress
-	// onDone for it. Decided under the same lock as the working-state flip.
-	suppressDone := cm.cancelling
 	var idleWaiters []chan struct{}
 	if !working {
 		idleWaiters, cm.idleWaiters = cm.idleWaiters, nil
@@ -425,9 +413,6 @@ func (cm *ConversationManager) setAgentWorking(working, persist bool) {
 			Working:        working,
 			Model:          modelID,
 		})
-	}
-	if !working && onDone != nil && !suppressDone {
-		onDone()
 	}
 }
 
@@ -790,18 +775,13 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 
 // rejectTurnStart restores an idle manager after a turn-start write fails.
 // SetAgentWorking(false) repairs the persisted bit too, covering a recorder
-// that failed after an ambiguous commit. Marking the transition as cancelling
-// suppresses subagent onDone: a rejected turn is not a completed turn.
+// that failed after an ambiguous commit.
 func (cm *ConversationManager) rejectTurnStart(keepWorking bool) {
 	if keepWorking {
 		return
 	}
-	cm.mu.Lock()
-	cm.cancelling = true
-	cm.mu.Unlock()
 	cm.SetAgentWorking(false)
 	cm.mu.Lock()
-	cm.cancelling = false
 	cm.preservePendingOnCancel = false
 	needsDrain := len(cm.pendingBatches) > 0 && !cm.distilling
 	onRejected := cm.onTurnStartRejected
@@ -2663,7 +2643,6 @@ func (cm *ConversationManager) handleFatalLoopExit(loopInstance *loop.Loop, gene
 	detached.done = nil // this is the loop goroutine; loopDone closes after we return
 	cm.hydrated = false
 	cm.hasConversationEvents = false
-	cm.cancelling = true // suppress an onDone notification for a failed turn
 	cm.mu.Unlock()
 
 	detached.stop()

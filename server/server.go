@@ -1073,7 +1073,6 @@ func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, con
 		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.serverPort = s.listenPort
-		manager.onDone = func() { s.notifyParentSubagentIdle(conversationID) }
 		// See getOrCreateConversationManager for why we don't hold s.mu here.
 		if err := manager.Hydrate(ctx); err != nil {
 			return nil, err

@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -637,15 +636,6 @@ func TestResumeAfterUpgradeResumesSubagent(t *testing.T) {
 	if got := countByType(msgs, db.MessageTypeWarning); got != 1 {
 		t.Errorf("subagent warning messages = %d, want 1", got)
 	}
-	waitFor(t, 15*time.Second, func() bool {
-		for _, m := range listMessages(t, database, parent.ConversationID) {
-			if m.Type == string(db.MessageTypeUser) && m.LlmData != nil && strings.Contains(*m.LlmData, "finished its turn and is idle") {
-				return true
-			}
-		}
-		return false
-	})
-	waitFor(t, 15*time.Second, func() bool { return !srv.IsAgentWorking(parent.ConversationID) })
 }
 
 func TestResumeAfterUpgradeSkips(t *testing.T) {

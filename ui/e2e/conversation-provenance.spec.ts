@@ -69,7 +69,6 @@ for (const viewport of [
         parent.conversationId,
         progress.replace("API and database", "**API and database**"),
       );
-      // The parent also receives the child's idle notice; select by text.
       let message = page.getByTestId("message").filter({ hasText: "Backend underway" });
       let source = message.getByTestId("message-author-conversation");
       await expect(source).toHaveText(`Message from ${child.slug}`);

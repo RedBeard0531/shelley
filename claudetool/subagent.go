@@ -14,8 +14,8 @@ import (
 // This is implemented by the server package to avoid import cycles.
 type SubagentRunner interface {
 	// RunSubagent sends prompt to the subagent conversation and returns an
-	// acknowledgement immediately. The parent is told when the subagent's
-	// turn ends.
+	// acknowledgement immediately. The subagent reports back with
+	// message_parent.
 	// modelID is the model to use for the subagent.
 	// reasoning is the user-facing reasoning/thinking level for the subagent
 	// (one of "off", "minimal", "low", "medium", "high", "xhigh", "max");
@@ -94,11 +94,10 @@ output-heavy work whose details should not fill your context.
 Use a new slug to start a subagent; reuse its slug to continue that conversation.
 A busy subagent receives the message during its current turn.
 
-The tool returns immediately; the subagent works in the background. It reports
-back with messages, and you are told when its turn ends and it is idle; its
-final reply is not forwarded. Its messages and the idle notice wake you, so
-once you have nothing else to do, end your turn instead of checking on it;
-never poll list_subagents in a loop.
+The tool returns immediately; the subagent works in the background and reports
+back with messages; its final reply is not forwarded, so ask it to message you
+when it is done. Its messages wake you, so once you have nothing else to do,
+end your turn instead of checking on it; never poll list_subagents in a loop.
 
 Subagents do not inherit your conversation. When writing prompts for subagents,
 convey intent, nuance, and operational details — not just prescriptive instructions.
@@ -252,7 +251,7 @@ const listSubagentsName = "list_subagents"
 func (s *SubagentTool) ListTool() *llm.Tool {
 	return &llm.Tool{
 		Name:        listSubagentsName,
-		Description: "List your subagents: each one's slug (use it with the subagent tool), whether it is working, and a preview of its latest response. Don't call this to wait for a subagent: its messages and idle notice wake you, so end your turn instead.",
+		Description: "List your subagents: each one's slug (use it with the subagent tool), whether it is working, and a preview of its latest response. Don't call this to wait for a subagent: its messages wake you, so end your turn instead.",
 		InputSchema: llm.MustSchema(`{"type": "object", "properties": {}}`),
 		Run: func(ctx context.Context, _ json.RawMessage) llm.ToolOut {
 			subagents, err := s.Runner.ListSubagents(ctx, s.ParentConversationID)
