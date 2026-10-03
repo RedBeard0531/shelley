@@ -59,9 +59,37 @@ func (g gate) readerAlive(t *testing.T) bool {
 	return true
 }
 
+// writer waits until the command has opened the gate for reading. Keep it
+// open until release so the command's read does not see EOF.
+func (g gate) writer(t *testing.T) *os.File {
+	t.Helper()
+	type result struct {
+		f   *os.File
+		err error
+	}
+	opened := make(chan result, 1)
+	go func() {
+		f, err := os.OpenFile(string(g), os.O_WRONLY, 0)
+		opened <- result{f, err}
+	}()
+	select {
+	case r := <-opened:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		t.Cleanup(func() { r.f.Close() })
+		return r.f
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for gate reader")
+		return nil
+	}
+}
+
 func (g gate) release(t *testing.T) {
 	t.Helper()
-	if err := os.WriteFile(string(g), []byte("go\n"), 0); err != nil {
+	f := g.writer(t)
+	defer f.Close()
+	if _, err := f.WriteString("go\n"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -95,6 +123,14 @@ func TestBashBackgroundsLongCommand(t *testing.T) {
 	}
 	bg := <-jobs
 	job := bg.job
+	t.Cleanup(func() {
+		select {
+		case <-bg.exited:
+		default:
+			syscall.Kill(-job.PID, syscall.SIGKILL)
+			waitClosed(t, bg.exited, "job cleanup")
+		}
+	})
 	if job.ConversationID != "conv-1" || job.ToolUseID != "toolu_1" || job.Command != command {
 		t.Errorf("job = %+v, want conversation, tool use, and command recorded", job)
 	}
@@ -106,12 +142,16 @@ func TestBashBackgroundsLongCommand(t *testing.T) {
 		t.Errorf("display.Background = %+v, want job %+v", display.Background, job)
 	}
 	text := out.LLMContent[0].Text
-	for _, want := range []string{"started", job.ID, job.LogPath, "kill -- -" + strconv.Itoa(job.PID), "do not poll"} {
+	// The timeout can fire before the shell produces any output.
+	for _, want := range []string{job.ID, job.LogPath, "kill -- -" + strconv.Itoa(job.PID), "do not poll"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("result %q does not contain %q", text, want)
 		}
 	}
 
+	// Synchronize with the shell instead of assuming it reached the gate
+	// within BackgroundAfter, which includes login-shell startup.
+	f := g.writer(t)
 	// Cancelling the turn no longer affects a backgrounded job.
 	cancel()
 	if !g.readerAlive(t) {
@@ -123,7 +163,9 @@ func TestBashBackgroundsLongCommand(t *testing.T) {
 	default:
 	}
 
-	g.release(t)
+	if _, err := f.WriteString("go\n"); err != nil {
+		t.Fatal(err)
+	}
 	waitClosed(t, bg.exited, "job exit")
 	notice := job.Outcome().Notice()
 	for _, want := range []string{"Background job " + job.ID + " finished: exit 3", job.LogPath, "started\nfinished"} {
