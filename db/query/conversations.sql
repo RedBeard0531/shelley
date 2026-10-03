@@ -502,7 +502,6 @@ SET turn_interrupted = TRUE
 WHERE conversations.conversation_id = sqlc.arg('conversation_id')
   AND conversations.agent_working = TRUE
   AND conversations.turn_interrupted = FALSE
-  AND conversations.parent_conversation_id IS NULL
   AND conversations.current_generation = sqlc.arg('current_generation')
   AND (SELECT COALESCE(MAX(sequence_id), 0)
        FROM messages
@@ -516,18 +515,17 @@ UPDATE conversations
 SET turn_interrupted = FALSE
 WHERE conversation_id = sqlc.arg('conversation_id')
   AND agent_working = TRUE
-  AND turn_interrupted = TRUE
-  AND parent_conversation_id IS NULL;
+  AND turn_interrupted = TRUE;
 
 -- name: MarkUpgradeResumeInterrupted :execrows
 -- Converts a failed automatic resume into the ordinary manual-recovery state,
 -- but only while the startup token still names the same durable turn.
+-- Subagents have no manual resume; they just become idle.
 UPDATE conversations
 SET agent_working = FALSE,
-    turn_interrupted = TRUE
+    turn_interrupted = conversations.parent_conversation_id IS NULL
 WHERE conversations.conversation_id = sqlc.arg('conversation_id')
   AND conversations.agent_working = TRUE
-  AND conversations.parent_conversation_id IS NULL
   AND conversations.current_generation = sqlc.arg('current_generation')
   AND (SELECT COALESCE(MAX(sequence_id), 0)
        FROM messages

@@ -21,9 +21,10 @@ const maxConcurrentResumes = 4
 const resumeWarningText = "Shelley restarted to install a new binary while this turn was in flight. The turn has been resumed; any tool call whose result was not saved before the restart may run again."
 
 // resumeInterruptedConversations re-fires the LLM request for each conversation
-// that db.ConsumeResumeAfterUpgrade reported as mid-turn when the process exited
-// to install an upgrade. Called once, after the server's listeners are up, so
-// resumed loops see a usable server (port, subagent runner, streams).
+// (top-level or delegated subagent) that db.ConsumeResumeAfterUpgrade reported
+// as mid-turn when the process exited to install an upgrade. Called once, after
+// the server's listeners are up, so resumed loops see a usable server (port,
+// subagent runner, streams).
 func (s *Server) resumeInterruptedConversations(ctx context.Context, resumes []db.UpgradeResume) {
 	if len(resumes) == 0 {
 		return
@@ -54,7 +55,7 @@ func (s *Server) resumeInterruptedConversations(ctx context.Context, resumes []d
 // user turn invalidates the token in its turn-start transaction, so a late
 // worker becomes a no-op without touching newer work.
 func (s *Server) resumeConversation(ctx context.Context, resume db.UpgradeResume) error {
-	manager, err := s.getOrCreateConversationManager(ctx, resume.ConversationID, "")
+	manager, err := s.upgradeResumeManager(ctx, resume.ConversationID)
 	if err != nil {
 		if _, recoverErr := s.db.MarkUpgradeResumeInterrupted(ctx, resume); recoverErr != nil {
 			return errors.Join(fmt.Errorf("get conversation manager: %w", err), fmt.Errorf("preserve interrupted turn: %w", recoverErr))
@@ -78,4 +79,17 @@ func (s *Server) resumeConversation(ctx context.Context, resume db.UpgradeResume
 		return err
 	}
 	return nil
+}
+
+// upgradeResumeManager returns the conversation's manager. A subagent gets its
+// subagent manager so its resumed turn still notifies the parent on completion.
+func (s *Server) upgradeResumeManager(ctx context.Context, conversationID string) (*ConversationManager, error) {
+	conversation, err := s.db.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if conversation.ParentConversationID != nil {
+		return s.getOrCreateSubagentConversationManager(ctx, conversationID)
+	}
+	return s.getOrCreateConversationManager(ctx, conversationID, "")
 }

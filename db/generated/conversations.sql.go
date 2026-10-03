@@ -68,7 +68,6 @@ SET turn_interrupted = TRUE
 WHERE conversations.conversation_id = ?1
   AND conversations.agent_working = TRUE
   AND conversations.turn_interrupted = FALSE
-  AND conversations.parent_conversation_id IS NULL
   AND conversations.current_generation = ?2
   AND (SELECT COALESCE(MAX(sequence_id), 0)
        FROM messages
@@ -261,7 +260,6 @@ SET turn_interrupted = FALSE
 WHERE conversation_id = ?1
   AND agent_working = TRUE
   AND turn_interrupted = TRUE
-  AND parent_conversation_id IS NULL
 `
 
 // Clears the hidden claim immediately before the automatic retry. Failures
@@ -1066,10 +1064,9 @@ func (q *Queries) ListConversationsWithQueuedTranscriptions(ctx context.Context)
 const markUpgradeResumeInterrupted = `-- name: MarkUpgradeResumeInterrupted :execrows
 UPDATE conversations
 SET agent_working = FALSE,
-    turn_interrupted = TRUE
+    turn_interrupted = conversations.parent_conversation_id IS NULL
 WHERE conversations.conversation_id = ?1
   AND conversations.agent_working = TRUE
-  AND conversations.parent_conversation_id IS NULL
   AND conversations.current_generation = ?2
   AND (SELECT COALESCE(MAX(sequence_id), 0)
        FROM messages
@@ -1085,6 +1082,7 @@ type MarkUpgradeResumeInterruptedParams struct {
 
 // Converts a failed automatic resume into the ordinary manual-recovery state,
 // but only while the startup token still names the same durable turn.
+// Subagents have no manual resume; they just become idle.
 func (q *Queries) MarkUpgradeResumeInterrupted(ctx context.Context, arg MarkUpgradeResumeInterruptedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markUpgradeResumeInterrupted, arg.ConversationID, arg.CurrentGeneration, arg.MaxUserSequenceID)
 	if err != nil {
