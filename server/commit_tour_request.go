@@ -356,7 +356,7 @@ func (s *Server) requestCommitTour(ctx context.Context, parentID string, target 
 			s.commitTourMu.Unlock()
 			return status, false, nil
 		}
-		conversation, settleErr := s.db.UpdateCommitTourWorker(ctx, job.childID, func(request *db.CommitTourRequest) {
+		_, settleErr := s.db.UpdateCommitTourWorker(ctx, job.childID, func(request *db.CommitTourRequest) {
 			request.State = commitTourStatusFailed
 			if request.Error == "" {
 				request.Error = job.error
@@ -367,9 +367,6 @@ func (s *Server) requestCommitTour(ctx context.Context, parentID string, target 
 			return CommitTourStatus{}, false, settleErr
 		}
 		delete(s.commitTourJobs, key)
-		if conversation != nil {
-			go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conversation})
-		}
 	}
 	worker, request, found, err := s.matchingCommitTourWorker(ctx, target)
 	if err != nil {
@@ -426,7 +423,6 @@ func (s *Server) requestCommitTour(ctx context.Context, parentID string, target 
 	s.commitTourJobs[key] = job
 	s.commitTourMu.Unlock()
 
-	go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: child})
 	go s.runCommitTourJob(workerCtx, job, false)
 	return CommitTourStatus{
 		Status:               commitTourStatusBuilding,
@@ -520,7 +516,7 @@ func (s *Server) finishCommitTourJob(job *commitTourJob, runErr error) {
 			errorText = commitTourError(err)
 		}
 	}
-	conversation, err := s.db.UpdateCommitTourWorker(context.Background(), job.childID, func(request *db.CommitTourRequest) {
+	_, err := s.db.UpdateCommitTourWorker(context.Background(), job.childID, func(request *db.CommitTourRequest) {
 		request.State = state
 		request.Error = errorText
 	})
@@ -550,7 +546,6 @@ func (s *Server) finishCommitTourJob(job *commitTourJob, runErr error) {
 		delete(s.commitTourJobs, job.key)
 	}
 	s.commitTourMu.Unlock()
-	go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conversation})
 }
 
 func (s *Server) cancelCommitTourJobs(conversationIDs ...string) {
@@ -583,7 +578,7 @@ func (s *Server) stopCommitTourChild(childID string) {
 }
 
 func (s *Server) updateCommitTourWorkerState(ctx context.Context, childID, state, errorText string) {
-	conversation, err := s.db.UpdateCommitTourWorker(ctx, childID, func(request *db.CommitTourRequest) {
+	_, err := s.db.UpdateCommitTourWorker(ctx, childID, func(request *db.CommitTourRequest) {
 		request.State = state
 		request.Error = errorText
 	})
@@ -591,7 +586,6 @@ func (s *Server) updateCommitTourWorkerState(ctx context.Context, childID, state
 		s.logger.Error("Failed to update commit tour worker", "child", childID, "state", state, "error", err)
 		return
 	}
-	go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conversation})
 }
 
 func (s *Server) settleInactiveCommitTourWorker(ctx context.Context, childID string, target commitTourTarget, state, errorText string) (bool, error) {
@@ -619,14 +613,13 @@ func (s *Server) settleInactiveCommitTourWorker(ctx context.Context, childID str
 			errorText = ""
 		}
 	}
-	conversation, err := s.db.UpdateCommitTourWorker(ctx, childID, func(request *db.CommitTourRequest) {
+	_, err = s.db.UpdateCommitTourWorker(ctx, childID, func(request *db.CommitTourRequest) {
 		request.State = state
 		request.Error = errorText
 	})
 	if err != nil {
 		return false, err
 	}
-	go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conversation})
 	return true, nil
 }
 

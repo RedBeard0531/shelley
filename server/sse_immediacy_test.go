@@ -360,7 +360,7 @@ func TestSSEUserMessageWithExistingConnection(t *testing.T) {
 
 	// We should receive an update with the user message within 500ms
 	// (well before the 5 second LLM delay)
-	// Note: We may receive other updates first (e.g., ConversationListUpdate for slug changes),
+	// Note: We may receive other updates first (e.g., conversation updates for slug changes),
 	// so we need to keep checking until we find the user message or timeout.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	foundUserMsg := false

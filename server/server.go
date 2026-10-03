@@ -115,15 +115,13 @@ type StreamResponse struct {
 	// ConversationID identifies which conversation this per-conversation
 	// event belongs to. The unified /api/stream2 delivers events for all
 	// active conversations on a single connection; clients route by this
-	// field. Server-wide events (heartbeat, list patches, list updates)
+	// field. Server-wide events (heartbeat, list patches)
 	// leave it empty.
 	ConversationID    string                  `json:"conversation_id,omitempty"`
 	Messages          []APIMessage            `json:"messages,omitempty"`
 	Conversation      *generated.Conversation `json:"conversation,omitempty"`
 	ConversationState *ConversationState      `json:"conversation_state,omitempty"`
 	ContextWindowSize uint64                  `json:"context_window_size,omitempty"`
-	// ConversationListUpdate is set when another conversation in the list changed
-	ConversationListUpdate *ConversationListUpdate `json:"conversation_list_update,omitempty"`
 	// ConversationListPatch is set when requested conversation-list JSON Patch diffs are available.
 	ConversationListPatch *ConversationListPatchEvent `json:"conversation_list_patch,omitempty"`
 	// Heartbeat indicates this is a heartbeat message (no new data, just keeping connection alive)
@@ -346,15 +344,6 @@ func calculateContextWindowSizeFromMsg(msg *generated.Message) uint64 {
 		return 0
 	}
 	return usage.ContextWindowUsed()
-}
-
-// ConversationListUpdate represents an update to the conversation list
-type ConversationListUpdate struct {
-	Type            string                  `json:"type"` // "update", "delete"
-	Conversation    *generated.Conversation `json:"conversation,omitempty"`
-	ConversationID  string                  `json:"conversation_id,omitempty"` // For deletes
-	GitRepoRoot     string                  `json:"git_repo_root,omitempty"`
-	GitWorktreeRoot string                  `json:"git_worktree_root,omitempty"`
 }
 
 // Server manages the HTTP API and active conversations
@@ -852,16 +841,6 @@ func isGitRepo(dirPath string) bool {
 		}
 	}
 	return false
-}
-
-// gitInfoForCwd returns the git repo root and worktree root for a given cwd.
-// Returns empty strings if not in a git repo.
-func gitInfoForCwd(cwd string) (repoRoot, worktreeRoot string) {
-	root, err := getGitRoot(cwd)
-	if err != nil {
-		return "", ""
-	}
-	return root, getGitWorktreeRoot(root)
 }
 
 // getGitHeadSubject returns the subject line of HEAD commit for a git repository.
@@ -1480,22 +1459,7 @@ func (s *Server) notifySubscribers(ctx context.Context, conversationID string, n
 			ContextWindowSize: ctxSize,
 		})
 	}
-
-	s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: &conversation,
-	})
 }
-
-// publishConversationListUpdate broadcasts a conversation list update to ALL active
-// conversation streams. This allows clients to receive updates about other conversations
-// while they're subscribed to their current conversation's stream.
-//
-// The conversation list patch stream is refreshed automatically by Pool.OnCommit
-// after every committed write Tx (see NewServer). Callers do NOT need to invoke
-// this function for that purpose. It is retained only to fan the legacy
-// `conversation_list_update` SSE field out to active conversation managers,
-// which older clients (notably iOS) still rely on.
 
 // notifyConversationListChanged recomputes the conversation list patch
 // stream so subscribers receive a patch event that reflects the latest
@@ -1515,30 +1479,6 @@ func (s *Server) notifyConversationListChanged() {
 	// real changes (commits, checkouts, resets) on the next list refresh.
 	if err := s.conversationListStream.notify(context.Background()); err != nil {
 		s.logger.Error("failed to publish conversation list patch", "error", err)
-	}
-}
-
-func (s *Server) publishConversationListUpdate(update ConversationListUpdate) {
-	// Populate git info from conversation cwd
-	if update.Conversation != nil && update.Conversation.Cwd != nil {
-		update.GitRepoRoot, update.GitWorktreeRoot = gitInfoForCwd(*update.Conversation.Cwd)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	streamData := StreamResponse{ConversationListUpdate: &update}
-	if update.Conversation != nil {
-		streamData.ConversationID = update.Conversation.ConversationID
-	}
-	// /api/stream2 subscribers get a single fan-out via the server-wide stream.
-	if s.streamPub != nil {
-		s.streamPub.Broadcast(streamData)
-	}
-	// Legacy /api/conversation/<id>/stream subscribers (iOS, CLI) still
-	// receive list updates via the per-conversation subpub.
-	for _, manager := range s.activeConversations {
-		manager.subpub.Broadcast(streamData)
 	}
 }
 

@@ -33,10 +33,6 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		}
 	}
 
-	// Notify the UI about the subagent conversation.
-	// This ensures the sidebar shows the subagent even if it's a newly created conversation.
-	go r.notifySubagentConversation(ctx, conversationID)
-
 	// Run new-conversation hook for newly created subagent conversations.
 	// We detect "new" by checking if the manager already exists.
 	s.mu.Lock()
@@ -200,47 +196,6 @@ func (s *Server) messageParent(ctx context.Context, conv generated.Conversation,
 		Text:                 text,
 	})
 	return parent.InjectMessage(ctx, s, modelID, llm.UserStringMessage(text))
-}
-
-// notifySubagentConversation fetches the subagent conversation and publishes it
-// to all SSE streams so the UI can update the sidebar.
-func (r *SubagentRunner) notifySubagentConversation(ctx context.Context, conversationID string) {
-	s := r.server
-
-	// Fetch the conversation from the database
-	var conv generated.Conversation
-	err := s.db.Queries(ctx, func(q *generated.Queries) error {
-		var err error
-		conv, err = q.GetConversation(ctx, conversationID)
-		return err
-	})
-	if err != nil {
-		s.logger.Error("Failed to get subagent conversation for notification", "error", err, "conversationID", conversationID)
-		return
-	}
-
-	// Only notify if this is actually a managed child.
-	if !isManagedChild(conv) {
-		return
-	}
-
-	// Internal transcription workers are implementation details, not navigable
-	// conversations. Publishing them can steal attention from the composer that
-	// is waiting for their synchronous result.
-	if db.ParseConversationOptions(conv.ConversationOptions).Kind == transcriptionKind {
-		return
-	}
-
-	// Publish the subagent conversation to all active streams
-	s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: &conv,
-	})
-
-	s.logger.Debug("Notified UI about subagent conversation",
-		"conversationID", conversationID,
-		"parentID", *conv.ParentConversationID,
-		"slug", conv.Slug)
 }
 
 // notifyParentSubagentIdle tells the parent that a delegated subagent

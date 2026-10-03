@@ -1597,12 +1597,6 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Notify conversation list subscribers about the new conversation
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
-
 	userEmail := r.Header.Get("X-ExeDev-Email")
 	// Attribute the user turn to its author; see handleChatConversation for why
 	// the recorder reads the email off ctx rather than the shared manager.
@@ -3186,12 +3180,6 @@ func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Notify conversation list subscribers
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
 }
@@ -3209,12 +3197,6 @@ func (s *Server) handleUnarchiveConversation(w http.ResponseWriter, r *http.Requ
 		s.internalError(w, "Failed to unarchive conversation", err, "conversationID", conversationID)
 		return
 	}
-
-	// Notify conversation list subscribers
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
@@ -3234,12 +3216,6 @@ func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request
 		s.internalError(w, "Failed to delete conversation", err, "conversationID", conversationID)
 		return
 	}
-
-	// Notify conversation list subscribers about the deletion
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:           "delete",
-		ConversationID: conversationID,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
@@ -3314,12 +3290,6 @@ func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request
 		s.internalError(w, "Failed to rename conversation", err, "conversationID", conversationID)
 		return
 	}
-
-	// Notify conversation list subscribers
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
@@ -3432,10 +3402,6 @@ func (s *Server) handleSetConversationCwd(w http.ResponseWriter, r *http.Request
 		s.internalError(w, "Failed to reload conversation after cwd change", err, "conversationID", conversationID)
 		return
 	}
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: updated,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updated)
@@ -3485,11 +3451,6 @@ func (s *Server) handleUpdateConversationTags(w http.ResponseWriter, r *http.Req
 		s.internalError(w, "Failed to update conversation tags", err, "conversationID", conversationID)
 		return
 	}
-
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
@@ -3853,18 +3814,17 @@ func (s *Server) handleCancelQueued(w http.ResponseWriter, r *http.Request, conv
 
 	// Without an active manager (e.g. after a restart, before the conversation
 	// is opened) the queued_messages array may still hold persisted entries, so
-	// remove them directly and broadcast the row ourselves.
-	var conv *generated.Conversation
+	// remove them directly.
 	err := s.cancelQueuedTranscriptions(ctx, conversationID, queuedID, func() (err error) {
 		switch {
 		case active && queuedID != "":
-			conv, err = manager.CancelQueuedMessage(ctx, s, queuedID)
+			_, err = manager.CancelQueuedMessage(ctx, s, queuedID)
 		case active:
-			conv, err = manager.CancelQueuedMessages(ctx, s)
+			_, err = manager.CancelQueuedMessages(ctx, s)
 		case queuedID != "":
-			conv, err = s.db.RemoveQueuedMessages(ctx, conversationID, queuedID)
+			_, err = s.db.RemoveQueuedMessages(ctx, conversationID, queuedID)
 		default:
-			conv, err = s.db.ClearQueuedMessages(ctx, conversationID)
+			_, err = s.db.ClearQueuedMessages(ctx, conversationID)
 		}
 		return err
 	})
@@ -3875,9 +3835,6 @@ func (s *Server) handleCancelQueued(w http.ResponseWriter, r *http.Request, conv
 	if err != nil {
 		s.internalError(w, "Failed to cancel queued messages", err, "conversationID", conversationID)
 		return
-	}
-	if !active {
-		s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conv})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -4030,9 +3987,6 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 	}
-
-	// Notify conversation list subscribers about the new conversation.
-	go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: forked})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -4203,7 +4157,6 @@ func (s *Server) startNewGeneration(ctx context.Context, conversationID string) 
 	}
 
 	manager.broadcastStream(StreamResponse{Conversation: &conversation})
-	s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: &conversation})
 
 	return conversation, nil
 }

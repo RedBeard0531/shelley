@@ -300,7 +300,7 @@ func (s *Server) updateCurrentQueuedTranscription(ctx context.Context, parentID,
 		s.transcriptionMu.Unlock()
 		return db.QueuedMessage{}, errQueuedTranscriptionSuperseded
 	}
-	conv, queued, err := s.db.UpdateQueuedMessage(ctx, parentID, queuedID, func(current *db.QueuedMessage) error {
+	_, queued, err := s.db.UpdateQueuedMessage(ctx, parentID, queuedID, func(current *db.QueuedMessage) error {
 		if err := validateCurrentQueuedTranscription(current); err != nil {
 			return err
 		}
@@ -312,9 +312,6 @@ func (s *Server) updateCurrentQueuedTranscription(ctx context.Context, parentID,
 		return db.QueuedMessage{}, err
 	}
 	go s.notifySubscribers(context.Background(), parentID)
-	if conv != nil {
-		go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conv})
-	}
 	return queued, nil
 }
 
@@ -661,7 +658,7 @@ func (s *Server) handleRetryQueued(w http.ResponseWriter, r *http.Request, paren
 	}
 
 	s.transcriptionMu.Lock()
-	updatedParent, queued, err := s.db.RetryQueuedTranscription(r.Context(), parentID, queuedID)
+	_, queued, err := s.db.RetryQueuedTranscription(r.Context(), parentID, queuedID)
 	if err != nil {
 		s.transcriptionMu.Unlock()
 		switch {
@@ -683,7 +680,6 @@ func (s *Server) handleRetryQueued(w http.ResponseWriter, r *http.Request, paren
 	// The failed in-memory blocker remains in the same FIFO position; only its
 	// durable state changed.
 	go s.notifySubscribers(context.Background(), parentID)
-	go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: updatedParent})
 	s.launchQueuedTranscription(parentID, queued)
 	writeQueuedTranscription(w)
 }
