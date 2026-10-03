@@ -416,55 +416,6 @@ func TestOrphanedTranscriptionBarrierSelfHeals(t *testing.T) {
 	}
 }
 
-func TestTranscriptionBarrierDoesNotStarveSubagentCompletion(t *testing.T) {
-	server, database, _ := newTestServer(t)
-	defer stopActiveConversationLoops(server)
-	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.AppendQueuedMessage(t.Context(), conversation.ConversationID, db.QueuedMessage{
-		ID: "failed-transcription", CreatedAt: time.Now().UTC(), Model: "predictable",
-		Kind: db.QueuedMessageKindTranscription, State: db.QueuedMessageStateFailed,
-		Transcription: &db.QueuedTranscription{MediaPath: "/tmp/failed.webm"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := server.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager.mu.Lock()
-	manager.pendingBatches = append(manager.pendingBatches, pendingBatch{
-		Kind: pendingBatchSubagentDone,
-		Messages: []llm.Message{
-			{Role: llm.MessageRoleAssistant, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "subagent completed"}}},
-			llm.UserStringMessage("subagent result"),
-		},
-		ModelID: "predictable",
-	})
-	manager.mu.Unlock()
-
-	manager.drainPendingMessages(server)
-	messages, err := database.ListMessages(t.Context(), conversation.ConversationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, message := range messages {
-		if message.LlmData != nil && strings.Contains(*message.LlmData, "subagent result") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("failed transcription starved subagent completion")
-	}
-	queued := queuedMessages(t, database, conversation.ConversationID)
-	if len(queued) != 1 || queued[0].State != db.QueuedMessageStateFailed {
-		t.Fatalf("transcription barrier changed while draining subagent completion: %#v", queued)
-	}
-}
-
 func TestQueuedTranscriptionPreservesFIFOAndVideoPaths(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)

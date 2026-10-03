@@ -69,9 +69,10 @@ for (const viewport of [
         parent.conversationId,
         progress.replace("API and database", "**API and database**"),
       );
-      const source = page.getByTestId("message-author-conversation");
+      // The parent also receives the child's idle notice; select by text.
+      let message = page.getByTestId("message").filter({ hasText: "Backend underway" });
+      let source = message.getByTestId("message-author-conversation");
       await expect(source).toHaveText(`Message from ${child.slug}`);
-      const message = page.getByTestId("message").filter({ has: source });
       await expectToolMessage(message, progress, background);
       await expect(message.locator("strong")).toHaveText("API and database");
 
@@ -86,6 +87,8 @@ for (const viewport of [
 
       const instruction = "Please finish the API tests before the database changes.";
       await sendFrom(parent.conversationId, child.conversation_id, instruction);
+      message = page.getByTestId("message").filter({ hasText: instruction });
+      source = message.getByTestId("message-author-conversation");
       await expect(source).toHaveText(`Message from ${parent.slug}`);
       await expectToolMessage(message, instruction, background);
       // The label follows renames; the stable ID keeps the link unambiguous.
@@ -101,7 +104,10 @@ for (const viewport of [
       await expect(parentLink).toHaveAttribute("title", "Open parent conversation");
       await parentLink.click();
       await expect(page.locator(".header-title")).toHaveText(parent.slug);
-      await expect(source).toHaveText(`Message from ${child.slug}`);
+      message = page.getByTestId("message").filter({ hasText: "Backend underway" });
+      await expect(message.getByTestId("message-author-conversation")).toHaveText(
+        `Message from ${child.slug}`,
+      );
 
       const human = page
         .getByTestId("message")

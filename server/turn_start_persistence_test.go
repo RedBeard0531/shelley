@@ -56,7 +56,7 @@ func TestAcceptUserMessageRejectsUnpersistedTurn(t *testing.T) {
 	<-recordStarted
 	reservedWorking := manager.IsAgentWorking()
 	manager.mu.Lock()
-	manager.pendingBatches = append(manager.pendingBatches, pendingBatch{Kind: pendingBatchSubagentDone})
+	manager.pendingBatches = append(manager.pendingBatches, pendingBatch{Kind: pendingBatchUser})
 	manager.mu.Unlock()
 	close(finishRecord)
 	got := <-resultCh

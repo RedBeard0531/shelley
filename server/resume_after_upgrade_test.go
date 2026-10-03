@@ -445,7 +445,6 @@ func TestPreclaimFailureBecomesManualInterruption(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		nil,
 		srv.streamPub,
 	)
 	manager.mu.Lock()
@@ -640,7 +639,7 @@ func TestResumeAfterUpgradeResumesSubagent(t *testing.T) {
 	}
 	waitFor(t, 15*time.Second, func() bool {
 		for _, m := range listMessages(t, database, parent.ConversationID) {
-			if m.LlmData != nil && strings.Contains(*m.LlmData, "subagent result") {
+			if m.Type == string(db.MessageTypeUser) && m.LlmData != nil && strings.Contains(*m.LlmData, "finished its turn and is idle") {
 				return true
 			}
 		}

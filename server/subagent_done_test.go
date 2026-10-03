@@ -17,8 +17,7 @@ import (
 // subagentDoneFixture sets up a parent conversation with an active manager and
 // a child subagent conversation whose manager has the onDone callback wired up
 // by getOrCreateSubagentConversationManager. It records a final assistant text
-// message into the subagent's DB so notifyParentSubagentDone has something to
-// splice into the parent's history.
+// message into the subagent's DB as the subagent's latest response.
 type subagentDoneFixture struct {
 	t        *testing.T
 	server   *Server
@@ -51,7 +50,7 @@ func newSubagentDoneFixture(t *testing.T, subResponse string) *subagentDoneFixtu
 	}
 
 	// Subagent conversation, parented to the above. Use CreateSubagentConversation
-	// so ParentConversationID is set; that's what notifyParentSubagentDone keys off.
+	// so ParentConversationID is set; that's what notifyParentSubagentIdle keys off.
 	slug := "sub-test"
 	subConv, err := database.CreateSubagentConversation(ctx, slug, parentConv.ConversationID, nil)
 	if err != nil {
@@ -104,40 +103,28 @@ func (f *subagentDoneFixture) parentMessages() []generated.Message {
 	return msgs
 }
 
-// findSyntheticPair scans parent messages for a subagent tool_use immediately
-// followed by a matching tool_result, returning both decoded llm.Message values
-// and whether they were found.
-func (f *subagentDoneFixture) findSyntheticPair() (use, result llm.Message, ok bool) {
+// idleNotices returns the parent's user messages that announce this
+// subagent went idle, attributed to it through sender user_data.
+func (f *subagentDoneFixture) idleNotices() []generated.Message {
 	f.t.Helper()
-	msgs := f.parentMessages()
-	for i := 0; i+1 < len(msgs); i++ {
-		if msgs[i].LlmData == nil || msgs[i+1].LlmData == nil {
+	var out []generated.Message
+	for _, m := range f.parentMessages() {
+		if m.Type != string(db.MessageTypeUser) || m.UserData == nil || m.LlmData == nil {
 			continue
 		}
-		var m1, m2 llm.Message
-		if err := json.Unmarshal([]byte(*msgs[i].LlmData), &m1); err != nil {
+		data, ok, err := parseSenderMessageUserData([]byte(*m.UserData))
+		if err != nil || !ok || data.SenderConversationID != f.subagentID || data.SenderRelationship != senderRelationshipSubagent {
 			continue
 		}
-		if err := json.Unmarshal([]byte(*msgs[i+1].LlmData), &m2); err != nil {
-			continue
+		var msg llm.Message
+		if err := json.Unmarshal([]byte(*m.LlmData), &msg); err != nil {
+			f.t.Fatal(err)
 		}
-		var useID string
-		for _, c := range m1.Content {
-			if c.Type == llm.ContentTypeToolUse && c.ToolName == "subagent" {
-				useID = c.ID
-				break
-			}
-		}
-		if useID == "" {
-			continue
-		}
-		for _, c := range m2.Content {
-			if c.Type == llm.ContentTypeToolResult && c.ToolUseID == useID {
-				return m1, m2, true
-			}
+		if strings.Contains(messageText(msg), "is idle") {
+			out = append(out, m)
 		}
 	}
-	return llm.Message{}, llm.Message{}, false
+	return out
 }
 
 // fireOnDone simulates the agent transitioning from working to not working
@@ -148,57 +135,94 @@ func (f *subagentDoneFixture) fireOnDone() {
 	f.subagentMgr.SetAgentWorking(false)
 }
 
-// notifySubagentDone runs the full dispatch+notify pipeline synchronously
-// (capture identity, then enqueue), like dispatchSubagentDone but without
-// the goroutine — so tests can assert queue state immediately after.
-func (f *subagentDoneFixture) notifySubagentDone(subagentID string) {
-	response, seq, ok := f.server.captureSubagentDone(subagentID)
-	if !ok {
-		return
-	}
-	f.server.notifyParentSubagentDone(subagentID, response, seq)
-}
-
-// buildSyntheticPair constructs a minimal subagent-done tool_use/tool_result
-// pair like notifyParentSubagentDone's, for tests that need to enqueue a
-// batch directly (bypassing producer-side invalidation).
-func (f *subagentDoneFixture) buildSyntheticPair() (use, result llm.Message) {
-	toolUseID := "sa_done_test_pair"
-	use = llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type: llm.ContentTypeToolUse, ID: toolUseID, ToolName: "subagent",
-			ToolInput: json.RawMessage(`{}`),
-		}},
-	}
-	result = llm.Message{
-		Role: llm.MessageRoleUser,
-		Content: []llm.Content{{
-			Type: llm.ContentTypeToolResult, ToolUseID: toolUseID,
-			ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: "stale result"}},
-		}},
-	}
-	return use, result
-}
-
 func TestSubagentDone(t *testing.T) {
-	t.Run("HappyPath_NotifiesIdleParent", testSubagentDone_HappyPath)
+	t.Run("NotifiesParentWithoutCopyingResponse", testSubagentDone_NotifiesParentWithoutCopyingResponse)
 	t.Run("CancellationDoesNotNotifyParent", testSubagentDone_CancellationDoesNotNotifyParent)
-	t.Run("QueuedDuringDistillation", testSubagentDone_QueuedDuringDistillation)
-	t.Run("WakesIdleParentLoop", testSubagentDone_WakesIdleLoop)
-	t.Run("StaleNotificationCoalescedWhileParentBusy", testSubagentDone_StaleNotificationCoalesced)
-	t.Run("InjectedMidTurn", testSubagentDone_InjectedMidTurn)
-	t.Run("InjectionSkippedWhileDistilling", testSubagentDone_InjectionSkippedWhileDistilling)
-	t.Run("StaleQueuedNotificationDroppedOnSend", testSubagentDone_StaleQueuedNotificationDroppedOnSend)
-	t.Run("StragglerNotifierSkipsAfterSupersede", testSubagentDone_StragglerNotifierSkipsAfterSupersede)
-	t.Run("DelayedNotifierCannotReannounceInjectedResponse", testSubagentDone_DelayedNotifierCannotReannounceInjectedResponse)
-	t.Run("DelayedNotifierSkipsWhileNewTurnRunning", testSubagentDone_DelayedNotifierSkipsWhileNewTurnRunning)
-	t.Run("ToolResultCorrectness", testSubagentDone_ToolResultCorrectness)
-	t.Run("ConcurrentSubagentFinishes_BothPairsAtomic", testSubagentDone_ConcurrentFinishes)
-	t.Run("LastMessageIsToolUse_FallsBackGracefully", testSubagentDone_LastMessageIsToolUse)
-	t.Run("GitInfoMessageDoesNotLeakIntoNotification", testSubagentDone_GitInfoIgnored)
-	t.Run("CitationMarkersStripped", testSubagentDone_CitationMarkersStripped)
 	t.Run("EvictedParentManagerStillNotified", testSubagentDone_EvictedParentManagerStillNotified)
+}
+
+// When a subagent's turn ends, the parent gets one attributed notice that the
+// subagent is idle, and its turn starts. The subagent's reply is not copied.
+func testSubagentDone_NotifiesParentWithoutCopyingResponse(t *testing.T) {
+	f := newSubagentDoneFixture(t, "SECRET-RESULT-TEXT")
+	defer stopActiveConversationLoops(f.server)
+
+	f.fireOnDone()
+
+	waitFor(t, 5*time.Second, func() bool { return len(f.idleNotices()) == 1 })
+	for _, m := range f.parentMessages() {
+		if m.LlmData != nil && strings.Contains(*m.LlmData, "SECRET-RESULT-TEXT") {
+			t.Fatalf("subagent response was copied into the parent: %s", *m.LlmData)
+		}
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		for _, req := range f.llmSvc.GetRecentRequests() {
+			for _, msg := range req.Messages {
+				if strings.Contains(messageText(msg), `<subagent_message conversation_id="`+f.subagentID+`" slug="sub-test">`) {
+					return true
+				}
+			}
+		}
+		return false
+	})
+}
+
+// Cancelling a subagent's in-flight turn (e.g. a resend to a busy subagent, or
+// a user-initiated stop) records a synthetic "[Operation cancelled]"
+// end-of-turn message that flips agentWorking→idle. That transition must NOT
+// fire onDone: a cancellation is not a completion, and notifying the parent
+// here produces a spurious subagent-done pair (and, when a resend's new turn
+// later finishes, a duplicate). The cancelling guard keeps onDone quiet.
+func testSubagentDone_CancellationDoesNotNotifyParent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newSubagentDoneFixture(t, "Should never reach the parent.")
+		defer stopActiveConversationLoops(f.server)
+
+		// Bring the subagent's loop up so CancelConversation has something to tear
+		// down (it returns early when loop==nil).
+		if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
+			t.Fatalf("ensureLoop subagent: %v", err)
+		}
+		f.subagentMgr.SetAgentWorking(true)
+
+		before := len(f.parentMessages())
+		if err := f.subagentMgr.CancelConversation(t.Context()); err != nil {
+			t.Fatalf("CancelConversation: %v", err)
+		}
+
+		// Let any (erroneous) async notification land on the parent.
+		synctest.Wait()
+		if got := len(f.parentMessages()); got != before {
+			t.Fatalf("cancellation added %d parent message(s); want 0", got-before)
+		}
+
+		// The subagent itself must be idle after cancel.
+		if f.subagentMgr.IsAgentWorking() {
+			t.Fatalf("subagent still working after CancelConversation")
+		}
+	})
+}
+
+// Cleanup may evict an idle parent's manager while its subagent works; the
+// subagent's idle notice must recreate it rather than be dropped.
+func testSubagentDone_EvictedParentManagerStillNotified(t *testing.T) {
+	f := newSubagentDoneFixture(t, "Finished after the parent manager was evicted.")
+	defer stopActiveConversationLoops(f.server)
+
+	f.server.mu.Lock()
+	delete(f.server.activeConversations, f.parentID)
+	f.server.mu.Unlock()
+	f.parentMgr.stopLoop()
+
+	f.fireOnDone()
+
+	waitFor(t, 5*time.Second, func() bool { return len(f.idleNotices()) == 1 })
+	f.server.mu.Lock()
+	_, ok := f.server.activeConversations[f.parentID]
+	f.server.mu.Unlock()
+	if !ok {
+		t.Fatal("expected parent manager to be recreated in activeConversations")
+	}
 }
 
 func TestManualSubagentTurnDoesNotNotifyParent(t *testing.T) {
@@ -235,41 +259,6 @@ func TestManualSubagentTurnDoesNotNotifyParent(t *testing.T) {
 	}
 	if parentManager.IsAgentWorking() {
 		t.Fatal("manual child turn started a parent turn")
-	}
-}
-
-// Regression: the parent was blocked inside the subagent tool call (its
-// lastActivity going stale because tool execution doesn't Touch the parent
-// manager), the periodic Cleanup() evicted the parent's ConversationManager
-// from activeConversations, and then the subagent finished.
-// notifyParentSubagentDone looked the parent up in activeConversations, found
-// nothing, and returned — silently dropping the completion. The parent's turn
-// had also been torn down (stopLoop cancels its context), so nothing ever
-// surfaced the subagent's result: the conversation hung until the user typed
-// something. The fix is to (re)create the parent manager on demand, exactly
-// like the wake-idle-loop path already re-hydrates a parked loop.
-func testSubagentDone_EvictedParentManagerStillNotified(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Finished after the parent manager was evicted.")
-
-	// Simulate Cleanup() evicting the parent manager (30 min inactivity).
-	f.server.mu.Lock()
-	delete(f.server.activeConversations, f.parentID)
-	f.server.mu.Unlock()
-	f.parentMgr.stopLoop()
-
-	f.fireOnDone()
-
-	// The synthetic pair must still be persisted on the parent.
-	waitFor(t, 5*time.Second, func() bool {
-		return hasSyntheticDonePair(t, f.parentMessages())
-	})
-
-	// And a live manager must exist again so the loop actually runs the turn.
-	f.server.mu.Lock()
-	_, ok := f.server.activeConversations[f.parentID]
-	f.server.mu.Unlock()
-	if !ok {
-		t.Fatalf("expected parent manager to be recreated in activeConversations")
 	}
 }
 
@@ -317,994 +306,5 @@ func TestCleanupSkipsWorkingConversations(t *testing.T) {
 	}
 	if idleKept {
 		t.Fatalf("Cleanup kept a stale idle conversation; want evicted")
-	}
-}
-
-// 1. Happy path: parent is idle (agentWorking=false), subagent finishes; two
-// new persisted messages appear (synthetic tool_use + matching tool_result),
-// and the parent's agentWorking flips to true.
-func testSubagentDone_HappyPath(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Subagent finished successfully.")
-
-	before := len(f.parentMessages())
-	if f.parentMgr.IsAgentWorking() {
-		t.Fatalf("precondition: parent should not be working")
-	}
-
-	f.fireOnDone()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(f.parentMessages()) >= before+2 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if n := len(f.parentMessages()); n < before+2 {
-		t.Fatalf("timeout: parent had %d msgs (before=%d, want>=%d). messages:\n%s", n, before, before+2, dumpMessages(t, f.parentMessages()))
-	}
-	t.Logf("happy path: parent had %d msgs after (before=%d)", len(f.parentMessages()), before)
-
-	use, result, ok := f.findSyntheticPair()
-	if !ok {
-		t.Fatalf("expected synthetic tool_use/tool_result pair in parent\nmessages: %s", dumpMessages(t, f.parentMessages()))
-	}
-
-	// Inspect tool_use
-	var useID, toolName string
-	for _, c := range use.Content {
-		if c.Type == llm.ContentTypeToolUse {
-			useID = c.ID
-			toolName = c.ToolName
-		}
-	}
-	if toolName != "subagent" {
-		t.Errorf("expected tool name=subagent, got %q", toolName)
-	}
-	if useID == "" {
-		t.Errorf("tool_use ID was empty")
-	}
-
-	// Inspect tool_result
-	var gotText string
-	var gotUseID string
-	for _, c := range result.Content {
-		if c.Type == llm.ContentTypeToolResult {
-			gotUseID = c.ToolUseID
-			for _, r := range c.ToolResult {
-				if r.Type == llm.ContentTypeText {
-					gotText = r.Text
-				}
-			}
-		}
-	}
-	if gotUseID != useID {
-		t.Errorf("tool_result ToolUseID=%q, want %q", gotUseID, useID)
-	}
-	if !strings.Contains(gotText, f.subResponse) {
-		t.Errorf("tool_result text=%q does not contain subagent response %q", gotText, f.subResponse)
-	}
-
-	// Parent's loop should be driven: the predictable LLM service must see a
-	// request whose last message is the synthetic tool_result. (Polling for
-	// agentWorking==true is racy because the predictable model finishes the
-	// turn faster than the test's polling interval.)
-	waitFor(t, 5*time.Second, func() bool {
-		last := f.llmSvc.GetLastRequest()
-		if last == nil || len(last.Messages) < 2 {
-			return false
-		}
-		cur := last.Messages[len(last.Messages)-1]
-		for _, c := range cur.Content {
-			if c.Type == llm.ContentTypeToolResult && strings.Contains(toolResultText(c), f.subResponse) {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-func toolResultText(c llm.Content) string {
-	var sb strings.Builder
-	for _, r := range c.ToolResult {
-		if r.Type == llm.ContentTypeText {
-			sb.WriteString(r.Text)
-		}
-	}
-	return sb.String()
-}
-
-// Cancelling a subagent's in-flight turn (e.g. a resend to a busy subagent, or
-// a user-initiated stop) records a synthetic "[Operation cancelled]"
-// end-of-turn message that flips agentWorking→idle. That transition must NOT
-// fire onDone: a cancellation is not a completion, and notifying the parent
-// here produces a spurious subagent-done pair (and, when a resend's new turn
-// later finishes, a duplicate). The cancelling guard keeps onDone quiet.
-func testSubagentDone_CancellationDoesNotNotifyParent(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newSubagentDoneFixture(t, "Should never reach the parent.")
-		defer stopActiveConversationLoops(f.server)
-
-		// Bring the subagent's loop up so CancelConversation has something to tear
-		// down (it returns early when loop==nil).
-		if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-			t.Fatalf("ensureLoop subagent: %v", err)
-		}
-		f.subagentMgr.SetAgentWorking(true)
-
-		before := len(f.parentMessages())
-		if err := f.subagentMgr.CancelConversation(t.Context()); err != nil {
-			t.Fatalf("CancelConversation: %v", err)
-		}
-
-		// Let any (erroneous) async notification land on the parent.
-		synctest.Wait()
-		if n := countSyntheticDonePairs(t, f.parentMessages()); n != 0 {
-			t.Fatalf("cancellation fired %d subagent-done notification(s) to the parent; want 0\nmessages:\n%s", n, dumpMessages(t, f.parentMessages()))
-		}
-		if got := len(f.parentMessages()); got != before {
-			t.Fatalf("cancellation added %d parent message(s); want 0", got-before)
-		}
-
-		// The subagent itself must be idle after cancel.
-		if f.subagentMgr.IsAgentWorking() {
-			t.Fatalf("subagent still working after CancelConversation")
-		}
-	})
-}
-
-// countSyntheticDonePairs returns how many synthetic subagent-done tool_use/
-// tool_result pairs (sa_done_ prefixed) appear in msgs. Used to assert that
-// exactly one async completion fires, ignoring any normal parent replies the
-// loop appends afterward.
-func countSyntheticDonePairs(t *testing.T, msgs []generated.Message) int {
-	t.Helper()
-	n := 0
-	for i := 0; i+1 < len(msgs); i++ {
-		if msgs[i].LlmData == nil || msgs[i+1].LlmData == nil {
-			continue
-		}
-		var use, result llm.Message
-		if err := json.Unmarshal([]byte(*msgs[i].LlmData), &use); err != nil {
-			continue
-		}
-		if err := json.Unmarshal([]byte(*msgs[i+1].LlmData), &result); err != nil {
-			continue
-		}
-		var useID string
-		for _, c := range use.Content {
-			if c.Type == llm.ContentTypeToolUse && c.ToolName == "subagent" && strings.HasPrefix(c.ID, "sa_done_") {
-				useID = c.ID
-			}
-		}
-		if useID == "" {
-			continue
-		}
-		for _, c := range result.Content {
-			if c.Type == llm.ContentTypeToolResult && c.ToolUseID == useID {
-				n++
-			}
-		}
-	}
-	return n
-}
-
-func hasSyntheticDonePair(t *testing.T, msgs []generated.Message) bool {
-	t.Helper()
-	for i := 0; i+1 < len(msgs); i++ {
-		if msgs[i].LlmData == nil || msgs[i+1].LlmData == nil {
-			continue
-		}
-		var use, result llm.Message
-		if err := json.Unmarshal([]byte(*msgs[i].LlmData), &use); err != nil {
-			continue
-		}
-		if err := json.Unmarshal([]byte(*msgs[i+1].LlmData), &result); err != nil {
-			continue
-		}
-		var useID string
-		for _, c := range use.Content {
-			if c.Type == llm.ContentTypeToolUse && c.ToolName == "subagent" && strings.HasPrefix(c.ID, "sa_done_") {
-				useID = c.ID
-			}
-		}
-		if useID == "" {
-			continue
-		}
-		for _, c := range result.Content {
-			if c.Type == llm.ContentTypeToolResult && c.ToolUseID == useID {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// 3. Parent distilling: notification waits in the pending-batch queue until
-// distillation ends, then drains. No more drop-on-distilling — the single
-// queue serializes subagent-done batches with distillation just like it
-// already does for user messages.
-func testSubagentDone_QueuedDuringDistillation(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Some response.")
-
-	f.parentMgr.SetDistilling(true)
-
-	before := len(f.parentMessages())
-	f.notifySubagentDone(f.subagentID)
-
-	// While distilling, the synthetic pair must NOT yet be persisted.
-	if got := len(f.parentMessages()); got != before {
-		t.Fatalf("expected no new parent messages while distilling, got %d new", got-before)
-	}
-	if _, _, ok := f.findSyntheticPair(); ok {
-		t.Fatalf("unexpected synthetic pair recorded while distilling")
-	}
-
-	// End distillation — this is what runDistillNewGeneration's defer does
-	// in real code (SetDistilling(false) then drainPendingMessages).
-	f.parentMgr.SetDistilling(false)
-	go f.parentMgr.drainPendingMessages(f.server)
-
-	// Now the synthetic pair must show up.
-	waitFor(t, 5*time.Second, func() bool {
-		_, _, ok := f.findSyntheticPair()
-		return ok
-	})
-}
-
-// 4. Wakes idle parent: tear down the parent's loop, finish the subagent.
-// notifyParentSubagentDone must Hydrate + ensureLoop the parent back up,
-// persist the synthetic pair to the DB, queue them onto the loop, and the
-// loop must actually fire an LLM request whose last two history entries are
-// the synthetic tool_use and tool_result.
-func testSubagentDone_WakesIdleLoop(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Background work done.")
-
-	// Bring the parent's loop up once with the predictable service so model is
-	// recorded and toolset is built; then drop it as if the parent went idle.
-	if err := f.parentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-		t.Fatalf("ensureLoop initial: %v", err)
-	}
-	f.parentMgr.ResetLoop()
-
-	f.parentMgr.mu.Lock()
-	hasLoop := f.parentMgr.loop != nil
-	f.parentMgr.mu.Unlock()
-	if hasLoop {
-		t.Fatalf("expected parent loop to be torn down")
-	}
-
-	f.llmSvc.ClearRequests()
-
-	f.fireOnDone()
-
-	// Persisted synthetic pair shows up.
-	waitFor(t, 5*time.Second, func() bool {
-		_, _, ok := f.findSyntheticPair()
-		return ok
-	})
-
-	// Parent loop should be running again.
-	waitFor(t, 5*time.Second, func() bool {
-		f.parentMgr.mu.Lock()
-		defer f.parentMgr.mu.Unlock()
-		return f.parentMgr.loop != nil
-	})
-
-	// And the predictable LLM service should have been invoked, with the last
-	// two history entries being our synthetic tool_use and tool_result.
-	waitFor(t, 5*time.Second, func() bool {
-		reqs := f.llmSvc.GetRecentRequests()
-		if len(reqs) == 0 {
-			return false
-		}
-		last := reqs[len(reqs)-1]
-		if len(last.Messages) < 2 {
-			return false
-		}
-		n := len(last.Messages)
-		prev := last.Messages[n-2]
-		cur := last.Messages[n-1]
-		var prevUseID string
-		for _, c := range prev.Content {
-			if c.Type == llm.ContentTypeToolUse && c.ToolName == "subagent" {
-				prevUseID = c.ID
-			}
-		}
-		if prevUseID == "" {
-			return false
-		}
-		for _, c := range cur.Content {
-			if c.Type == llm.ContentTypeToolResult && c.ToolUseID == prevUseID {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-// 5. Tool result correctness: tool_use ID matches tool_result ToolUseID, and
-// long subagent text is truncated to 500 chars (plus suffix) in the tool_result.
-func testSubagentDone_ToolResultCorrectness(t *testing.T) {
-	long := strings.Repeat("x", 800)
-	f := newSubagentDoneFixture(t, long)
-
-	f.fireOnDone()
-
-	waitFor(t, 5*time.Second, func() bool {
-		_, _, ok := f.findSyntheticPair()
-		return ok
-	})
-
-	use, result, ok := f.findSyntheticPair()
-	if !ok {
-		t.Fatalf("missing synthetic pair")
-	}
-
-	var useID string
-	for _, c := range use.Content {
-		if c.Type == llm.ContentTypeToolUse {
-			useID = c.ID
-		}
-	}
-	if useID == "" || !strings.HasPrefix(useID, "sa_done_") {
-		t.Errorf("unexpected tool_use ID: %q", useID)
-	}
-
-	var gotText, gotUseID string
-	for _, c := range result.Content {
-		if c.Type == llm.ContentTypeToolResult {
-			gotUseID = c.ToolUseID
-			for _, r := range c.ToolResult {
-				if r.Type == llm.ContentTypeText {
-					gotText = r.Text
-				}
-			}
-		}
-	}
-	if gotUseID != useID {
-		t.Errorf("ToolUseID mismatch: use=%q result=%q", useID, gotUseID)
-	}
-
-	// The full 800-char text must not be present verbatim; the truncated body
-	// (first 500 "x"s + suffix) must be present.
-	if strings.Contains(gotText, long) {
-		t.Errorf("expected subagent text to be truncated, but full 800-char body is present")
-	}
-	if !strings.Contains(gotText, strings.Repeat("x", 500)) {
-		t.Errorf("expected first 500 chars of subagent text to be present, got %q", truncForLog(gotText))
-	}
-	if !strings.Contains(gotText, "...") {
-		t.Errorf("expected truncation suffix '...' in tool_result text")
-	}
-}
-
-// testSubagentDone_InjectedMidTurn reproduces the "late subagent reply wastes
-// a parent turn" problem observed in production — a subagent finishing while
-// the parent is mid-turn used to queue its completion notification until the
-// parent's turn ended (potentially hours later), wasting a full parent turn
-// (plus a user-facing notification) acknowledging old news — and verifies the
-// fix: the notification is INJECTED into the parent's running turn at the
-// next LLM round, so the parent reacts immediately.
-//
-// The parent runs a real turn (predictable model, bash sleep tool round);
-// while the tool executes, the subagent finishes. The synthetic pair must
-// land in the parent's history BEFORE the turn's final assistant message —
-// i.e. within the same turn — exactly once, leaving nothing queued for the
-// end-of-turn drain.
-func testSubagentDone_InjectedMidTurn(t *testing.T) {
-	f := newSubagentDoneFixture(t, "review complete: LGTM")
-	ctx := t.Context()
-
-	// Start a real parent turn whose first round calls the bash tool with a
-	// sleep, giving the subagent completion a window to arrive mid-turn.
-	userMsg := llm.Message{
-		Role:    llm.MessageRoleUser,
-		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "bash: sleep 2"}},
-	}
-	if _, err := f.parentMgr.AcceptUserMessage(ctx, f.llmSvc, "predictable", userMsg); err != nil {
-		t.Fatalf("AcceptUserMessage: %v", err)
-	}
-
-	// Wait until the bash tool_use is recorded: the tool round is running.
-	waitFor(t, 5*time.Second, func() bool {
-		for _, m := range f.parentMessages() {
-			if m.LlmData == nil {
-				continue
-			}
-			var lm llm.Message
-			if err := json.Unmarshal([]byte(*m.LlmData), &lm); err != nil {
-				continue
-			}
-			for _, c := range lm.Content {
-				if c.Type == llm.ContentTypeToolUse && c.ToolName == "bash" {
-					return true
-				}
-			}
-		}
-		return false
-	})
-	if !f.parentMgr.IsAgentWorking() {
-		t.Fatalf("parent should be mid-turn")
-	}
-
-	// Subagent finishes now, mid-turn. The notification is queued (parent is
-	// working) and must be injected at the next LLM round instead of waiting
-	// for the turn to end.
-	f.notifySubagentDone(f.subagentID)
-
-	// Wait for the turn to complete.
-	waitFor(t, 15*time.Second, func() bool {
-		return !f.parentMgr.IsAgentWorking()
-	})
-
-	msgs := f.parentMessages()
-	if n := countSyntheticDonePairs(t, msgs); n != 1 {
-		t.Fatalf("expected exactly one synthetic done pair, got %d\n%s", n, dumpMessages(t, msgs))
-	}
-
-	// The pair must sit BEFORE the final end-of-turn assistant message: it was
-	// spliced into the running turn, not appended as a new turn afterwards.
-	pairIdx, endIdx := -1, -1
-	for i, m := range msgs {
-		if m.LlmData == nil {
-			continue
-		}
-		var lm llm.Message
-		if err := json.Unmarshal([]byte(*m.LlmData), &lm); err != nil {
-			continue
-		}
-		for _, c := range lm.Content {
-			if c.Type == llm.ContentTypeToolUse && strings.HasPrefix(c.ID, "sa_done_") {
-				pairIdx = i
-			}
-		}
-		if lm.Role == llm.MessageRoleAssistant && lm.EndOfTurn && endIdx == -1 {
-			endIdx = i // FIRST end-of-turn: where the original turn finished
-		}
-	}
-	if pairIdx == -1 || endIdx == -1 {
-		t.Fatalf("missing pair (%d) or end-of-turn message (%d)\n%s", pairIdx, endIdx, dumpMessages(t, msgs))
-	}
-	if pairIdx > endIdx {
-		t.Fatalf("synthetic pair (idx %d) landed AFTER the turn ended (idx %d): not injected mid-turn\n%s",
-			pairIdx, endIdx, dumpMessages(t, msgs))
-	}
-
-	// Nothing left queued: the end-of-turn drain must not re-deliver.
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected empty pending queue after injection, got %d", n)
-	}
-}
-
-// testSubagentDone_InjectionSkippedWhileDistilling verifies that mid-turn
-// injection stays hands-off while the conversation is being rewritten by
-// distillation: takeInjectable returns nothing and leaves the
-// batch queued for the post-distillation drain (whose delivery is covered by
-// QueuedDuringDistillation).
-func testSubagentDone_InjectionSkippedWhileDistilling(t *testing.T) {
-	f := newSubagentDoneFixture(t, "subagent response")
-	ctx := t.Context()
-
-	f.parentMgr.SetDistilling(true)
-	defer f.parentMgr.SetDistilling(false)
-
-	f.notifySubagentDone(f.subagentID)
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
-	})
-
-	f.parentMgr.mu.Lock()
-	generation := f.parentMgr.loopGeneration
-	f.parentMgr.mu.Unlock()
-	if msgs := f.parentMgr.takeInjectable(ctx, generation); len(msgs) != 0 {
-		t.Fatalf("expected no injectable messages while distilling, got %d", len(msgs))
-	}
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 1 {
-		t.Fatalf("expected batch to stay queued while distilling, got %d", n)
-	}
-}
-
-// testSubagentDone_StaleQueuedNotificationDroppedOnSend covers
-// supersession staleness: a notification for the subagent's
-// PREVIOUS turn is queued on the busy parent, and the parent then sends the
-// subagent new work (a busy subagent). The new work supersedes
-// the queued notification — the same "only the newest matters" policy
-// enqueueBatch applies between two queued notifications — so it must be
-// dropped; the new turn's completion will enqueue a fresh one.
-func testSubagentDone_StaleQueuedNotificationDroppedOnSend(t *testing.T) {
-	f := newSubagentDoneFixture(t, "previous-turn response")
-
-	// Parent is mid-turn.
-	f.parentMgr.SetAgentWorking(true)
-
-	// Subagent finished its previous turn while the parent was busy.
-	f.notifySubagentDone(f.subagentID)
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) == 1
-	})
-
-	// The subagent is now busy on another turn (simulated), and the parent
-	// queues new work for it.
-	if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-		t.Fatalf("ensureLoop subagent: %v", err)
-	}
-	f.subagentMgr.SetAgentWorking(true)
-
-	runner := NewSubagentRunner(f.server)
-	res, err := runner.RunSubagent(t.Context(), f.subagentID, "do the next thing", "predictable", "")
-	if err != nil {
-		t.Fatalf("RunSubagent: %v", err)
-	}
-	if !strings.Contains(res, "current turn") {
-		t.Fatalf("expected a mid-turn delivery status, got %q", res)
-	}
-
-	// The stale previous-turn notification must be gone.
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected stale queued subagent-done batch to be dropped on send, still have %d", n)
-	}
-}
-
-// testSubagentDone_StragglerNotifierSkipsAfterSupersede pins the
-// producer-side invalidation for the supersession path with the
-// worst-case interleaving: the completion for the PREVIOUS turn was already
-// CAPTURED (dispatch time — identity fixed) but its enqueue is delayed until
-// after the parent has sent the subagent new work (which scrubbed the queue
-// and recorded the supersession watermark). The late enqueue must skip: the
-// watermark covers the captured response's sequence id.
-func testSubagentDone_StragglerNotifierSkipsAfterSupersede(t *testing.T) {
-	f := newSubagentDoneFixture(t, "previous-turn response")
-	ctx := t.Context()
-
-	// Parent is mid-turn, so an enqueued notification would stay queued.
-	f.parentMgr.SetAgentWorking(true)
-
-	// Dispatch-time capture happens NOW, before the supersession — the
-	// notifier goroutine then stalls (simulated by holding the values).
-	response, seq, ok := f.server.captureSubagentDone(f.subagentID)
-	if !ok {
-		t.Fatalf("expected capture to succeed while subagent idle")
-	}
-
-	// Parent sends the subagent new work. This records the
-	// supersession watermark for the existing response and scrubs the queue.
-	runner := NewSubagentRunner(f.server)
-	if _, err := runner.RunSubagent(ctx, f.subagentID, "delay: 5", "predictable", ""); err != nil {
-		t.Fatalf("RunSubagent: %v", err)
-	}
-
-	// The stalled notifier finally enqueues. The watermark must reject it.
-	f.server.notifyParentSubagentDone(f.subagentID, response, seq)
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected straggler notification to be skipped after supersede, have %d queued", n)
-	}
-}
-
-// testSubagentDone_DelayedNotifierCannotReannounceInjectedResponse pins the
-// claim-based dedupe (notifiedResponseSeq): a notifier for turn A stalls;
-// turn B's notifier announces B's response, which is enqueued and then LEAVES
-// the queue (mid-turn injection/drain) — so queue coalescing can no longer
-// help. When the stalled notifier finally runs, it re-reads the subagent's
-// latest response (B, already announced) and must skip: only the first claim
-// for a given response seq wins.
-func testSubagentDone_DelayedNotifierCannotReannounceInjectedResponse(t *testing.T) {
-	f := newSubagentDoneFixture(t, "turn-B response")
-
-	// Parent idle: the first notification drains (leaves the queue)
-	// immediately, like a mid-turn injection would.
-	f.notifySubagentDone(f.subagentID)
-	waitFor(t, 5*time.Second, func() bool {
-		return countSyntheticDonePairs(t, f.parentMessages()) == 1
-	})
-	waitFor(t, 5*time.Second, func() bool {
-		return countPendingSubagentDone(f.parentMgr, f.subagentID) == 0
-	})
-
-	// Parent is now mid-turn (the drained notification woke its loop, or
-	// simulate it); the stalled duplicate notifier for the SAME response
-	// finally runs. It must claim-fail and enqueue nothing.
-	f.parentMgr.SetAgentWorking(true)
-	f.notifySubagentDone(f.subagentID)
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected delayed duplicate notifier to be skipped by claim, have %d queued", n)
-	}
-	f.parentMgr.SetAgentWorking(false)
-
-	// And no second synthetic pair may ever land.
-	if n := countSyntheticDonePairs(t, f.parentMessages()); n != 1 {
-		t.Fatalf("expected exactly one synthetic pair, got %d", n)
-	}
-}
-
-// testSubagentDone_DelayedNotifierSkipsWhileNewTurnRunning pins the
-// working-check in notifyParentSubagentDone: a notifier for finished turn A
-// that only runs after turn B has STARTED (subagent working again) must
-// skip — reading "the latest agent row" mid-turn would announce an
-// in-progress turn (often a bare tool_use → "(no textual response)") as
-// finished. Turn B's own completion notifies with the real result.
-func testSubagentDone_DelayedNotifierSkipsWhileNewTurnRunning(t *testing.T) {
-	f := newSubagentDoneFixture(t, "turn-A response")
-
-	// Parent is mid-turn so a notification would stay queued (visible).
-	f.parentMgr.SetAgentWorking(true)
-
-	// Turn B is now running on the subagent.
-	if err := f.subagentMgr.ensureLoop(f.llmSvc, "predictable"); err != nil {
-		t.Fatalf("ensureLoop subagent: %v", err)
-	}
-	f.subagentMgr.SetAgentWorking(true)
-	defer f.subagentMgr.SetAgentWorking(false)
-
-	// The delayed notifier for turn A finally runs. It must skip.
-	f.notifySubagentDone(f.subagentID)
-	if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 0 {
-		t.Fatalf("expected delayed notifier to skip while a newer turn is running, have %d queued", n)
-	}
-}
-
-// testSubagentDone_StaleNotificationCoalesced reproduces the "stray duplicate
-// subagent notifications" bug: a subagent that finishes MORE THAN ONCE while
-// the parent is busy (e.g. the parent re-prompted the subagent and the
-// subagent finished each turn) must not leave multiple
-// subagent-done batches queued for the parent. Only ONE notification per
-// subagent conversation should remain pending — the newest — so that when the
-// parent's turn ends it drains a single "subagent finished" pair instead of a
-// pile of stale echoes of already-superseded turns.
-func testSubagentDone_StaleNotificationCoalesced(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newSubagentDoneFixture(t, "first-turn response")
-		defer stopActiveConversationLoops(f.server)
-
-		// Parent is mid-turn: its loop is busy, so enqueued subagent-done batches
-		// wait in pendingBatches rather than draining immediately.
-		f.parentMgr.SetAgentWorking(true)
-
-		// Subagent finishes its first turn while the parent is busy -> one queued
-		// notification.
-		f.notifySubagentDone(f.subagentID)
-
-		// The parent re-prompted the subagent (not modeled here) and it finishes a
-		// SECOND turn, still while the parent is busy -> a second notification for
-		// the SAME subagent conversation. This is the stale echo we must coalesce.
-		f.notifySubagentDone(f.subagentID)
-
-		// Let anything the notifications kicked off settle.
-		synctest.Wait()
-
-		// Exactly one subagent-done batch for this subagent should be queued: the
-		// second (newest) notification supersedes the first.
-		if n := countPendingSubagentDone(f.parentMgr, f.subagentID); n != 1 {
-			t.Fatalf("expected exactly 1 queued subagent-done batch for the subagent, got %d", n)
-		}
-
-		// Drain: parent finishes its turn. Exactly one synthetic pair should land.
-		f.parentMgr.SetAgentWorking(false)
-		go f.parentMgr.drainPendingMessages(f.server)
-
-		waitFor(t, 5*time.Second, func() bool {
-			return countSyntheticDonePairs(t, f.parentMessages()) >= 1
-		})
-		// Let any erroneous second pair land.
-		synctest.Wait()
-		if n := countSyntheticDonePairs(t, f.parentMessages()); n != 1 {
-			t.Fatalf("expected exactly one synthetic done pair after draining coalesced notifications, got %d", n)
-		}
-	})
-}
-
-// countPendingSubagentDone counts queued subagent-done batches in the parent's
-// pending queue that target the given subagent conversation.
-func countPendingSubagentDone(cm *ConversationManager, subagentID string) int {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	n := 0
-	for _, b := range cm.pendingBatches {
-		if b.Kind == pendingBatchSubagentDone && b.SubagentConversationID == subagentID {
-			n++
-		}
-	}
-	return n
-}
-
-func truncForLog(s string) string {
-	if len(s) > 120 {
-		return s[:120] + "..."
-	}
-	return s
-}
-
-func dumpMessages(t *testing.T, msgs []generated.Message) string {
-	t.Helper()
-	var sb strings.Builder
-	for i, m := range msgs {
-		data := "<nil>"
-		if m.LlmData != nil {
-			data = *m.LlmData
-		}
-		sb.WriteString("[")
-		b, _ := json.Marshal(i)
-		sb.Write(b)
-		sb.WriteString("]")
-		sb.WriteString(" type=")
-		sb.WriteString(m.Type)
-		sb.WriteString(" data=")
-		sb.WriteString(truncForLog(data))
-		sb.WriteString("\n")
-	}
-	return sb.String()
-}
-
-// testSubagentDone_ConcurrentFinishes verifies that when two subagents under
-// the same parent finish concurrently, both synthetic tool_use/tool_result
-// pairs land in the parent's history and each pair is atomic: a tool_use is
-// immediately followed by its matching tool_result with no interleaving.
-// LLM APIs require tool_use blocks be paired with their tool_result before
-// any other content; if the messages were globally racey we could end up
-// with [useA, useB, resultA, resultB] which would be rejected.
-func testSubagentDone_ConcurrentFinishes(t *testing.T) {
-	f := newSubagentDoneFixture(t, "alpha done")
-
-	ctx := t.Context()
-	subConv2, err := f.database.CreateSubagentConversation(ctx, "sub-test-2", f.parentID, nil)
-	if err != nil {
-		t.Fatalf("create subagent 2: %v", err)
-	}
-	sub2Mgr, err := f.server.getOrCreateSubagentConversationManager(ctx, subConv2.ConversationID)
-	if err != nil {
-		t.Fatalf("get subagent 2 manager: %v", err)
-	}
-	if err := f.server.recordMessage(ctx, subConv2.ConversationID, llm.Message{
-		Role:      llm.MessageRoleAssistant,
-		Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "beta done"}},
-		EndOfTurn: true,
-	}, llm.Usage{}, nil); err != nil {
-		t.Fatalf("record subagent 2 assistant: %v", err)
-	}
-
-	// Prime working=true so the false transition fires onDone.
-	f.subagentMgr.SetAgentWorking(true)
-	sub2Mgr.SetAgentWorking(true)
-
-	go f.subagentMgr.SetAgentWorking(false)
-	go sub2Mgr.SetAgentWorking(false)
-
-	// Either both pairs land (each = 2 msgs), or the parent loop has woken
-	// and started churning. We just want >=4 messages in parent.
-	// Wait until we see two distinct synthetic tool_use blocks each followed
-	// by their matching tool_result. Just waiting on a message count can
-	// catch an intermediate state where the parent's loop has interleaved
-	// its own LLM turn between the two pairs.
-	waitFor(t, 5*time.Second, func() bool {
-		msgs := f.parentMessages()
-		found := 0
-		for i, m := range msgs {
-			if m.LlmData == nil {
-				continue
-			}
-			var lm llm.Message
-			if err := json.Unmarshal([]byte(*m.LlmData), &lm); err != nil {
-				continue
-			}
-			var useID string
-			for _, c := range lm.Content {
-				if c.Type == llm.ContentTypeToolUse && c.ToolName == "subagent" && strings.HasPrefix(c.ID, "sa_done_") {
-					useID = c.ID
-				}
-			}
-			if useID == "" {
-				continue
-			}
-			if i+1 >= len(msgs) || msgs[i+1].LlmData == nil {
-				continue
-			}
-			var next llm.Message
-			if err := json.Unmarshal([]byte(*msgs[i+1].LlmData), &next); err != nil {
-				continue
-			}
-			for _, c := range next.Content {
-				if c.Type == llm.ContentTypeToolResult && c.ToolUseID == useID {
-					found++
-				}
-			}
-		}
-		return found >= 2
-	})
-
-	msgs := f.parentMessages()
-
-	type found struct {
-		useIdx int
-		useID  string
-		text   string
-	}
-	var pairs []found
-	for i, m := range msgs {
-		if m.LlmData == nil {
-			continue
-		}
-		var lm llm.Message
-		if err := json.Unmarshal([]byte(*m.LlmData), &lm); err != nil {
-			continue
-		}
-		var useID string
-		for _, c := range lm.Content {
-			if c.Type == llm.ContentTypeToolUse && c.ToolName == "subagent" && strings.HasPrefix(c.ID, "sa_done_") {
-				useID = c.ID
-			}
-		}
-		if useID == "" {
-			continue
-		}
-		if i+1 >= len(msgs) || msgs[i+1].LlmData == nil {
-			t.Fatalf("tool_use at idx %d (id=%s) has no following message; messages:\n%s", i, useID, dumpMessages(t, msgs))
-		}
-		var next llm.Message
-		if err := json.Unmarshal([]byte(*msgs[i+1].LlmData), &next); err != nil {
-			t.Fatalf("unmarshal next: %v", err)
-		}
-		var matched bool
-		var text string
-		for _, c := range next.Content {
-			if c.Type == llm.ContentTypeToolResult && c.ToolUseID == useID {
-				matched = true
-				text = toolResultText(c)
-			}
-		}
-		if !matched {
-			t.Fatalf("tool_use at idx %d (id=%s) NOT followed by matching tool_result; messages:\n%s", i, useID, dumpMessages(t, msgs))
-		}
-		pairs = append(pairs, found{useIdx: i, useID: useID, text: text})
-	}
-
-	// We expect at least 2 distinct subagent pairs (the parent's loop may
-	// also produce additional turns, but those aren't sa_done_ pairs).
-	if len(pairs) < 2 {
-		t.Fatalf("expected >=2 synthetic subagent pairs, got %d. messages:\n%s", len(pairs), dumpMessages(t, msgs))
-	}
-
-	seenAlpha, seenBeta := false, false
-	seenIDs := map[string]bool{}
-	for _, p := range pairs {
-		if seenIDs[p.useID] {
-			t.Errorf("duplicate tool_use ID across pairs: %q", p.useID)
-		}
-		seenIDs[p.useID] = true
-		if strings.Contains(p.text, "alpha done") {
-			seenAlpha = true
-		}
-		if strings.Contains(p.text, "beta done") {
-			seenBeta = true
-		}
-	}
-	if !seenAlpha || !seenBeta {
-		t.Errorf("expected both 'alpha done' and 'beta done' across synthetic pairs (alpha=%v, beta=%v); pairs=%+v", seenAlpha, seenBeta, pairs)
-	}
-}
-
-// testSubagentDone_LastMessageIsToolUse exercises the case where the
-// subagent's most recent persisted message has no text content (it's a
-// tool_use only). lastAssistantText returns "" and notifyParentSubagentDone
-// must fall back to "(no textual response)" without panicking, while still
-// emitting a coherent synthetic pair.
-func testSubagentDone_LastMessageIsToolUse(t *testing.T) {
-	f := newSubagentDoneFixture(t, "earlier text that should be IGNORED")
-
-	toolUseOnly := llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        "toolu_subagent_did_a_thing",
-			ToolName:  "bash",
-			ToolInput: []byte(`{"command":"echo hi"}`),
-		}},
-	}
-	if err := f.server.recordMessage(t.Context(), f.subagentID, toolUseOnly, llm.Usage{}, nil); err != nil {
-		t.Fatalf("record tool_use-only message: %v", err)
-	}
-
-	f.fireOnDone()
-
-	waitFor(t, 5*time.Second, func() bool {
-		_, _, ok := f.findSyntheticPair()
-		return ok
-	})
-
-	_, result, ok := f.findSyntheticPair()
-	if !ok {
-		t.Fatalf("expected synthetic pair even when last subagent msg has no text")
-	}
-	var gotText string
-	for _, c := range result.Content {
-		if c.Type == llm.ContentTypeToolResult {
-			gotText = toolResultText(c)
-		}
-	}
-	if !strings.Contains(gotText, "(no textual response)") {
-		t.Errorf("expected fallback text '(no textual response)' in tool_result, got %q", truncForLog(gotText))
-	}
-	if strings.Contains(gotText, "earlier text that should be IGNORED") {
-		t.Errorf("tool_result leaked text from an older assistant message: %q", truncForLog(gotText))
-	}
-}
-
-// testSubagentDone_GitInfoIgnored verifies that a gitinfo message recorded
-// after the subagent's last real LLM response does not get picked up as
-// "the subagent's response" and forwarded to the parent. Gitinfo messages
-// have role=Assistant in their llm_data (they describe a worktree state
-// change) but Type=gitinfo and are user-visible only — never sent to the
-// LLM. Before the lastAgentText fix, notifyParentSubagentDone would
-// happily splice the gitinfo text (e.g. '… now at abc1234 "some commit"')
-// into the parent's tool_result.
-func testSubagentDone_GitInfoIgnored(t *testing.T) {
-	f := newSubagentDoneFixture(t, "The subagent's actual final answer.")
-
-	gitMsg := llm.Message{
-		Role:    llm.MessageRoleAssistant,
-		Content: []llm.Content{{Type: llm.ContentTypeText, Text: `~/exe-subagent-done (subagent-done-notify) now at 7b2a11b65 "shelley: notify parent agent when subagent finishes"`}},
-	}
-	if _, err := f.database.CreateMessage(t.Context(), db.CreateMessageParams{
-		ConversationID: f.subagentID,
-		Type:           db.MessageTypeGitInfo,
-		LLMData:        gitMsg,
-		UsageData:      llm.Usage{},
-	}); err != nil {
-		t.Fatalf("create gitinfo msg: %v", err)
-	}
-
-	f.fireOnDone()
-
-	waitFor(t, 5*time.Second, func() bool {
-		_, _, ok := f.findSyntheticPair()
-		return ok
-	})
-
-	_, result, ok := f.findSyntheticPair()
-	if !ok {
-		t.Fatalf("expected synthetic pair")
-	}
-	var text string
-	for _, c := range result.Content {
-		if c.Type == llm.ContentTypeToolResult {
-			text = toolResultText(c)
-		}
-	}
-	if !strings.Contains(text, f.subResponse) {
-		t.Errorf("expected subagent's real response %q in tool_result, got %q", f.subResponse, truncForLog(text))
-	}
-	if strings.Contains(text, "now at 7b2a11b65") {
-		t.Errorf("gitinfo message text leaked into tool_result: %q", truncForLog(text))
-	}
-}
-
-// testSubagentDone_CitationMarkersStripped verifies that a ChatGPT-backed
-// subagent's inline citation markup does not reach the parent conversation.
-// The notification carries the text in a tool_result, which llmDataForAPI's
-// agent-text strip never sees, so it must already be clean.
-func testSubagentDone_CitationMarkersStripped(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Found it\ue200cite\ue202turn1search0\ue201 in the docs.")
-
-	f.fireOnDone()
-
-	waitFor(t, 5*time.Second, func() bool {
-		_, _, ok := f.findSyntheticPair()
-		return ok
-	})
-
-	_, result, ok := f.findSyntheticPair()
-	if !ok {
-		t.Fatalf("expected synthetic pair")
-	}
-	var text string
-	for _, c := range result.Content {
-		if c.Type == llm.ContentTypeToolResult {
-			text = toolResultText(c)
-		}
-	}
-	if !strings.Contains(text, "Found it in the docs.") {
-		t.Errorf("expected stripped subagent response in tool_result, got %q", truncForLog(text))
-	}
-	if strings.ContainsAny(text, "\ue200\ue201\ue202\ue203") {
-		t.Errorf("citation markers leaked into tool_result: %q", truncForLog(text))
 	}
 }

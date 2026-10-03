@@ -999,9 +999,6 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
 			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
 		}
-		recordBatch := func(ctx context.Context, msgs []recordMessageInput) error {
-			return s.recordMessages(ctx, conversationID, msgs)
-		}
 
 		btwIdentity, btwReader := db.ManagedBtwReaderIdentity(*conversation)
 		s.mu.Lock()
@@ -1016,7 +1013,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		if btwReader {
 			managerConfig.SubagentDepth++
 		}
-		manager := NewConversationManager(conversationID, s.db, s.logger, managerConfig, s.integrationSkills, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
+		manager := NewConversationManager(conversationID, s.db, s.logger, managerConfig, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
@@ -1079,18 +1076,15 @@ func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, con
 		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
 			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
 		}
-		recordBatch := func(ctx context.Context, msgs []recordMessageInput) error {
-			return s.recordMessages(ctx, conversationID, msgs)
-		}
 
 		onStateChange := func(state ConversationState) { s.publishConversationState(state) }
 
 		subagentConfig := s.toolSetConfig
 		subagentConfig.SubagentDepth++
-		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, s.integrationSkills, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
+		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.serverPort = s.listenPort
-		manager.onDone = func() { s.dispatchSubagentDone(conversationID) }
+		manager.onDone = func() { s.notifyParentSubagentIdle(conversationID) }
 		// See getOrCreateConversationManager for why we don't hold s.mu here.
 		if err := manager.Hydrate(ctx); err != nil {
 			return nil, err
