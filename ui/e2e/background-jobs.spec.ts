@@ -24,6 +24,8 @@ test("drawer badge lists running background jobs and kills one", async ({ page, 
   await expect(badge).toHaveCount(0, { timeout: 15000 });
   await expect(job).toHaveCount(0);
   await page.locator('button[aria-label="Close conversations"]').click();
-  await expect(page.getByTestId("message-author-background-job")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByText(/finished: exit 143/)).toBeVisible();
+  const notice = page.getByTestId("bash-tool-finished-job");
+  await expect(notice).toBeVisible({ timeout: 15000 });
+  await expect(notice).toContainText("exit 143");
+  await expect(page.locator(".bash-tool", { has: notice })).toContainText("sleep 600");
 });

@@ -26,14 +26,16 @@ async function sendFrom(sender: string, target: string, text: string) {
   );
 }
 
-async function expectToolMessage(message: Locator, text: string, background: string) {
+async function expectToolCard(message: Locator, headline: string, background: string) {
   await expect(message).toHaveClass(/message-tool/);
   await expect(message).not.toHaveClass(/message-user|message-agent/);
-  await expect(message).toContainText(text);
   await expect(message).not.toContainText(/<(?:parent|subagent)_message/);
-  await expect(message).toHaveCSS("background-color", background);
-  await expect(message).toHaveCSS("border-radius", "8px");
-  await expect(message.getByTestId("message-author-conversation")).toHaveCSS("font-weight", "400");
+  const card = message.getByTestId("conversation-message-card");
+  await expect(card.locator(".tool-tag")).toHaveText("message");
+  await expect(card.getByTestId("conversation-message-card-headline")).toHaveText(headline);
+  await expect(card).toHaveCSS("background-color", background);
+  await expect(card).toHaveCSS("border-radius", "8px");
+  return card;
 }
 
 for (const viewport of [
@@ -41,7 +43,7 @@ for (const viewport of [
   { width: 1280, height: 720 },
 ]) {
   for (const colorScheme of ["light", "dark"] as const) {
-    test(`CLI conversation provenance uses tool styling at ${viewport.width}px (${colorScheme})`, async ({
+    test(`CLI conversation provenance renders tool cards at ${viewport.width}px (${colorScheme})`, async ({
       page,
       request,
     }) => {
@@ -63,33 +65,32 @@ for (const viewport of [
       await page.goto(`/c/${parent.slug}`);
       await expect(page.getByTestId("message-input")).toBeVisible();
       const background = colorScheme === "dark" ? "rgb(31, 41, 55)" : "rgb(243, 244, 246)";
-      const progress = "Backend underway: API and database implementation are progressing.";
-      await sendFrom(
-        child.conversation_id,
-        parent.conversationId,
-        progress.replace("API and database", "**API and database**"),
-      );
+      const progress = "Backend underway: **API and database** implementation are progressing.";
+      await sendFrom(child.conversation_id, parent.conversationId, `${progress}\nNext: tests.`);
       let message = page.getByTestId("message").filter({ hasText: "Backend underway" });
-      let source = message.getByTestId("message-author-conversation");
-      await expect(source).toHaveText(`Message from ${child.slug}`);
-      await expectToolMessage(message, progress, background);
-      await expect(message.locator("strong")).toHaveText("API and database");
+      let card = await expectToolCard(message, progress, background);
+      await expect(card.getByRole("link", { name: child.slug, exact: true })).toBeVisible();
+      // Multi-line messages expand into a markdown body.
+      await card.getByRole("button", { name: "Expand" }).click();
+      await expect(card.locator(".tool-details strong")).toHaveText("API and database");
+      await expect(card.locator(".tool-details")).toContainText("Next: tests.");
 
       // Reload exercises persisted metadata rather than only stream updates.
       await page.reload();
-      await expectToolMessage(message, progress, background);
-      const childLink = source.getByRole("link", { name: child.slug, exact: true });
+      card = await expectToolCard(message, progress, background);
+      const childLink = card.getByRole("link", { name: child.slug, exact: true });
       await expect(childLink).toHaveAttribute("href", `/c/${child.conversation_id}`);
       await expect(childLink).toHaveAttribute("title", "Open subagent conversation");
       await childLink.click();
       await expect(page.locator(".header-title")).toHaveText(child.slug);
 
+      // A short single-line message shows in full with nothing to expand.
       const instruction = "Please finish the API tests before the database changes.";
       await sendFrom(parent.conversationId, child.conversation_id, instruction);
       message = page.getByTestId("message").filter({ hasText: instruction });
-      source = message.getByTestId("message-author-conversation");
-      await expect(source).toHaveText(`Message from ${parent.slug}`);
-      await expectToolMessage(message, instruction, background);
+      card = await expectToolCard(message, instruction, background);
+      await expect(card.getByRole("button", { name: "Expand" })).toHaveCount(0);
+      await expect(card.getByRole("link", { name: parent.slug, exact: true })).toBeVisible();
       // The label follows renames; the stable ID keeps the link unambiguous.
       const renamedSlug = `parent-renamed-${parent.conversationId.toLowerCase()}`;
       const renamed = await request.post(`/api/conversation/${parent.conversationId}/rename`, {
@@ -97,23 +98,20 @@ for (const viewport of [
       });
       expect(renamed.ok()).toBeTruthy();
       parent.slug = renamedSlug;
-      await expect(source).toHaveText(`Message from ${parent.slug}`);
-      const parentLink = source.getByRole("link", { name: parent.slug, exact: true });
+      const parentLink = card.getByRole("link", { name: parent.slug, exact: true });
       await expect(parentLink).toHaveAttribute("href", `/c/${parent.conversationId}`);
       await expect(parentLink).toHaveAttribute("title", "Open parent conversation");
       await parentLink.click();
       await expect(page.locator(".header-title")).toHaveText(parent.slug);
       message = page.getByTestId("message").filter({ hasText: "Backend underway" });
-      await expect(message.getByTestId("message-author-conversation")).toHaveText(
-        `Message from ${child.slug}`,
-      );
+      await expect(message.getByRole("link", { name: child.slug, exact: true })).toBeVisible();
 
       const human = page
         .getByTestId("message")
         .filter({ hasText: "subagent: backend echo: Ready." })
         .first();
       await expect(human).toHaveClass(/message-user/);
-      await expect(human.getByTestId("message-author-conversation")).toHaveCount(0);
+      await expect(human.getByTestId("conversation-message-card")).toHaveCount(0);
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);

@@ -35,6 +35,15 @@ type senderMessageUserData struct {
 // finished; it is not from a human or another conversation.
 type backgroundJobUserData struct {
 	BackgroundJobID string `json:"background_job_id"`
+	Command         string `json:"command"`
+	// ExitCode is absent when the job was lost.
+	ExitCode *int `json:"exit_code,omitempty"`
+	// Duration is the job's run time as a Go duration string, or "" when
+	// the job was lost.
+	Duration string `json:"duration"`
+	LogPath  string `json:"log_path"`
+	// Tail is the last lines of the job's output.
+	Tail string `json:"tail"`
 	// Text duplicates the message for full-text search, as in
 	// senderMessageUserData.
 	Text string `json:"Text"`

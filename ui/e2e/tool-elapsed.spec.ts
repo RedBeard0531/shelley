@@ -49,9 +49,7 @@ test("a working subagent's running requests show elapsed time", async ({ page, r
 
   await input.fill("subagent: helper bash: sleep 100");
   await page.getByTestId("send-button").click();
-  const subagent = page
-    .locator(".tool")
-    .filter({ has: page.locator(".tool-name", { hasText: "subagent" }) });
+  const subagent = page.locator(".tool").filter({ has: page.locator(".subagent-tool-slug") });
   // Subagent calls return as soon as the child starts; the live link stays
   // while the child works.
   await expect(subagent).toHaveAttribute("data-testid", "tool-call-completed", { timeout: 30000 });

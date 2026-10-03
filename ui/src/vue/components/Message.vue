@@ -159,11 +159,35 @@
             :on-fork="hasForkAction ? handleFork : undefined"
           />
 
-          <ConversationMessageAuthor v-if="sender && entityIndex === 0" :source="sender" />
+          <ConversationMessageAuthor
+            v-if="legacyJobNotice && entityIndex === 0"
+            :source="legacyJobNotice"
+          />
+
+          <template v-if="jobNotice?.outcome">
+            <BashTool
+              v-if="entityIndex === 0"
+              :tool-input="{ command: jobNotice.outcome.command }"
+              :tool-result="[{ ID: '', Type: 2, Text: jobNotice.outcome.tail }]"
+              :has-error="jobNotice.outcome.exitCode !== 0"
+              :execution-time="jobNotice.outcome.duration"
+              :finished-job="{ jobId: jobNotice.backgroundJobId, ...jobNotice.outcome }"
+            />
+          </template>
+
+          <template v-else-if="conversationSender">
+            <ConversationMessageCard
+              v-if="entityIndex === 0"
+              :source="conversationSender"
+              :text="messageText"
+              :message-id="message.message_id"
+              :cache-owner="message"
+            />
+          </template>
 
           <!-- Distillation box takes precedence over content blocks. -->
           <div
-            v-if="isDistilledUser"
+            v-else-if="isDistilledUser"
             class="distillation-file-box"
             data-testid="distillation-file-box"
           >
@@ -202,7 +226,7 @@
                 :markdown-text="item.markdownText"
                 :citations="item.citations"
                 :render-markdown="
-                  !isBackgroundJobNotice &&
+                  !jobNotice &&
                   shouldRenderMarkdown(markdownMode, isUser && !sender, isDistilledUser)
                 "
                 :message-id="message.message_id"
@@ -269,6 +293,8 @@ import { coalesceContent, splitContentEntities } from "../../utils/coalesceConte
 import { perfCount } from "../../utils/perf";
 import { messageSource } from "../../utils/messageSource";
 import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
+import ConversationMessageCard from "./ConversationMessageCard.vue";
+import BashTool from "./tools/BashTool.vue";
 import MessageDisplayData from "./MessageDisplayData.vue";
 
 interface ToolDisplay {
@@ -386,8 +412,16 @@ const showUserEmails = inject<ComputedRef<boolean>>("showUserEmails");
 const sender = computed(() =>
   isUser.value && !isDistilledUser.value ? messageSource(props.message.user_data) : null,
 );
-// Background job notices carry raw command output: show it verbatim.
-const isBackgroundJobNotice = computed(() => !!sender.value && "backgroundJobId" in sender.value);
+// Background job notices carry raw command output: show it as a bash card,
+// or verbatim for notices stored before their outcome was structured.
+const jobNotice = computed(() =>
+  sender.value && "backgroundJobId" in sender.value ? sender.value : null,
+);
+const legacyJobNotice = computed(() => (jobNotice.value?.outcome ? null : jobNotice.value));
+// Messages from another conversation render as a tool card.
+const conversationSender = computed(() =>
+  sender.value && "conversationId" in sender.value ? sender.value : null,
+);
 const authorEmail = computed(() =>
   isUser.value && !isDistilledUser.value && showUserEmails?.value
     ? props.message.user_email || null
@@ -607,6 +641,9 @@ const hasRenderableContent = computed(() => {
 
 // ---- Message container classes ----
 const messageClasses = computed(() => {
+  if (jobNotice.value?.outcome || conversationSender.value) {
+    return "message message-tool message-tool-card";
+  }
   if (sender.value) return "message message-tool message-conversation";
   if (isUser.value && !isDistilledUser.value) {
     return "message message-user";

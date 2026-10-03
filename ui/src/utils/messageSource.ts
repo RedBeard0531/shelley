@@ -4,8 +4,21 @@ export interface ConversationMessageSource {
   relationship: "subagent" | "parent";
 }
 
+export interface BackgroundJobOutcome {
+  command: string;
+  // Null when the job was lost: the host rebooted or the job was killed
+  // before it could record its exit status.
+  exitCode: number | null;
+  // Go duration string, empty when the job was lost.
+  duration: string;
+  logPath: string;
+  tail: string;
+}
+
 export interface BackgroundJobMessageSource {
   backgroundJobId: string;
+  // Absent on notices recorded before outcomes were stored structurally.
+  outcome?: BackgroundJobOutcome;
 }
 
 export type MessageSource = ConversationMessageSource | BackgroundJobMessageSource;
@@ -32,7 +45,10 @@ export function messageSource(userData: unknown): MessageSource | null {
   if (!parsed) return null;
 
   const { background_job_id: backgroundJobId } = parsed;
-  if (typeof backgroundJobId === "string" && backgroundJobId) return { backgroundJobId };
+  if (typeof backgroundJobId === "string" && backgroundJobId) {
+    const outcome = backgroundJobOutcome(parsed);
+    return outcome ? { backgroundJobId, outcome } : { backgroundJobId };
+  }
 
   const {
     sender_conversation_id: conversationId,
@@ -48,4 +64,24 @@ export function messageSource(userData: unknown): MessageSource | null {
     return null;
   }
   return { conversationId, slug, relationship };
+}
+
+function backgroundJobOutcome(parsed: Record<string, unknown>): BackgroundJobOutcome | null {
+  const { command, exit_code: exitCode, duration, log_path: logPath, tail } = parsed;
+  if (
+    typeof command !== "string" ||
+    !command ||
+    typeof duration !== "string" ||
+    typeof logPath !== "string" ||
+    typeof tail !== "string"
+  ) {
+    return null;
+  }
+  return {
+    command,
+    exitCode: typeof exitCode === "number" ? exitCode : null,
+    duration,
+    logPath,
+    tail,
+  };
 }

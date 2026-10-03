@@ -125,7 +125,7 @@ func TestBashBackgroundsLongCommand(t *testing.T) {
 
 	g.release(t)
 	waitClosed(t, bg.exited, "job exit")
-	notice := job.Notice()
+	notice := job.Outcome().Notice()
 	for _, want := range []string{"Background job " + job.ID + " finished: exit 3", job.LogPath, "started\nfinished"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("notice %q does not contain %q", notice, want)
@@ -158,7 +158,7 @@ func TestBashBackgroundFieldSkipsForegroundWait(t *testing.T) {
 		t.Errorf("display.Background = %+v, want job %s", d.Background, bg.job.ID)
 	}
 	waitClosed(t, bg.exited, "job exit")
-	if notice := bg.job.Notice(); !strings.Contains(notice, "finished: exit 0") || !strings.Contains(notice, "hi") {
+	if notice := bg.job.Outcome().Notice(); !strings.Contains(notice, "finished: exit 0") || !strings.Contains(notice, "hi") {
 		t.Errorf("notice = %q, want exit 0 with output", notice)
 	}
 }
@@ -242,7 +242,7 @@ func TestBackgroundJobRecovery(t *testing.T) {
 	})
 
 	t.Run("lost", func(t *testing.T) {
-		if got := job.Notice(); !strings.HasPrefix(got, "Background job j lost (host rebooted or killed). Log: "+logPath) || !strings.HasSuffix(got, "one\ntwo") {
+		if got := job.Outcome().Notice(); !strings.HasPrefix(got, "Background job j lost (host rebooted or killed). Log: "+logPath) || !strings.HasSuffix(got, "one\ntwo") {
 			t.Errorf("notice = %q", got)
 		}
 	})
@@ -251,7 +251,7 @@ func TestBackgroundJobRecovery(t *testing.T) {
 		if err := os.WriteFile(job.ExitPath, []byte("0\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if got := job.Notice(); !strings.HasPrefix(got, "Background job j finished: exit 0, ") {
+		if got := job.Outcome().Notice(); !strings.HasPrefix(got, "Background job j finished: exit 0, ") {
 			t.Errorf("notice = %q", got)
 		}
 	})

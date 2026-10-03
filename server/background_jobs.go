@@ -175,8 +175,20 @@ func (s *Server) deliverBackgroundJobNotice(ctx context.Context, job claudetool.
 	cm.mu.Lock()
 	modelID := cm.modelID
 	cm.mu.Unlock()
-	text := job.Notice()
-	ctx = contextWithTurnUserData(ctx, backgroundJobUserData{BackgroundJobID: job.ID, Text: text})
+	outcome := job.Outcome()
+	text := outcome.Notice()
+	data := backgroundJobUserData{
+		BackgroundJobID: job.ID,
+		Command:         job.Command,
+		ExitCode:        outcome.ExitCode,
+		LogPath:         job.LogPath,
+		Tail:            outcome.Tail,
+		Text:            text,
+	}
+	if outcome.ExitCode != nil {
+		data.Duration = outcome.Elapsed.String()
+	}
+	ctx = contextWithTurnUserData(ctx, data)
 	return cm.InjectMessage(ctx, s, modelID, llm.UserStringMessage(text))
 }
 

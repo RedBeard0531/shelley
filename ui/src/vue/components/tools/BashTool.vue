@@ -24,6 +24,19 @@
         >
           background job {{ background.jobId }}
         </span>
+        <span
+          v-if="finishedJob"
+          class="bash-tool-background"
+          data-testid="bash-tool-finished-job"
+          :title="`Log: ${finishedJob.logPath}`"
+        >
+          background job {{ finishedJob.jobId }} ·
+          {{
+            finishedJob.exitCode === null
+              ? "lost"
+              : `exit ${finishedJob.exitCode}, ${finishedJob.duration}`
+          }}
+        </span>
       </div>
       <button
         class="bash-tool-toggle"
@@ -60,6 +73,11 @@
           :source="command"
           language="shellscript"
         />
+      </div>
+
+      <div v-if="finishedJob" class="bash-tool-section">
+        <div class="bash-tool-label">Log:</div>
+        <pre class="bash-tool-code">{{ finishedJob.logPath }}</pre>
       </div>
 
       <div v-if="isRunning && streamingOutput" class="bash-tool-section">
@@ -109,6 +127,8 @@ const props = defineProps<{
   executionTime?: string;
   display?: unknown;
   streamingOutput?: string;
+  // Set when rendering the notice that a background job finished.
+  finishedJob?: { jobId: string; logPath: string; exitCode: number | null; duration: string };
 }>();
 
 /** Max lines shown in the streaming preview before "Show more" is needed. */
@@ -181,8 +201,9 @@ const isCancelled = computed(() => props.hasError && isCancelledToolResult(outpu
 
 const outputLabel = computed(() => {
   if (isCancelled.value) return "Output (cancelled)";
+  if (props.finishedJob?.exitCode === null) return "Output (job lost: host rebooted or killed)";
   if (background.value) return `Output so far (moved to background job ${background.value.jobId})`;
-  const exitCode = displayData.value?.exitCode;
+  const exitCode = props.finishedJob?.exitCode ?? displayData.value?.exitCode;
   if (typeof exitCode === "number") return `Output (exit code ${exitCode})`;
   return props.hasError ? "Output (Error)" : "Output";
 });

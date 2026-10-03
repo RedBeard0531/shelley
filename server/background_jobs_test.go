@@ -76,6 +76,10 @@ func TestBashBackgroundJobNotifiesConversation(t *testing.T) {
 	if !strings.Contains(notice.Text, "finished: exit 0") || !strings.Contains(notice.Text, "started\nfinished") {
 		t.Errorf("notice = %q", notice.Text)
 	}
+	if notice.Command != "echo started; read -r _ < "+gate+"; echo finished" || notice.ExitCode == nil || *notice.ExitCode != 0 ||
+		notice.Duration == "" || notice.LogPath == "" || notice.Tail != "started\nfinished" {
+		t.Errorf("notice = %+v", notice)
+	}
 	// The notice starts a turn in which the model sees it attributed.
 	waitFor(t, 10*time.Second, func() bool {
 		for _, req := range llmSvc.GetRecentRequests() {
@@ -178,28 +182,28 @@ func TestBackgroundJobRecoveryAfterRestart(t *testing.T) {
 	}
 	running, runningGate := start("running-output")
 
-	noticeFor := func(job claudetool.BackgroundJob) string {
+	noticeFor := func(job claudetool.BackgroundJob) backgroundJobUserData {
 		for _, n := range backgroundJobNotices(t, database, id) {
 			if n.BackgroundJobID == job.ID {
-				return n.Text
+				return n
 			}
 		}
-		return ""
+		return backgroundJobUserData{}
 	}
 	if err := server.recoverBackgroundJobs(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool { return len(backgroundJobNotices(t, database, id)) == 2 })
-	if got := noticeFor(finished.job); !strings.Contains(got, "finished: exit 0") || !strings.Contains(got, "finished-output") {
+	if got := noticeFor(finished.job).Text; !strings.Contains(got, "finished: exit 0") || !strings.Contains(got, "finished-output") {
 		t.Errorf("finished notice = %q", got)
 	}
-	if got := noticeFor(lost.job); !strings.Contains(got, "lost (host rebooted or killed)") {
-		t.Errorf("lost notice = %q", got)
+	if got := noticeFor(lost.job); !strings.Contains(got.Text, "lost (host rebooted or killed)") || got.ExitCode != nil || got.Duration != "" || got.Tail != "lost-output" {
+		t.Errorf("lost notice = %+v", got)
 	}
 
 	release(runningGate)
-	waitFor(t, 10*time.Second, func() bool { return noticeFor(running.job) != "" })
-	if got := noticeFor(running.job); !strings.Contains(got, "finished: exit 0") || !strings.Contains(got, "running-output") {
+	waitFor(t, 10*time.Second, func() bool { return noticeFor(running.job).Text != "" })
+	if got := noticeFor(running.job).Text; !strings.Contains(got, "finished: exit 0") || !strings.Contains(got, "running-output") {
 		t.Errorf("running notice = %q", got)
 	}
 	waitFor(t, 10*time.Second, func() bool { return len(unnotifiedBackgroundJobs(t, database)) == 0 })

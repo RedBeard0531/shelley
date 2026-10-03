@@ -180,23 +180,50 @@ func (j BackgroundJob) Kill() error {
 
 const jobNoticeTailLines = 20
 
-// Notice describes j's outcome for its conversation once it has exited:
-// its exit status, run time, log path, and the tail of its output.
-func (j BackgroundJob) Notice() string {
-	var b strings.Builder
+// BackgroundJobOutcome is how a BackgroundJob ended, as reported to its
+// conversation once it has exited.
+type BackgroundJobOutcome struct {
+	Job BackgroundJob
+	// ExitCode is the command's exit status, or nil if the job was lost:
+	// it left no exit status because the host rebooted or it was killed.
+	ExitCode *int
+	// Elapsed is the job's run time; it is zero for a lost job.
+	Elapsed time.Duration
+	// Tail is the last lines of the job's log.
+	Tail string
+}
+
+// Outcome reads j's exit status, run time, and log tail.
+func (j BackgroundJob) Outcome() BackgroundJobOutcome {
+	o := BackgroundJobOutcome{Job: j, Tail: strings.TrimRight(logTail(j.LogPath, jobNoticeTailLines), "\n")}
 	status, err := os.ReadFile(j.ExitPath)
-	if err == nil {
-		var elapsed time.Duration
-		if fi, err := os.Stat(j.ExitPath); err == nil {
-			elapsed = fi.ModTime().Sub(j.StartedAt).Round(time.Second)
-		}
-		fmt.Fprintf(&b, "Background job %s finished: exit %s, %s. Log: %s\n", j.ID, strings.TrimSpace(string(status)), elapsed, j.LogPath)
+	if err != nil {
+		return o
+	}
+	code, err := strconv.Atoi(strings.TrimSpace(string(status)))
+	if err != nil {
+		return o
+	}
+	o.ExitCode = &code
+	if fi, err := os.Stat(j.ExitPath); err == nil {
+		o.Elapsed = fi.ModTime().Sub(j.StartedAt).Round(time.Second)
+	}
+	return o
+}
+
+// Notice describes o for the job's conversation: its exit status, run
+// time, log path, and the tail of its output.
+func (o BackgroundJobOutcome) Notice() string {
+	var b strings.Builder
+	j := o.Job
+	if o.ExitCode != nil {
+		fmt.Fprintf(&b, "Background job %s finished: exit %d, %s. Log: %s\n", j.ID, *o.ExitCode, o.Elapsed, j.LogPath)
 	} else {
 		fmt.Fprintf(&b, "Background job %s lost (host rebooted or killed). Log: %s\n", j.ID, j.LogPath)
 	}
 	fmt.Fprintf(&b, "Command: %s\n", truncateLine(firstLine(j.Command)))
-	if tail := logTail(j.LogPath, jobNoticeTailLines); tail != "" {
-		b.WriteString("\n" + tail)
+	if o.Tail != "" {
+		b.WriteString("\n" + o.Tail)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

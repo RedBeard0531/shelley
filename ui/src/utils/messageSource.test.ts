@@ -45,3 +45,35 @@ for (const data of [
   assert.deepEqual(messageSource(data), { backgroundJobId: "1a2b3c4d" });
 }
 assert.equal(messageSource({ background_job_id: "" }), null);
+
+const finished = {
+  background_job_id: "1a2b3c4d",
+  command: "make test",
+  exit_code: 2,
+  duration: "18s",
+  log_path: "/tmp/shelley-jobs/1a2b3c4d.log",
+  tail: "FAIL",
+  Text: "Background job 1a2b3c4d finished: exit 2, 18s.",
+};
+assert.deepEqual(messageSource(JSON.stringify(finished)), {
+  backgroundJobId: "1a2b3c4d",
+  outcome: {
+    command: "make test",
+    exitCode: 2,
+    duration: "18s",
+    logPath: "/tmp/shelley-jobs/1a2b3c4d.log",
+    tail: "FAIL",
+  },
+});
+const lost: Record<string, unknown> = { ...finished, duration: "" };
+delete lost.exit_code;
+assert.deepEqual(messageSource(lost), {
+  backgroundJobId: "1a2b3c4d",
+  outcome: {
+    command: "make test",
+    exitCode: null,
+    duration: "",
+    logPath: "/tmp/shelley-jobs/1a2b3c4d.log",
+    tail: "FAIL",
+  },
+});

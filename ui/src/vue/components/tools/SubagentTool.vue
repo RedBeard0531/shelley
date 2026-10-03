@@ -1,8 +1,11 @@
 <!-- Vue port of components/SubagentTool.tsx.
-     Preserves: .tool, .tool-header, .tool-summary, .tool-emoji ⚡, .tool-name,
+     Preserves: .tool, .tool-header, .tool-summary, .tool-emoji ⚡,
      .tool-badge, .subagent-model-badge, .tool-command, .tool-toggle, .tool-details, .tool-section,
      .tool-label, .tool-code, .tool-time, .subagent-link,
      data-testid tool-call-running/completed.
+
+     Header: the subagent's slug, its model as a muted tag, and the first line
+     of the prompt, laid out like the bash card's command line.
 
      Live view: while the subagent is working (per the conversation list's
      authoritative working flag, injected from App via subagentLive), a strip
@@ -20,8 +23,9 @@
     <div class="tool-header" @click="isExpanded = !isExpanded">
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">⚡</span>
-        <span class="tool-name">subagent</span>
-        <span class="tool-command" :title="prompt">{{ commandText }}</span>
+        <span class="tool-command subagent-tool-slug">{{ slug }}</span>
+        <span v-if="model" class="tool-tag">{{ model }}</span>
+        <span class="tool-command" :title="prompt">{{ firstLine }}</span>
       </div>
       <button
         class="tool-toggle"
@@ -138,29 +142,8 @@ const resultText = computed(
       .join("\n") || "",
 );
 
-// Truncate prompt for display
-const truncateText = (text: string, maxLen = 60) => {
-  if (!text) return "";
-  const firstLine = text.split("\n")[0];
-  if (firstLine.length <= maxLen) return firstLine;
-  return firstLine.substring(0, maxLen) + "...";
-};
-
-const displayPrompt = computed(() => truncateText(prompt.value));
+const firstLine = computed(() => prompt.value.trim().split(/\r?\n/)[0]);
 const isComplete = computed(() => !props.isRunning && props.toolResult !== undefined);
-
-// Mirror the React JSX text exactly:
-//   Subagent '{slug}'{model ? ` (${model})` : ""}{" "}
-//   {isRunning ? "starting..." : ""}
-//   {displayPrompt && !isRunning && ` ${displayPrompt}`}
-const commandText = computed(() => {
-  let s = `Subagent '${slug.value}'`;
-  if (model.value) s += ` (${model.value})`;
-  s += " ";
-  s += props.isRunning ? "starting..." : "";
-  if (displayPrompt.value && !props.isRunning) s += ` ${displayPrompt.value}`;
-  return s;
-});
 
 function onLinkClick(e: MouseEvent) {
   // Let the browser handle cmd/ctrl/shift/middle-click (open in new tab/window).
@@ -170,3 +153,10 @@ function onLinkClick(e: MouseEvent) {
   navigateToConversationSlug(liveSlug.value);
 }
 </script>
+
+<style scoped>
+.subagent-tool-slug {
+  flex-shrink: 0;
+  max-width: 40%;
+}
+</style>

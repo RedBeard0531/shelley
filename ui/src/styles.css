@@ -1612,8 +1612,8 @@ body {
 }
 
 .message-author-conversation {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-14);
+  font-size: var(--font-size-12);
+  color: var(--text-secondary);
   margin-bottom: 0.5rem;
   overflow-wrap: anywhere;
 }
@@ -2095,6 +2095,15 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Muted qualifier after a tool card's command, e.g. a subagent's model. */
+.tool-tag {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-12);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tool-running {
@@ -4282,8 +4291,12 @@ diffs-container {
   max-height: none;
 }
 
-/* List state: drop wrapper padding so the table spans the modal fully. */
-.modal-xwide .modal-body:has(.models-modal-list) {
+/* List state: drop wrapper padding so the table spans the modal fully.
+   Background job notices and messages from other conversations are bare
+   tool cards, flush like tool calls. */
+.modal-xwide .modal-body:has(.models-modal-list),
+.message-tool-card .message-content,
+.message-tool-card [data-content-entity] {
   padding: 0;
 }
 
