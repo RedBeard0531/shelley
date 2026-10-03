@@ -215,8 +215,7 @@ func TestDiskSpaceDismissRoute(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/disk-space/dismiss", nil))
-	// Non-POST requests fall through to the server's catch-all handler.
-	if w.Code != http.StatusNotFound {
+	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET dismissal: HTTP %d", w.Code)
 	}
 

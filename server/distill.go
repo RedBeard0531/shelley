@@ -219,11 +219,6 @@ type DistillNewGenerationRequest struct {
 // It keeps the visible conversation, marks old messages as previous generation,
 // and inserts the distillation into the next generation.
 func (s *Server) handleDistillNewGeneration(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	var req DistillNewGenerationRequest

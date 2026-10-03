@@ -836,18 +836,9 @@ func TestHandleGitDiffFiles(t *testing.T) {
 	// Setup a test git repository
 	gitDir := setupTestGitRepo(t)
 
-	// Test with invalid method
-	req := httptest.NewRequest("POST", fmt.Sprintf("/api/git/diffs/working/files?cwd=%s", gitDir), nil)
-	w := httptest.NewRecorder()
-	h.server.handleGitDiffFiles(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("expected status 405 for invalid method, got %d", w.Code)
-	}
-
 	// Test with invalid path
-	req = httptest.NewRequest("GET", fmt.Sprintf("/api/git/diffs/working?cwd=%s", gitDir), nil)
-	w = httptest.NewRecorder()
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/git/diffs/working?cwd=%s", gitDir), nil)
+	w := httptest.NewRecorder()
 	h.server.handleGitDiffFiles(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -909,18 +900,9 @@ func TestHandleGitFileDiff(t *testing.T) {
 	// Setup a test git repository
 	gitDir := setupTestGitRepo(t)
 
-	// Test with invalid method
-	req := httptest.NewRequest("POST", fmt.Sprintf("/api/git/file-diff/working/test.txt?cwd=%s", gitDir), nil)
-	w := httptest.NewRecorder()
-	h.server.handleGitFileDiff(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("expected status 405 for invalid method, got %d", w.Code)
-	}
-
 	// Test with invalid path (missing diff ID)
-	req = httptest.NewRequest("GET", fmt.Sprintf("/api/git/file-diff/test.txt?cwd=%s", gitDir), nil)
-	w = httptest.NewRecorder()
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/git/file-diff/test.txt?cwd=%s", gitDir), nil)
+	w := httptest.NewRecorder()
 	h.server.handleGitFileDiff(w, req)
 
 	if w.Code != http.StatusBadRequest {

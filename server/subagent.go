@@ -295,11 +295,6 @@ func (s *Server) cancelSubagentTree(ctx context.Context, parentID string) {
 
 // handleGetSubagents returns the list of subagents for a conversation.
 func (s *Server) handleGetSubagents(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != "GET" {
-		http.Error(w, "Method not allowed", 405)
-		return
-	}
-
 	subagents, err := s.db.GetSubagents(r.Context(), conversationID)
 	if err != nil {
 		s.logger.Error("Failed to get subagents", "conversationID", conversationID, "error", err)

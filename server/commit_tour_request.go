@@ -787,10 +787,6 @@ func (s *Server) recoverCommitTourWorkersOnce(ctx context.Context) {
 }
 
 func (s *Server) handleCommitTourStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	target, err := resolveCommitTourTarget(r.URL.Query().Get("cwd"), r.URL.Query().Get("hash"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

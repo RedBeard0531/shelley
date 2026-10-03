@@ -511,104 +511,120 @@ func (s *Server) RegisterNotificationChannel(ch notifications.Channel) {
 
 // RegisterRoutes registers HTTP routes on the given mux
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+	// API routes live on their own mux so the "GET /" UI catch-all below
+	// cannot shadow them: a wrong method on an API path gets ServeMux's 405.
+	api := http.NewServeMux()
+	mux.Handle("/api/", api)
 	// API routes - wrap with compression where beneficial
-	mux.Handle("/api/conversations", compressionHandler(http.HandlerFunc(s.handleConversations)))
-	mux.Handle("GET /api/conversations/snapshot", compressionHandler(http.HandlerFunc(s.handleConversationsSnapshot)))
-	mux.Handle("GET /api/conversations/search", compressionHandler(http.HandlerFunc(s.handleSearchConversations)))
-	mux.Handle("GET /api/stream2", http.HandlerFunc(s.handleStream))
-	mux.HandleFunc("POST /api/disk-space/dismiss", s.handleDismissDiskSpace)
-	mux.Handle("/api/conversations/archived", compressionHandler(http.HandlerFunc(s.handleArchivedConversations)))
-	mux.Handle("/api/conversations/new", http.HandlerFunc(s.handleNewConversation))                         // Small response
-	mux.Handle("POST /api/conversations/draft", http.HandlerFunc(s.handleCreateDraft))                      // Small response
-	mux.Handle("/api/conversations/distill-new-generation", http.HandlerFunc(s.handleDistillNewGeneration)) // Small response
-	mux.Handle("/api/conversation/", http.StripPrefix("/api/conversation", s.conversationMux()))
-	mux.Handle("/api/conversation-by-slug/", compressionHandler(http.HandlerFunc(s.handleConversationBySlug)))
-	mux.Handle("/api/validate-cwd", http.HandlerFunc(s.handleValidateCwd)) // Small response
-	mux.Handle("POST /api/model-costs", http.HandlerFunc(s.handleModelCosts))
-	mux.Handle("/api/list-directory", compressionHandler(http.HandlerFunc(s.handleListDirectory)))
-	mux.Handle("/api/find-files", compressionHandler(http.HandlerFunc(s.handleFindFiles)))
-	mux.Handle("/api/create-directory", http.HandlerFunc(s.handleCreateDirectory))
-	mux.Handle("/api/git/repos", compressionHandler(http.HandlerFunc(s.handleGitRepos)))
-	mux.Handle("/api/git/diffs", compressionHandler(http.HandlerFunc(s.handleGitDiffs)))
-	mux.Handle("/api/git/tour", compressionHandler(http.HandlerFunc(s.handleGitTour)))
-	mux.Handle("/api/git/tour/status", compressionHandler(http.HandlerFunc(s.handleCommitTourStatus)))
-	mux.Handle("/api/git/tour/media", http.HandlerFunc(s.handleGitTourMedia)) // Already-compressed images and video
-	mux.Handle("/api/git/graph", compressionHandler(http.HandlerFunc(s.handleGitGraph)))
-	mux.Handle("/api/git/commit-detail", compressionHandler(http.HandlerFunc(s.handleGitCommitDetail)))
-	mux.Handle("/api/git/diffs/", compressionHandler(http.HandlerFunc(s.handleGitDiffFiles)))
-	mux.Handle("/api/git/file-diff/", compressionHandler(http.HandlerFunc(s.handleGitFileDiff)))
-	mux.Handle("/api/git/commit-messages", compressionHandler(http.HandlerFunc(s.handleGitCommitMessages)))
-	mux.Handle("/api/git/amend-message", http.HandlerFunc(s.handleGitAmendMessage))
-	mux.Handle("/api/git/create-worktree", http.HandlerFunc(s.handleGitCreateWorktree))                            // Small response
-	mux.HandleFunc("POST /api/upload/raw", s.handleUploadRaw)                                                      // Raw binary uploads
-	mux.HandleFunc("GET /api/upload/raw", s.handleUploadRawProbe)                                                  // Capability probe
-	mux.HandleFunc("/api/upload", s.handleUpload)                                                                  // Multipart binary uploads
-	mux.HandleFunc("/api/read", s.handleRead)                                                                      // Serves images from disk
-	mux.HandleFunc("GET /api/message/{message_id}/image/{content_index}/{toolresult_index}", s.handleMessageImage) // Serves images from DB
-	mux.HandleFunc("GET /api/message/{message_id}/file", s.handleMessageFile)                                      // Serves local images referenced in message markdown
-	mux.HandleFunc("GET /api/message/{message_id}/download", s.handleMessageDownload)                              // Downloads files linked as sandbox:<path> in message markdown
-	mux.Handle("/api/write-file", http.HandlerFunc(s.handleWriteFile))                                             // Small response
-	mux.Handle("/api/read-file", compressionHandler(http.HandlerFunc(s.handleReadFile)))                           // Reads arbitrary text files as JSON
-	mux.Handle("/api/user-agents-md", http.HandlerFunc(s.handleUserAgentsMd))                                      // Small response
-	mux.HandleFunc("/api/exec-ws", s.handleExecWS)                                                                 // Websocket for shell commands
-	mux.HandleFunc("GET /api/terminals", s.handleTerminalsList)                                                    // List persistent terminal sessions
-	mux.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalDelete)
-	mux.HandleFunc("POST /api/terminals/{id}/kill", s.handleTerminalDelete)
-	mux.HandleFunc("PUT /api/terminals/{id}/scope", s.handleTerminalScope) // Move a terminal between conversation-local and global
+	api.Handle("GET /api/conversations", compressionHandler(http.HandlerFunc(s.handleConversations)))
+	api.Handle("GET /api/conversations/snapshot", compressionHandler(http.HandlerFunc(s.handleConversationsSnapshot)))
+	api.Handle("GET /api/conversations/search", compressionHandler(http.HandlerFunc(s.handleSearchConversations)))
+	api.HandleFunc("GET /api/stream2", s.handleStream)
+	api.HandleFunc("POST /api/disk-space/dismiss", s.handleDismissDiskSpace)
+	api.Handle("GET /api/conversations/archived", compressionHandler(http.HandlerFunc(s.handleArchivedConversations)))
+	api.HandleFunc("POST /api/conversations/new", s.handleNewConversation)                         // Small response
+	api.HandleFunc("POST /api/conversations/draft", s.handleCreateDraft)                           // Small response
+	api.HandleFunc("POST /api/conversations/distill-new-generation", s.handleDistillNewGeneration) // Small response
+	s.registerConversationRoutes(api)
+	api.Handle("GET /api/conversation-by-slug/", compressionHandler(http.HandlerFunc(s.handleConversationBySlug)))
+	api.HandleFunc("GET /api/validate-cwd", s.handleValidateCwd) // Small response
+	api.HandleFunc("POST /api/model-costs", s.handleModelCosts)
+	api.Handle("GET /api/list-directory", compressionHandler(http.HandlerFunc(s.handleListDirectory)))
+	api.Handle("GET /api/find-files", compressionHandler(http.HandlerFunc(s.handleFindFiles)))
+	api.HandleFunc("POST /api/create-directory", s.handleCreateDirectory)
+	api.Handle("GET /api/git/repos", compressionHandler(http.HandlerFunc(s.handleGitRepos)))
+	api.Handle("GET /api/git/diffs", compressionHandler(http.HandlerFunc(s.handleGitDiffs)))
+	api.Handle("GET /api/git/tour", compressionHandler(http.HandlerFunc(s.handleGitTour)))
+	api.Handle("GET /api/git/tour/status", compressionHandler(http.HandlerFunc(s.handleCommitTourStatus)))
+	api.HandleFunc("GET /api/git/tour/media", s.handleGitTourMedia) // Already-compressed images and video
+	api.Handle("GET /api/git/graph", compressionHandler(http.HandlerFunc(s.handleGitGraph)))
+	api.Handle("GET /api/git/commit-detail", compressionHandler(http.HandlerFunc(s.handleGitCommitDetail)))
+	api.Handle("GET /api/git/diffs/", compressionHandler(http.HandlerFunc(s.handleGitDiffFiles)))
+	api.Handle("GET /api/git/file-diff/", compressionHandler(http.HandlerFunc(s.handleGitFileDiff)))
+	api.Handle("GET /api/git/commit-messages", compressionHandler(http.HandlerFunc(s.handleGitCommitMessages)))
+	api.HandleFunc("POST /api/git/amend-message", s.handleGitAmendMessage)
+	api.HandleFunc("POST /api/git/create-worktree", s.handleGitCreateWorktree)                                     // Small response
+	api.HandleFunc("POST /api/upload/raw", s.handleUploadRaw)                                                      // Raw binary uploads
+	api.HandleFunc("GET /api/upload/raw", s.handleUploadRawProbe)                                                  // Capability probe
+	api.HandleFunc("POST /api/upload", s.handleUpload)                                                             // Multipart binary uploads
+	api.HandleFunc("GET /api/read", s.handleRead)                                                                  // Serves images from disk
+	api.HandleFunc("GET /api/message/{message_id}/image/{content_index}/{toolresult_index}", s.handleMessageImage) // Serves images from DB
+	api.HandleFunc("GET /api/message/{message_id}/file", s.handleMessageFile)                                      // Serves local images referenced in message markdown
+	api.HandleFunc("GET /api/message/{message_id}/download", s.handleMessageDownload)                              // Downloads files linked as sandbox:<path> in message markdown
+	api.HandleFunc("POST /api/write-file", s.handleWriteFile)                                                      // Small response
+	api.Handle("GET /api/read-file", compressionHandler(http.HandlerFunc(s.handleReadFile)))                       // Reads arbitrary text files as JSON
+	api.HandleFunc("GET /api/user-agents-md", s.handleUserAgentsMd)                                                // Small response
+	api.HandleFunc("GET /api/exec-ws", s.handleExecWS)                                                             // Websocket for shell commands
+	api.HandleFunc("GET /api/terminals", s.handleTerminalsList)                                                    // List persistent terminal sessions
+	api.HandleFunc("DELETE /api/terminals/{id}", s.handleTerminalDelete)
+	api.HandleFunc("POST /api/terminals/{id}/kill", s.handleTerminalDelete)
+	api.HandleFunc("PUT /api/terminals/{id}/scope", s.handleTerminalScope) // Move a terminal between conversation-local and global
 
 	// Custom models API
-	mux.Handle("/api/custom-models", http.HandlerFunc(s.handleCustomModels))
-	mux.Handle("/api/custom-models/", http.HandlerFunc(s.handleCustomModel))
-	mux.Handle("/api/custom-models-test", http.HandlerFunc(s.handleTestModel))
+	api.HandleFunc("GET /api/custom-models", s.handleListModels)
+	api.HandleFunc("POST /api/custom-models", s.handleCreateModel)
+	api.HandleFunc("GET /api/custom-models/{id}", func(w http.ResponseWriter, r *http.Request) { s.handleGetModel(w, r, r.PathValue("id")) })
+	api.HandleFunc("PUT /api/custom-models/{id}", func(w http.ResponseWriter, r *http.Request) { s.handleUpdateModel(w, r, r.PathValue("id")) })
+	api.HandleFunc("DELETE /api/custom-models/{id}", func(w http.ResponseWriter, r *http.Request) { s.handleDeleteModel(w, r, r.PathValue("id")) })
+	api.HandleFunc("POST /api/custom-models/{id}/duplicate", func(w http.ResponseWriter, r *http.Request) { s.handleDuplicateModel(w, r, r.PathValue("id")) })
+	api.HandleFunc("POST /api/custom-models-test", s.handleTestModel)
 
 	// Notification channels API
-	mux.Handle("/api/notification-channels", http.HandlerFunc(s.handleNotificationChannels))
-	mux.Handle("/api/notification-channels/", http.HandlerFunc(s.handleNotificationChannel))
-	mux.Handle("/api/notification-channel-types", http.HandlerFunc(s.handleNotificationChannelTypes))
-	mux.HandleFunc("GET /api/integrations", handleIntegrations)
-	mux.HandleFunc("POST /api/integrations/notify/test", s.handleTestExeNotify)
-	mux.HandleFunc("POST /api/integrations/slack/test", s.handleTestSlack)
+	api.HandleFunc("GET /api/notification-channels", s.handleListNotificationChannels)
+	api.HandleFunc("POST /api/notification-channels", s.handleCreateNotificationChannel)
+	api.HandleFunc("GET /api/notification-channels/{id}", func(w http.ResponseWriter, r *http.Request) { s.handleGetNotificationChannel(w, r, r.PathValue("id")) })
+	api.HandleFunc("PUT /api/notification-channels/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.handleUpdateNotificationChannel(w, r, r.PathValue("id"))
+	})
+	api.HandleFunc("DELETE /api/notification-channels/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.handleDeleteNotificationChannel(w, r, r.PathValue("id"))
+	})
+	api.HandleFunc("POST /api/notification-channels/{id}/test", func(w http.ResponseWriter, r *http.Request) { s.handleTestNotificationChannel(w, r, r.PathValue("id")) })
+	api.HandleFunc("GET /api/notification-channel-types", s.handleNotificationChannelTypes)
+	api.HandleFunc("GET /api/integrations", handleIntegrations)
+	api.HandleFunc("POST /api/integrations/notify/test", s.handleTestExeNotify)
+	api.HandleFunc("POST /api/integrations/slack/test", s.handleTestSlack)
 
 	// Models API (dynamic list refresh)
-	mux.Handle("POST /api/models/refresh", compressionHandler(http.HandlerFunc(s.handleModelRefresh)))
-	mux.Handle("/api/models", compressionHandler(http.HandlerFunc(s.handleModels)))
-	mux.Handle("/api/tools", http.HandlerFunc(s.handleTools))
+	api.Handle("POST /api/models/refresh", compressionHandler(http.HandlerFunc(s.handleModelRefresh)))
+	api.Handle("GET /api/models", compressionHandler(http.HandlerFunc(s.handleModels)))
+	api.HandleFunc("GET /api/tools", s.handleTools)
 
 	// Version endpoints
-	mux.Handle("GET /version", http.HandlerFunc(s.handleVersion))
-	mux.Handle("GET /version-check", http.HandlerFunc(s.handleVersionCheck))
-	mux.Handle("GET /version-changelog", http.HandlerFunc(s.handleVersionChangelog))
-	mux.Handle("POST /upgrade", http.HandlerFunc(s.handleUpgrade))
-	mux.Handle("POST /upgrade-headless-shell", http.HandlerFunc(s.handleUpgradeHeadlessShell))
-	mux.Handle("POST /exit", http.HandlerFunc(s.handleExit))
-	mux.HandleFunc("GET /api/favicon-emoji", s.handleGetFaviconEmoji)
-	mux.HandleFunc("PUT /api/favicon-emoji", s.handleSetFaviconEmoji)
-	mux.Handle("GET /settings", http.HandlerFunc(s.handleGetSettings))
-	mux.Handle("POST /settings", http.HandlerFunc(s.handleSetSetting))
-	mux.Handle("GET /feature-flags", http.HandlerFunc(s.handleGetFeatureFlags))
-	mux.Handle("POST /feature-flags", http.HandlerFunc(s.handleSetFeatureFlag))
-	mux.Handle("DELETE /feature-flags", http.HandlerFunc(s.handleDeleteFeatureFlag))
+	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("GET /version-check", s.handleVersionCheck)
+	mux.HandleFunc("GET /version-changelog", s.handleVersionChangelog)
+	mux.HandleFunc("POST /upgrade", s.handleUpgrade)
+	mux.HandleFunc("POST /upgrade-headless-shell", s.handleUpgradeHeadlessShell)
+	mux.HandleFunc("POST /exit", s.handleExit)
+	api.HandleFunc("GET /api/favicon-emoji", s.handleGetFaviconEmoji)
+	api.HandleFunc("PUT /api/favicon-emoji", s.handleSetFaviconEmoji)
+	mux.HandleFunc("GET /settings", s.handleGetSettings)
+	mux.HandleFunc("POST /settings", s.handleSetSetting)
+	mux.HandleFunc("GET /feature-flags", s.handleGetFeatureFlags)
+	mux.HandleFunc("POST /feature-flags", s.handleSetFeatureFlag)
+	mux.HandleFunc("DELETE /feature-flags", s.handleDeleteFeatureFlag)
 
 	// IndexedDB cache encryption: hand out a per-browser AES-GCM key
 	// derived from a server master secret + per-browser session cookie.
-	mux.Handle("GET /api/cache-key", http.HandlerFunc(s.handleCacheKey))
-	mux.Handle("POST /api/cache-session/clear", http.HandlerFunc(s.handleCacheSessionClear))
+	api.HandleFunc("GET /api/cache-key", s.handleCacheKey)
+	api.HandleFunc("POST /api/cache-session/clear", s.handleCacheSessionClear)
 
 	// Debug endpoints
-	mux.Handle("GET /debug/conversations", http.HandlerFunc(s.handleDebugConversationsPage))
-	mux.Handle("GET /debug/conversation-stream", http.HandlerFunc(s.handleDebugConversationStreamPage))
-	mux.Handle("GET /debug/conversation-stream/history", http.HandlerFunc(s.handleDebugConversationStreamHistory))
-	mux.Handle("GET /debug/stylebook", http.HandlerFunc(s.handleDebugStylebook))
-	mux.Handle("GET /debug/loremipsum", http.HandlerFunc(s.handleDebugLoremIpsum))
-	mux.Handle("POST /debug/loremipsum", http.HandlerFunc(s.handleDebugLoremIpsum))
-	mux.Handle("GET /debug/histograms", http.HandlerFunc(s.handleDebugHistograms))
+	mux.HandleFunc("GET /debug/conversations", s.handleDebugConversationsPage)
+	mux.HandleFunc("GET /debug/conversation-stream", s.handleDebugConversationStreamPage)
+	mux.HandleFunc("GET /debug/conversation-stream/history", s.handleDebugConversationStreamHistory)
+	mux.HandleFunc("GET /debug/stylebook", s.handleDebugStylebook)
+	mux.HandleFunc("GET /debug/loremipsum", s.handleDebugLoremIpsum)
+	mux.HandleFunc("POST /debug/loremipsum", s.handleDebugLoremIpsum)
+	mux.HandleFunc("GET /debug/histograms", s.handleDebugHistograms)
 
 	// pprof endpoints
-	mux.Handle("GET /debug/pprof/", http.HandlerFunc(pprof.Index))
-	mux.Handle("GET /debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
-	mux.Handle("GET /debug/pprof/profile", http.HandlerFunc(pprof.Profile))
-	mux.Handle("GET /debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
-	mux.Handle("GET /debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
 
 	// Serve embedded UI assets
 	mux.Handle("/", s.staticHandler(ui.Assets()))
@@ -616,11 +632,6 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 // handleValidateCwd validates that a path exists and is a directory
 func (s *Server) handleValidateCwd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		w.Header().Set("Content-Type", "application/json")
@@ -686,11 +697,6 @@ type ListDirectoryResponse struct {
 
 // handleListDirectory lists the contents of a directory for the directory picker
 func (s *Server) handleListDirectory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		// Default to home directory or root
@@ -893,11 +899,6 @@ func getGitWorktreeRoot(repoPath string) string {
 
 // handleCreateDirectory creates a new directory
 func (s *Server) handleCreateDirectory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req struct {
 		Path string `json:"path"`
 	}

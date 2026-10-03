@@ -59,10 +59,6 @@ func marshalDeltaBatchFrames(conversationID string, deltas []llm.StreamDelta) ([
 
 // handleRead serves files from limited allowed locations via /api/read?path=
 func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	p := r.URL.Query().Get("path")
 	if p == "" {
 		http.Error(w, "path required", http.StatusBadRequest)
@@ -139,10 +135,6 @@ func isDistillationTempFile(path string) bool {
 // editor shows freshly-saved content rather than whatever was on disk when the
 // page was first loaded.
 func (s *Server) handleUserAgentsMd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	path, err := userAgentsMdPath()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -161,11 +153,6 @@ func (s *Server) handleUserAgentsMd(w http.ResponseWriter, r *http.Request) {
 
 // handleWriteFile writes content to a file (for diff viewer edit mode)
 func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -218,10 +205,6 @@ const maxEditableFileBytes = 16 << 20 // 16 MiB
 // file the fuzzy finder surfaces. Writing already accepts arbitrary absolute
 // paths via /api/write-file, so reading them is consistent.
 func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	p := r.URL.Query().Get("path")
 	if p == "" {
 		http.Error(w, "path required", http.StatusBadRequest)
@@ -264,11 +247,6 @@ type uploadErrorResponse struct {
 // handleUpload handles file uploads via POST /api/upload.
 // Files are saved to the UploadDir with a random filename.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -716,10 +694,6 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 // handleConfig returns server configuration
 // handleConversations handles GET /conversations
 func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	limit := 5000
 	offset := 0
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
@@ -882,106 +856,99 @@ func (s *Server) decorateConversations(ctx context.Context, conversations []db.C
 	return result, nil
 }
 
-// conversationMux returns a mux for /api/conversation/<id>/* routes
-func (s *Server) conversationMux() *http.ServeMux {
-	mux := http.NewServeMux()
+// registerConversationRoutes registers the /api/conversation/<id>/* routes.
+func (s *Server) registerConversationRoutes(mux *http.ServeMux) {
 	// GET /api/conversation/<id> - returns all messages (can be large, compress)
-	mux.Handle("GET /{id}", compressionHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /api/conversation/{id}", compressionHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.handleGetConversation(w, r, r.PathValue("id"))
 	})))
 	// GET /api/conversation/<id>/subagent-usage - aggregated subagent cost
-	mux.HandleFunc("GET /{id}/subagent-usage", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/subagent-usage", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSubagentUsage(w, r, r.PathValue("id"))
 	})
 	// GET /api/conversation/<id>/stream - legacy SSE stream. Compression is
 	// negotiated inside the handler (zstd/gzip per Accept-Encoding) with a
 	// compressor flush after every event so messages stream promptly.
-	mux.HandleFunc("GET /{id}/stream", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
 		s.handleStreamConversation(w, r, r.PathValue("id"))
 	})
 	// POST endpoints - small responses, no compression needed
-	mux.HandleFunc("POST /{id}/chat", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/chat", func(w http.ResponseWriter, r *http.Request) {
 		s.handleChatConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/hooks", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/hooks", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRegisterConversationHook(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCancelConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRetryConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
 		s.handleResumeConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("GET /{id}/btw", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/btw", func(w http.ResponseWriter, r *http.Request) {
 		s.handleListBtwReaders(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/btw/{childID}/summarize", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/btw/{childID}/summarize", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSummarizeBtwReader(w, r, r.PathValue("id"), r.PathValue("childID"))
 	})
-	mux.HandleFunc("POST /{id}/btw/{childID}/dismiss", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/btw/{childID}/dismiss", func(w http.ResponseWriter, r *http.Request) {
 		s.handleDismissBtwReader(w, r, r.PathValue("id"), r.PathValue("childID"))
 	})
-	mux.HandleFunc("POST /{id}/continue", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/continue", func(w http.ResponseWriter, r *http.Request) {
 		s.handleContinueConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
 		s.handleArchiveConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/unarchive", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/unarchive", func(w http.ResponseWriter, r *http.Request) {
 		s.handleUnarchiveConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/delete", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/rename", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/rename", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRenameConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/tags", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/tags", func(w http.ResponseWriter, r *http.Request) {
 		s.handleUpdateConversationTags(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("GET /{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
 		s.handleGetSubagents(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("GET /{id}/background-jobs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/background-jobs", func(w http.ResponseWriter, r *http.Request) {
 		s.handleListBackgroundJobs(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/background-jobs/{jobID}/kill", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/background-jobs/{jobID}/kill", func(w http.ResponseWriter, r *http.Request) {
 		s.handleKillBackgroundJob(w, r, r.PathValue("id"), r.PathValue("jobID"))
 	})
-	mux.HandleFunc("POST /{id}/send-queued", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/send-queued", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSendQueuedNow(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/cancel-queued", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/cancel-queued", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCancelQueued(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/retry-queued", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/retry-queued", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRetryQueued(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("PUT /{id}/draft", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /api/conversation/{id}/draft", func(w http.ResponseWriter, r *http.Request) {
 		s.handleUpdateDraft(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/new-generation", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/new-generation", func(w http.ResponseWriter, r *http.Request) {
 		s.handleStartNewGeneration(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/fork", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/fork", func(w http.ResponseWriter, r *http.Request) {
 		s.handleForkConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/cwd", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/cwd", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSetConversationCwd(w, r, r.PathValue("id"))
 	})
-	return mux
 }
 
 // handleGetConversation handles GET /conversation/<id>
 func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	// Optional cursor: clients that already have a partial cache pass
 	// `?last_sequence_id=N` and we return only the tail (matches the
@@ -1063,11 +1030,6 @@ type ChatRequest struct {
 
 // handleChatConversation handles POST /conversation/<id>/chat
 func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	// Parse request
@@ -1487,11 +1449,6 @@ func (s *Server) runChatMessageHook(r *http.Request, conversationID, modelID, re
 
 // handleNewConversation handles POST /api/conversations/new - creates conversation implicitly on first message
 func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	// Parse request
@@ -1663,11 +1620,6 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 
 // handleCancelConversation handles POST /conversation/<id>/cancel
 func (s *Server) handleCancelConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	s.mu.Lock()
@@ -1740,11 +1692,6 @@ func (s *Server) handleCancelConversation(w http.ResponseWriter, r *http.Request
 // startup, without adding a synthetic user message. Upgrade restarts resume
 // automatically.
 func (s *Server) handleResumeConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	manager, err := s.getOrCreateConversationManager(ctx, conversationID, r.Header.Get("X-ExeDev-Email"))
 	if err != nil {
@@ -1785,11 +1732,6 @@ func (s *Server) handleResumeConversation(w http.ResponseWriter, r *http.Request
 // model. Requires a latest message of type "error" that is classified
 // retryable.
 func (s *Server) handleRetryConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	// Validate that there's actually a retryable error to act on BEFORE
@@ -1882,11 +1824,6 @@ type continueRequest struct {
 // is left untouched (append-only log) and excluded from context, so the new
 // model sees the same request.
 func (s *Server) handleContinueConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	// Parse the optional body (empty body is fine — defaults to Opus).
@@ -2028,11 +1965,6 @@ func (s *Server) newStreamUpdatesQueue(ctx context.Context, conversationID strin
 }
 
 func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationID string, includeConversationListPatches bool) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx, cancelStream := context.WithCancel(r.Context())
 	responseController := http.NewResponseController(w)
 	var streamInterruptResult <-chan bool
@@ -2555,11 +2487,6 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 // features without reshaping the response. See version.Capabilities for
 // the current set.
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	resp := struct {
 		version.Info
 		Capabilities []string `json:"capabilities"`
@@ -2993,10 +2920,6 @@ func (s *Server) effectiveDefaultModel(modelList []ModelInfo) string {
 
 // handleModels returns the list of available models
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	modelList := s.getModelList()
 	markDefaultModel(modelList, s.effectiveDefaultModel(modelList))
 	w.Header().Set("Content-Type", "application/json")
@@ -3010,10 +2933,6 @@ type builtModelRefresher interface {
 // handleModelRefresh refreshes the non-custom model catalog and returns the
 // same shape as GET /api/models.
 func (s *Server) handleModelRefresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.refreshBuiltModels == nil {
 		http.Error(w, "model refresh is not configured", http.StatusNotImplemented)
 		return
@@ -3053,10 +2972,6 @@ func markDefaultModel(modelList []ModelInfo, defaultID string) {
 
 // handleTools returns the list of tools available to conversations.
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"tools": claudetool.ToolRegistry,
@@ -3068,10 +2983,6 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 // conversations, returning the same shape as /api/conversations so the UI
 // can render results directly.
 func (s *Server) handleSearchConversations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	limit := 200
 	offset := 0
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
@@ -3104,10 +3015,6 @@ func (s *Server) handleSearchConversations(w http.ResponseWriter, r *http.Reques
 
 // handleArchivedConversations handles GET /api/conversations/archived
 func (s *Server) handleArchivedConversations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctx := r.Context()
 	limit := 5000
 	offset := 0
@@ -3168,11 +3075,6 @@ func (s *Server) handleArchivedConversations(w http.ResponseWriter, r *http.Requ
 
 // handleArchiveConversation handles POST /conversation/<id>/archive
 func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	conversation, err := s.db.ArchiveConversation(ctx, conversationID)
 	if err != nil {
@@ -3186,11 +3088,6 @@ func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Reques
 
 // handleUnarchiveConversation handles POST /conversation/<id>/unarchive
 func (s *Server) handleUnarchiveConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	conversation, err := s.db.UnarchiveConversation(ctx, conversationID)
 	if err != nil {
@@ -3204,11 +3101,6 @@ func (s *Server) handleUnarchiveConversation(w http.ResponseWriter, r *http.Requ
 
 // handleDeleteConversation handles POST /conversation/<id>/delete
 func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	if err := s.deleteConversation(ctx, conversationID); err != nil {
 		// The terminals are already global at this point. That is harmless and
@@ -3223,11 +3115,6 @@ func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request
 
 // handleConversationBySlug handles GET /api/conversation-by-slug/<slug>
 func (s *Server) handleConversationBySlug(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	slug := strings.TrimPrefix(r.URL.Path, "/api/conversation-by-slug/")
 	if slug == "" {
 		http.Error(w, "Slug required", http.StatusBadRequest)
@@ -3261,11 +3148,6 @@ type RenameRequest struct {
 
 // handleRenameConversation handles POST /conversation/<id>/rename
 func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	var req RenameRequest
@@ -3309,11 +3191,6 @@ type SetCwdRequest struct {
 // updated but the running toolset not, or vice versa — is worse than a refused
 // one, because nothing afterwards would notice the disagreement.
 func (s *Server) handleSetConversationCwd(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	var req SetCwdRequest
@@ -3434,11 +3311,6 @@ func normalizeTags(in []string) []string {
 
 // handleUpdateConversationTags handles POST /conversation/<id>/tags
 func (s *Server) handleUpdateConversationTags(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req TagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -3846,11 +3718,6 @@ type RegisterConversationHookRequest struct {
 }
 
 func (s *Server) handleRegisterConversationHook(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req RegisterConversationHookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -3892,11 +3759,6 @@ type ForkRequest struct {
 // messages up to and including a cutoff point, then returns the new
 // conversation so the client can navigate to it.
 func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	var req ForkRequest
@@ -4083,11 +3945,6 @@ func isUniqueConstraintErr(err error) bool {
 
 // handleStartNewGeneration handles POST /conversation/<id>/new-generation.
 func (s *Server) handleStartNewGeneration(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	conversation, err := s.startNewGeneration(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -56,14 +56,6 @@ func TestHandleVersion(t *testing.T) {
 	if body.Modified != nil {
 		t.Errorf("unexpected modified field in response: %v", *body.Modified)
 	}
-
-	// Non-GET requests should be rejected by the handler itself.
-	req = httptest.NewRequest(http.MethodPost, "/version", nil)
-	w = httptest.NewRecorder()
-	h.server.handleVersion(w, req)
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status code %d, got %d", http.StatusMethodNotAllowed, w.Code)
-	}
 }
 
 func TestHandleArchivedConversations(t *testing.T) {
@@ -126,15 +118,6 @@ func TestHandleArchivedConversations(t *testing.T) {
 		t.Errorf("Expected archived participants [%+v], got %v", wantParticipant, got)
 	}
 
-	// Test method not allowed
-	req = httptest.NewRequest(http.MethodPost, "/api/conversations/archived", nil)
-	w = httptest.NewRecorder()
-	h.server.handleArchivedConversations(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status code %d, got %d", http.StatusMethodNotAllowed, w.Code)
-	}
-
 	// Test with query parameters
 	req = httptest.NewRequest(http.MethodGet, "/api/conversations/archived?limit=10&offset=0", nil)
 	w = httptest.NewRecorder()
@@ -177,15 +160,6 @@ func TestHandleArchiveConversation(t *testing.T) {
 
 	if !archivedConv.Archived {
 		t.Error("Expected conversation to be archived")
-	}
-
-	// Test method not allowed
-	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/conversation/%s/archive", conv.ConversationID), nil)
-	w = httptest.NewRecorder()
-	h.server.handleArchiveConversation(w, req, conv.ConversationID)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status code %d, got %d", http.StatusMethodNotAllowed, w.Code)
 	}
 
 	// Test with invalid conversation ID
@@ -235,15 +209,6 @@ func TestHandleUnarchiveConversation(t *testing.T) {
 
 	if unarchivedConv.Archived {
 		t.Error("Expected conversation to be unarchived")
-	}
-
-	// Test method not allowed
-	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/conversation/%s/unarchive", conv.ConversationID), nil)
-	w = httptest.NewRecorder()
-	h.server.handleUnarchiveConversation(w, req, conv.ConversationID)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status code %d, got %d", http.StatusMethodNotAllowed, w.Code)
 	}
 
 	// Test with invalid conversation ID
@@ -296,15 +261,6 @@ func TestHandleDeleteConversation(t *testing.T) {
 		t.Error("Expected conversation to be deleted, but it still exists")
 	}
 
-	// Test method not allowed
-	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/conversation/%s/delete", conv.ConversationID), nil)
-	w = httptest.NewRecorder()
-	h.server.handleDeleteConversation(w, req, conv.ConversationID)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status code %d, got %d", http.StatusMethodNotAllowed, w.Code)
-	}
-
 	// Test with invalid conversation ID (should still return success as DELETE is idempotent)
 	req = httptest.NewRequest(http.MethodPost, "/conversation/invalid-id/delete", nil)
 	w = httptest.NewRecorder()
@@ -350,15 +306,6 @@ func TestHandleRenameConversation(t *testing.T) {
 
 	if *renamedConv.Slug != newSlug {
 		t.Errorf("Expected slug '%s', got '%s'", newSlug, *renamedConv.Slug)
-	}
-
-	// Test method not allowed
-	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/conversation/%s/rename", conv.ConversationID), nil)
-	w = httptest.NewRecorder()
-	h.server.handleRenameConversation(w, req, conv.ConversationID)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status code %d, got %d", http.StatusMethodNotAllowed, w.Code)
 	}
 
 	// Test with invalid JSON
@@ -441,15 +388,6 @@ func TestHandleWriteFile(t *testing.T) {
 	// if string(content) != fileContent {
 	// 	t.Errorf("Expected file content '%s', got '%s'", fileContent, string(content))
 	// }
-
-	// Test method not allowed
-	req = httptest.NewRequest(http.MethodGet, "/api/write-file", nil)
-	w = httptest.NewRecorder()
-	h.server.handleWriteFile(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status code %d, got %d", http.StatusMethodNotAllowed, w.Code)
-	}
 
 	// Test with invalid JSON
 	req = httptest.NewRequest(http.MethodPost, "/api/write-file", bytes.NewBufferString(`invalid json`))
@@ -541,5 +479,27 @@ func TestStaticFontRevalidates(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotModified {
 		t.Fatalf("revalidation status %d, want 304", rec.Code)
+	}
+}
+
+// TestRoutesRejectWrongMethod checks that the route table, not the handlers,
+// answers wrong-method requests with 405 and an Allow header.
+func TestRoutesRejectWrongMethod(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+	mux := http.NewServeMux()
+	h.server.RegisterRoutes(mux)
+	for _, tc := range []struct{ method, path, allow string }{
+		{http.MethodGet, "/api/conversation/c1/archive", "POST"},
+		{http.MethodGet, "/api/upload", "POST"},
+		{http.MethodPost, "/api/find-files", "GET, HEAD"},
+		{http.MethodPost, "/api/custom-models/m1", "DELETE, GET, HEAD, PUT"},
+		{http.MethodGet, "/api/notification-channels/n1/test", "POST"},
+	} {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+		if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != tc.allow {
+			t.Errorf("%s %s: got %d Allow=%q, want 405 Allow=%q", tc.method, tc.path, w.Code, w.Header().Get("Allow"), tc.allow)
+		}
 	}
 }
