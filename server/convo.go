@@ -821,32 +821,15 @@ func (cm *ConversationManager) discardUnstartedLoopLocked(expected *loop.Loop) {
 		cm.mu.Unlock()
 		return
 	}
-	cancel := cm.loopCancel
-	loopDone := cm.loopDone
-	toolSet := cm.toolSet
-	cm.loopGeneration++
-	teardownGeneration := cm.loopGeneration
-	cm.loopTearingDown = true
-	cm.loopLifecycleDone = make(chan struct{})
-	cm.loopCancel = nil
-	cm.loopCtx = nil
-	cm.loopDone = nil
-	cm.loop = nil
-	cm.toolSet = nil
+	modelID := cm.modelID
+	detached := cm.detachLoopLocked()
+	cm.modelID = modelID // the conversation's model outlives a rejected turn
 	cm.mu.Unlock()
 
 	cm.loopLifecycleMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if loopDone != nil {
-		<-loopDone
-	}
-	if toolSet != nil {
-		toolSet.Cleanup()
-	}
+	detached.stop()
 	cm.loopLifecycleMu.Lock()
-	cm.finishLoopTeardownLocked(teardownGeneration)
+	cm.finishLoopTeardownLocked(detached.generation)
 }
 
 // errRetryNotApplicable is returned by RetryLastLLMRequest when the latest
@@ -2387,6 +2370,54 @@ func (cm *ConversationManager) finishLoopTeardownLocked(expectedGeneration uint6
 	close(done)
 }
 
+// detachedLoop is a loop removed from the manager while its teardown boundary
+// is still open.
+type detachedLoop struct {
+	cancel     context.CancelFunc
+	done       <-chan struct{}
+	toolSet    *claudetool.ToolSet
+	generation uint64
+}
+
+// detachLoopLocked uninstalls the current loop and opens a teardown boundary:
+// advancing the generation invalidates the loop's delayed callbacks, and
+// loopTearingDown blocks any replacement until finishLoopTeardownLocked closes
+// the boundary with the returned generation. The caller holds loopLifecycleMu
+// and cm.mu.
+func (cm *ConversationManager) detachLoopLocked() detachedLoop {
+	cm.loopGeneration++
+	detached := detachedLoop{
+		cancel:     cm.loopCancel,
+		done:       cm.loopDone,
+		toolSet:    cm.toolSet,
+		generation: cm.loopGeneration,
+	}
+	cm.loopTearingDown = true
+	cm.loopLifecycleDone = make(chan struct{})
+	cm.loopCancel = nil
+	cm.loopCtx = nil
+	cm.loopDone = nil
+	cm.loop = nil
+	cm.modelID = ""
+	cm.toolSet = nil
+	return detached
+}
+
+// stop cancels a detached loop, waits for it to exit unless done is nil, and
+// releases its tools. A waiting caller must not hold cm.mu or loopLifecycleMu:
+// the exiting loop may need them.
+func (d detachedLoop) stop() {
+	if d.cancel != nil {
+		d.cancel()
+	}
+	if d.done != nil {
+		<-d.done
+	}
+	if d.toolSet != nil {
+		d.toolSet.Cleanup()
+	}
+}
+
 // ensureLoop creates a loop only after any prior lifecycle transition has
 // completed. Callers that already hold loopLifecycleMu use ensureLoopLocked.
 func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) error {
@@ -2623,37 +2654,21 @@ func (cm *ConversationManager) handleFatalLoopExit(loopInstance *loop.Loop, gene
 	// that very loopDone. Their generation invalidation makes this exit stale,
 	// so the identity check below must simply return and let the defer unblock
 	// the owner.
-	var teardownGeneration uint64
 	cm.mu.Lock()
 	if cm.loop != loopInstance || cm.loopGeneration != generation {
 		cm.mu.Unlock()
 		return
 	}
-	cancel := cm.loopCancel
-	toolSet := cm.toolSet
-	cm.loopGeneration++ // invalidate callbacks from the failed loop
-	teardownGeneration = cm.loopGeneration
-	cm.loopTearingDown = true
-	cm.loopLifecycleDone = make(chan struct{})
-	cm.loopCancel = nil
-	cm.loopCtx = nil
-	cm.loopDone = nil
-	cm.loop = nil
-	cm.modelID = ""
-	cm.toolSet = nil
+	detached := cm.detachLoopLocked()
+	detached.done = nil // this is the loop goroutine; loopDone closes after we return
 	cm.hydrated = false
 	cm.hasConversationEvents = false
 	cm.cancelling = true // suppress an onDone notification for a failed turn
 	cm.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
-	}
-	if toolSet != nil {
-		toolSet.Cleanup()
-	}
+	detached.stop()
 	cm.SetAgentWorking(false)
-	cm.finishLoopTeardownLocked(teardownGeneration)
+	cm.finishLoopTeardownLocked(detached.generation)
 }
 
 func (cm *ConversationManager) stopLoop() {
@@ -2672,50 +2687,23 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 	cm.loopLifecycleMu.Lock()
 	cm.waitForLoopTeardownLocked()
 
-	var teardownGeneration uint64
 	cm.mu.Lock()
-	loopInstance := cm.loop
-	loopDone := cm.loopDone
-	cancel := cm.loopCancel
-	toolSet := cm.toolSet
-	cm.loopGeneration++ // invalidate delayed callbacks before cancellation
-	teardownGeneration = cm.loopGeneration
-	if loopInstance == nil {
-		if markUnhydrated {
-			cm.hydrated = false
-			cm.hasConversationEvents = false
-		}
-		cm.mu.Unlock()
-		cm.loopLifecycleMu.Unlock()
-		return
-	}
-	cm.loopTearingDown = true
-	cm.loopLifecycleDone = make(chan struct{})
-	cm.loopCancel = nil
-	cm.loopCtx = nil
-	cm.loopDone = nil
-	cm.loop = nil
-	cm.modelID = ""
-	cm.toolSet = nil
 	if markUnhydrated {
 		cm.hydrated = false
 		cm.hasConversationEvents = false
 	}
+	if cm.loop == nil {
+		cm.mu.Unlock()
+		cm.loopLifecycleMu.Unlock()
+		return
+	}
+	detached := cm.detachLoopLocked()
 	cm.mu.Unlock()
 	cm.loopLifecycleMu.Unlock()
 
-	if cancel != nil {
-		cancel()
-	}
-	if loopDone != nil {
-		<-loopDone
-	}
-	if toolSet != nil {
-		toolSet.Cleanup()
-	}
-
+	detached.stop()
 	cm.loopLifecycleMu.Lock()
-	cm.finishLoopTeardownLocked(teardownGeneration)
+	cm.finishLoopTeardownLocked(detached.generation)
 	cm.loopLifecycleMu.Unlock()
 }
 
@@ -2770,18 +2758,13 @@ func (cm *ConversationManager) cancelConversation(ctx context.Context, clearQueu
 		}
 	}
 
-	var teardownGeneration uint64
 	cm.mu.Lock()
 	if sendQueuedID != "" && !cm.agentWorking {
 		cm.mu.Unlock()
 		cm.loopLifecycleMu.Unlock()
 		return nil
 	}
-	loopInstance := cm.loop
-	loopDone := cm.loopDone
-	cancel := cm.loopCancel
-	toolSet := cm.toolSet
-	if loopInstance == nil {
+	if cm.loop == nil {
 		wasCancelling := cm.cancelling
 		if clearQueued {
 			cm.pendingBatches = nil
@@ -2812,21 +2795,12 @@ func (cm *ConversationManager) cancelConversation(ctx context.Context, clearQueu
 		cm.logger.Info("No active loop to cancel", "clear_queued", clearQueued)
 		return nil
 	}
-	cm.loopGeneration++ // stale queues/callbacks cannot target this loop
-	teardownGeneration = cm.loopGeneration
-	cm.loopTearingDown = true
-	cm.loopLifecycleDone = make(chan struct{})
+	detached := cm.detachLoopLocked()
 	cm.cancelling = true
 	cm.preservePendingOnCancel = !clearQueued
 	if clearQueued {
 		cm.pendingBatches = nil
 	}
-	cm.loopCancel = nil
-	cm.loopCtx = nil
-	cm.loopDone = nil
-	cm.loop = nil
-	cm.modelID = ""
-	cm.toolSet = nil
 	cm.hydrated = false
 	cm.hasConversationEvents = false
 	cm.mu.Unlock()
@@ -2844,22 +2818,14 @@ func (cm *ConversationManager) cancelConversation(ctx context.Context, clearQueu
 		}
 	}
 
-	if cancel != nil {
-		cancel()
-	}
-	if loopDone != nil {
-		<-loopDone
-	}
-	if toolSet != nil {
-		toolSet.Cleanup()
-	}
+	detached.stop()
 
 	// No replacement can have been installed while loopTearingDown was true.
 	// Reacquire the lifecycle lock before publishing the end marker and reopen
 	// the boundary only after that marker has committed.
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
-	defer cm.finishLoopTeardownLocked(teardownGeneration)
+	defer cm.finishLoopTeardownLocked(detached.generation)
 
 	endTurnMessage := llm.Message{
 		Role:      llm.MessageRoleAssistant,
