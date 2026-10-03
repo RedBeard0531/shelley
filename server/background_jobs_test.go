@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 )
 
@@ -84,5 +87,126 @@ func TestBashBackgroundJobNotifiesConversation(t *testing.T) {
 	waitForIdle(t, server, id)
 	if n := len(backgroundJobNotices(t, database, id)); n != 1 {
 		t.Fatalf("%d notices, want 1", n)
+	}
+	if jobs := unnotifiedBackgroundJobs(t, database); len(jobs) != 0 {
+		t.Fatalf("unnotified jobs after notice: %+v", jobs)
+	}
+}
+
+func unnotifiedBackgroundJobs(t *testing.T, database *db.DB) []generated.BackgroundJob {
+	t.Helper()
+	var rows []generated.BackgroundJob
+	err := database.Queries(t.Context(), func(q *generated.Queries) error {
+		var err error
+		rows, err = q.ListUnnotifiedBackgroundJobs(t.Context())
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+// stashedJobs is a BackgroundJobs that only hands jobs to the test, like a
+// Shelley process that backgrounded them and then died before reporting.
+type stashedJobs chan backgroundedJob
+
+type backgroundedJob struct {
+	job    claudetool.BackgroundJob
+	exited <-chan struct{}
+}
+
+func (j stashedJobs) Background(ctx context.Context, job claudetool.BackgroundJob, exited <-chan struct{}) error {
+	j <- backgroundedJob{job, exited}
+	return nil
+}
+
+// After a restart, every job the previous process backgrounded but did not
+// report is reported exactly once: at once if it finished or vanished
+// meanwhile, and when it exits if it is still running.
+func TestBackgroundJobRecoveryAfterRestart(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir()) // keep job logs out of /tmp
+	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := conv.ConversationID
+
+	// The previous process: real jobs, recorded but never reported.
+	stash := make(stashedJobs, 1)
+	bash := (&claudetool.BashTool{
+		WorkingDir:      claudetool.NewMutableWorkingDir(t.TempDir()),
+		Env:             claudetool.ShelleyEnv{ConversationID: id},
+		Jobs:            stash,
+		BackgroundAfter: time.Millisecond,
+	}).Tool()
+	start := func(name string) (backgroundedJob, string) {
+		t.Helper()
+		gate := filepath.Join(t.TempDir(), "gate")
+		if err := syscall.Mkfifo(gate, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		input, _ := json.Marshal(map[string]string{"command": "read -r _ < " + gate + "; echo " + name})
+		if out := bash.Run(t.Context(), input); out.Error != nil {
+			t.Fatal(out.Error)
+		}
+		bg := <-stash
+		if err := server.recordBackgroundJob(t.Context(), bg.job); err != nil {
+			t.Fatal(err)
+		}
+		return bg, gate
+	}
+	release := func(gate string) {
+		t.Helper()
+		if err := os.WriteFile(gate, []byte("go\n"), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finished, gate := start("finished-output")
+	release(gate)
+	<-finished.exited
+	lost, gate := start("lost-output")
+	release(gate)
+	<-lost.exited
+	if err := os.Remove(lost.job.ExitPath); err != nil {
+		t.Fatal(err)
+	}
+	running, runningGate := start("running-output")
+
+	noticeFor := func(job claudetool.BackgroundJob) string {
+		for _, n := range backgroundJobNotices(t, database, id) {
+			if n.BackgroundJobID == job.ID {
+				return n.Text
+			}
+		}
+		return ""
+	}
+	if err := server.recoverBackgroundJobs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 10*time.Second, func() bool { return len(backgroundJobNotices(t, database, id)) == 2 })
+	if got := noticeFor(finished.job); !strings.Contains(got, "finished: exit 0") || !strings.Contains(got, "finished-output") {
+		t.Errorf("finished notice = %q", got)
+	}
+	if got := noticeFor(lost.job); !strings.Contains(got, "lost (host rebooted or killed)") {
+		t.Errorf("lost notice = %q", got)
+	}
+
+	release(runningGate)
+	waitFor(t, 10*time.Second, func() bool { return noticeFor(running.job) != "" })
+	if got := noticeFor(running.job); !strings.Contains(got, "finished: exit 0") || !strings.Contains(got, "running-output") {
+		t.Errorf("running notice = %q", got)
+	}
+	waitFor(t, 10*time.Second, func() bool { return len(unnotifiedBackgroundJobs(t, database)) == 0 })
+
+	// Another restart reports nothing again.
+	if err := server.recoverBackgroundJobs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	waitForIdle(t, server, id)
+	if n := len(backgroundJobNotices(t, database, id)); n != 3 {
+		t.Fatalf("%d notices, want 3", n)
 	}
 }

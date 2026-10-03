@@ -2072,6 +2072,11 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 	// listeners (and therefore ports, streams and the subagent runner) are live.
 	go s.resumeInterruptedConversations(context.Background(), resumeTurns)
 
+	// Report background jobs a previous process left running or unreported.
+	if err := s.recoverBackgroundJobs(context.Background()); err != nil {
+		s.logger.Error("Failed to recover background jobs", "error", err)
+	}
+
 	// Recover durable queued transcription workers independently of browser
 	// connections and request lifetimes.
 	go s.recoverQueuedTranscriptions(context.Background())

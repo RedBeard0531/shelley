@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+type BackgroundJob struct {
+	JobID            string    `json:"job_id"`
+	ConversationID   string    `json:"conversation_id"`
+	ToolUseID        string    `json:"tool_use_id"`
+	Command          string    `json:"command"`
+	Pid              int64     `json:"pid"`
+	ProcessStartTime int64     `json:"process_start_time"`
+	LogPath          string    `json:"log_path"`
+	ExitPath         string    `json:"exit_path"`
+	StartedAt        time.Time `json:"started_at"`
+	Notified         bool      `json:"notified"`
+}
+
 type CacheSession struct {
 	TokenHash  string    `json:"token_hash"`
 	UserID     string    `json:"user_id"`
