@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
@@ -18,6 +19,31 @@ import (
 
 func TestSubagentBusy(t *testing.T) {
 	t.Run("DeliversMidTurn", testSubagentBusy_DeliversMidTurn)
+}
+
+// list_subagents reports each delegated subagent's slug, working state, and
+// latest response, as the agent sees it through the tool.
+func TestListSubagentsTool(t *testing.T) {
+	f := newSubagentDoneFixture(t, "Found three\nflaky tests.")
+	defer stopActiveConversationLoops(f.server)
+	tool := (&claudetool.SubagentTool{
+		ParentConversationID: f.parentID,
+		Runner:               NewSubagentRunner(f.server),
+	}).ListTool()
+
+	out := tool.Run(t.Context(), json.RawMessage(`{}`))
+	if out.Error != nil {
+		t.Fatal(out.Error)
+	}
+	if got, want := out.LLMContent[0].Text, "- sub-test (idle): Found three flaky tests.\n"; got != want {
+		t.Fatalf("idle listing = %q, want %q", got, want)
+	}
+
+	f.subagentMgr.SetAgentWorking(true)
+	out = tool.Run(t.Context(), json.RawMessage(`{}`))
+	if !strings.Contains(out.LLMContent[0].Text, "- sub-test (working)") {
+		t.Fatalf("working listing = %q", out.LLMContent[0].Text)
+	}
 }
 
 // A reasoning level passed to RunSubagent must be persisted on the subagent's

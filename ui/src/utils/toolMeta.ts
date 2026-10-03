@@ -56,6 +56,7 @@ export function toolEmoji(name: string | undefined | null, input?: unknown): str
     case "browser_eval":
       return "⚡";
     case "subagent":
+    case "list_subagents":
       return "⚡";
     case "keyword_search":
       return "🔍";

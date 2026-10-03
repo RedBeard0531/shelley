@@ -39,8 +39,11 @@ func ToolInfoByName(name string) (ToolInfo, bool) {
 }
 
 func registeredToolName(name string) string {
-	if name == ApplyPatchName {
+	switch name {
+	case ApplyPatchName:
 		return PatchName
+	case listSubagentsName:
+		return subagentName
 	}
 	return name
 }

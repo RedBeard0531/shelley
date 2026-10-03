@@ -155,6 +155,34 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 	return "message sent; the subagent works in the background and its response will be delivered asynchronously when its turn finishes.", nil
 }
 
+// ListSubagents implements claudetool.SubagentRunner. It lists delegated
+// subagents only: BTW readers and internal workers are not addressable with
+// the subagent tool.
+func (r *SubagentRunner) ListSubagents(ctx context.Context, parentConversationID string) ([]claudetool.SubagentSummary, error) {
+	s := r.server
+	convs, err := s.db.GetSubagents(ctx, parentConversationID)
+	if err != nil {
+		return nil, err
+	}
+	var out []claudetool.SubagentSummary
+	for _, conv := range convs {
+		kind := db.ParseConversationOptions(conv.ConversationOptions).Kind
+		if !isManagedChild(conv) || isBtwReader(conv) || kind == transcriptionKind || kind == commitTourKind || conv.Slug == nil {
+			continue
+		}
+		text, _, err := s.lastAgentText(ctx, conv.ConversationID)
+		if err != nil {
+			return nil, fmt.Errorf("read subagent %s: %w", *conv.Slug, err)
+		}
+		out = append(out, claudetool.SubagentSummary{
+			Slug:         *conv.Slug,
+			Working:      s.IsAgentWorking(conv.ConversationID),
+			LastResponse: text,
+		})
+	}
+	return out, nil
+}
+
 // dropStaleParentNotification removes any queued subagent-done notification
 // for the given subagent from its parent's pending-batch queue. RunSubagent
 // calls it before sending new work: the new prompt supersedes the earlier

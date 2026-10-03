@@ -2,6 +2,7 @@ package claudetool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -20,6 +21,17 @@ type SubagentRunner interface {
 	// (one of "off", "minimal", "low", "medium", "high", "xhigh", "max");
 	// an empty string means "use the service/conversation default".
 	RunSubagent(ctx context.Context, conversationID, prompt, modelID, reasoning string) (string, error)
+	// ListSubagents returns the delegated subagents of the parent
+	// conversation, oldest first.
+	ListSubagents(ctx context.Context, parentConversationID string) ([]SubagentSummary, error)
+}
+
+// SubagentSummary describes one subagent for list_subagents.
+type SubagentSummary struct {
+	Slug    string
+	Working bool
+	// LastResponse is the subagent's latest agent text, empty if none.
+	LastResponse string
 }
 
 // subagentReasoningLevels are the user-facing reasoning/thinking levels a
@@ -228,6 +240,50 @@ func (s *SubagentTool) run(ctx context.Context, req subagentInput) llm.ToolOut {
 			ConversationID: conversationID,
 		},
 	}
+}
+
+const listSubagentsName = "list_subagents"
+
+// ListTool returns the list_subagents tool, which reports this
+// conversation's subagents so the agent can find and address them by slug.
+func (s *SubagentTool) ListTool() *llm.Tool {
+	return &llm.Tool{
+		Name:        listSubagentsName,
+		Description: "List your subagents: each one's slug (use it with the subagent tool), whether it is working, and a preview of its latest response.",
+		InputSchema: llm.MustSchema(`{"type": "object", "properties": {}}`),
+		Run: func(ctx context.Context, _ json.RawMessage) llm.ToolOut {
+			subagents, err := s.Runner.ListSubagents(ctx, s.ParentConversationID)
+			if err != nil {
+				return llm.ErrorfToolOut("list subagents: %w", err)
+			}
+			return llm.ToolOut{LLMContent: llm.TextContent(formatSubagentList(subagents))}
+		},
+	}
+}
+
+// subagentPreviewLen caps each latest-response preview in list_subagents.
+const subagentPreviewLen = 200
+
+func formatSubagentList(subagents []SubagentSummary) string {
+	if len(subagents) == 0 {
+		return "No subagents."
+	}
+	var b strings.Builder
+	for _, sa := range subagents {
+		state := "idle"
+		if sa.Working {
+			state = "working"
+		}
+		fmt.Fprintf(&b, "- %s (%s)", sa.Slug, state)
+		if preview := strings.Join(strings.Fields(sa.LastResponse), " "); preview != "" {
+			if r := []rune(preview); len(r) > subagentPreviewLen {
+				preview = string(r[:subagentPreviewLen]) + "..."
+			}
+			fmt.Fprintf(&b, ": %s", preview)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // SubagentDisplayData is the display data sent to the UI for subagent tool results.

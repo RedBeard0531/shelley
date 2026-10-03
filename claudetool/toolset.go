@@ -252,7 +252,7 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 			AvailableModels:      availableModels,
 			ParentReasoning:      cfg.ReasoningLevel,
 		}
-		tools = append(tools, subagentTool.Tool())
+		tools = append(tools, subagentTool.Tool(), subagentTool.ListTool())
 	}
 
 	// Add LLM one-shot tool if LLM provider is configured
