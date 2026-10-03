@@ -609,7 +609,9 @@ func TestQueuedSenderUserDataUpdatesSearchText(t *testing.T) {
 }
 
 func TestXMLProvenanceAttributesEscapeNormalizedWhitespace(t *testing.T) {
-	got, err := xmlProvenanceOpeningTag("parent_message", "parent\nid", "slug\tline\r")
+	got, err := xmlProvenanceOpeningTag("parent_message",
+		xml.Attr{Name: xml.Name{Local: "conversation_id"}, Value: "parent\nid"},
+		xml.Attr{Name: xml.Name{Local: "slug"}, Value: "slug\tline\r"})
 	if err != nil {
 		t.Fatal(err)
 	}

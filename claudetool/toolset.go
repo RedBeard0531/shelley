@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"time"
 
 	"shelley.exe.dev/claudetool/browse"
 	"shelley.exe.dev/llm"
@@ -72,6 +73,10 @@ type ToolSetConfig struct {
 	// ParentMessenger, if set, provides the message_parent tool. The server
 	// sets it only for delegated subagents.
 	ParentMessenger ParentMessenger
+	// BackgroundJobs is told about bash commands moved to the background.
+	BackgroundJobs BackgroundJobs
+	// BashBackgroundAfter overrides DefaultBashBackgroundAfter when nonzero.
+	BashBackgroundAfter time.Duration
 	// ParentConversationID is the ID of the parent conversation (for subagent tool).
 	ParentConversationID string
 	// ConversationID is the ID of the conversation these tools belong to.
@@ -190,6 +195,8 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		ModelID:          cfg.ModelID,
 		EnableJITInstall: cfg.EnableJITInstall,
 		Env:              env,
+		Jobs:             cfg.BackgroundJobs,
+		BackgroundAfter:  cfg.BashBackgroundAfter,
 	}
 
 	patchProvider, patchProfile := "", "nested"

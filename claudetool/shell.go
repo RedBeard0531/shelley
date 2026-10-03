@@ -268,7 +268,7 @@ func (s *ShellTool) run(ctx context.Context, req shellInput) llm.ToolOut {
 	progressDone := make(chan struct{})
 	progressStop := make(chan struct{})
 	if progressFn != nil && toolID != "" {
-		go shellProgressLoop(progressFn, toolID, logPath, progressStop, progressDone)
+		go shellProgressLoop(progressFn, toolID, shellName, logPath, progressStop, progressDone)
 	} else {
 		close(progressDone)
 	}
@@ -407,7 +407,7 @@ func buildYieldPayload(command string, pid, pgid int, logPath, tail string, yiel
 
 const shellProgressInterval = 500 * time.Millisecond
 
-func shellProgressLoop(progress llm.ToolProgressFunc, toolID, path string, stop <-chan struct{}, done chan<- struct{}) {
+func shellProgressLoop(progress llm.ToolProgressFunc, toolID, toolName, path string, stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(shellProgressInterval)
 	defer ticker.Stop()
@@ -418,7 +418,7 @@ func shellProgressLoop(progress llm.ToolProgressFunc, toolID, path string, stop 
 			last = t
 			progress(llm.ToolProgress{
 				ToolUseID: toolID,
-				ToolName:  shellName,
+				ToolName:  toolName,
 				Output:    t,
 			})
 		}

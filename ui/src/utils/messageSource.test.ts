@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { conversationMessageSource } from "./messageSource";
+import { messageSource } from "./messageSource";
 
 for (const relationship of ["subagent", "parent"] as const) {
   const data = {
@@ -13,12 +13,12 @@ for (const relationship of ["subagent", "parent"] as const) {
     slug: data.sender_slug,
     relationship,
   };
-  assert.deepEqual(conversationMessageSource(data), expected);
-  assert.deepEqual(conversationMessageSource(JSON.stringify(data)), expected);
+  assert.deepEqual(messageSource(data), expected);
+  assert.deepEqual(messageSource(JSON.stringify(data)), expected);
 }
 
 assert.deepEqual(
-  conversationMessageSource({
+  messageSource({
     sender_conversation_id: "unnamed-parent",
     sender_slug: "",
     sender_relationship: "parent",
@@ -35,5 +35,13 @@ for (const data of [
   { sender_conversation_id: "id", sender_slug: "slug" },
   { sender_conversation_id: "id", sender_slug: "slug", sender_relationship: "user" },
 ]) {
-  assert.equal(conversationMessageSource(data), null);
+  assert.equal(messageSource(data), null);
 }
+
+for (const data of [
+  { background_job_id: "1a2b3c4d", Text: "Background job 1a2b3c4d finished: exit 0, 2m3s." },
+  '{"background_job_id":"1a2b3c4d","Text":"done"}',
+]) {
+  assert.deepEqual(messageSource(data), { backgroundJobId: "1a2b3c4d" });
+}
+assert.equal(messageSource({ background_job_id: "" }), null);

@@ -55,7 +55,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { type QueuedMessage, queuedMessageText } from "../../types";
-import { conversationMessageSource } from "../../utils/messageSource";
+import { messageSource } from "../../utils/messageSource";
 import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
 
 const props = defineProps<{
@@ -66,5 +66,5 @@ const props = defineProps<{
 }>();
 
 const text = computed(() => queuedMessageText(props.queued));
-const source = computed(() => conversationMessageSource(props.queued.user_data));
+const source = computed(() => messageSource(props.queued.user_data));
 </script>

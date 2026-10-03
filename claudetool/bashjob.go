@@ -1,0 +1,190 @@
+package claudetool
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// BackgroundJob is a bash command that outlived its tool call. Its process
+// is a small wrapper (see bashJobWrapper) that writes the command's exit
+// status to ExitPath, so the status is recoverable even when Shelley is not
+// the wrapper's parent.
+type BackgroundJob struct {
+	ID             string
+	ConversationID string
+	ToolUseID      string
+	Command        string
+	// PID is the wrapper's PID, which is also the job's process group ID.
+	PID int
+	// StartTime is the wrapper's start time from /proc/<pid>/stat, in clock
+	// ticks since boot. It distinguishes the wrapper from a later process
+	// that reuses its PID.
+	StartTime uint64
+	LogPath   string
+	ExitPath  string
+	StartedAt time.Time
+}
+
+// BackgroundJobs is told about every command bash moves to the background.
+// exited is closed once the job has exited and its exit file is written.
+// Implementations report the job's completion to its conversation.
+type BackgroundJobs interface {
+	Background(ctx context.Context, job BackgroundJob, exited <-chan struct{}) error
+}
+
+// bashJobWrapper runs $1 and atomically records its exit status in $2. It
+// traps (rather than ignores) the polite termination signals so that
+// `kill -- -PGID` stops the command but not the wrapper, which then records
+// the status; children still get default signal dispositions.
+const bashJobWrapper = `trap : HUP INT TERM
+bash --login -c "$1"
+s=$?
+printf '%d\n' "$s" >"$2.tmp" && mv -f -- "$2.tmp" "$2"
+exit "$s"`
+
+// bashJobDir returns the directory holding job logs and exit files.
+func bashJobDir() string {
+	return filepath.Join(os.TempDir(), "shelley-jobs")
+}
+
+// newBashJobID returns a short random job ID.
+func newBashJobID() string {
+	var b [4]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// processStartTime returns field 22 (starttime) of /proc/<pid>/stat.
+func processStartTime(pid int) (uint64, error) {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, err
+	}
+	// comm (field 2) may contain spaces and parentheses; fields after the
+	// last ')' start at field 3.
+	i := strings.LastIndexByte(string(b), ')')
+	if i < 0 {
+		return 0, fmt.Errorf("malformed /proc/%d/stat", pid)
+	}
+	fields := strings.Fields(string(b[i+1:]))
+	if len(fields) < 20 {
+		return 0, fmt.Errorf("malformed /proc/%d/stat", pid)
+	}
+	return strconv.ParseUint(fields[19], 10, 64)
+}
+
+// writeJobExitFile records status in path atomically, for wrappers that
+// died before recording it themselves (SIGKILL).
+func writeJobExitFile(path string, state *os.ProcessState) error {
+	status := state.ExitCode()
+	if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		status = 128 + int(ws.Signal())
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(status)+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// waitBashJob waits for cmd, a started job wrapper, ensures its exit file
+// exists, and closes exited.
+func waitBashJob(cmd *exec.Cmd, exitPath string, exited chan<- struct{}) {
+	defer close(exited)
+	cmd.Wait()
+	if _, err := os.Stat(exitPath); errors.Is(err, os.ErrNotExist) {
+		writeJobExitFile(exitPath, cmd.ProcessState)
+	}
+}
+
+// Exited returns a channel closed when j's wrapper process has exited. It
+// is for jobs this process did not start, so it waits with a pidfd. A
+// wrapper that is already gone, or whose PID now names another process,
+// yields an already-closed channel.
+func (j BackgroundJob) Exited() (<-chan struct{}, error) {
+	exited := make(chan struct{})
+	fd, err := unix.PidfdOpen(j.PID, 0)
+	if errors.Is(err, unix.ESRCH) {
+		close(exited)
+		return exited, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pidfd_open %d: %w", j.PID, err)
+	}
+	// The pidfd pins the process identity: if the start time read after
+	// opening it matches, the pidfd refers to the wrapper.
+	if st, err := processStartTime(j.PID); err != nil || st != j.StartTime {
+		unix.Close(fd)
+		close(exited)
+		return exited, nil
+	}
+	go func() {
+		defer close(exited)
+		defer unix.Close(fd)
+		fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+		for {
+			_, err := unix.Poll(fds, -1)
+			if !errors.Is(err, unix.EINTR) {
+				return
+			}
+		}
+	}()
+	return exited, nil
+}
+
+const jobNoticeTailLines = 20
+
+// Notice describes j's outcome for its conversation once it has exited:
+// its exit status, run time, log path, and the tail of its output.
+func (j BackgroundJob) Notice() string {
+	var b strings.Builder
+	status, err := os.ReadFile(j.ExitPath)
+	if err == nil {
+		var elapsed time.Duration
+		if fi, err := os.Stat(j.ExitPath); err == nil {
+			elapsed = fi.ModTime().Sub(j.StartedAt).Round(time.Second)
+		}
+		fmt.Fprintf(&b, "Background job %s finished: exit %s, %s. Log: %s\n", j.ID, strings.TrimSpace(string(status)), elapsed, j.LogPath)
+	} else {
+		fmt.Fprintf(&b, "Background job %s lost (host rebooted or killed). Log: %s\n", j.ID, j.LogPath)
+	}
+	fmt.Fprintf(&b, "Command: %s\n", truncateLine(firstLine(j.Command)))
+	if tail := logTail(j.LogPath, jobNoticeTailLines); tail != "" {
+		b.WriteString("\n" + tail)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i] + " ..."
+	}
+	return s
+}
+
+// logTail returns at most the last n lines of the log at path, each
+// truncated to maxLineLength.
+func logTail(path string, n int) string {
+	tail := strings.TrimRight(readTailString(path, int64(n*(maxLineLength+1))), "\n")
+	if tail == "" {
+		return ""
+	}
+	lines := strings.Split(tail, "\n")
+	lines = lines[max(0, len(lines)-n):]
+	for i, l := range lines {
+		lines[i] = truncateLine(l)
+	}
+	return strings.Join(lines, "\n") + "\n"
+}

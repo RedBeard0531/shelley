@@ -31,6 +31,15 @@ type senderMessageUserData struct {
 	Text string `json:"Text"`
 }
 
+// backgroundJobUserData marks a notice that a backgrounded bash command
+// finished; it is not from a human or another conversation.
+type backgroundJobUserData struct {
+	BackgroundJobID string `json:"background_job_id"`
+	// Text duplicates the message for full-text search, as in
+	// senderMessageUserData.
+	Text string `json:"Text"`
+}
+
 func provenanceEligibleConversation(conversation generated.Conversation) bool {
 	return !isBtwReader(conversation) && db.ParseConversationOptions(conversation.ConversationOptions).Kind != transcriptionKind
 }
@@ -92,16 +101,10 @@ func parseSenderMessageUserData(raw []byte) (senderMessageUserData, bool, error)
 	return data, true, nil
 }
 
-func xmlProvenanceOpeningTag(tag, conversationID, slug string) (string, error) {
+func xmlProvenanceOpeningTag(tag string, attrs ...xml.Attr) (string, error) {
 	var out bytes.Buffer
 	encoder := xml.NewEncoder(&out)
-	if err := encoder.EncodeToken(xml.StartElement{
-		Name: xml.Name{Local: tag},
-		Attr: []xml.Attr{
-			{Name: xml.Name{Local: "conversation_id"}, Value: conversationID},
-			{Name: xml.Name{Local: "slug"}, Value: slug},
-		},
-	}); err != nil {
+	if err := encoder.EncodeToken(xml.StartElement{Name: xml.Name{Local: tag}, Attr: attrs}); err != nil {
 		return "", err
 	}
 	if err := encoder.Flush(); err != nil {
@@ -118,16 +121,35 @@ func xmlProvenanceText(text string) string {
 	return provenanceTextEscaper.Replace(text)
 }
 
-func messageWithSenderProvenance(message llm.Message, rawUserData []byte) (llm.Message, error) {
+// provenanceTag returns the XML element that wraps a message with the given
+// user_data for the model, or "" if the message is a plain user message.
+func provenanceTag(rawUserData []byte) (string, []xml.Attr, error) {
+	if len(rawUserData) > 0 {
+		var job backgroundJobUserData
+		if err := json.Unmarshal(rawUserData, &job); err == nil && job.BackgroundJobID != "" {
+			return "background_job", []xml.Attr{{Name: xml.Name{Local: "id"}, Value: job.BackgroundJobID}}, nil
+		}
+	}
 	data, ok, err := parseSenderMessageUserData(rawUserData)
 	if err != nil || !ok {
-		return message, err
+		return "", nil, err
 	}
 	tag := "subagent_message"
 	if data.SenderRelationship == senderRelationshipParent {
 		tag = "parent_message"
 	}
-	opening, err := xmlProvenanceOpeningTag(tag, data.SenderConversationID, data.SenderSlug)
+	return tag, []xml.Attr{
+		{Name: xml.Name{Local: "conversation_id"}, Value: data.SenderConversationID},
+		{Name: xml.Name{Local: "slug"}, Value: data.SenderSlug},
+	}, nil
+}
+
+func messageWithSenderProvenance(message llm.Message, rawUserData []byte) (llm.Message, error) {
+	tag, attrs, err := provenanceTag(rawUserData)
+	if err != nil || tag == "" {
+		return message, err
+	}
+	opening, err := xmlProvenanceOpeningTag(tag, attrs...)
 	if err != nil {
 		return message, fmt.Errorf("encode sender provenance tag: %w", err)
 	}

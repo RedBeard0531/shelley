@@ -4,8 +4,14 @@ export interface ConversationMessageSource {
   relationship: "subagent" | "parent";
 }
 
+export interface BackgroundJobMessageSource {
+  backgroundJobId: string;
+}
+
+export type MessageSource = ConversationMessageSource | BackgroundJobMessageSource;
+
 // Persisted messages carry JSON text; queued ghosts carry the decoded object.
-export function conversationMessageSource(userData: unknown): ConversationMessageSource | null {
+function parseUserData(userData: unknown): Record<string, unknown> | null {
   if (!userData) return null;
   let parsed: unknown = userData;
   if (typeof parsed === "string") {
@@ -16,16 +22,23 @@ export function conversationMessageSource(userData: unknown): ConversationMessag
     }
   }
   if (typeof parsed !== "object" || parsed === null) return null;
+  return parsed as Record<string, unknown>;
+}
+
+// messageSource identifies who, other than a human, sent a user message:
+// another conversation, or a backgrounded bash job that finished.
+export function messageSource(userData: unknown): MessageSource | null {
+  const parsed = parseUserData(userData);
+  if (!parsed) return null;
+
+  const { background_job_id: backgroundJobId } = parsed;
+  if (typeof backgroundJobId === "string" && backgroundJobId) return { backgroundJobId };
 
   const {
     sender_conversation_id: conversationId,
     sender_slug: slug,
     sender_relationship: relationship,
-  } = parsed as {
-    sender_conversation_id?: unknown;
-    sender_slug?: unknown;
-    sender_relationship?: unknown;
-  };
+  } = parsed;
   if (
     typeof conversationId !== "string" ||
     !conversationId ||

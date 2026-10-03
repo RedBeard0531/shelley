@@ -132,7 +132,7 @@
     >
       <div class="message-content message-content-entities" data-testid="message-content">
         <div
-          v-if="authorEmail && !conversationSource"
+          v-if="authorEmail && !sender"
           class="message-author-email"
           data-testid="message-author-email"
         >
@@ -159,10 +159,7 @@
             :on-fork="hasForkAction ? handleFork : undefined"
           />
 
-          <ConversationMessageAuthor
-            v-if="conversationSource && entityIndex === 0"
-            :source="conversationSource"
-          />
+          <ConversationMessageAuthor v-if="sender && entityIndex === 0" :source="sender" />
 
           <!-- Distillation box takes precedence over content blocks. -->
           <div
@@ -205,12 +202,13 @@
                 :markdown-text="item.markdownText"
                 :citations="item.citations"
                 :render-markdown="
-                  shouldRenderMarkdown(markdownMode, isUser && !conversationSource, isDistilledUser)
+                  !isBackgroundJobNotice &&
+                  shouldRenderMarkdown(markdownMode, isUser && !sender, isDistilledUser)
                 "
                 :message-id="message.message_id"
                 :cache-owner="message"
                 :run-key="`${entity.key}-${index}`"
-                :rewrite-localhost-links="message.type === 'agent' || !!conversationSource"
+                :rewrite-localhost-links="message.type === 'agent' || !!sender"
               />
               <MessageContentBlock v-else :content="item.content!" />
             </div>
@@ -269,7 +267,7 @@ import MessageContentBlock from "./MessageContentBlock.vue";
 import CitedText from "./CitedText.vue";
 import { coalesceContent, splitContentEntities } from "../../utils/coalesceContent";
 import { perfCount } from "../../utils/perf";
-import { conversationMessageSource } from "../../utils/messageSource";
+import { messageSource } from "../../utils/messageSource";
 import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
 import MessageDisplayData from "./MessageDisplayData.vue";
 
@@ -385,11 +383,11 @@ const isError = computed(() => props.message.type === "error");
 // distilled/compacted user messages (which render agent-side and aren't a
 // single person's turn).
 const showUserEmails = inject<ComputedRef<boolean>>("showUserEmails");
-const conversationSource = computed(() =>
-  isUser.value && !isDistilledUser.value
-    ? conversationMessageSource(props.message.user_data)
-    : null,
+const sender = computed(() =>
+  isUser.value && !isDistilledUser.value ? messageSource(props.message.user_data) : null,
 );
+// Background job notices carry raw command output: show it verbatim.
+const isBackgroundJobNotice = computed(() => !!sender.value && "backgroundJobId" in sender.value);
 const authorEmail = computed(() =>
   isUser.value && !isDistilledUser.value && showUserEmails?.value
     ? props.message.user_email || null
@@ -495,8 +493,7 @@ const errorMeta = computed(() => {
       retryable = !!ud?.retryable;
       errorType = typeof ud?.error_type === "string" ? ud.error_type : "";
       refusalModel = typeof ud?.refusal_model === "string" ? ud.refusal_model.trim() : "";
-      refusalCategory =
-        typeof ud?.refusal_category === "string" ? ud.refusal_category.trim() : "";
+      refusalCategory = typeof ud?.refusal_category === "string" ? ud.refusal_category.trim() : "";
       refusalExplanation =
         typeof ud?.refusal_explanation === "string" ? ud.refusal_explanation.trim() : "";
     } catch {
@@ -610,7 +607,7 @@ const hasRenderableContent = computed(() => {
 
 // ---- Message container classes ----
 const messageClasses = computed(() => {
-  if (conversationSource.value) return "message message-tool message-conversation";
+  if (sender.value) return "message message-tool message-conversation";
   if (isUser.value && !isDistilledUser.value) {
     return "message message-user";
   }

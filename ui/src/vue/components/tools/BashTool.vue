@@ -16,6 +16,14 @@
         <span v-if="displayData?.workingDir" class="bash-tool-cwd" :title="displayData.workingDir">
           in {{ displayData.workingDir }}
         </span>
+        <span
+          v-if="background"
+          class="bash-tool-background"
+          data-testid="bash-tool-background"
+          :title="`Still running in the background. Log: ${background.logPath}. Cancel with kill -- -${background.pgid}`"
+        >
+          background job {{ background.jobId }}
+        </span>
       </div>
       <button
         class="bash-tool-toggle"
@@ -89,6 +97,7 @@ import { isCancelledToolResult } from "../../utils/toolStatus";
 interface BashDisplayData {
   workingDir: string;
   exitCode?: number;
+  background?: { jobId: string; logPath: string; pgid: number };
 }
 
 const props = defineProps<{
@@ -166,10 +175,13 @@ const output = computed(() =>
     : "",
 );
 
+const background = computed(() => displayData.value?.background ?? null);
+
 const isCancelled = computed(() => props.hasError && isCancelledToolResult(output.value));
 
 const outputLabel = computed(() => {
   if (isCancelled.value) return "Output (cancelled)";
+  if (background.value) return `Output so far (moved to background job ${background.value.jobId})`;
   const exitCode = displayData.value?.exitCode;
   if (typeof exitCode === "number") return `Output (exit code ${exitCode})`;
   return props.hasError ? "Output (Error)" : "Output";

@@ -159,7 +159,6 @@ func (g *loremGen) shellCall(i, k int) toolCall {
 			ToolName: "shell",
 			ToolInput: rawInput(map[string]any{
 				"command": fmt.Sprintf("go test ./... -run Turn%d", i),
-				"slow_ok": true,
 			}),
 		},
 		result: textResult(fmt.Sprintf("ok  \tshelley.exe.dev/pkg%d\t%s\n", i%9, lorem(i, 4))),
