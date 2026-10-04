@@ -1,10 +1,22 @@
 import { test, expect } from "@playwright/test";
-import { createConversationViaAPI } from "./helpers";
+import { createConversationViaAPIWithDetails } from "./helpers";
 
 test("drawer expands running jobs with live output and stops one", async ({ page, request }) => {
-  const slug = await createConversationViaAPI(request, "bash-bg: echo ready; sleep 600");
+  const { slug, conversationId } = await createConversationViaAPIWithDetails(
+    request,
+    "bash-bg: echo ready; sleep 600",
+  );
   await page.goto(`/c/${slug}`);
   await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
+
+  const started = page.getByTestId("bash-tool-background");
+  await expect(started).toHaveText("Backgrounded");
+  const running = page.locator(".bash-tool", { has: started });
+  await running.getByRole("button", { name: "Expand" }).click();
+  const jobsResponse = await request.get(`/api/conversation/${conversationId}/background-jobs`);
+  expect(jobsResponse.ok()).toBeTruthy();
+  const [{ job_id: jobId }] = await jobsResponse.json();
+  await expect(running).not.toContainText(jobId);
 
   await page.locator('button[aria-label="Open conversations"]').click();
   await expect(page.locator(".drawer.open")).toBeVisible();
@@ -34,6 +46,147 @@ test("drawer expands running jobs with live output and stops one", async ({ page
   await page.locator('button[aria-label="Close conversations"]').click();
   const notice = page.getByTestId("bash-tool-finished-job");
   await expect(notice).toBeVisible({ timeout: 15000 });
-  await expect(notice).toContainText("exit 143");
-  await expect(page.locator(".bash-tool", { has: notice })).toContainText("sleep 600");
+  await expect(notice).toHaveText("Failed");
+  const card = page.locator(".bash-tool", { has: notice });
+  await expect(card).toContainText("echo ready; sleep 600");
+  await expect(card.getByRole("button", { name: "Expand" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(card.locator(".bash-tool-details")).toHaveCount(0);
+  await card.getByRole("button", { name: "Expand" }).click();
+  await expect(card.locator(".bash-tool-code").first()).toHaveText("echo ready; sleep 600");
+  await expect(card.locator(".bash-tool-label").last()).toHaveText("Output:");
+  await expect(card).not.toContainText(jobId);
+});
+
+test("historical background job notices render collapsed bash cards", async ({ page, request }) => {
+  await page.setViewportSize({ width: 393, height: 851 });
+  const { conversationId, slug } = await createConversationViaAPIWithDetails(
+    request,
+    "echo: ready",
+  );
+  const response = await request.get(`/api/conversation/${conversationId}`);
+  expect(response.ok()).toBeTruthy();
+  const body = await response.json();
+  body.conversation.agent_working = false;
+  const notices = [
+    {
+      jobId: "abc12345",
+      text:
+        "Background job abc12345 finished: exit 0, 4m31s. Log: /tmp/shelley-jobs/abc12345.log\n" +
+        "Command: bin/q --only 59e4fc203f\n\nq: checking\n\nq: passed",
+    },
+    {
+      jobId: "def67890",
+      text: "Older, unrecognized job notice\nits output must still be readable",
+    },
+    {
+      jobId: "1234abcd",
+      text:
+        "Background job 1234abcd lost (host rebooted or killed). Log: /tmp/shelley-jobs/1234abcd.log\n" +
+        "Command: cat /tmp/partial\n\none\ntwo",
+    },
+  ];
+  body.messages = notices.map(({ jobId, text }, index) => ({
+    message_id: `job-${jobId}`,
+    conversation_id: conversationId,
+    sequence_id: index + 1,
+    type: "user",
+    llm_data: JSON.stringify({ Role: 0, Content: [{ Type: 2, Text: text }] }),
+    user_data: JSON.stringify({ background_job_id: jobId, Text: text }),
+    created_at: "2026-09-22T12:00:00Z",
+    generation: 1,
+  }));
+  body.conversation.queued_messages = JSON.stringify([
+    {
+      id: "queued-job",
+      created_at: "2026-09-22T12:00:01Z",
+      model: "predictable",
+      llm: { Role: 0, Content: [{ Type: 2, Text: "queued job output" }] },
+      user_data: {
+        background_job_id: "fedcba98",
+        command: "sleep 100 && echo foo",
+        exit_code: 0,
+        duration: "1m40s",
+        log_path: "/tmp/shelley-jobs/fedcba98.log",
+        tail: "foo",
+      },
+    },
+  ]);
+  await page.route("**/api/stream2*", (route) => route.abort());
+  await page.route("**/api/conversations/snapshot", async (route) => {
+    const snapshotResponse = await route.fetch();
+    const snapshot = await snapshotResponse.json();
+    const conversation = snapshot.conversations.find(
+      (c: { conversation_id: string }) => c.conversation_id === conversationId,
+    );
+    expect(conversation).toBeTruthy();
+    conversation.queued_messages = body.conversation.queued_messages;
+    await route.fulfill({ response: snapshotResponse, json: snapshot });
+  });
+  await page.route(`**/api/conversation/${conversationId}*`, (route) =>
+    route.fulfill({ response, json: body }),
+  );
+  await page.goto(`/c/${slug}`);
+
+  const parsed = page.getByTestId("message").filter({ hasText: "bin/q --only 59e4fc203f" });
+  await expect(parsed).toHaveClass(/message-tool-card/);
+  await expect(parsed.getByTestId("message-author-background-job")).toHaveCount(0);
+  const card = parsed.locator(".bash-tool");
+  await expect(card.getByTestId("bash-tool-finished-job")).toHaveText("Finished");
+  const positions = await card.locator(".bash-tool-summary").evaluate((summary) => {
+    const top = (selector: string) => summary.querySelector(selector)!.getBoundingClientRect().top;
+    return {
+      emoji: top(".bash-tool-emoji"),
+      command: top(".bash-tool-command"),
+      status: top(".bash-tool-background"),
+    };
+  });
+  expect(Math.abs(positions.emoji - positions.command)).toBeLessThan(2);
+  expect(positions.status).toBeGreaterThan(positions.command);
+  await expect(card.locator(".bash-tool-details")).toHaveCount(0);
+  await card.getByRole("button", { name: "Expand" }).click();
+  await expect(card.locator(".bash-tool-code").last()).toHaveText("q: checking\n\nq: passed");
+  await expect(card.locator(".bash-tool-code").last()).toHaveCSS("font-family", /mono/i);
+  await expect(card).not.toContainText("abc12345");
+  await expect(card.locator(".bash-tool-label").last()).toHaveText("Output:");
+
+  const unknown = page.locator('[data-message-id="job-def67890"]');
+  await expect(unknown).toHaveClass(/message-tool-card/);
+  const unknownCard = unknown.locator(".bash-tool");
+  await expect(unknownCard.getByTestId("bash-tool-finished-job")).toHaveText("Background update");
+  await expect(unknownCard.locator(".bash-tool-details")).toHaveCount(0);
+  await unknownCard.getByRole("button", { name: "Expand" }).click();
+  await expect(unknownCard.locator(".bash-tool-section")).toHaveCount(1);
+  await expect(unknownCard.locator(".bash-tool-label")).toHaveText("Output:");
+  await expect(unknownCard.locator(".bash-tool-code").last()).toHaveText(notices[1].text);
+
+  const lost = page.locator('[data-message-id="job-1234abcd"] .bash-tool');
+  await expect(lost.getByTestId("bash-tool-finished-job")).toHaveText("Lost");
+  await lost.getByRole("button", { name: "Expand" }).click();
+  await expect(lost.locator(".bash-tool-label").last()).toHaveText("Output:");
+  await expect(lost.locator(".bash-tool-code").last()).toHaveClass(/error/);
+  await expect(lost.locator(".bash-tool-code").last()).toHaveText("one\ntwo");
+
+  const queued = page.getByTestId("queued-ghost");
+  await expect(queued).toHaveClass(/message-tool-card/);
+  await expect(queued.getByTestId("queued-badge")).toBeVisible();
+  await expect(queued.getByTestId("bash-tool-finished-job")).toHaveText("Finished");
+  await expect(queued.locator(".bash-tool-details")).toHaveCount(0);
+  await queued.getByRole("button", { name: "Expand" }).click();
+  await expect(queued.locator(".bash-tool-code").last()).toHaveText("foo");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const widths = await queued.evaluate((element) => [
+    element.getBoundingClientRect().width,
+    element.querySelector(".message-content")!.getBoundingClientRect().width,
+  ]);
+  expect(Math.abs(widths[0] - widths[1])).toBeLessThan(2);
+
+  await page.reload();
+  await expect(parsed.locator(".bash-tool-details")).toHaveCount(0);
+  await expect(parsed.getByTestId("bash-tool-finished-job")).toHaveText("Finished");
 });

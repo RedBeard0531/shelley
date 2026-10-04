@@ -1625,7 +1625,8 @@ body {
   color: var(--link-color);
 }
 
-.message-conversation > .message-content {
+.message-conversation > .message-content,
+.message-queued.message-tool-card > .message-content {
   width: 100%;
 }
 
@@ -2415,6 +2416,26 @@ body {
   color: var(--text-secondary);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* On narrow screens the job status gets its own line rather than squeezing
+   a long command down to a few unreadable characters. */
+@media (max-width: 640px) {
+  .bash-tool-summary:has(.bash-tool-background) {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+  }
+
+  .bash-tool-summary:has(.bash-tool-background) .bash-tool-command {
+    flex-basis: calc(100% - 2rem);
+  }
+
+  .bash-tool-summary:has(.bash-tool-background) .bash-tool-background {
+    margin-left: 2rem;
+    max-width: calc(100% - 2rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 .bash-tool-running {
@@ -3529,8 +3550,13 @@ diffs-container {
 }
 
 /* Ghost queued messages render with a dashed border to read as "pending". */
-.message-queued .message-content {
+.message-queued:not(.message-tool-card) .message-content,
+.message-queued.message-tool-card .bash-tool {
   border: 1px dashed rgba(249, 115, 22, 0.5);
+}
+
+.message-queued.message-tool-card .queued-message-badge {
+  margin: 0 1rem 0.75rem;
 }
 
 .queued-cancel-all-row {

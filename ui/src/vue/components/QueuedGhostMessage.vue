@@ -5,14 +5,21 @@
   <div
     :class="[
       'message',
-      source ? 'message-tool message-conversation' : 'message-user',
+      jobNotice
+        ? 'message-tool message-tool-card'
+        : source
+          ? 'message-tool message-conversation'
+          : 'message-user',
       'message-queued',
     ]"
     data-testid="queued-ghost"
   >
     <div class="message-content" data-testid="message-content">
-      <ConversationMessageAuthor v-if="source" :source="source" />
-      <div class="whitespace-pre-wrap break-words">{{ text }}</div>
+      <BackgroundJobNoticeCard v-if="jobNotice" :source="jobNotice" :text="text" />
+      <template v-else>
+        <ConversationMessageAuthor v-if="source" :source="source" />
+        <div class="whitespace-pre-wrap break-words">{{ text }}</div>
+      </template>
       <div class="queued-message-badge" data-testid="queued-badge">
         <span class="queued-message-badge-label">
           <svg
@@ -56,6 +63,7 @@
 import { computed } from "vue";
 import { type QueuedMessage, queuedMessageText } from "../../types";
 import { messageSource } from "../../utils/messageSource";
+import BackgroundJobNoticeCard from "./BackgroundJobNoticeCard.vue";
 import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
 
 const props = defineProps<{
@@ -67,4 +75,7 @@ const props = defineProps<{
 
 const text = computed(() => queuedMessageText(props.queued));
 const source = computed(() => messageSource(props.queued.user_data));
+const jobNotice = computed(() =>
+  source.value && "backgroundJobId" in source.value ? source.value : null,
+);
 </script>

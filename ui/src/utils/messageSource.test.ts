@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { messageSource } from "./messageSource";
+import { messageSource, parseLegacyBackgroundJobNotice } from "./messageSource";
 
 for (const relationship of ["subagent", "parent"] as const) {
   const data = {
@@ -77,3 +77,71 @@ assert.deepEqual(messageSource(lost), {
     tail: "FAIL",
   },
 });
+
+// Notices recorded before outcomes were structured must render as the same
+// bash card, with their output kept verbatim (including newlines).
+assert.deepEqual(
+  parseLegacyBackgroundJobNotice(
+    "Background job 1a2b3c4d finished: exit 0, 4m31s. Log: /tmp/shelley-jobs/1a2b3c4d.log\n" +
+      "Command: bin/q --only 59e4fc203f\n\nq: checking\n\nq: passed",
+    "1a2b3c4d",
+  ),
+  {
+    command: "bin/q --only 59e4fc203f",
+    exitCode: 0,
+    duration: "4m31s",
+    logPath: "/tmp/shelley-jobs/1a2b3c4d.log",
+    tail: "q: checking\n\nq: passed",
+  },
+);
+assert.deepEqual(
+  parseLegacyBackgroundJobNotice(
+    "Background job 1a2b3c4d lost (host rebooted or killed). Log: /tmp/job.log\nCommand: sleep 100",
+    "1a2b3c4d",
+  ),
+  { command: "sleep 100", exitCode: null, duration: "", logPath: "/tmp/job.log", tail: "" },
+);
+assert.deepEqual(
+  parseLegacyBackgroundJobNotice(
+    "Background job 1a2b3c4d lost (host rebooted or killed). Log: /tmp/job.log\nCommand: sleep 100\n\none\ntwo",
+    "1a2b3c4d",
+  ),
+  { command: "sleep 100", exitCode: null, duration: "", logPath: "/tmp/job.log", tail: "one\ntwo" },
+);
+assert.deepEqual(
+  parseLegacyBackgroundJobNotice(
+    "Background job 1a2b3c4d finished: exit 7, 1s. Log: /tmp/job.log\nCommand: false",
+    "1a2b3c4d",
+  ),
+  { command: "false", exitCode: 7, duration: "1s", logPath: "/tmp/job.log", tail: "" },
+);
+assert.deepEqual(
+  parseLegacyBackgroundJobNotice(
+    "Background job 1a2b3c4d finished: exit 0, 1s. Log: /tmp/a. Log: b/job.log\nCommand: true\n\nok",
+    "1a2b3c4d",
+  ),
+  { command: "true", exitCode: 0, duration: "1s", logPath: "/tmp/a. Log: b/job.log", tail: "ok" },
+);
+assert.equal(
+  parseLegacyBackgroundJobNotice(
+    "Background job other finished: exit 0, 1s. Log: /tmp/job.log\nCommand: true",
+    "1a2b3c4d",
+  ),
+  null,
+);
+assert.equal(
+  parseLegacyBackgroundJobNotice(
+    "Background job 1a2b3c4d finished: exit 0, 1s. Log: /tmp/job.log\nCommand: true\nnot blank",
+    "1a2b3c4d",
+  ),
+  null,
+);
+const tail = "first\n\n`literal`\n<script>alert(1)</script>\n\u001b[31mred\u001b[0m";
+assert.equal(
+  parseLegacyBackgroundJobNotice(
+    `Background job 1a2b3c4d finished: exit 0, 2s. Log: /tmp/job.log\nCommand: echo ok\n\n${tail}`,
+    "1a2b3c4d",
+  )?.tail,
+  tail,
+);
+assert.equal(parseLegacyBackgroundJobNotice("unrecognized notice\nfoo", "1a2b3c4d"), null);

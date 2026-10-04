@@ -159,19 +159,11 @@
             :on-fork="hasForkAction ? handleFork : undefined"
           />
 
-          <ConversationMessageAuthor
-            v-if="legacyJobNotice && entityIndex === 0"
-            :source="legacyJobNotice"
-          />
-
-          <template v-if="jobNotice?.outcome">
-            <BashTool
+          <template v-if="jobNotice">
+            <BackgroundJobNoticeCard
               v-if="entityIndex === 0"
-              :tool-input="{ command: jobNotice.outcome.command }"
-              :tool-result="[{ ID: '', Type: 2, Text: jobNotice.outcome.tail }]"
-              :has-error="jobNotice.outcome.exitCode !== 0"
-              :execution-time="jobNotice.outcome.duration"
-              :finished-job="{ jobId: jobNotice.backgroundJobId, ...jobNotice.outcome }"
+              :source="jobNotice"
+              :text="messageText"
             />
           </template>
 
@@ -226,7 +218,6 @@
                 :markdown-text="item.markdownText"
                 :citations="item.citations"
                 :render-markdown="
-                  !jobNotice &&
                   shouldRenderMarkdown(markdownMode, isUser && !sender, isDistilledUser)
                 "
                 :message-id="message.message_id"
@@ -292,9 +283,8 @@ import CitedText from "./CitedText.vue";
 import { coalesceContent, splitContentEntities } from "../../utils/coalesceContent";
 import { perfCount } from "../../utils/perf";
 import { messageSource } from "../../utils/messageSource";
-import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
 import ConversationMessageCard from "./ConversationMessageCard.vue";
-import BashTool from "./tools/BashTool.vue";
+import BackgroundJobNoticeCard from "./BackgroundJobNoticeCard.vue";
 import MessageDisplayData from "./MessageDisplayData.vue";
 
 interface ToolDisplay {
@@ -412,12 +402,11 @@ const showUserEmails = inject<ComputedRef<boolean>>("showUserEmails");
 const sender = computed(() =>
   isUser.value && !isDistilledUser.value ? messageSource(props.message.user_data) : null,
 );
-// Background job notices carry raw command output: show it as a bash card,
-// or verbatim for notices stored before their outcome was structured.
+// Background job notices are user messages to the model but bash tool cards
+// to the reader, including notices stored before outcomes were structured.
 const jobNotice = computed(() =>
   sender.value && "backgroundJobId" in sender.value ? sender.value : null,
 );
-const legacyJobNotice = computed(() => (jobNotice.value?.outcome ? null : jobNotice.value));
 // Messages from another conversation render as a tool card.
 const conversationSender = computed(() =>
   sender.value && "conversationId" in sender.value ? sender.value : null,
@@ -641,10 +630,9 @@ const hasRenderableContent = computed(() => {
 
 // ---- Message container classes ----
 const messageClasses = computed(() => {
-  if (jobNotice.value?.outcome || conversationSender.value) {
+  if (jobNotice.value || conversationSender.value) {
     return "message message-tool message-tool-card";
   }
-  if (sender.value) return "message message-tool message-conversation";
   if (isUser.value && !isDistilledUser.value) {
     return "message message-user";
   }

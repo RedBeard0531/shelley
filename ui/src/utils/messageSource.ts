@@ -85,3 +85,30 @@ function backgroundJobOutcome(parsed: Record<string, unknown>): BackgroundJobOut
     tail,
   };
 }
+
+// Earlier notices only stored background_job_id and the model-facing text.
+// Recover the fields from the exact format produced by BackgroundJobOutcome.Notice
+// so existing conversation history uses the same bash card as new notices.
+export function parseLegacyBackgroundJobNotice(
+  text: string,
+  jobId: string,
+): BackgroundJobOutcome | null {
+  const lines = text.split("\n");
+  const header =
+    /^Background job (\S+) (?:finished: exit (\d+), (.+?)\. Log: (.+)|lost \(host rebooted or killed\)\. Log: (.+))$/.exec(
+      lines[0],
+    );
+  const command = /^Command: (.+)$/.exec(lines[1] ?? "");
+  if (!header || header[1] !== jobId || !command || (lines.length > 2 && lines[2] !== "")) {
+    return null;
+  }
+  const exitCode = header[2] === undefined ? null : Number(header[2]);
+  if (exitCode !== null && !Number.isSafeInteger(exitCode)) return null;
+  return {
+    command: command[1],
+    exitCode,
+    duration: header[3] ?? "",
+    logPath: header[4] ?? header[5],
+    tail: lines.slice(3).join("\n"),
+  };
+}

@@ -8,34 +8,25 @@
       <div class="bash-tool-summary">
         <span class="bash-tool-emoji" :class="{ running: isRunning }">🛠️</span>
         <HighlightedCode
+          v-if="command"
           class="bash-tool-command"
           :source="displayCommand"
           language="shellscript"
           :title="command"
         />
-        <span v-if="displayData?.workingDir" class="bash-tool-cwd" :title="displayData.workingDir">
+        <span v-else class="bash-tool-command">Output</span>
+        <span
+          v-if="displayData?.workingDir && !background"
+          class="bash-tool-cwd"
+          :title="displayData.workingDir"
+        >
           in {{ displayData.workingDir }}
         </span>
-        <span
-          v-if="background"
-          class="bash-tool-background"
-          data-testid="bash-tool-background"
-          :title="`Still running in the background. Log: ${background.logPath}. Cancel with kill -- -${background.pgid}`"
-        >
-          background job {{ background.jobId }}
+        <span v-if="background" class="bash-tool-background" data-testid="bash-tool-background">
+          Backgrounded
         </span>
-        <span
-          v-if="finishedJob"
-          class="bash-tool-background"
-          data-testid="bash-tool-finished-job"
-          :title="`Log: ${finishedJob.logPath}`"
-        >
-          background job {{ finishedJob.jobId }} ·
-          {{
-            finishedJob.exitCode === null
-              ? "lost"
-              : `exit ${finishedJob.exitCode}, ${finishedJob.duration}`
-          }}
+        <span v-if="returnState" class="bash-tool-background" data-testid="bash-tool-finished-job">
+          {{ returnLabels[returnState] }}
         </span>
       </div>
       <button
@@ -65,7 +56,7 @@
         <div class="bash-tool-label">Working Directory:</div>
         <pre class="bash-tool-code bash-tool-code-cwd">{{ displayData.workingDir }}</pre>
       </div>
-      <div class="bash-tool-section">
+      <div v-if="command" class="bash-tool-section">
         <div class="bash-tool-label">Command:</div>
         <HighlightedCode
           tag="pre"
@@ -73,11 +64,6 @@
           :source="command"
           language="shellscript"
         />
-      </div>
-
-      <div v-if="finishedJob" class="bash-tool-section">
-        <div class="bash-tool-label">Log:</div>
-        <pre class="bash-tool-code">{{ finishedJob.logPath }}</pre>
       </div>
 
       <div v-if="isRunning && streamingOutput" class="bash-tool-section">
@@ -89,10 +75,12 @@
         />
       </div>
 
-      <div v-if="isComplete" class="bash-tool-section">
+      <div v-if="isComplete && (!background || output)" class="bash-tool-section">
         <div class="bash-tool-label">
           {{ outputLabel }}:
-          <span v-if="executionTime" class="bash-tool-time">{{ executionTime }}</span>
+          <span v-if="executionTime && !background" class="bash-tool-time">
+            {{ executionTime }}
+          </span>
         </div>
         <AnsiText
           :class-name="`bash-tool-code ${hasError ? 'error' : ''}`"
@@ -111,12 +99,21 @@ import AnsiText from "./AnsiText.vue";
 import ToolChevron from "./ToolChevron.vue";
 import RunningToolTime from "./RunningToolTime.vue";
 import { isCancelledToolResult } from "../../utils/toolStatus";
+import { backgroundOutput, type BackgroundJobDisplay } from "../../../utils/backgroundOutput";
 
 interface BashDisplayData {
   workingDir: string;
   exitCode?: number;
-  background?: { jobId: string; logPath: string; pgid: number };
+  background?: BackgroundJobDisplay;
 }
+
+type ReturnState = "finished" | "failed" | "lost" | "unknown";
+const returnLabels: Record<ReturnState, string> = {
+  finished: "Finished",
+  failed: "Failed",
+  lost: "Lost",
+  unknown: "Background update",
+};
 
 const props = defineProps<{
   toolInput?: unknown;
@@ -127,8 +124,8 @@ const props = defineProps<{
   executionTime?: string;
   display?: unknown;
   streamingOutput?: string;
-  // Set when rendering the notice that a background job finished.
-  finishedJob?: { jobId: string; logPath: string; exitCode: number | null; duration: string };
+  // A completion notice is a separate card from the original tool call.
+  returnState?: ReturnState;
 }>();
 
 /** Max lines shown in the streaming preview before "Show more" is needed. */
@@ -189,21 +186,24 @@ const command = computed(() => {
   return typeof ti === "string" ? ti : "";
 });
 
-const output = computed(() =>
+const rawOutput = computed(() =>
   props.toolResult && props.toolResult.length > 0 && props.toolResult[0].Text
     ? props.toolResult[0].Text
     : "",
 );
 
 const background = computed(() => displayData.value?.background ?? null);
+const output = computed(() =>
+  background.value ? backgroundOutput(rawOutput.value, background.value) : rawOutput.value,
+);
 
 const isCancelled = computed(() => props.hasError && isCancelledToolResult(output.value));
 
 const outputLabel = computed(() => {
   if (isCancelled.value) return "Output (cancelled)";
-  if (props.finishedJob?.exitCode === null) return "Output (job lost: host rebooted or killed)";
-  if (background.value) return `Output so far (moved to background job ${background.value.jobId})`;
-  const exitCode = props.finishedJob?.exitCode ?? displayData.value?.exitCode;
+  if (props.returnState) return "Output";
+  if (background.value) return "Output so far";
+  const exitCode = displayData.value?.exitCode;
   if (typeof exitCode === "number") return `Output (exit code ${exitCode})`;
   return props.hasError ? "Output (Error)" : "Output";
 });
