@@ -97,13 +97,10 @@ const (
 	bashDescription = `Executes shell commands via bash --login -c, returning combined stdout/stderr.
 Shell state (cwd, variables, aliases) does not persist; use change_dir for cwd.
 
-Commands still running after 60s move to the background: the result gives
-the job ID, log path, and process group. If a command will likely take longer
-than 60s (builds, full test suites, CI runs, large downloads, sleep 60+), set
-background=true so you are not blocked waiting. Completion wakes this
-conversation, so never poll or sleep waiting for it; keep working, or end
-your turn.
-Do not use &, nohup, or disown.
+After 60s, commands move to the background. You may start slow commands in the
+background to begin with. Completion wakes this conversation, so never poll or
+sleep waiting for it; keep working, or end your turn. Do not use &, nohup, or
+disown.
 
 For servers and watch modes, which never exit, use tmux.
 
@@ -127,7 +124,7 @@ write a file and run it; both can share one call.
     },
     "background": {
       "type": "boolean",
-      "description": "Set true for commands expected to take over 60s; returns immediately and completion wakes you"
+      "description": "Set true to background immediately; commands background automatically after 60s"
     }
   }
 }
