@@ -1459,6 +1459,22 @@ func (s *Server) conversationURL(slug string) string {
 	return fmt.Sprintf("https://%s:%d%s", hostname, s.listenPort, path)
 }
 
+// hasActiveDelegatedWork reports whether conversationID has a running
+// background job or a working subagent.
+func (s *Server) hasActiveDelegatedWork(conversationID string) bool {
+	if len(s.runningBackgroundJobsOf(conversationID)) > 0 {
+		return true
+	}
+	children, err := s.db.GetSubagents(context.Background(), conversationID)
+	if err != nil {
+		s.logger.Warn("failed to load subagents", "conversationID", conversationID, "error", err)
+		return false
+	}
+	return slices.ContainsFunc(children, func(c generated.Conversation) bool {
+		return c.AgentWorking && isManagedChild(c) && !isBtwReader(c)
+	})
+}
+
 // publishConversationState broadcasts a conversation state update to ALL active
 // conversation streams. This allows clients to see the working state of other conversations.
 func (s *Server) publishConversationState(state ConversationState) {
@@ -1478,7 +1494,9 @@ func (s *Server) publishConversationState(state ConversationState) {
 		// with disable_notifications suppress all end-of-turn notifications
 		// (push, email, discord, ntfy) and hooks, same as subagents.
 		notifyDisabled := convErr == nil && db.ParseConversationOptions(conv.ConversationOptions).DisableNotifications
-		suppressNotify := isSubagent || notifyDisabled
+		// Work still running for this conversation will wake it again when it
+		// finishes, so that later turn is the one worth notifying about.
+		suppressNotify := isSubagent || notifyDisabled || s.hasActiveDelegatedWork(state.ConversationID)
 		var hooks []db.ConversationHook
 		if !suppressNotify {
 			s.mu.Lock()
@@ -1553,9 +1571,9 @@ func (s *Server) publishConversationState(state ConversationState) {
 					s.logger.Error("end-of-turn hook failed", "conversationID", input.ConversationID, "error", err)
 				}
 			}()
+			// The UI raises a browser notification from this.
+			notifEvent = &event
 		}
-		// Still set notifEvent so the SSE stream broadcasts it to the UI.
-		notifEvent = &event
 	}
 
 	s.mu.Lock()

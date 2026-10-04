@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/server/notifications"
 )
@@ -55,6 +56,59 @@ func TestPublishConversationStateHonorsDisableNotifications(t *testing.T) {
 			}
 
 			// Simulate the agent finishing a turn.
+			server.publishConversationState(ConversationState{
+				ConversationID: conversation.ConversationID,
+				Working:        false,
+				Model:          "predictable",
+			})
+
+			got := ch.count() > 0
+			if got != tc.wantHit {
+				t.Fatalf("notification fired = %v, want %v (events=%d)", got, tc.wantHit, ch.count())
+			}
+		})
+	}
+}
+
+func TestPublishConversationStateWaitsForDelegatedWork(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		setup   func(t *testing.T, s *Server, database *db.DB, conversationID string)
+		wantHit bool
+	}{
+		{"idle subagent notifies", func(t *testing.T, s *Server, database *db.DB, id string) {
+			if _, err := database.CreateSubagentConversation(t.Context(), "helper", id, nil); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+		{"working subagent suppresses", func(t *testing.T, s *Server, database *db.DB, id string) {
+			child, err := database.CreateSubagentConversation(t.Context(), "helper", id, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := database.SetConversationAgentWorking(t.Context(), child.ConversationID, true); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+		{"running background job suppresses", func(t *testing.T, s *Server, database *db.DB, id string) {
+			s.setBackgroundJobRunning(claudetool.BackgroundJob{ID: "job1", ConversationID: id}, true)
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, database, _ := newTestServer(t)
+			ch := &recordingChannel{}
+			server.RegisterNotificationChannel(ch)
+
+			conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+			if err != nil {
+				t.Fatalf("failed to create conversation: %v", err)
+			}
+			tc.setup(t, server, database, conversation.ConversationID)
+
 			server.publishConversationState(ConversationState{
 				ConversationID: conversation.ConversationID,
 				Working:        false,
