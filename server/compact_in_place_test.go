@@ -383,6 +383,51 @@ func TestContextNudger(t *testing.T) {
 	}
 }
 
+func callItem(seq int64, id string) contextItem {
+	return contextItem{from: seq, to: seq, source: &generated.Message{SequenceID: seq, Type: string(db.MessageTypeAgent)}, message: llm.Message{Role: llm.MessageRoleAssistant, Content: []llm.Content{
+		{Type: llm.ContentTypeToolUse, ID: id, ToolName: "bash"},
+	}}}
+}
+
+func outputItem(seq int64, id, text string) contextItem {
+	// Like a stored tool output, which is a user message that carries only results.
+	return contextItem{from: seq, to: seq, source: &generated.Message{SequenceID: seq, Type: string(db.MessageTypeUser)}, message: llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{
+		{Type: llm.ContentTypeToolResult, ToolUseID: id, ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: text}}},
+	}}}
+}
+
+// TestBuildCompactionKeepsCallsWithOutputs: a range may neither start on a
+// tool output nor end on a tool call, and the other problems of the request
+// are reported with it.
+func TestBuildCompactionKeepsCallsWithOutputs(t *testing.T) {
+	out := strings.Repeat("x", 400)
+	items := []contextItem{
+		textItem(1, llm.MessageRoleUser, "do it"),
+		callItem(2, "a"), outputItem(3, "a", out),
+		callItem(4, "b"), outputItem(5, "b", out),
+		textItem(6, llm.MessageRoleAssistant, "done"),
+		textItem(7, llm.MessageRoleAssistant, strings.Repeat("x", 4*25_000)),
+	}
+	col := func(from, to claudetool.IndexID, note string) claudetool.CompactCollapse {
+		return claudetool.CompactCollapse{From: from, To: to, Note: note}
+	}
+	_, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{
+		col("3", "6", "n"), col("4", "4", "n"), col("2", "3", ""), col("3", "4", "n"),
+	}})
+	want := "4 problems. Nothing was compacted; fix them and send the whole request again:\n" +
+		"- collapse 3-6: starts with a tool output, which must stay with its call; start at the call before it, or after the output\n" +
+		"- collapse 4-4: ends with a tool call, which must stay with its output; extend it to include the output, or end before the call\n" +
+		"- collapse 2-3: note is empty\n" +
+		"- collapse 3-4: starts with a tool output"
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("got %v", err)
+	}
+	c, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{col("2", "3", "n"), col("4", "6", "n")}})
+	if err != nil || len(c.Squishes) != 2 {
+		t.Fatalf("%+v, %v", c, err)
+	}
+}
+
 func TestBuildCompaction(t *testing.T) {
 	big := strings.Repeat("x", 4*15_000) // ~15k tokens
 	items := []contextItem{
@@ -410,6 +455,18 @@ func TestBuildCompaction(t *testing.T) {
 		if _, err := buildCompaction(items, 20_000, in); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("want error %q, got %v", want, err)
 		}
+	}
+	// Every problem is reported at once, and nothing is compacted.
+	_, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{
+		Trim:     []string{"nope"},
+		Collapse: []claudetool.CompactCollapse{col("99", "2"), col("1", "3")},
+	})
+	want := "3 problems. Nothing was compacted; fix them and send the whole request again:\n" +
+		"- trim nope: no tool output with that id in the index\n" +
+		"- collapse 99-2: unknown id; use ids from the index\n" +
+		"- collapse 1-3: covers ~"
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("want error starting %q, got %v", want, err)
 	}
 	// Over the limit is fine for a single message or call-and-output pair.
 	c, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{col("3", "5"), col("1", "2")}})

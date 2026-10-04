@@ -135,53 +135,77 @@ func compactionEvidence(items []contextItem) (seqs []int64, toolUseIDs []string)
 }
 
 // buildCompaction turns the agent's request into a record, validating it
-// against items (the current view) and its recent part.
+// against items (the current view) and its recent part. It reports every
+// problem at once.
 func buildCompaction(items []contextItem, keepRecentTokens int, in claudetool.CompactInPlaceInput) (db.InPlaceCompaction, error) {
 	var c db.InPlaceCompaction
 	if len(in.Trim) == 0 && len(in.Collapse) == 0 {
 		return c, fmt.Errorf("nothing to compact: give trim and/or collapse")
 	}
+	var problems []string
 	for _, id := range in.Trim {
 		i, ok := findToolResult(items, id)
-		if !ok {
-			return c, fmt.Errorf("trim %s: no tool output with that id in the index", id)
+		switch {
+		case !ok:
+			problems = append(problems, fmt.Sprintf("trim %s: no tool output with that id in the index", id))
+		case slices.ContainsFunc(c.Trims, func(t db.CompactionTrim) bool { return t.ToolUseID == id }):
+			problems = append(problems, fmt.Sprintf("trim %s: listed twice", id))
+		default:
+			c.Trims = append(c.Trims, db.CompactionTrim{SequenceID: items[i].from, ToolUseID: id})
 		}
-		if slices.ContainsFunc(c.Trims, func(t db.CompactionTrim) bool { return t.ToolUseID == id }) {
-			return c, fmt.Errorf("trim %s: listed twice", id)
-		}
-		c.Trims = append(c.Trims, db.CompactionTrim{SequenceID: items[i].from, ToolUseID: id})
 	}
 
 	recent := recentStart(items, keepRecentTokens)
 	type span struct{ i, j int }
 	var spans []span
 	for _, col := range in.Collapse {
-		i, j := indexOfIndexID(items, col.From), indexOfIndexID(items, col.To)
 		name := fmt.Sprintf("collapse %s-%s", col.From, col.To)
+		problem := func(format string, args ...any) {
+			problems = append(problems, name+": "+fmt.Sprintf(format, args...))
+		}
+		i, j := indexOfIndexID(items, col.From), indexOfIndexID(items, col.To)
 		switch {
 		case i < 0 || j < 0:
-			return c, fmt.Errorf("%s: unknown id; use ids from the index", name)
+			problem("unknown id; use ids from the index")
+			continue
 		case j < i:
-			return c, fmt.Errorf("%s: from comes after to", name)
+			problem("from comes after to")
+			continue
 		case j >= recent:
-			return c, fmt.Errorf("%s: reaches into the recent part (from %s on), which cannot be collapsed", name, itemID(items[recent]))
-		case strings.TrimSpace(col.Note) == "":
-			return c, fmt.Errorf("%s: note is empty", name)
+			problem("reaches into the recent part (from %s on), which cannot be collapsed", itemID(items[recent]))
+			continue
+		case hasContent(items[i].message, llm.ContentTypeToolResult):
+			problem("starts with a tool output, which must stay with its call; start at the call before it, or after the output")
+			continue
+		case hasContent(items[j].message, llm.ContentTypeToolUse):
+			problem("ends with a tool call, which must stay with its output; extend it to include the output, or end before the call")
+			continue
+		case slices.ContainsFunc(spans, func(s span) bool { return i <= s.j && s.i <= j }):
+			problem("overlaps another collapse")
+			continue
 		}
-		tokens := itemTokens(items[i : j+1])
-		if tokens > maxCollapseTokens && j-i > 1 {
-			return c, fmt.Errorf("%s: covers ~%d tokens; at most ~%d per collapse unless it is one tool call and its output, so split it", name, tokens, maxCollapseTokens)
-		}
-		if (len(col.Note)+3)/4 >= tokens {
-			return c, fmt.Errorf("%s: note is not shorter than the ~%d tokens it replaces", name, tokens)
-		}
-		for _, s := range spans {
-			if i <= s.j && s.i <= j {
-				return c, fmt.Errorf("%s: overlaps another collapse", name)
-			}
-		}
+		// The range is sound; whatever else is wrong with it, it is taken.
 		spans = append(spans, span{i, j})
+		tokens := itemTokens(items[i : j+1])
+		switch {
+		case strings.TrimSpace(col.Note) == "":
+			problem("note is empty")
+			continue
+		case tokens > maxCollapseTokens && j-i > 1:
+			problem("covers ~%d tokens; at most ~%d per collapse unless it is one tool call and its output, so split it", tokens, maxCollapseTokens)
+			continue
+		case (len(col.Note)+3)/4 >= tokens:
+			problem("note is not shorter than the ~%d tokens it replaces", tokens)
+			continue
+		}
 		c.Squishes = append(c.Squishes, db.CompactionSquish{FromSequenceID: items[i].from, ToSequenceID: items[j].to, Summary: col.Note})
+	}
+	switch len(problems) {
+	case 0:
+	case 1:
+		return c, fmt.Errorf("%s. Nothing was compacted; fix this and send the whole request again", problems[0])
+	default:
+		return c, fmt.Errorf("%d problems. Nothing was compacted; fix them and send the whole request again:\n- %s", len(problems), strings.Join(problems, "\n- "))
 	}
 	// Squishes apply in order, each to the view the previous ones left; they
 	// are disjoint, so order them as they appear.
