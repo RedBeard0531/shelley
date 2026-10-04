@@ -146,6 +146,10 @@ func buildCompaction(history []contextItem, keepRecentTokens int, in claudetool.
 	if err != nil {
 		return c, err
 	}
+	alone, err := aloneRows(items)
+	if err != nil {
+		return c, err
+	}
 	recent := recentStart(items, keepRecentTokens)
 	var problems []string
 	for _, id := range in.Trim {
@@ -190,6 +194,15 @@ func buildCompaction(history []contextItem, keepRecentTokens int, in claudetool.
 			problem("overlaps another collapse")
 			continue
 		}
+		// A row that can only be collapsed on its own may not share a range.
+		if k := slices.Index(alone[i:j+1], true); k >= 0 && j > i {
+			instead := "collapse each of those rows on its own"
+			if r := suggestRanges(items, alone, i, j); r != "" {
+				instead = "collapse e.g. " + r + " instead"
+			}
+			problem("covers %s, which can only be collapsed on its own; %s", itemID(items[i+k]), instead)
+			continue
+		}
 		// The range is sound; whatever else is wrong with it, it is taken.
 		spans = append(spans, span{i, j})
 		tokens := itemTokens(items[i : j+1])
@@ -217,6 +230,61 @@ func buildCompaction(history []contextItem, keepRecentTokens int, in claudetool.
 	// are disjoint, so order them as they appear.
 	slices.SortFunc(c.Squishes, func(a, b db.CompactionSquish) int { return int(a.FromSequenceID - b.FromSequenceID) })
 	return c, nil
+}
+
+// collapsesAlone reports whether a collapse may cover it only on its own: a
+// message from the user (or the parent agent), or a note or summary from an
+// earlier compaction. They carry the task and its rules, and the agent
+// tends to fold them into notes that keep little of them.
+func collapsesAlone(it contextItem) (bool, error) {
+	switch {
+	case it.source == nil:
+		return true, nil
+	case it.source.Type != string(db.MessageTypeUser) || isToolResultMessage(it.message):
+		return false, nil
+	case it.source.UserData == nil:
+		return true, nil
+	}
+	tag, _, err := provenanceTag([]byte(*it.source.UserData))
+	if err != nil {
+		return false, fmt.Errorf("message %s: %w", itemID(it), err)
+	}
+	return tag == "" || tag == "parent_message", nil
+}
+
+// aloneRows applies collapsesAlone to items.
+func aloneRows(items []contextItem) ([]bool, error) {
+	alone := make([]bool, len(items))
+	for i, it := range items {
+		var err error
+		if alone[i], err = collapsesAlone(it); err != nil {
+			return nil, err
+		}
+	}
+	return alone, nil
+}
+
+// suggestRanges lists the ranges of items[i..j] between the rows that can
+// only be collapsed on their own.
+func suggestRanges(items []contextItem, alone []bool, i, j int) string {
+	var ranges []string
+	start := -1
+	for k := i; k <= j+1; k++ {
+		switch {
+		case k <= j && !alone[k]:
+			if start < 0 {
+				start = k
+			}
+		case start >= 0:
+			r := itemID(items[start])
+			if start < k-1 {
+				r += "-" + itemID(items[k-1])
+			}
+			ranges = append(ranges, r)
+			start = -1
+		}
+	}
+	return strings.Join(ranges, ", ")
 }
 
 func indexOfIndexID(items []contextItem, id claudetool.IndexID) int {
@@ -303,11 +371,17 @@ sequence_id (see the previous-conversations skill).
 Then call compact_in_place with action "compact": trim lists tool_use_ids;
 collapse lists {from, to, note} ranges of ids from the table. A range may not
 split a call from its output, nor cover more than ~%dk tokens unless it is just
-one tool call and its output.`
+one tool call and its output. Rows marked * are messages from the user or the
+parent and notes and summaries from earlier compactions: they carry the task
+and its rules, so a range may not cover one unless it is just that row.`
 
 // compactIndex renders the index the agent compacts from.
 func compactIndex(history []contextItem, keepRecentTokens int) (string, error) {
 	items, err := compactionView(history)
+	if err != nil {
+		return "", err
+	}
+	alone, err := aloneRows(items)
 	if err != nil {
 		return "", err
 	}
@@ -329,7 +403,7 @@ func compactIndex(history []contextItem, keepRecentTokens int) (string, error) {
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "id\trole\ttokens\tcontent")
 	toolNames := map[string]string{}
-	for _, it := range items[:recent] {
+	for i, it := range items[:recent] {
 		role := "note"
 		switch {
 		case it.source == nil:
@@ -337,6 +411,9 @@ func compactIndex(history []contextItem, keepRecentTokens int) (string, error) {
 			role = "assistant"
 		default:
 			role = "user"
+		}
+		if alone[i] {
+			role += "*"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", itemID(it), role, estimatePiMessageTokens(it.message), describeItem(it, toolNames))
 	}

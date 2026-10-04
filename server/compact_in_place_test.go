@@ -201,6 +201,9 @@ func TestCompactInPlaceEndToEnd(t *testing.T) {
 			t.Fatalf("index missing %q:\n%s", want, index)
 		}
 	}
+	if want := regexp.MustCompile(fmt.Sprintf(`(?m)^%d +user\* `, helloSeq)); !want.MatchString(index) {
+		t.Fatalf("index does not mark the user's message with *:\n%s", index)
+	}
 	// The recent part (the index request) is not listed.
 	if strings.Contains(index, `"compact_in_place: `) {
 		t.Fatalf("index lists the recent part:\n%s", index)
@@ -213,9 +216,10 @@ func TestCompactInPlaceEndToEnd(t *testing.T) {
 	}
 	seq := func(n int64) claudetool.IndexID { return claudetool.IndexID(fmt.Sprint(n)) }
 	for want, collapse := range map[string]claudetool.CompactCollapse{
-		"unknown id":          {From: "999999", To: seq(hiSeq), Note: "x"},
-		"from comes after to": {From: seq(hiSeq), To: seq(helloSeq), Note: "x"},
-		"note is not shorter": {From: seq(helloSeq), To: seq(hiSeq), Note: strings.Repeat("long ", 100)},
+		"unknown id":           {From: "999999", To: seq(hiSeq), Note: "x"},
+		"from comes after to":  {From: seq(hiSeq), To: seq(helloSeq), Note: "x"},
+		"note is not shorter":  {From: seq(hiSeq), To: seq(hiSeq), Note: strings.Repeat("long ", 100)},
+		"only be collapsed on": {From: seq(helloSeq), To: seq(hiSeq), Note: "x"},
 	} {
 		compact(nil, collapse)
 		if out, isErr := c.lastToolOutput(); !isErr || !strings.Contains(out, want) {
@@ -230,7 +234,7 @@ func TestCompactInPlaceEndToEnd(t *testing.T) {
 		t.Fatalf("invalid requests recorded %d compactions", n)
 	}
 
-	compact([]string{firstUseID}, claudetool.CompactCollapse{From: seq(helloSeq), To: seq(hiSeq), Note: "GREETED"})
+	compact([]string{firstUseID}, claudetool.CompactCollapse{From: seq(hiSeq), To: seq(hiSeq), Note: "GREETED"})
 	if out, isErr := c.lastToolOutput(); isErr || !strings.Contains(out, "Compacted: 1 collapsed, 1 trimmed") {
 		t.Fatalf("compact: %q", out)
 	}
@@ -243,8 +247,8 @@ func TestCompactInPlaceEndToEnd(t *testing.T) {
 	check := func(req *llm.Request) {
 		t.Helper()
 		got := requestDump(req)
-		if first := req.Messages[0].Content[0].Text; first != compactionNoteText(c.id, helloSeq, hiSeq, "GREETED") {
-			t.Fatalf("first message is not the note:\n%s", got)
+		if second := req.Messages[1].Content[0].Text; second != compactionNoteText(c.id, hiSeq, hiSeq, "GREETED") {
+			t.Fatalf("second message is not the note:\n%s", got)
 		}
 		for _, m := range req.Messages {
 			for _, ct := range m.Content {
@@ -559,15 +563,19 @@ func TestBuildCompactionTrimsOnlyOlderOutputs(t *testing.T) {
 func TestBuildCompaction(t *testing.T) {
 	big := strings.Repeat("x", 4*15_000) // ~15k tokens
 	items := []contextItem{
-		textItem(1, llm.MessageRoleUser, big),
-		textItem(2, llm.MessageRoleAssistant, big),
-		textItem(3, llm.MessageRoleUser, "a"),
-		textItem(4, llm.MessageRoleAssistant, "b"),
-		textItem(5, llm.MessageRoleUser, "c"),
-		textItem(6, llm.MessageRoleAssistant, big+big),
+		textItem(1, llm.MessageRoleUser, "do it"),
+		callItem(2, "a"),
+		outputItem(3, "a", strings.Repeat("x", 4*25_000)),
+		textItem(4, llm.MessageRoleAssistant, big),
+		textItem(5, llm.MessageRoleAssistant, "a"),
+		textItem(6, llm.MessageRoleUser, "also this"),
+		textItem(7, llm.MessageRoleUser, "and that"),
+		textItem(8, llm.MessageRoleAssistant, "b"),
+		textItem(9, llm.MessageRoleAssistant, "c"),
+		textItem(10, llm.MessageRoleAssistant, big+big),
 	}
 	// The recent part is the last message.
-	if r := recentStart(items, 20_000); r != 5 {
+	if r := recentStart(items, 20_000); r != 9 {
 		t.Fatalf("recent start = %d", r)
 	}
 	col := func(from, to claudetool.IndexID) claudetool.CompactCollapse {
@@ -575,10 +583,13 @@ func TestBuildCompaction(t *testing.T) {
 	}
 	for want, in := range map[string]claudetool.CompactInPlaceInput{
 		"nothing to compact": {},
-		"recent part":        {Collapse: []claudetool.CompactCollapse{col("5", "6")}},
-		"at most":            {Collapse: []claudetool.CompactCollapse{col("1", "3")}},
-		"overlaps":           {Collapse: []claudetool.CompactCollapse{col("2", "4"), col("4", "5")}},
-		"note is empty":      {Collapse: []claudetool.CompactCollapse{{From: "3", To: "4"}}},
+		"recent part":        {Collapse: []claudetool.CompactCollapse{col("9", "10")}},
+		"at most":            {Collapse: []claudetool.CompactCollapse{col("2", "4")}},
+		"overlaps":           {Collapse: []claudetool.CompactCollapse{col("8", "9"), col("9", "9")}},
+		"note is empty":      {Collapse: []claudetool.CompactCollapse{{From: "8", To: "9"}}},
+		// The user's messages may only be collapsed on their own.
+		"collapse 5-8: covers 6, which can only be collapsed on its own; collapse e.g. 5, 8 instead":             {Collapse: []claudetool.CompactCollapse{col("5", "8")}},
+		"collapse 6-7: covers 6, which can only be collapsed on its own; collapse each of those rows on its own": {Collapse: []claudetool.CompactCollapse{col("6", "7")}},
 	} {
 		if _, err := buildCompaction(items, 20_000, in); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("want error %q, got %v", want, err)
@@ -587,22 +598,54 @@ func TestBuildCompaction(t *testing.T) {
 	// Every problem is reported at once, and nothing is compacted.
 	_, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{
 		Trim:     []string{"nope"},
-		Collapse: []claudetool.CompactCollapse{col("99", "2"), col("1", "3")},
+		Collapse: []claudetool.CompactCollapse{col("99", "2"), col("2", "4")},
 	})
 	want := "3 problems. Nothing was compacted; fix them and send the whole request again:\n" +
 		"- trim nope: no tool output with that id in the index\n" +
 		"- collapse 99-2: unknown id; use ids from the index\n" +
-		"- collapse 1-3: covers ~"
+		"- collapse 2-4: covers ~"
 	if err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Errorf("want error starting %q, got %v", want, err)
 	}
-	// Over the limit is fine for a single message or call-and-output pair.
-	c, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{col("3", "5"), col("1", "2")}})
+	// Over the limit is fine for one tool call and its output, and a user
+	// message may be collapsed on its own.
+	c, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{col("8", "9"), col("2", "3"), col("6", "6"), col("1", "1")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Squishes) != 2 || c.Squishes[0].FromSequenceID != 1 || c.Squishes[0].ToSequenceID != 2 || c.Squishes[1].ToSequenceID != 5 {
-		t.Fatalf("squishes = %+v", c.Squishes)
+	var got []string
+	for _, s := range c.Squishes {
+		got = append(got, fmt.Sprintf("%d-%d", s.FromSequenceID, s.ToSequenceID))
+	}
+	if g := strings.Join(got, " "); g != "1-1 2-3 6-6 8-9" {
+		t.Fatalf("squishes %s", g)
+	}
+}
+
+func TestCollapsesAlone(t *testing.T) {
+	withUserData := func(it contextItem, ud string) contextItem {
+		it.source.UserData = &ud
+		return it
+	}
+	for _, tc := range []struct {
+		it   contextItem
+		want bool
+	}{
+		{textItem(1, llm.MessageRoleUser, "fix it"), true},
+		{withUserData(textItem(1, llm.MessageRoleUser, "summary"), `{"distilled":"true","distillation_content":"summary"}`), true},
+		{withUserData(textItem(1, llm.MessageRoleUser, "do this"), `{"sender_conversation_id":"c1","sender_relationship":"parent"}`), true},
+		{withUserData(textItem(1, llm.MessageRoleUser, "found it"), `{"sender_conversation_id":"c2","sender_relationship":"subagent"}`), false},
+		{contextItem{noteID: "s5.0", note: "earlier"}, true},
+		{textItem(1, llm.MessageRoleAssistant, "done"), false},
+		{outputItem(1, "a", "out"), false},
+	} {
+		got, err := collapsesAlone(tc.it)
+		if err != nil || got != tc.want {
+			t.Errorf("%+v: got %v, %v", tc.it, got, err)
+		}
+	}
+	if _, err := collapsesAlone(withUserData(textItem(1, llm.MessageRoleUser, "x"), `{`)); err == nil {
+		t.Error("malformed user data: want an error")
 	}
 }
 
