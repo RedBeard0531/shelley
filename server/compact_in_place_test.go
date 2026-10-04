@@ -331,6 +331,32 @@ func TestCompactInPlaceNudge(t *testing.T) {
 	if got := requestDump(c.ps.GetLastRequest()); strings.Contains(got, "Context is") {
 		t.Fatalf("nudge still in context after compaction:\n%s", got)
 	}
+
+	// The response that makes a compact call crosses the next nudge level
+	// (here, as its input carries a long message). Right after the
+	// compaction that size is stale: no nudge.
+	c.turn("bash: echo AGAIN")
+	useID = c.rows()[c.seqWith(`AGAIN\n`)].Content[0].ToolUseID
+	size := lastContextWindowSize(listMessages(t, c.database, c.id))
+	if err := c.database.UpdateConversationOptions(t.Context(), c.id, db.ConversationOptions{
+		ToolOverrides:      map[string]string{claudetool.CompactInPlaceName: "on"},
+		CompactNudgeTokens: int(size) + 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := c.srv.getOrCreateConversationManager(t.Context(), c.id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.ResetLoop()
+	before := len(nudges())
+	c.turn(`compact_in_place: {"action":"compact","trim":["` + useID + `"]}` + strings.Repeat(" ", 2000))
+	if out, isErr := c.lastToolOutput(); isErr {
+		t.Fatalf("compact: %s", out)
+	}
+	if got := nudges(); len(got) != before {
+		t.Fatalf("nudged with the size from before the compaction: %v", got[before:])
+	}
 }
 
 func TestContextNudger(t *testing.T) {
