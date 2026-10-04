@@ -32,6 +32,17 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		}
 	}
 
+	// Without a requested model, an existing subagent keeps its own model
+	// and a new one inherits the parent's, then the server default
+	// (preferring a ready model from the catalog; see effectiveDefaultModel).
+	if modelID == "" {
+		var err error
+		modelID, err = s.inheritedSubagentModel(ctx, conversationID)
+		if err != nil {
+			return "", err
+		}
+	}
+
 	// Run new-conversation hook for newly created subagent conversations.
 	// We detect "new" by checking if the manager already exists.
 	s.mu.Lock()
@@ -88,13 +99,6 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		return "", fmt.Errorf("failed to set subagent reasoning level %q: %w", reasoning, err)
 	}
 
-	// Use the parent's model if provided, otherwise fall back to server
-	// default (preferring a ready model from the catalog; see
-	// effectiveDefaultModel).
-	if modelID == "" {
-		modelID = s.effectiveDefaultModel(s.getModelList())
-	}
-
 	// Persist model on the subagent conversation record
 	// UpdateConversationModel only sets the model if it's NULL, so this is safe for re-sends
 	if modelID != "" {
@@ -131,6 +135,28 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		return "", fmt.Errorf("failed to accept user message: %w", err)
 	}
 	return "message sent; the subagent works in the background and reports back with message_parent.", nil
+}
+
+// inheritedSubagentModel returns the model of the subagent conversation, else
+// of its parent, else the server default.
+func (s *Server) inheritedSubagentModel(ctx context.Context, conversationID string) (string, error) {
+	conv, err := s.db.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		return "", err
+	}
+	if conv.Model != nil && *conv.Model != "" {
+		return *conv.Model, nil
+	}
+	if conv.ParentConversationID != nil {
+		parent, err := s.db.GetConversationByID(ctx, *conv.ParentConversationID)
+		if err != nil {
+			return "", err
+		}
+		if parent.Model != nil && *parent.Model != "" {
+			return *parent.Model, nil
+		}
+	}
+	return s.effectiveDefaultModel(s.getModelList()), nil
 }
 
 // MessageParent implements claudetool.ParentMessenger.

@@ -15,7 +15,8 @@ type SubagentRunner interface {
 	// RunSubagent sends prompt to the subagent conversation and returns an
 	// acknowledgement immediately. The subagent reports back with
 	// message_parent.
-	// modelID is the model to use for the subagent.
+	// modelID is the requested model; empty keeps an existing subagent's
+	// model, or gives a new subagent the parent's.
 	// reasoning is the user-facing reasoning/thinking level for the subagent
 	// (one of "off", "minimal", "low", "medium", "high", "xhigh", "max");
 	// an empty string means "use the service/conversation default".
@@ -69,7 +70,6 @@ type SubagentTool struct {
 	ParentConversationID string
 	WorkingDir           *MutableWorkingDir
 	Runner               SubagentRunner
-	ModelID              string           // Parent conversation's model ID (default for subagents)
 	AvailableModels      []AvailableModel // Models the agent can choose from
 	// ParentReasoning is the parent conversation's user-facing reasoning level
 	// (one of "off", "minimal", "low", "medium", "high", "xhigh", "max",
@@ -132,7 +132,7 @@ func (s *SubagentTool) subagentInputSchema() string {
 		modelProp = fmt.Sprintf(`,
     "model": {
       "type": "string",
-      "description": "Optional. LLM model for the subagent. Omit to use the parent conversation's model; set only when the user asks for a specific model.",
+      "description": "Optional. LLM model for the subagent. Omit to keep an existing subagent's model, or to give a new subagent the parent conversation's model; set only when the user asks for a specific model.",
       "enum": [%s]
     }`, strings.Join(enumItems, ", "))
 	}
@@ -199,8 +199,9 @@ func (s *SubagentTool) run(ctx context.Context, req subagentInput) llm.ToolOut {
 	unlockSlug := s.lockSlug(req.Slug)
 	defer unlockSlug()
 
-	// Determine which model to use: explicit choice > parent's model
-	modelID := s.ModelID
+	// An omitted model is resolved by the runner: an existing subagent keeps
+	// its own model, and a new one inherits the parent's.
+	var modelID string
 	if req.Model != "" {
 		var err error
 		if modelID, err = resolveModel(s.AvailableModels, req.Model); err != nil {

@@ -120,7 +120,6 @@ func TestSubagentTool_Run(t *testing.T) {
 		ParentConversationID: "parent-123",
 		WorkingDir:           wd,
 		Runner:               runner,
-		ModelID:              "claude-opus-4-20250514",
 	}
 
 	input := subagentInput{
@@ -198,7 +197,9 @@ func TestSubagentTool_Validation(t *testing.T) {
 	})
 }
 
-func TestSubagentTool_InheritsModel(t *testing.T) {
+// An omitted model reaches the runner empty, so the runner can keep an
+// existing subagent's model rather than force the parent's onto it.
+func TestSubagentTool_OmittedModelLeftToRunner(t *testing.T) {
 	wd := NewMutableWorkingDir("/tmp")
 	db := newMockSubagentDB()
 	runner := &mockSubagentRunner{response: "OK"}
@@ -208,15 +209,14 @@ func TestSubagentTool_InheritsModel(t *testing.T) {
 		ParentConversationID: "parent-123",
 		WorkingDir:           wd,
 		Runner:               runner,
-		ModelID:              "claude-sonnet-4-6",
 	}
 
 	input := subagentInput{Slug: "test", Prompt: "do something"}
 	inputJSON, _ := json.Marshal(input)
 	tool.Tool().Run(t.Context(), inputJSON)
 
-	if runner.lastModelID != "claude-sonnet-4-6" {
-		t.Errorf("expected model 'claude-sonnet-4-6', got %q", runner.lastModelID)
+	if runner.lastModelID != "" {
+		t.Errorf("expected no model, got %q", runner.lastModelID)
 	}
 }
 
@@ -230,7 +230,6 @@ func TestSubagentTool_ModelOverride(t *testing.T) {
 		ParentConversationID: "parent-123",
 		WorkingDir:           wd,
 		Runner:               runner,
-		ModelID:              "claude-sonnet-4-6",
 		AvailableModels: []AvailableModel{
 			{Name: "claude-sonnet-4-6", ID: "claude-sonnet-4-6"},
 			{Name: "claude-haiku-4.5", ID: "claude-haiku-4.5@subscription"},
@@ -285,7 +284,6 @@ func TestSubagentTool_ModelOverride_InvalidModel(t *testing.T) {
 		ParentConversationID: "parent-123",
 		WorkingDir:           wd,
 		Runner:               runner,
-		ModelID:              "claude-sonnet-4-6",
 		AvailableModels: []AvailableModel{
 			{Name: "claude-sonnet-4-6", ID: "claude-sonnet-4-6@subscription"},
 			{Name: "claude-haiku-4.5", ID: "claude-haiku-4.5"},
@@ -317,7 +315,6 @@ func TestSubagentTool_NoModels(t *testing.T) {
 		ParentConversationID: "parent-123",
 		WorkingDir:           NewMutableWorkingDir("/tmp"),
 		Runner:               &mockSubagentRunner{response: "OK"},
-		ModelID:              "some-model",
 	}
 
 	llmTool := tool.Tool()
