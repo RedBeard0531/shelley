@@ -190,7 +190,9 @@ test.describe("Context usage popup", () => {
     await label.click();
     const popup = page.locator(".chat-context-popup");
     await expect(popup).toBeVisible();
-    await expect(popup).toContainText("LLM call number");
+    await expect(popup).toContainText("LLM call");
+    // The current context size heads the popup, labeled.
+    await expect(popup.locator(".usage-popup-title")).toHaveText(/^Current context: .+ tokens$/);
     await expect(label).toHaveAttribute("aria-expanded", "true");
     // The panel is teleported out of the button's subtree, so aria-controls is
     // the only thing tying the two together. It must resolve to the dialog.
@@ -229,6 +231,8 @@ test.describe("Context usage popup", () => {
     request,
   }) => {
     test.setTimeout(60000);
+    // Desktop width, where sub-agents widen the popup past the graph column.
+    await page.setViewportSize({ width: 1280, height: 900 });
     await page.route("**/api/model-costs", async (route) => {
       const body = route.request().postDataJSON() as { models: { model: string }[] };
       const costs = Object.fromEntries(
@@ -289,7 +293,27 @@ test.describe("Context usage popup", () => {
     const total = page.getByTestId("token-cost-total");
     await expect(total).toBeVisible();
     await expect(total).toContainText("Total");
-    await expect(total).toHaveCSS("border-top-style", "solid");
+    await expect(total.locator("th")).toHaveCSS("border-top-style", "solid");
+    // Totals head the receipt, above the per-model breakdown, rather than
+    // trailing it where a scrolling popup cuts them off.
+    const subtotalBox = (await page.getByTestId("conversation-cost-subtotal").boundingBox())!;
+    const totalRowBox = (await total.boundingBox())!;
+    const firstModelBox = (await page
+      .locator(".token-cost-model-breakdown")
+      .first()
+      .boundingBox())!;
+    expect(subtotalBox.y).toBeLessThan(totalRowBox.y);
+    expect(totalRowBox.y + totalRowBox.height).toBeLessThanOrEqual(firstModelBox.y + 1);
+    // The graph covers the main conversation only, and says so.
+    await expect(page.locator(".token-cost-pane-label").first()).toHaveText(
+      "Cumulative cost · main conversation",
+    );
+    // The context size lines up with the graph column, not the popup corner.
+    const titleBox = (await page.locator(".usage-popup-title").boundingBox())!;
+    const graphBox = (await page.locator(".token-cost-graph-svg").boundingBox())!;
+    const popupBox = (await page.locator(".chat-context-popup").boundingBox())!;
+    expect(popupBox.width).toBeGreaterThan(graphBox.width + 100);
+    expect(Math.abs(titleBox.x - graphBox.x)).toBeLessThan(1);
     const subagentCostBox = await subagentRow.locator(".token-cost-legend-cost").boundingBox();
     const totalCostBox = await total.locator(".token-cost-legend-cost").boundingBox();
     expect(subagentCostBox).not.toBeNull();
@@ -327,6 +351,53 @@ test.describe("Context usage popup", () => {
     await page.locator(".context-usage-label").click();
     await expect(total).toBeVisible();
     await expect.poll(() => subagentRequests).toBeGreaterThan(requestsBeforeReopen);
+  });
+
+  test("cost graph plots each call's own cost below the running total", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(60000);
+    await page.route("**/api/model-costs", async (route) => {
+      const body = route.request().postDataJSON() as { models: { model: string }[] };
+      const costs = Object.fromEntries(
+        body.models.map(({ model }) => [
+          model,
+          { input: 10, output: 10, cache_read: 10, cache_write: 10 },
+        ]),
+      );
+      await route.fulfill({ json: { costs } });
+    });
+    const slug = await createConversationViaAPI(request, "echo delta cost");
+    await page.goto(`/c/${slug}`);
+    await page.locator(".context-usage-label").click();
+
+    const popup = page.locator(".chat-context-popup");
+    const graph = popup.locator(".token-cost-graph");
+    const svg = graph.locator(".token-cost-graph-svg");
+    await expect(svg).toBeVisible({ timeout: 30000 });
+    // One combined graph, not a separate tab.
+    await expect(popup.getByRole("tab")).toHaveText(["cost", "context"]);
+    await expect(svg).toContainText("LLM call");
+    await expect(svg).not.toContainText("LLM call number");
+    // Each pane is labeled.
+    await expect(svg.locator(".token-cost-pane-label")).toHaveText([
+      "Cumulative cost",
+      "Incremental cost",
+    ]);
+
+    // The running total is an area; the strip below it has a bar per call.
+    const fills = await svg
+      .locator("path[fill]")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("d") || ""));
+    expect(fills.some((d) => /^M[\d.]+,[\d.]+V[\d.]+H[\d.]+V[\d.]+Z/.test(d))).toBe(true);
+    expect(fills.some((d) => /^M[\d.]+,[\d.]+L/.test(d))).toBe(true);
+
+    const box = await svg.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    const readout = graph.locator(".token-cost-hover-readout");
+    await expect(readout).toHaveText(/^call 1, \$[\d.]+, cumulative \$[\d.]+( \(.+\))?$/);
   });
 
   // The token count is the only way into this popup, and it is styled to read as
@@ -713,7 +784,7 @@ test.describe("Status readout controls", () => {
     // Token count -> cost popup, and NOT the picker.
     await tokens.click();
     await expect(costPopup).toBeVisible();
-    await expect(costPopup).toContainText("LLM call number");
+    await expect(costPopup).toContainText("LLM call");
     await expect(pickerPanel).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(costPopup).toBeHidden();

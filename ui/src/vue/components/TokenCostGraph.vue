@@ -1,9 +1,12 @@
-<!-- Stacked cumulative token-cost graph shown in the context usage popup.
+<!-- Stacked cumulative token-cost graph shown in the context usage popup,
+     with a short strip below it showing each call's own cost as a bar.
      X axis: LLM calls or wall-clock time (toggle); in time mode, idle time
      between turns is collapsed into fixed-width gaps. Y axis: cumulative
      dollars per (model, token-band) segment — every segment has its own color
      — falling back to raw token counts when no model in the conversation has
-     known pricing.
+     known pricing. The strip stacks the same segments per call; where calls
+     are denser than bars can be drawn, a bar shows its group's most
+     expensive call, and hovering picks that call.
 
      Subagent cost and "other" (indirect) LLM usage — compaction
      summarization, LLM-backed tools, slug generation, … — are not part of the
@@ -15,9 +18,6 @@
   <div class="token-cost-graph">
     <div v-if="loading" class="token-cost-graph-note">Loading pricing…</div>
     <div v-else-if="stack && stack.n > 0" class="token-cost-timeline">
-      <div v-if="hasSubagents" class="token-cost-graph-note">
-        Main conversation · cumulative direct {{ stack.weighted ? "cost" : "tokens" }}
-      </div>
       <div class="token-cost-controls">
         <button
           :class="{ 'token-cost-toggle-active': xMode === 'calls' }"
@@ -40,7 +40,7 @@
         :viewBox="`0 0 ${W} ${H}`"
         class="token-cost-graph-svg"
         @mousemove="onMove"
-        @mouseleave="hoverIndex = null"
+        @mouseleave="clearHover"
       >
         <line
           v-for="t in ticks"
@@ -51,26 +51,42 @@
           :y2="yAt(t)"
           class="token-cost-gridline"
         />
-        <path v-for="(d, s) in segPaths" :key="s" :d="d" :fill="stack.segments[s].color" />
-        <line
+        <path v-for="(d, s) in areaPaths" :key="s" :d="d" :fill="stack.segments[s].color" />
+        <path v-for="(d, s) in barPaths" :key="`bar-${s}`" :d="d" :fill="stack.segments[s].color" />
+        <path
           v-for="i in genStarts"
           :key="`gen-${i}`"
-          :x1="xAt(i)"
-          :y1="PADT"
-          :x2="xAt(i)"
-          :y2="H - PADB"
+          :d="guide(genX(i))"
           class="token-cost-gen-line"
         />
-        <line :x1="PADL" :y1="PADT" :x2="PADL" :y2="H - PADB" class="token-cost-axis" />
-        <line :x1="PADL" :y1="H - PADB" :x2="W - PADR" :y2="H - PADB" class="token-cost-axis" />
+        <line :x1="PADL" :y1="PADT" :x2="PADL" :y2="AREA_BOTTOM" class="token-cost-axis" />
         <line
-          v-if="hoverIndex !== null && stack.n > 1"
-          :x1="xAt(hoverIndex)"
-          :y1="PADT"
-          :x2="xAt(hoverIndex)"
-          :y2="H - PADB"
+          :x1="PADL"
+          :y1="AREA_BOTTOM"
+          :x2="W - PADR"
+          :y2="AREA_BOTTOM"
+          class="token-cost-axis"
+        />
+        <line :x1="PADL" :y1="STRIP_TOP" :x2="PADL" :y2="STRIP_BOTTOM" class="token-cost-axis" />
+        <line
+          :x1="PADL"
+          :y1="STRIP_BOTTOM"
+          :x2="W - PADR"
+          :y2="STRIP_BOTTOM"
+          class="token-cost-axis"
+        />
+        <path
+          v-if="hoverX !== null && stack.n > 1"
+          :d="guide(hoverX)"
           class="token-cost-hover-line"
         />
+        <text :x="PADL" :y="PADT - 3" class="token-cost-label token-cost-pane-label">
+          Cumulative {{ unit }}
+          <template v-if="hasSubagents">· main conversation</template>
+        </text>
+        <text :x="PADL" :y="STRIP_TOP - 3" class="token-cost-label token-cost-pane-label">
+          Incremental {{ unit }}
+        </text>
         <text
           v-for="t in ticks"
           :key="`ticklabel-${t}`"
@@ -81,24 +97,25 @@
         >
           {{ tickLabel(t) }}
         </text>
+        <text
+          v-if="stack.maxDelta > 0"
+          :x="PADL - 3"
+          :y="STRIP_TOP + 6"
+          text-anchor="end"
+          class="token-cost-label"
+        >
+          {{ tickLabel(stack.maxDelta) }}
+        </text>
         <text :x="(PADL + W - PADR) / 2" :y="H - 4" text-anchor="middle" class="token-cost-label">
           {{ xAxisLabel }}
         </text>
       </svg>
       <div class="token-cost-hover-readout">
-        <template v-if="hoverEntry">
-          <div>
-            call {{ hoverIndex! + 1 }} of {{ stack.n
-            }}<template v-if="hoverGeneration"> (gen {{ hoverGeneration }})</template
-            ><template v-if="hoverTime"> · {{ hoverTime }}</template> · cumulative {{ hoverTotal }}
-          </div>
-          <div v-if="hoverEntry.snippet" class="token-cost-hover-snippet">
-            {{ hoverEntry.snippet }}
-          </div>
-        </template>
-        <template v-else>
-          <div>{{ hintText }}</div>
-        </template>
+        <div v-if="hoverText" class="token-cost-hover-text">
+          <span>{{ hoverText }}</span>
+          <span v-if="hoverSnippet" class="token-cost-hover-snippet"> ({{ hoverSnippet }})</span>
+        </div>
+        <div v-else>{{ hintText }}</div>
       </div>
       <div v-if="stack.weighted && fetchFailed" class="token-cost-graph-note">
         Pricing lookup failed for some models.
@@ -134,6 +151,37 @@
           <th v-if="hasSubagents" scope="col">Sub-agents</th>
         </tr>
       </thead>
+      <tbody class="token-cost-summary">
+        <tr class="token-cost-subtotal-row">
+          <th scope="row">Subtotal</th>
+          <td data-testid="conversation-cost-subtotal">
+            <span
+              v-if="mainKnownUsd > 0 || mainUnpricedCalls === 0"
+              class="token-cost-legend-cost"
+              >{{ formatUsd(mainKnownUsd) }}</span
+            >
+            <span v-else class="token-cost-legend-unit">no pricing</span>
+          </td>
+          <td v-if="hasSubagents" data-testid="subagent-cost-row">
+            <span
+              v-if="subagentKnownUsd > 0 || subagentUsage?.unpriced_calls === 0"
+              class="token-cost-legend-cost"
+              >{{ formatUsd(subagentKnownUsd) }}</span
+            >
+            <span v-else class="token-cost-legend-unit">no pricing</span>
+          </td>
+        </tr>
+        <tr
+          v-if="!subagentLoading && showCostSummary"
+          class="token-cost-total-row"
+          data-testid="token-cost-total"
+        >
+          <th scope="row" :colspan="hasSubagents ? 2 : 1">Total</th>
+          <td>
+            <span class="token-cost-legend-cost">≈{{ formatUsd(costSummary.totalUsd) }}</span>
+          </td>
+        </tr>
+      </tbody>
       <ModelCostBreakdown
         v-for="model in modelComparison"
         :key="model.model"
@@ -173,37 +221,6 @@
           <td v-if="hasSubagents" class="token-cost-empty">—</td>
         </tr>
       </tbody>
-      <tfoot>
-        <tr class="token-cost-subtotal-row">
-          <th scope="row">Subtotal</th>
-          <td data-testid="conversation-cost-subtotal">
-            <span
-              v-if="mainKnownUsd > 0 || mainUnpricedCalls === 0"
-              class="token-cost-legend-cost"
-              >{{ formatUsd(mainKnownUsd) }}</span
-            >
-            <span v-else class="token-cost-legend-unit">no pricing</span>
-          </td>
-          <td v-if="hasSubagents" data-testid="subagent-cost-row">
-            <span
-              v-if="subagentKnownUsd > 0 || subagentUsage?.unpriced_calls === 0"
-              class="token-cost-legend-cost"
-              >{{ formatUsd(subagentKnownUsd) }}</span
-            >
-            <span v-else class="token-cost-legend-unit">no pricing</span>
-          </td>
-        </tr>
-        <tr
-          v-if="!subagentLoading && showCostSummary"
-          class="token-cost-total-row"
-          data-testid="token-cost-total"
-        >
-          <th scope="row" :colspan="hasSubagents ? 2 : 1">Total</th>
-          <td>
-            <span class="token-cost-legend-cost">≈{{ formatUsd(costSummary.totalUsd) }}</span>
-          </td>
-        </tr>
-      </tfoot>
     </table>
     <div v-if="!loading && hasSubagents" class="token-cost-graph-note">
       Sub-agent model totals include nested sub-agents and indirect usage.
@@ -248,13 +265,16 @@ import {
   buildTokenCostStack,
   callXLayout,
   countConfirmedUnpricedCalls,
+  deltaBars,
   formatDuration,
   formatTokenCount,
   formatUsd,
+  generationBoundary,
   generationStarts,
   timeXLayout,
   yTicks,
   TOKEN_BANDS,
+  type DeltaBar,
   type ModelUsage,
   type OtherPurposeUsage,
   type OtherUsageBreakdown,
@@ -272,12 +292,21 @@ const props = defineProps<{
   active?: boolean;
 }>();
 
+// The cumulative area sits on top; the per-call strip below it is kept
+// short, since its spikes read fine at a glance. Each pane's label sits in
+// the space above it.
 const W = 280;
-const H = 150;
 const PADL = 32;
 const PADR = 6;
-const PADT = 6;
+const PADT = 13;
+const AREA_H = 112;
+const STRIP_GAP = 14;
+const STRIP_H = 26;
 const PADB = 18;
+const AREA_BOTTOM = PADT + AREA_H;
+const STRIP_TOP = AREA_BOTTOM + STRIP_GAP;
+const STRIP_BOTTOM = STRIP_TOP + STRIP_H;
+const H = STRIP_BOTTOM + PADB;
 
 const loading = ref(false);
 const fetchFailed = ref(false);
@@ -529,7 +558,6 @@ const showCostSummary = computed(() => {
 });
 
 const plotW = W - PADL - PADR;
-const plotH = H - PADT - PADB;
 
 const xMode = ref<"calls" | "time">("calls");
 
@@ -542,15 +570,30 @@ function xAt(i: number): number {
 }
 
 function yAt(v: number): number {
-  const maxY = stack.value?.maxY || 1;
-  return PADT + plotH * (1 - v / maxY);
+  return PADT + AREA_H * (1 - v / (stack.value?.maxY || 1));
+}
+
+function stripYAt(v: number): number {
+  return STRIP_TOP + STRIP_H * (1 - v / (stack.value?.maxDelta || 1));
+}
+
+const unit = computed(() => (stack.value?.weighted ? "cost" : "tokens"));
+
+// A vertical guide through both panes, skipping the label between them.
+function guide(x: number): string {
+  const px = x.toFixed(1);
+  return `M${px},${PADT}V${AREA_BOTTOM}M${px},${STRIP_TOP}V${STRIP_BOTTOM}`;
+}
+
+function genX(i: number): number {
+  return PADL + generationBoundary(bars.value, layout.value.xs, i) * plotW;
 }
 
 // One path per (model, band) segment; each turn is a separate subpath so
 // idle time between turns renders as a gap in time mode. Zero-width turns
 // (single call, or all calls sharing one second-granularity timestamp)
 // become narrow slabs so they stay visible.
-const segPaths = computed<string[]>(() => {
+const areaPaths = computed<string[]>(() => {
   const s = stack.value;
   const lay = layout.value;
   if (!s || s.n === 0 || s.maxY === 0) return [];
@@ -579,6 +622,36 @@ const segPaths = computed<string[]>(() => {
   });
 });
 
+// Non-overlapping per-call bars; each draws (and hovers as) one call.
+const bars = computed<DeltaBar[]>(() => {
+  const s = stack.value;
+  if (!s || s.n === 0 || s.segments.length === 0) return [];
+  return deltaBars(layout.value.xs, s.deltaLayers[s.segments.length - 1]);
+});
+
+// One path per segment holding a rect per bar with a nonzero share.
+const barPaths = computed<string[]>(() => {
+  const s = stack.value;
+  if (!s || s.maxDelta === 0) return [];
+  const xs = bars.value.map((b) => [
+    (PADL + b.left * plotW).toFixed(2),
+    (PADL + b.right * plotW).toFixed(2),
+  ]);
+  return s.segments.map((_, si) => {
+    let d = "";
+    bars.value.forEach((b, k) => {
+      const top = s.deltaLayers[si][b.call];
+      const bottom = si === 0 ? 0 : s.deltaLayers[si - 1][b.call];
+      if (top <= bottom) return;
+      const [x0, x1] = xs[k];
+      const yT = stripYAt(top).toFixed(1);
+      const yB = stripYAt(bottom).toFixed(1);
+      d += `M${x0},${yB}V${yT}H${x1}V${yB}Z`;
+    });
+    return d;
+  });
+});
+
 const ticks = computed<number[]>(() => yTicks(stack.value?.maxY ?? 0));
 
 function tickLabel(v: number): string {
@@ -592,19 +665,13 @@ function tickLabel(v: number): string {
 const xAxisLabel = computed(() => {
   const s = stack.value;
   if (!s) return "";
-  if (xMode.value === "calls") return `LLM call number (${s.n} calls)`;
+  if (xMode.value === "calls") return "LLM call";
   const lay = layout.value;
   const dur = lay.activeMs > 0 ? `${formatDuration(lay.activeMs)} active` : "time";
   return lay.turns.length > 1 ? `${dur} · gaps = idle between turns` : dur;
 });
 
-const hintText = computed(() => {
-  const parts: string[] = [];
-  if (genStarts.value.length) parts.push("Dashed lines mark new generations (compactions).");
-  if (xMode.value === "time" && layout.value.turns.length > 1)
-    parts.push("Idle time between turns is not to scale.");
-  return parts.join(" ");
-});
+const hintText = computed(() => (genStarts.value.length ? "Dashed lines mark compactions." : ""));
 
 // ChatGPT subscriptions report zero writes even when caching works.
 // Usage uses native model names, not picker IDs. A graph group can combine
@@ -639,68 +706,76 @@ function isSubscriptionUsage(name: string, url?: string): boolean {
   return sources.length > 0 && sources.every((model) => model.mode === "chatgpt");
 }
 
-const hoverIndex = ref<number | null>(null);
+// Pointer position as a plot fraction. The hovered call is derived from it,
+// so a redraw (pricing arriving, axis switch) can't leave the readout
+// describing a different call than the one drawn under the pointer.
+const hoverFrac = ref<number | null>(null);
 
-// A shrinking entries list (e.g. switching conversations) could leave a stale
-// out-of-range index behind.
-watch(
-  () => stack.value?.n,
-  () => (hoverIndex.value = null),
-);
-
-function onMove(ev: MouseEvent) {
-  const s = stack.value;
-  if (!s || s.n === 0) return;
-  const svg = ev.currentTarget as SVGSVGElement;
-  const rect = svg.getBoundingClientRect();
-  const px = ((ev.clientX - rect.left) / rect.width) * W;
-  const frac = (px - PADL) / plotW;
-  const xs = layout.value.xs;
-  let best = 0;
-  let bestD = Infinity;
-  for (let i = 0; i < xs.length; i++) {
-    const d = Math.abs(xs[i] - frac);
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
-  }
-  hoverIndex.value = best;
+function clearHover() {
+  hoverFrac.value = null;
 }
 
-const hoverEntry = computed<UsageEntry | null>(() => {
-  const s = stack.value;
-  const i = hoverIndex.value;
-  if (!s || i === null || i >= s.n) return null;
-  return props.entries[i];
+// Switching conversations swaps the graph out from under a still pointer.
+watch(() => stack.value?.n, clearHover);
+
+// The call under the pointer: the one its per-call bar draws, so the readout
+// always matches the bar beneath the cursor. Every call lies inside its bar,
+// so the hover line (at the call's x) does too.
+const hoverIndex = computed<number | null>(() => {
+  const frac = hoverFrac.value;
+  if (frac === null) return null;
+  let best: DeltaBar | null = null;
+  let bestD = Infinity;
+  for (const b of bars.value) {
+    const d = Math.max(b.left - frac, frac - b.right, 0);
+    if (d < bestD) {
+      bestD = d;
+      best = b;
+    }
+  }
+  return best?.call ?? null;
 });
+
+const hoverX = computed(() => (hoverIndex.value === null ? null : xAt(hoverIndex.value)));
+
+function onMove(ev: MouseEvent) {
+  const rect = (ev.currentTarget as SVGSVGElement).getBoundingClientRect();
+  const px = ((ev.clientX - rect.left) / rect.width) * W;
+  hoverFrac.value = (px - PADL) / plotW;
+}
 
 const genStarts = computed(() => generationStarts(props.entries));
 
-// Generation number shown in the hover readout, only when the conversation
-// actually spans multiple generations.
-const hoverGeneration = computed<number | null>(() => {
-  if (genStarts.value.length === 0) return null;
-  return hoverEntry.value?.generation ?? null;
-});
+function amount(v: number): string {
+  return stack.value?.weighted ? formatUsd(v) : `${formatTokenCount(v)} tok`;
+}
 
-// Wall-clock time of the hovered call, shown in time mode.
-const hoverTime = computed(() => {
-  const ts = hoverEntry.value?.timestamp;
-  if (xMode.value !== "time" || !ts) return "";
-  return new Date(ts).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-});
-
-const hoverTotal = computed(() => {
+// "call 169, $1.61, cumulative $47.05", then the snippet: "(bash)". Time
+// mode adds the time.
+const hoverText = computed(() => {
   const s = stack.value;
   const i = hoverIndex.value;
-  if (!s || i === null || i >= s.n || s.segments.length === 0) return "";
-  const top = s.layers[s.segments.length - 1][i];
-  return s.weighted ? formatUsd(top) : `${formatTokenCount(top)} tok`;
+  if (!s || i === null) return "";
+  const e = props.entries[i];
+  const top = s.segments.length - 1;
+  const parts = [`call ${i + 1}`];
+  if (xMode.value === "time" && e.timestamp) {
+    const d = new Date(e.timestamp);
+    const day = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    parts.push(`${day} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`);
+  }
+  // A call to an unpriced model adds nothing to a dollar graph, but it is
+  // not free: say so, with the provider's own figure when there is one.
+  if (s.weighted && !(e.model && costs.value[e.model])) {
+    parts.push(e.cost_usd > 0 ? `${formatUsd(e.cost_usd)} reported` : "unpriced");
+  } else {
+    parts.push(amount(s.deltaLayers[top][i]));
+  }
+  parts.push(`cumulative ${amount(s.layers[top][i])}`);
+  return parts.join(", ");
 });
+
+const hoverSnippet = computed(() =>
+  hoverIndex.value === null ? "" : props.entries[hoverIndex.value]?.snippet || "",
+);
 </script>

@@ -1611,7 +1611,7 @@ function messageSnippet(m: Message): string {
       if (!snippet) {
         for (const c of content) {
           if (c.Type === LLM_TYPE_TOOL_USE && c.ToolName) {
-            snippet = `→ ${c.ToolName}`;
+            snippet = c.ToolName;
             break;
           }
         }

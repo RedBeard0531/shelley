@@ -18,7 +18,7 @@
       @show="onPopupShow"
       @hide="popupOpen = false"
     >
-      {{ formatTokenCount(contextWindowSize) }} tokens
+      <div class="usage-popup-title">{{ popupTitle }}</div>
       <div v-if="popupOpen" class="usage-graph-panel">
         <div
           :class="{ 'usage-graph-panel-item-inactive': usageGraph !== 'cost' }"
@@ -156,6 +156,9 @@ const usageTitle = computed(() => {
   const suffix = level ? ` — conversation ${level}` : "";
   return `Context usage: ${formatTokenCount(props.contextWindowSize)} tokens${suffix}`;
 });
+const popupTitle = computed(
+  () => `Current context: ${formatTokenCount(props.contextWindowSize)} tokens`,
+);
 const usageTooltip = computed(() => `${usageTitle.value}. Click for details.`);
 
 // Warn the parent as early as we can — hover/focus, which precede the click —

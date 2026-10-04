@@ -11884,6 +11884,13 @@ kbd {
   border-color: var(--text-secondary);
 }
 
+/* Lines up with the graph column (.token-cost-timeline). */
+.usage-popup-title {
+  max-width: 420px;
+  margin: 0 auto 4px;
+  color: var(--text-primary);
+}
+
 .usage-graph-panel {
   display: grid;
 }
@@ -12030,6 +12037,10 @@ kbd {
   fill: var(--text-secondary);
 }
 
+.token-cost-pane-label {
+  fill: var(--text-primary);
+}
+
 .token-cost-hover-readout {
   margin-top: 2px;
   font-size: 0.7rem;
@@ -12038,11 +12049,20 @@ kbd {
   min-height: 2.7em;
 }
 
+/* The amounts always show in full, wrapping if they must; only the message
+   snippet truncates, inline when there's room, else on its own line. */
+.token-cost-hover-text {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.25em;
+}
+
 .token-cost-hover-snippet {
-  white-space: nowrap;
+  flex: 1 1 6em;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-style: italic;
+  white-space: nowrap;
 }
 
 .token-cost-legend {
@@ -12183,14 +12203,18 @@ kbd {
   color: var(--text-tertiary);
 }
 
-.token-cost-table tfoot > tr > * {
+/* Subtotals and the total head the receipt, right under the graph, rather
+   than trailing a long breakdown that a scrolling popup cuts off; a rule
+   sets them off from the per-model rows. */
+.token-cost-table .token-cost-summary > tr > * {
   padding-top: 6px;
   border-top: 1px solid var(--border);
   font-weight: 600;
 }
 
-.token-cost-total-row {
-  border-top: 1px solid var(--border);
+.token-cost-table .token-cost-summary > tr:last-child > * {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
 }
 
 @media (min-width: 769px) {
