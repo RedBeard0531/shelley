@@ -23,7 +23,11 @@ let tempDir: string | null = null;
 // killing only the forkpty child's group leaves those jobs running forever.
 function killTerminalSessions(dir: string) {
   const prefix = `exe-scroll: session ${dir}/`;
-  const procs = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid=,sess=,command='], { encoding: 'utf8' })
+  // Shared CI hosts can have process tables larger than Node's 1 MiB default.
+  const procs = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid=,sess=,command='], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  })
     .split('\n')
     .flatMap((line) => {
       const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);

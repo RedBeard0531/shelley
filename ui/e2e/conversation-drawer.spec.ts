@@ -872,7 +872,9 @@ test.describe("conversation drawer startup and app bar", () => {
     await expect(page.locator('[data-conversation-id="mine"]')).toBeVisible();
     // Drop the seeded current-user filter so every group is on screen.
     await page.getByRole("button", { name: "Search conversations..." }).click();
-    await queryEditor(page).fill("");
+    const editor = queryEditor(page);
+    await expectQuery(editor, "user:adam@poyo.co ");
+    await clearConversationQuery(editor);
     await expect(page.locator('[data-conversation-id="none"]')).toBeVisible();
 
     await page.getByRole("button", { name: "Group conversations" }).click();
