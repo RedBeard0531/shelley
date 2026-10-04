@@ -36,6 +36,13 @@ async function run(name: string, fn: () => Promise<void>): Promise<void> {
   }
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Hold the event loop, as a long render or a tab resuming from suspension does. */
+function blockEventLoop(ms: number): void {
+  const end = performance.now() + ms;
+  while (performance.now() < end) {
+    // spin
+  }
+}
 
 async function main(): Promise<void> {
   await run("resolves normally when the operation beats the deadline", async () => {
@@ -145,6 +152,64 @@ async function main(): Promise<void> {
     }
     assert(String(err).includes("boom"), "the real error propagates");
     assert(pendingWaits().length === 0, "registry cleared on rejection");
+  });
+
+  // ── Event-loop stalls ───────────────────────────────────────────────────
+  //
+  // A result can only be observed when the event loop is free to deliver it.
+  // Safari 26.4, measured: issue a 3ms IndexedDB read with a 250ms timer, then
+  // block the main thread for 300ms or 1s — the overdue timer runs FIRST and
+  // the long-finished read second. Counting the stall against the deadline
+  // therefore declared "IndexedDB contention", aborted a good read and went
+  // to the network, all because the tab itself was busy.
+
+  await run("time the event loop spends blocked does not count against the deadline", async () => {
+    let resolveIt!: (v: string) => void;
+    const p = new Promise<string>((r) => {
+      resolveIt = r;
+    });
+    const wait = withDeadline(p, 20, { what: "indexedDB.read conversation_meta" });
+    blockEventLoop(60);
+    // The answer becomes deliverable only once the loop is free again, and is
+    // queued behind the now-overdue deadline timer — the Safari ordering.
+    setTimeout(() => resolveIt("ok"), 0);
+    let got: string | undefined;
+    let err: unknown;
+    try {
+      got = await wait;
+    } catch (e) {
+      err = e;
+    }
+    assert(got === "ok", `the result that arrived after the stall wins, got ${String(err)}`);
+    assert(missedDeadlines().length === 0, "a stall alone is not a missed deadline");
+  });
+
+  await run("a stall still ends in a miss when the operation never answers", async () => {
+    const wait = withDeadline(new Promise<string>(() => {}), 20, { what: "indexedDB.open" });
+    blockEventLoop(60);
+    let err: unknown;
+    try {
+      await wait;
+    } catch (e) {
+      err = e;
+    }
+    assert(isDeadlineExceeded(err), "the budget still runs out on free time");
+    const [rec] = missedDeadlines();
+    assert(
+      rec.stalledMs !== undefined && rec.stalledMs >= 30,
+      `the stall is recorded so the HUD can tell it apart: ${rec.stalledMs}`,
+    );
+  });
+
+  await run("an in-flight wait reports budget used separately from wall time", async () => {
+    const wait = withDeadline(new Promise<string>(() => {}), 200, { what: "indexedDB.open" });
+    blockEventLoop(150);
+    await sleep(10);
+    const [w] = pendingWaits();
+    assert(w.elapsedMs >= 150, `wall time includes the stall: ${w.elapsedMs}`);
+    assert(w.chargedMs < 100, `the stall is not charged to the budget: ${w.chargedMs}`);
+    assert(w.stalledMs >= 100, `and is reported as a stall: ${w.stalledMs}`);
+    await wait.catch(() => {});
   });
 
   // ── Missed-deadline record ──────────────────────────────────────────────
