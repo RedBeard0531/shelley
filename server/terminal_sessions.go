@@ -68,12 +68,10 @@ type TerminalSessions struct {
 	attachMu sync.Mutex
 }
 
-// NewTerminalSessions opens (or creates) a sessions directory and reaps any
-// stale records left over from previous runs.
+// NewTerminalSessions opens a sessions directory and reaps any stale records
+// left over from previous runs. The directory is created on first Spawn, so
+// a server that never opens a terminal leaves nothing on disk.
 func NewTerminalSessions(dir string, logger *slog.Logger) (*TerminalSessions, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("terminals: mkdir %s: %w", dir, err)
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("terminals: locate shelley executable: %w", err)
@@ -190,6 +188,9 @@ func (t *TerminalSessions) Spawn(command, cwd, conversationID string, cols, rows
 		} else {
 			cwd = "/"
 		}
+	}
+	if err := os.MkdirAll(t.dir, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("terminals: mkdir %s: %w", t.dir, err)
 	}
 	id, err := newTerminalID()
 	if err != nil {

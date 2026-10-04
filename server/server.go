@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -463,17 +464,15 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 	s.integrationSkills = newIntegrationSkillCache(logger, currentIntegrationSkillDiscoverer(logger))
 
 	// Persistent terminal sessions live alongside the database so that they
-	// survive shelley restarts. In tests DBPath is empty; use a unique
-	// per-process dir so concurrent tests don't see each other.
+	// survive shelley restarts. In tests DBPath is empty; use a unique dir so
+	// concurrent tests don't see each other; keep the name short so socket
+	// paths inside it fit macOS's 104-byte limit. TerminalSessions creates it
+	// only when a terminal is spawned, so most test servers leave nothing.
 	var termDir string
 	if DBPath != "" {
 		termDir = filepath.Join(filepath.Dir(DBPath), "terminals")
 	} else {
-		td, err := os.MkdirTemp("", "shelley-terminals-")
-		if err != nil {
-			panic(fmt.Errorf("terminal sessions tempdir: %w", err))
-		}
-		termDir = td
+		termDir = filepath.Join(os.TempDir(), "shelley-terminals-"+rand.Text()[:10])
 	}
 	ts, terr := NewTerminalSessions(termDir, logger)
 	if terr != nil {

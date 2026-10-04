@@ -57,6 +57,7 @@ func newTestServer(t *testing.T) (*Server, *db.DB, *predictable.Service) {
 	svr.hooksDir = t.TempDir()
 	if svr.terminals != nil {
 		svr.terminals.SetSpawner(InProcessSpawner)
+		t.Cleanup(func() { os.RemoveAll(svr.terminals.dir) })
 	}
 	return svr, database, ps
 }
