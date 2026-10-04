@@ -343,3 +343,11 @@ func TestBackgroundJobKill(t *testing.T) {
 		}
 	})
 }
+
+func TestBackgroundJobTailHidesLogPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.log")
+	tail := (BackgroundJob{LogPath: path}).Tail()
+	if strings.Contains(tail, path) {
+		t.Fatalf("tail exposes log path: %q", tail)
+	}
+}

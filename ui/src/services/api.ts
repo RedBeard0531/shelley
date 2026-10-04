@@ -42,8 +42,7 @@ async function responseError(response: Response, prefix: string): Promise<ApiErr
 export interface BackgroundJob {
   job_id: string;
   command: string;
-  pgid: number;
-  log_path: string;
+  tail: string;
   started_at: string;
 }
 

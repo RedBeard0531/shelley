@@ -88,6 +88,108 @@ test.describe("conversation drawer startup and app bar", () => {
     await expect(runningRow.locator(".drawer-interrupted-indicator")).toHaveCount(0);
   });
 
+  test("expands background jobs above subagents, including jobs inside subagents", async ({
+    page,
+  }) => {
+    const parent = conversation("parent");
+    parent.subagent_count = 1;
+    parent.running_background_jobs = 1;
+    const subagent = conversation("subagent");
+    subagent.parent_conversation_id = parent.conversation_id;
+    subagent.running_background_jobs = 1;
+    await stubConversationList(page, [parent, subagent]);
+    let tail = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+    await page.route("**/api/conversation/*/background-jobs", (route) =>
+      route.fulfill({
+        json: [
+          {
+            job_id: "internal",
+            command: "echo hello",
+            tail,
+            started_at: "2026-07-23T12:00:00Z",
+          },
+        ],
+      }),
+    );
+
+    await page.goto("/new");
+    const parentBadge = page
+      .locator('[data-conversation-id="parent"]')
+      .getByTestId("background-jobs-badge");
+    await parentBadge.click();
+    await expect(page.locator("#background-jobs-parent [data-testid=background-job]")).toHaveCount(
+      1,
+    );
+    await expect(
+      page.locator("#background-jobs-parent [data-testid=background-job]"),
+    ).not.toContainText("internal");
+    const output = page.locator("#background-jobs-parent [data-testid=background-job-tail]");
+    await expect(output).toContainText("line 19");
+    expect(
+      await output.evaluate(
+        (el) =>
+          el.scrollHeight > el.clientHeight &&
+          el.scrollTop + el.clientHeight >= el.scrollHeight - 2,
+      ),
+    ).toBe(true);
+    tail = "updated";
+    await expect(output).toHaveText("updated", { timeout: 10000 });
+    await page.getByRole("button", { name: "Expand subagents" }).click();
+    await expect(page.locator(".drawer-subagent-list .subagent-item")).toHaveCount(1);
+    expect(
+      await page
+        .locator("#background-jobs-parent")
+        .evaluate(
+          (el) =>
+            el.compareDocumentPosition(document.querySelector(".drawer-subagent-list")!) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+    ).toBeTruthy();
+    const subBadge = page.locator(".subagent-item").getByTestId("background-jobs-badge");
+    await subBadge.click();
+    await expect(
+      page.locator("#background-jobs-subagent [data-testid=background-job]"),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(".drawer-subagent-list > .drawer-background-jobs-nested"),
+    ).toHaveCount(1);
+    await expect(page).toHaveURL(/\/new$/);
+  });
+
+  test("a slow background job response still replaces the loading state", async ({ page }) => {
+    const parent = conversation("parent");
+    parent.running_background_jobs = 1;
+    await stubConversationList(page, [parent]);
+    const pending: Array<() => void> = [];
+    await page.route("**/api/conversation/*/background-jobs", async (route) => {
+      await new Promise<void>((resolve) => pending.push(resolve));
+      await route.fulfill({
+        json: [
+          {
+            job_id: "job",
+            command: "echo done",
+            tail: "done",
+            started_at: "2026-07-23T12:00:00Z",
+          },
+        ],
+      });
+    });
+    await page.clock.install();
+    await page.goto("/new");
+    await page.getByTestId("background-jobs-badge").click();
+    await expect.poll(() => pending.length).toBe(1);
+
+    // The first response takes longer than the poll interval. A new poll
+    // must not supersede it before it can populate the list.
+    await page.clock.runFor(3500);
+    try {
+      pending[0]();
+      await expect(page.getByTestId("background-job")).toContainText("echo done");
+    } finally {
+      for (const release of pending) release();
+    }
+  });
+
   test("truncates long slugs to one line with an ellipsis", async ({ page }) => {
     const long = conversation(
       "unexpected-conversation-navigation-redirect-with-an-even-longer-tail",

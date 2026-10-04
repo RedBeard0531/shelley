@@ -875,87 +875,90 @@ body {
   height: 0.75rem;
 }
 
-.background-jobs-popover.p-popover {
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: var(--text-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  width: min(26rem, calc(100vw - 1rem));
+.drawer-background-jobs-list,
+.drawer-subagent-list {
+  margin-left: 1.5rem;
 }
 
-.background-jobs-popover .background-jobs-popover-content {
-  padding: 0.5rem 0.625rem;
-  max-height: min(24rem, 70dvh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+.drawer-background-jobs-nested {
+  margin-left: 0.5rem;
+  max-width: calc(100% - 0.5rem);
 }
 
-.background-jobs-title {
-  font-size: var(--font-size-12);
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 0.375rem;
-}
-
-.background-jobs-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.background-jobs-item {
+.drawer-background-job {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 0.5rem;
-  row-gap: 0.125rem;
-  align-items: center;
-  padding: 0.375rem 0;
-  border-top: 1px solid var(--border-color);
-}
-
-.background-jobs-item:first-child {
-  border-top: none;
+  gap: 0.125rem 0.25rem;
+  padding: 0.5rem;
+  border-left: 2px solid var(--border-color);
+  min-width: 0;
 }
 
 .background-jobs-command {
   font-family: var(--font-mono);
   font-size: var(--font-size-12);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.background-jobs-meta,
-.background-jobs-log {
-  grid-column: 1;
-  font-size: var(--font-size-12);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .background-jobs-meta {
-  display: flex;
-  gap: 0.5rem;
+  grid-column: 1;
+  font-size: var(--font-size-12);
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
-.background-jobs-log {
+.background-jobs-tail {
+  grid-column: 1 / -1;
+  max-height: 7rem;
+  min-width: 0;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem 0.375rem;
+  overflow: auto;
+  border-radius: 0.25rem;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
+  font-size: var(--font-size-12);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.background-jobs-kill {
+.background-jobs-stop {
   grid-column: 2;
-  grid-row: 1 / span 3;
+  grid-row: 1 / span 2;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.background-jobs-stop:hover {
+  background: color-mix(in srgb, var(--error-text) 10%, transparent);
+  color: var(--error-text);
+}
+
+.background-jobs-stop:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .background-jobs-empty,
 .background-jobs-error {
   font-size: var(--font-size-12);
   color: var(--text-secondary);
-  padding: 0.25rem 0;
+  padding: 0.5rem;
+  border-left: 2px solid var(--border-color);
 }
 
 .background-jobs-error {
@@ -11803,11 +11806,10 @@ kbd {
   max-width: calc(100vw - 1rem);
 }
 .chat-context-popup.p-popover:before,
-.chat-context-popup.p-popover:after,
-.background-jobs-popover.p-popover:before,
-.background-jobs-popover.p-popover:after {
+.chat-context-popup.p-popover:after {
   display: none;
 }
+
 /* Same flip caveat as .toc-popover: Popover defaults to "below the target",
    which for the status-bar usage bar means covering the message input. Shift
    it above the 6px bar (+4px gap) unless PrimeVue already flipped it. */
@@ -13041,10 +13043,6 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-}
-
-.drawer-subagent-list {
-  margin-left: 1.5rem;
 }
 
 .drawer-subagent-item-style {

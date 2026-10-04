@@ -111,7 +111,7 @@ type BackgroundJobOutcome struct {
 
 // Outcome reads j's exit status, run time, and log tail.
 func (j BackgroundJob) Outcome() BackgroundJobOutcome {
-	o := BackgroundJobOutcome{Job: j, Tail: strings.TrimRight(logTail(j.LogPath, jobNoticeTailLines), "\n")}
+	o := BackgroundJobOutcome{Job: j, Tail: j.Tail()}
 	status, err := os.ReadFile(j.ExitPath)
 	if err != nil {
 		return o
@@ -125,6 +125,11 @@ func (j BackgroundJob) Outcome() BackgroundJobOutcome {
 		o.Elapsed = fi.ModTime().Sub(j.StartedAt).Round(time.Second)
 	}
 	return o
+}
+
+// Tail returns the same bounded log excerpt shown when this job finishes.
+func (j BackgroundJob) Tail() string {
+	return strings.TrimRight(logTail(j.LogPath, jobNoticeTailLines), "\n")
 }
 
 // Notice describes o for the job's conversation: its exit status, run
@@ -167,15 +172,16 @@ func logTail(path string, n int) string {
 }
 
 // readTailString returns up to maxBytes from the end of the file (best-effort).
+// Errors may be displayed in the drawer; never include the log path in them.
 func readTailString(path string, maxBytes int64) string {
 	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Sprintf("(could not open log: %v)", err)
+		return "(could not open job output)"
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return fmt.Sprintf("(could not stat log: %v)", err)
+		return "(could not stat job output)"
 	}
 	size := st.Size()
 	if size == 0 {
@@ -188,11 +194,11 @@ func readTailString(path string, maxBytes int64) string {
 		truncated = true
 	}
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return fmt.Sprintf("(could not seek log: %v)", err)
+		return "(could not seek job output)"
 	}
 	b, err := io.ReadAll(f)
 	if err != nil {
-		return fmt.Sprintf("(could not read log: %v)", err)
+		return "(could not read job output)"
 	}
 	out := string(b)
 	if truncated {

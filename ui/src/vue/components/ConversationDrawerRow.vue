@@ -231,9 +231,11 @@
           {{ terminalCount }}
         </span>
         <BackgroundJobsBadge
-          v-if="!isDraft && convState.running_background_jobs > 0"
+          v-if="!isDraft && !itemArchived && convState.running_background_jobs > 0"
           :conversation-id="conversation.conversation_id"
           :count="convState.running_background_jobs"
+          :expanded="expandedJobs.has(conversation.conversation_id)"
+          @toggle="toggleJobs(conversation.conversation_id)"
         />
         <button
           v-if="showParticipantBadge"
@@ -355,43 +357,66 @@
     </div>
   </div>
 
+  <!-- Running jobs sit above subagents, as children of the conversation. -->
+  <BackgroundJobsList
+    v-if="
+      !itemArchived &&
+      convState.running_background_jobs > 0 &&
+      expandedJobs.has(conversation.conversation_id)
+    "
+    :conversation-id="conversation.conversation_id"
+    :count="convState.running_background_jobs"
+  />
+
   <!-- Subagents -->
   <div
     v-if="!itemArchived && isExpanded && conversationSubagents.length > 0"
     class="subagent-list drawer-subagent-list"
   >
-    <div
-      v-for="sub in conversationSubagents"
-      :key="sub.conversation_id"
-      :class="`conversation-item subagent-item drawer-subagent-item-style ${sub.conversation_id === ctx.currentConversationId.value ? 'active' : ''}${ctx.seenIds.value !== null && !ctx.seenIds.value.has(sub.conversation_id) ? ' conversation-item-enter' : ''}`"
-      @click="onSubClick($event, sub)"
-      @auxclick="ctx.handleAuxClick($event, sub)"
-    >
-      <div class="drawer-conversation-item-flex-container">
-        <div class="drawer-conversation-header-row">
-          <div class="drawer-conversation-item-flex-container">
-            <div class="conversation-title" :title="sub.slug || undefined">
-              <em v-if="!sub.slug">untitled</em>
-              <template v-else>{{ sub.slug }}</template>
+    <template v-for="sub in conversationSubagents" :key="sub.conversation_id">
+      <div
+        :class="`conversation-item subagent-item drawer-subagent-item-style ${sub.conversation_id === ctx.currentConversationId.value ? 'active' : ''}${ctx.seenIds.value !== null && !ctx.seenIds.value.has(sub.conversation_id) ? ' conversation-item-enter' : ''}`"
+        @click="onSubClick($event, sub)"
+        @auxclick="ctx.handleAuxClick($event, sub)"
+      >
+        <div class="drawer-conversation-item-flex-container">
+          <div class="drawer-conversation-header-row">
+            <div class="drawer-conversation-item-flex-container">
+              <div class="conversation-title" :title="sub.slug || undefined">
+                <em v-if="!sub.slug">untitled</em>
+                <template v-else>{{ sub.slug }}</template>
+              </div>
             </div>
+            <span
+              v-if="sub.working"
+              class="working-indicator"
+              :title="ctx.t('subagentIsWorking')"
+            />
           </div>
-          <span v-if="sub.working" class="working-indicator" :title="ctx.t('subagentIsWorking')" />
-        </div>
-        <div class="conversation-preview" :title="sub.preview || undefined">
-          {{ sub.preview || "\u00a0" }}
-        </div>
-        <div class="conversation-meta">
-          <span class="conversation-date drawer-subagent-date">{{
-            ctx.formatDate(sub.updated_at)
-          }}</span>
-          <BackgroundJobsBadge
-            v-if="sub.running_background_jobs > 0"
-            :conversation-id="sub.conversation_id"
-            :count="sub.running_background_jobs"
-          />
+          <div class="conversation-preview" :title="sub.preview || undefined">
+            {{ sub.preview || "\u00a0" }}
+          </div>
+          <div class="conversation-meta">
+            <span class="conversation-date drawer-subagent-date">{{
+              ctx.formatDate(sub.updated_at)
+            }}</span>
+            <BackgroundJobsBadge
+              v-if="sub.running_background_jobs > 0"
+              :conversation-id="sub.conversation_id"
+              :count="sub.running_background_jobs"
+              :expanded="expandedJobs.has(sub.conversation_id)"
+              @toggle="toggleJobs(sub.conversation_id)"
+            />
+          </div>
         </div>
       </div>
-    </div>
+      <BackgroundJobsList
+        v-if="sub.running_background_jobs > 0 && expandedJobs.has(sub.conversation_id)"
+        :conversation-id="sub.conversation_id"
+        :count="sub.running_background_jobs"
+        nested
+      />
+    </template>
   </div>
 </template>
 
@@ -412,6 +437,7 @@ import Menu from "primevue/menu";
 import type { MenuItem } from "primevue/menuitem";
 import OverflowDotsIcon from "./OverflowDotsIcon.vue";
 import BackgroundJobsBadge from "./BackgroundJobsBadge.vue";
+import BackgroundJobsList from "./BackgroundJobsList.vue";
 import type { Conversation, ConversationWithState } from "../../types";
 import { isImeComposing } from "../../utils/imeComposing";
 import { highlightSearchMatches } from "../../utils/searchHighlight";
@@ -521,6 +547,13 @@ const participantTooltipHtml = computed(() => {
   return `<span class="conversation-participant-tooltip-list">${rows}</span>`;
 });
 const isDraft = computed(() => !!props.conversation.is_draft);
+const expandedJobs = ref(new Set<string>());
+function toggleJobs(conversationId: string) {
+  const next = new Set(expandedJobs.value);
+  if (next.has(conversationId)) next.delete(conversationId);
+  else next.add(conversationId);
+  expandedJobs.value = next;
+}
 const isActive = computed(
   () => props.conversation.conversation_id === ctx.currentConversationId.value,
 );

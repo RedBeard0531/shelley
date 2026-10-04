@@ -271,13 +271,22 @@ func TestBackgroundJobsListedAndKilled(t *testing.T) {
 	postChatMessage(t, server, id, "bash-bg: echo started; read -r _ < "+gate)
 	waitForListJobCount(t, next, 1)
 
+	waitFor(t, 10*time.Second, func() bool {
+		w := call("GET", "/api/conversation/"+id+"/background-jobs")
+		var listed []BackgroundJobInfo
+		return json.NewDecoder(w.Body).Decode(&listed) == nil &&
+			len(listed) == 1 && strings.Contains(listed[0].Tail, "started")
+	})
 	w := call("GET", "/api/conversation/"+id+"/background-jobs")
 	var jobs []BackgroundJobInfo
 	if err := json.NewDecoder(w.Body).Decode(&jobs); err != nil {
 		t.Fatalf("decode %q: %v", w.Body.String(), err)
 	}
-	if len(jobs) != 1 || !strings.Contains(jobs[0].Command, gate) || jobs[0].PGID == 0 || jobs[0].LogPath == "" {
+	if len(jobs) != 1 || !strings.Contains(jobs[0].Command, gate) || !strings.Contains(jobs[0].Tail, "started") {
 		t.Fatalf("background jobs = %+v", jobs)
+	}
+	if strings.Contains(w.Body.String(), "pgid") || strings.Contains(w.Body.String(), "log_path") {
+		t.Fatalf("list exposes internal job details: %s", w.Body.String())
 	}
 	job := jobs[0]
 

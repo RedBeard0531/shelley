@@ -196,8 +196,7 @@ func (s *Server) deliverBackgroundJobNotice(ctx context.Context, job claudetool.
 type BackgroundJobInfo struct {
 	JobID     string    `json:"job_id"`
 	Command   string    `json:"command"`
-	PGID      int       `json:"pgid"`
-	LogPath   string    `json:"log_path"`
+	Tail      string    `json:"tail"`
 	StartedAt time.Time `json:"started_at"`
 }
 
@@ -205,7 +204,7 @@ type BackgroundJobInfo struct {
 func (s *Server) handleListBackgroundJobs(w http.ResponseWriter, r *http.Request, conversationID string) {
 	out := []BackgroundJobInfo{}
 	for _, j := range s.runningBackgroundJobsOf(conversationID) {
-		out = append(out, BackgroundJobInfo{JobID: j.ID, Command: j.Command, PGID: j.PID, LogPath: j.LogPath, StartedAt: j.StartedAt})
+		out = append(out, BackgroundJobInfo{JobID: j.ID, Command: j.Command, Tail: j.Tail(), StartedAt: j.StartedAt})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
