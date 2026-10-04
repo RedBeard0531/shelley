@@ -49,12 +49,12 @@ func TestRunDrainsPendingBetweenModelRequests(t *testing.T) {
 		Tools: []*llm.Tool{{Name: "work", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`), Run: func(context.Context, json.RawMessage) llm.ToolOut {
 			return llm.ToolOut{LLMContent: llm.TextContent("finished")}
 		}}},
-		Pending: func(context.Context) ([]llm.Message, error) {
+		Pending: func(_ context.Context, messages []llm.Message) ([]llm.Message, error) {
 			checks++
 			if checks == 2 {
-				return []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("child completed")}}, nil
+				return append(messages, llm.Message{Role: llm.MessageRoleUser, Content: llm.TextContent("child completed")}), nil
 			}
-			return nil, nil
+			return messages, nil
 		},
 		Hooks: Hooks{
 			OnResponse: func(_ context.Context, response Response) error {

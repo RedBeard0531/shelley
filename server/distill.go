@@ -169,17 +169,23 @@ func (s *Server) broadcastEstimatedContextSize(ctx context.Context, conversation
 	}
 	latestGen := conv.CurrentGeneration
 
+	var contextRows []generated.Message
+	for _, m := range messages {
+		if m.Generation == latestGen && !m.ExcludedFromContext {
+			contextRows = append(contextRows, m)
+		}
+	}
+	items, system, err := manager.contextItems(contextRows)
+	if err != nil {
+		s.logger.Error("Failed to build context for estimate", "conversationID", conversationID, "error", err)
+		return
+	}
 	var estimate int64
-	for i := range messages {
-		m := messages[i]
-		if m.Generation != latestGen || m.ExcludedFromContext {
-			continue
-		}
-		llmMsg, cerr := convertToLLMMessage(m)
-		if cerr != nil {
-			continue
-		}
-		estimate += int64(estimatePiMessageTokens(llmMsg))
+	for _, sc := range system {
+		estimate += int64(estimatePiMessageTokens(llm.Message{Content: []llm.Content{{Type: llm.ContentTypeText, Text: sc.Text}}}))
+	}
+	for _, it := range items {
+		estimate += int64(estimatePiMessageTokens(it.message))
 	}
 	if estimate <= 0 {
 		return

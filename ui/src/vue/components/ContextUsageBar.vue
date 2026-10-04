@@ -57,7 +57,7 @@
         Compact it or start a new conversation.
       </div>
       <div
-        v-if="conversationId && (onDistillNewGeneration || onStartNewGeneration)"
+        v-if="conversationId && (onDistillNewGeneration || onStartNewGeneration || onCompactInPlace)"
         class="chat-distill-container"
       >
         <button
@@ -67,6 +67,14 @@
           @click="handleDistillNewGeneration"
         >
           {{ distilling ? "Compacting..." : "Compact Conversation" }}
+        </button>
+        <button
+          v-if="onCompactInPlace"
+          :disabled="distilling"
+          class="chat-distill-button chat-distill-generation-button"
+          @click="handleCompactInPlace"
+        >
+          Compact in Place
         </button>
         <button
           v-if="onStartNewGeneration"
@@ -120,6 +128,8 @@ const props = defineProps<{
   messages?: Message[];
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration?: () => Promise<void> | void;
+  /** Asks the agent to use compact_in_place; set when the tool is on. */
+  onCompactInPlace?: () => Promise<void> | void;
   /** Called just before the popup opens. The parent computes usageEntries /
    *  otherUsageRows lazily (walking every message and parsing its usage data),
    *  so it needs a beat's warning; the graph renders empty for one tick and
@@ -226,6 +236,17 @@ async function handleDistillNewGeneration() {
   distilling.value = true;
   try {
     await props.onDistillNewGeneration();
+    popoverRef.value?.hide();
+  } finally {
+    distilling.value = false;
+  }
+}
+
+async function handleCompactInPlace() {
+  if (distilling.value || !props.onCompactInPlace) return;
+  distilling.value = true;
+  try {
+    await props.onCompactInPlace();
     popoverRef.value?.hide();
   } finally {
     distilling.value = false;

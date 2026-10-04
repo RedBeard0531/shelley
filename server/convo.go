@@ -190,6 +190,14 @@ type ConversationManager struct {
 	// turn; batches arriving meanwhile are dropped and nothing is injected.
 	// Guarded by cm.mu.
 	cancelling bool
+
+	// compactedGeneration is the loop generation whose turn recorded an
+	// in-place compaction (compact_in_place) that its history does not yet
+	// reflect; takeInjectable swaps in the rebuilt history. Guarded by cm.mu.
+	compactedGeneration uint64
+	// keepRecentTokens is the budget of the recent part compact_in_place may
+	// not collapse.
+	keepRecentTokens int
 }
 
 // NewConversationManager constructs a manager with dependencies but defers hydration until needed.
@@ -1279,7 +1287,7 @@ func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, mode
 // generation after the compaction snapshot was taken and thus be absent from
 // the new generation's context (visible in the transcript, not re-fed) — an
 // accepted, pre-existing loss mode of the drain path too.
-func (cm *ConversationManager) takeInjectable(ctx context.Context, generation uint64) []llm.Message {
+func (cm *ConversationManager) takeInjectable(ctx context.Context, generation uint64, nudger *contextNudger) (loop.Injection, error) {
 	// This callback runs inside a loop goroutine. Never wait for an in-progress
 	// teardown here: cancellation is waiting for this goroutine to exit. Taking
 	// the lifecycle lock only long enough to validate/record makes the winner
@@ -1291,9 +1299,13 @@ func (cm *ConversationManager) takeInjectable(ctx context.Context, generation ui
 	cm.mu.Lock()
 	stale := cm.loopTearingDown || cm.loop == nil || cm.loopGeneration != generation ||
 		cm.distilling || cm.cancelling
+	compacted := !stale && cm.compactedGeneration == generation
+	if compacted {
+		cm.compactedGeneration = 0
+	}
 	cm.mu.Unlock()
 	if stale {
-		return nil
+		return loop.Injection{}, nil
 	}
 
 	// WithoutCancel: ctx is the loop's context; a concurrent cancellation
@@ -1301,12 +1313,29 @@ func (cm *ConversationManager) takeInjectable(ctx context.Context, generation ui
 	// recorded rows remain valid history either way — hydration picks them
 	// up even if the turn dies before the next LLM round sends them.
 	ctx = context.WithoutCancel(ctx)
+	var inj loop.Injection
+	if compacted {
+		// compact_in_place recorded a compaction during this turn. The record
+		// and every row so far are persisted, so rebuild from the DB.
+		var rows []generated.Message
+		if err := cm.db.Queries(ctx, func(q *generated.Queries) error {
+			var err error
+			rows, err = q.ListMessagesForContext(ctx, cm.conversationID)
+			return err
+		}); err != nil {
+			return inj, fmt.Errorf("reload compacted history: %w", err)
+		}
+		history, _, err := cm.partitionMessages(rows)
+		if err != nil {
+			return inj, fmt.Errorf("rebuild compacted history: %w", err)
+		}
+		inj.History = history
+	}
 	queued, err := cm.db.GetQueuedMessages(ctx, cm.conversationID)
 	if err != nil {
 		cm.logger.Error("Failed to read queued messages for injection", "error", err)
-		return nil
+		queued = nil
 	}
-	var out []llm.Message
 	for _, qm := range queued {
 		if !qm.Inject {
 			continue
@@ -1319,10 +1348,19 @@ func (cm *ConversationManager) takeInjectable(ctx context.Context, generation ui
 			cm.logger.Error("Failed to record injected user message; leaving it queued", "queued_id", qm.ID, "error", err)
 		default:
 			cm.logger.Info("Injected user message mid-turn", "queued_id", qm.ID)
-			out = append(out, fed)
+			inj.Messages = append(inj.Messages, fed)
 		}
 	}
-	return out
+	if nudger != nil {
+		if text, ok := nudger.take(); ok {
+			nudge, err := cm.recordContextNudge(ctx, text)
+			if err != nil {
+				return inj, err
+			}
+			inj.Messages = append(inj.Messages, nudge)
+		}
+	}
+	return inj, nil
 }
 
 // CancelQueuedMessages clears the conversation's queued_messages array.
@@ -1774,6 +1812,7 @@ func (cm *ConversationManager) systemPromptDisplayData(promptSkills []skills.Ski
 	cfg := cm.toolSetConfig
 	cfg.ToolOverrides = cm.conversationOptions.ToolOverrides
 	cfg.DisableAllTools = cm.conversationOptions.DisableAllTools
+	cfg.InPlaceCompactor = inPlaceCompactor{cm: cm}
 	return systemPromptDisplayData(cfg, promptSkills)
 }
 
@@ -1818,63 +1857,49 @@ func subagentPromptCacheKey(system []llm.SystemContent, modelID string) string {
 }
 
 func (cm *ConversationManager) partitionMessages(messages []generated.Message) ([]llm.Message, []llm.SystemContent, error) {
-	var history []llm.Message
-	var system []llm.SystemContent
-
-	for _, msg := range messages {
-		// Skip gitinfo messages - they are user-visible only, not sent to LLM
-		if msg.Type == string(db.MessageTypeGitInfo) {
-			continue
-		}
-
-		// Skip modelchange markers - user-visible only, not sent to LLM.
-		if msg.Type == string(db.MessageTypeModelChange) {
-			continue
-		}
-
-		// Skip slug markers - they carry only the slug call's usage, have no
-		// content, and are not part of the conversation.
-		if msg.Type == string(db.MessageTypeSlug) {
-			continue
-		}
-
-		// Skip error messages - they are system-generated for user visibility,
-		// but should not be sent to the LLM as they are not part of the conversation
-		if msg.Type == string(db.MessageTypeError) {
-			continue
-		}
-
-		llmMsg, err := convertToLLMMessage(msg)
-		if err != nil {
-			cm.logger.Warn("Failed to convert message to LLM format", "messageID", msg.MessageID, "error", err)
-			continue
-		}
-
-		if msg.Type == string(db.MessageTypeSystem) {
-			for _, content := range llmMsg.Content {
-				if content.Type == llm.ContentTypeText && content.Text != "" {
-					system = append(system, llm.SystemContent{Type: "text", Text: content.Text})
-				}
-			}
-			continue
-		}
-
-		if msg.Type == string(db.MessageTypeUser) {
-			cm.applyDistillationContentOverride(&llmMsg, msg)
-			var userData []byte
-			if msg.UserData != nil {
-				userData = []byte(*msg.UserData)
-			}
-			wrapped, wrapErr := messageWithSenderProvenance(llmMsg, userData)
-			if wrapErr != nil {
-				return nil, nil, fmt.Errorf("apply sender provenance to message %s: %w", msg.MessageID, wrapErr)
-			}
-			llmMsg = wrapped
-		}
-
-		history = append(history, llmMsg)
+	items, system, err := cm.contextItems(messages)
+	if err != nil {
+		return nil, nil, err
 	}
+	history := make([]llm.Message, len(items))
+	for i, it := range items {
+		history[i] = it.message
+	}
+	return history, system, nil
+}
 
+// contextItems builds the LLM's view of messages (one generation's context
+// rows, in sequence order): the system prompt, and the compacted history with
+// distillation overrides and sender provenance applied to user messages.
+func (cm *ConversationManager) contextItems(messages []generated.Message) ([]contextItem, []llm.SystemContent, error) {
+	history, systemMessages, err := compactedContext(cm.logger, messages)
+	if err != nil {
+		return nil, nil, err
+	}
+	var system []llm.SystemContent
+	for _, m := range systemMessages {
+		for _, content := range m.Content {
+			if content.Type == llm.ContentTypeText && content.Text != "" {
+				system = append(system, llm.SystemContent{Type: "text", Text: content.Text})
+			}
+		}
+	}
+	for i := range history {
+		src := history[i].source
+		if src == nil || src.Type != string(db.MessageTypeUser) {
+			continue
+		}
+		cm.applyDistillationContentOverride(&history[i].message, *src)
+		var userData []byte
+		if src.UserData != nil {
+			userData = []byte(*src.UserData)
+		}
+		wrapped, err := messageWithSenderProvenance(history[i].message, userData)
+		if err != nil {
+			return nil, nil, fmt.Errorf("apply sender provenance to message %s: %w", src.MessageID, err)
+		}
+		history[i].message = wrapped
+	}
 	return history, system, nil
 }
 
@@ -2113,7 +2138,17 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 			"read_image": "on",
 		}
 	}
+	toolSetConfig.InPlaceCompactor = inPlaceCompactor{cm: cm, generation: generation}
 	toolSet := claudetool.NewToolSet(processCtx, toolSetConfig)
+	var nudger *contextNudger
+	if claudetool.IsToolEnabled(claudetool.CompactInPlaceName, toolSetConfig.ToolOverrides, toolSetConfig.DisableAllTools) {
+		nudger = newContextNudger(conversationOpts.CompactNudgeTokens, lastContextWindowSize(dbMessages))
+		record := recordMessage
+		recordMessage = func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+			nudger.observe(usage)
+			return record(ctx, message, usage, otherUsage)
+		}
+	}
 
 	// streamFlusher batches LLM stream deltas and flushes them periodically
 	// to avoid overwhelming the bounded subpub queue with hundreds
@@ -2160,8 +2195,8 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		},
 		OnStreamDelta: sf.Push,
 		OnStreamDone:  sf.Flush,
-		InjectMessages: func(ctx context.Context) []llm.Message {
-			return cm.takeInjectable(ctx, generation)
+		InjectMessages: func(ctx context.Context) (loop.Injection, error) {
+			return cm.takeInjectable(ctx, generation, nudger)
 		},
 	})
 
@@ -2262,8 +2297,19 @@ func (cm *ConversationManager) ResetLoop() {
 // It releases loopLifecycleMu while waiting so the dying loop can finish, but
 // loopTearingDown prevents any replacement from being installed in that gap.
 func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
+	_ = cm.resetLoopAfter(markUnhydrated, func() error { return nil })
+}
+
+// resetLoopAfter is resetLoop preceded by mutate, which runs under
+// loopLifecycleMu so no turn can start while it runs. If mutate fails, the
+// loop is left alone and the error returned.
+func (cm *ConversationManager) resetLoopAfter(markUnhydrated bool, mutate func() error) error {
 	cm.loopLifecycleMu.Lock()
 	cm.waitForLoopTeardownLocked()
+	if err := mutate(); err != nil {
+		cm.loopLifecycleMu.Unlock()
+		return err
+	}
 
 	cm.mu.Lock()
 	if markUnhydrated {
@@ -2273,7 +2319,7 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 	if cm.loop == nil {
 		cm.mu.Unlock()
 		cm.loopLifecycleMu.Unlock()
-		return
+		return nil
 	}
 	detached := cm.detachLoopLocked()
 	cm.mu.Unlock()
@@ -2283,6 +2329,7 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 	cm.loopLifecycleMu.Lock()
 	cm.finishLoopTeardownLocked(detached.generation)
 	cm.loopLifecycleMu.Unlock()
+	return nil
 }
 
 // CancelConversation cancels the active loop, clears queued user work, and

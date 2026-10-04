@@ -73,6 +73,9 @@ type ToolSetConfig struct {
 	// ParentMessenger, if set, provides the message_parent tool. The server
 	// sets it only for delegated subagents.
 	ParentMessenger ParentMessenger
+	// InPlaceCompactor, if set, provides the compact_in_place tool (off
+	// unless enabled by ToolOverrides).
+	InPlaceCompactor InPlaceCompactor
 	// BackgroundJobs is told about bash commands moved to the background.
 	BackgroundJobs BackgroundJobs
 	// BashBackgroundAfter overrides DefaultBashBackgroundAfter when nonzero.
@@ -260,6 +263,10 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 	if cfg.ParentMessenger != nil {
 		messageParentTool := &MessageParentTool{Messenger: cfg.ParentMessenger, ConversationID: cfg.ConversationID}
 		tools = append(tools, messageParentTool.Tool())
+	}
+
+	if cfg.InPlaceCompactor != nil {
+		tools = append(tools, CompactInPlaceTool(cfg.InPlaceCompactor))
 	}
 
 	// Add LLM one-shot tool if LLM provider is configured

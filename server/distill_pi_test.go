@@ -458,16 +458,16 @@ func TestResolvePiSummarizationTextSubstitutesPlaceholder(t *testing.T) {
 		"distillation_content": "REAL SUMMARY TEXT",
 	})
 	udStr := string(ud)
-	entry := piContextMessage{
-		llm:    textMsg(llm.MessageRoleUser, "Distillation written to /tmp/x.md"),
-		source: generated.Message{MessageID: "m1", UserData: &udStr},
+	entry := contextItem{
+		message: textMsg(llm.MessageRoleUser, "Distillation written to /tmp/x.md"),
+		source:  &generated.Message{MessageID: "m1", UserData: &udStr},
 	}
 	got := resolvePiSummarizationText(logger, entry)
 	if len(got.Content) == 0 || got.Content[0].Text != "REAL SUMMARY TEXT" {
 		t.Fatalf("expected placeholder replaced with real summary, got %+v", got.Content)
 	}
 	// The original entry must be untouched (no shared-slice mutation).
-	if entry.llm.Content[0].Text != "Distillation written to /tmp/x.md" {
+	if entry.message.Content[0].Text != "Distillation written to /tmp/x.md" {
 		t.Fatalf("resolvePiSummarizationText mutated the source message")
 	}
 }

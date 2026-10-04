@@ -59,6 +59,7 @@ func TS() *go2ts.Go2TS {
 			db.MessageTypeWarning,
 			db.MessageTypeModelChange,
 			db.MessageTypeSlug,
+			db.MessageTypeInPlaceCompaction,
 		},
 	)
 
@@ -66,6 +67,7 @@ func TS() *go2ts.Go2TS {
 	generator.AddMultiple(
 		generated.Conversation{},
 		llm.Usage{},
+		db.InPlaceCompaction{},
 	)
 
 	generator.AddMultiple(

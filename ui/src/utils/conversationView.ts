@@ -46,5 +46,5 @@ export function isVisibleConversationMessage(
   if (isHumanUserMessage(message)) return true;
   if (isDistillStatusMessage(message)) return true;
   if (message.type === "agent") return !!message.end_of_turn;
-  return ["error", "warning", "gitinfo", "modelchange"].includes(message.type);
+  return ["error", "warning", "gitinfo", "modelchange", "inplacecompaction"].includes(message.type);
 }

@@ -95,6 +95,15 @@ const piCompactionSummaryPrefix = `The conversation history before this point wa
 const piCompactionSummarySuffix = `
 </summary>`
 
+// keepRecentTokens is the budget of recent history kept verbatim: by pi
+// distillation, and as the recent part compact_in_place may not collapse.
+func (s *Server) keepRecentTokens() int {
+	if s.piDistillKeepRecentTokens > 0 {
+		return s.piDistillKeepRecentTokens
+	}
+	return defaultPiDistillSettings.keepRecentTokens
+}
+
 // estimatePiMessageTokens ports pi's character/4 heuristic for one message.
 func estimatePiMessageTokens(msg llm.Message) int {
 	chars := 0
@@ -323,38 +332,20 @@ func formatPiFileOperations(readFiles, modifiedFiles []string) string {
 	return "\n\n" + strings.Join(sections, "\n\n")
 }
 
-// piContextMessage pairs the LLM form of a source message with the original DB
-// row, so the pi flow can (a) resolve distillation-summary content for
-// summarization and (b) preserve user_data when copying messages verbatim into
-// the new generation.
-type piContextMessage struct {
-	llm    llm.Message
-	source generated.Message
-}
-
-// piContextMessages converts the source generation's context-eligible messages
-// into llm.Messages (preserving roles and tool structure), filtering out
-// system/error/gitinfo/warning/slug messages and anything excluded from context.
-// Each returned entry retains its source DB row.
-func piContextMessages(sourceGeneration int64, messages []generated.Message) []piContextMessage {
-	var out []piContextMessage
+// piContextMessages returns the source generation's compacted context (see
+// compactedContext), without the system prompt. Each original message keeps
+// its source row, so the pi flow can (a) resolve distillation-summary content
+// for summarization and (b) preserve user_data when copying messages verbatim
+// into the new generation.
+func piContextMessages(logger logWarner, sourceGeneration int64, messages []generated.Message) ([]contextItem, error) {
+	var rows []generated.Message
 	for _, m := range messages {
-		if m.Generation != sourceGeneration || m.ExcludedFromContext {
-			continue
+		if m.Generation == sourceGeneration && !m.ExcludedFromContext {
+			rows = append(rows, m)
 		}
-		switch m.Type {
-		case string(db.MessageTypeSystem), string(db.MessageTypeError),
-			string(db.MessageTypeGitInfo), string(db.MessageTypeWarning),
-			string(db.MessageTypeSlug):
-			continue
-		}
-		llmMsg, err := convertToLLMMessage(m)
-		if err != nil {
-			continue
-		}
-		out = append(out, piContextMessage{llm: llmMsg, source: m})
 	}
-	return out
+	items, _, err := compactedContext(logger, rows)
+	return items, err
 }
 
 // resolveDistilledContent returns the real distillation summary text for a
@@ -394,12 +385,15 @@ type logWarner interface {
 
 // resolvePiSummarizationText returns the message text to feed the summarizer,
 // substituting the real summary for any distilled-message placeholder.
-func resolvePiSummarizationText(logger logWarner, entry piContextMessage) llm.Message {
-	content, ok := resolveDistilledContent(logger, entry.source)
-	if !ok {
-		return entry.llm
+func resolvePiSummarizationText(logger logWarner, entry contextItem) llm.Message {
+	if entry.source == nil {
+		return entry.message
 	}
-	msg := entry.llm
+	content, ok := resolveDistilledContent(logger, *entry.source)
+	if !ok {
+		return entry.message
+	}
+	msg := entry.message
 	// Copy the content slice so we don't mutate the shared message.
 	newContent := make([]llm.Content, len(msg.Content))
 	copy(newContent, msg.Content)
@@ -552,21 +546,23 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 		return ""
 	}
 
-	ctxMsgs := piContextMessages(sourceGeneration, messages)
+	ctxMsgs, err := piContextMessages(logger, sourceGeneration, messages)
+	if err != nil {
+		logger.Error("Failed to build context for pi distillation", "error", err)
+		s.rollbackCompactionFailure(ctx, logger, conversationID, fmt.Sprintf("Compaction failed: %v", err), sourceGeneration, sourceTurnInterrupted)
+		return ""
+	}
 	if len(ctxMsgs) == 0 {
 		logger.Warn("pi distillation found no context messages")
 		s.insertDistillStatus(ctx, conversationID, "complete")
 		return ""
 	}
 
-	keepRecentTokens := defaultPiDistillSettings.keepRecentTokens
-	if s.piDistillKeepRecentTokens > 0 {
-		keepRecentTokens = s.piDistillKeepRecentTokens
-	}
+	keepRecentTokens := s.keepRecentTokens()
 	llmMsgs := make([]llm.Message, len(ctxMsgs))
 	for i, entry := range ctxMsgs {
-		llmMsgs[i] = entry.llm
-		if entry.source.Type == string(db.MessageTypeUser) && entry.source.UserData != nil {
+		llmMsgs[i] = entry.message
+		if entry.source != nil && entry.source.Type == string(db.MessageTypeUser) && entry.source.UserData != nil {
 			wrapped, wrapErr := messageWithSenderProvenance(llmMsgs[i], []byte(*entry.source.UserData))
 			if wrapErr != nil {
 				errMsg := fmt.Sprintf("Compaction failed: invalid sender provenance on message %s: %v", entry.source.MessageID, wrapErr)
@@ -588,7 +584,7 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 	olderMsgs := make([]llm.Message, len(older))
 	for i, entry := range older {
 		olderMsgs[i] = resolvePiSummarizationText(logger, entry)
-		if entry.source.Type == string(db.MessageTypeUser) && entry.source.UserData != nil {
+		if entry.source != nil && entry.source.Type == string(db.MessageTypeUser) && entry.source.UserData != nil {
 			wrapped, wrapErr := messageWithSenderProvenance(olderMsgs[i], []byte(*entry.source.UserData))
 			if wrapErr != nil {
 				errMsg := fmt.Sprintf("Compaction failed: invalid sender provenance on message %s: %v", entry.source.MessageID, wrapErr)
@@ -694,13 +690,18 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 	// its real summary text would be lost. Stamp compaction_carried=true on every
 	// copy so the UI can collapse the re-played tail behind a "messages carried
 	// forward" band instead of re-rendering each one (slow, jarring scroll).
+	// An in-place squish summary in the tail has no source row; it is carried
+	// as a plain user message, and trimmed tool results are carried trimmed.
 	for _, entry := range recent {
-		ud := userDataForCopy(entry.source)
+		var ud map[string]string
+		if entry.source != nil {
+			ud = userDataForCopy(*entry.source)
+		}
 		if ud == nil {
 			ud = map[string]string{}
 		}
 		ud["compaction_carried"] = "true"
-		batch = append(batch, recordMessageInput{message: entry.llm, userData: []interface{}{ud}})
+		batch = append(batch, recordMessageInput{message: entry.message, userData: []interface{}{ud}})
 	}
 
 	// Append the terminal "complete" status message as an additional INSERT in

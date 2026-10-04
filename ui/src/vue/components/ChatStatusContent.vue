@@ -152,6 +152,40 @@
           class="advanced-settings-popover"
           :style="popoverStyle"
         >
+          <div class="auto-compaction-row" data-testid="auto-compaction">
+            <span class="auto-compaction-name">Auto compaction</span>
+            <div class="tool-override-choices" role="radiogroup" aria-label="Auto compaction">
+              <button
+                v-for="choice in [
+                  { on: true, label: 'On' },
+                  { on: false, label: 'Off' },
+                ]"
+                :key="choice.label"
+                type="button"
+                role="radio"
+                :aria-checked="autoCompaction === choice.on"
+                :class="`tool-override-choice${autoCompaction === choice.on ? ' active' : ''}`"
+                :disabled="sending"
+                @click="onSetToolOverride(COMPACT_IN_PLACE_TOOL, choice.on ? 'on' : 'default')"
+              >
+                {{ choice.label }}
+              </button>
+            </div>
+            <label class="auto-compaction-nudge">
+              nudge at
+              <select
+                :value="compactNudgeTokens"
+                :disabled="sending || !autoCompaction"
+                @change="
+                  onSetCompactNudgeTokens(Number(($event.target as HTMLSelectElement).value))
+                "
+              >
+                <option v-for="n in COMPACT_NUDGE_CHOICES" :key="n" :value="n">
+                  {{ n / 1000 }}k
+                </option>
+              </select>
+            </label>
+          </div>
           <div class="advanced-settings-header">
             <span>Tools</span>
             <button
@@ -165,7 +199,7 @@
             </button>
           </div>
           <div class="tool-override-list">
-            <template v-for="tool in toolOverrideList" :key="tool.name">
+            <template v-for="tool in listedTools" :key="tool.name">
               <div class="tool-override-row">
                 <div class="tool-override-info">
                   <span class="tool-override-name">{{ tool.name }}</span>
@@ -230,6 +264,7 @@ import type { ThinkingLevel } from "./thinkingLevel";
 import AnimatedWorkingStatus from "./AnimatedWorkingStatus.vue";
 import ModelPicker from "./ModelPicker.vue";
 import StatusReadout from "./StatusReadout.vue";
+import { COMPACT_IN_PLACE_TOOL, COMPACT_NUDGE_CHOICES } from "./autoCompaction";
 
 type ToolInfo = { name: string; summary: string; default_on: boolean };
 
@@ -265,6 +300,7 @@ const props = defineProps<{
   onResumeInterrupted: () => void;
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration: () => Promise<void> | void;
+  onCompactInPlace?: () => Promise<void> | void;
   onSelectModel: (model: string) => void;
   onSelectCombination: (model: string, level: Exclude<ThinkingLevel, "default"> | null) => void;
   /** Model / reasoning-level picks from the status readout, which only renders
@@ -282,6 +318,8 @@ const props = defineProps<{
   onThinkingChange: (level: ThinkingLevel) => void;
   onSetToolOverride: (name: string, value: "default" | "on" | "off") => void;
   onResetToolOverrides: () => void;
+  compactNudgeTokens: number;
+  onSetCompactNudgeTokens: (tokens: number) => void;
   onOpenDirectoryPicker: () => void;
   /** Told before the context usage popup opens, so ChatInterface can start
    *  computing the cost graph's usage entries (see usageWanted there). */
@@ -308,6 +346,7 @@ const readoutProps = computed(() => ({
   refreshingModels: props.refreshingModels,
   onDistillNewGeneration: props.onDistillNewGeneration,
   onStartNewGeneration: props.onStartNewGeneration,
+  onCompactInPlace: props.onCompactInPlace,
   onUsageNeeded: props.onUsageNeeded,
   // The readout's cwd segment. Same picker as the composer's cwd chip, but for
   // a conversation that already exists, where the pick has to go through the
@@ -437,6 +476,12 @@ onUnmounted(() => {
   document.removeEventListener("mousedown", onOutside);
   stopObservingGeometry();
 });
+
+// Auto compaction has its own row; the tool list skips it.
+const autoCompaction = computed(() => props.toolOverrides[COMPACT_IN_PLACE_TOOL] === "on");
+const listedTools = computed(() =>
+  props.toolOverrideList.filter((tool) => tool.name !== COMPACT_IN_PLACE_TOOL),
+);
 
 function currentOverride(name: string): "default" | "on" | "off" {
   return props.toolOverrides[name] || "default";

@@ -139,6 +139,7 @@ export interface ChatRequest {
     disable_all_tools?: boolean;
     thinking_level?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
     disable_notifications?: boolean;
+    compact_nudge_tokens?: number;
   };
   queue?: boolean;
 }
@@ -377,6 +378,23 @@ export function cwdChange(message: Message): { from: string; to: string } | null
       typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
     if (!userData?.cwd_change) return null;
     return { from: userData.from || "", to: userData.to || "" };
+  } catch {
+    return null;
+  }
+}
+
+// The text of a context-size nudge (see recordContextNudge), or null if the
+// message isn't one. Like cwd changes, the agent reads it but the user didn't
+// type it, so it renders as a status line.
+export function contextNudge(message: Message): string | null {
+  if (!message.user_data || !message.llm_data) return null;
+  try {
+    const userData =
+      typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
+    if (!userData?.context_nudge) return null;
+    const llmData =
+      typeof message.llm_data === "string" ? JSON.parse(message.llm_data) : message.llm_data;
+    return llmData?.Content?.[0]?.Text ?? "";
   } catch {
     return null;
   }

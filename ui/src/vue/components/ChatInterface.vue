@@ -526,6 +526,11 @@ import {
   queuedTranscriptionPath,
   queuedTranscriptionTaskState,
 } from "../../types";
+import {
+  COMPACT_IN_PLACE_REQUEST,
+  COMPACT_IN_PLACE_TOOL,
+  DEFAULT_COMPACT_NUDGE_TOKENS,
+} from "./autoCompaction";
 import { api, ApiError } from "../../services/api";
 import { btwStore } from "../../services/btwStore";
 import { messageStore } from "../../services/messageStore";
@@ -657,8 +662,7 @@ const props = withDefaults(
       message: string,
       model: string,
       cwd?: string,
-      toolOverrides?: Record<string, "on" | "off">,
-      thinkingLevel?: Exclude<ThinkingLevel, "default">,
+      conversationOptions?: ChatRequest["conversation_options"],
     ) => Promise<void>;
     onDistillNewGeneration?: (
       sourceConversationId: string,
@@ -1490,6 +1494,20 @@ function resetToolOverrides() {
 }
 const toolOverrideCount = computed(() => Object.keys(toolOverrides.value).length);
 
+// ---- auto compaction nudge threshold (persisted) ----
+const COMPACT_NUDGE_KEY = "shelley.compactNudgeTokens";
+const compactNudgeTokens = ref<number>(
+  Number(localStorage.getItem(COMPACT_NUDGE_KEY)) || DEFAULT_COMPACT_NUDGE_TOKENS,
+);
+function setCompactNudgeTokens(tokens: number) {
+  compactNudgeTokens.value = tokens;
+  try {
+    localStorage.setItem(COMPACT_NUDGE_KEY, String(tokens));
+  } catch {
+    /* ignore */
+  }
+}
+
 const toolOverrideList = computed(() => availableTools.value);
 
 // ---- per-conversation localStorage helpers ----
@@ -1766,6 +1784,17 @@ const conversationThinkingLevel = computed<string | null>(() => {
     return opts?.thinking_level || null;
   } catch {
     return null;
+  }
+});
+
+// Whether this conversation was started with the compact_in_place tool on.
+const compactInPlaceEnabled = computed(() => {
+  const raw = props.currentConversation?.conversation_options;
+  if (!raw) return false;
+  try {
+    return JSON.parse(raw)?.tool_overrides?.[COMPACT_IN_PLACE_TOOL] === "on";
+  } catch {
+    return false;
   }
 });
 
@@ -2857,9 +2886,11 @@ function buildConversationOptions(): ChatRequest["conversation_options"] | undef
   const explicitThinking = thinkingLevel.value === "default" ? undefined : thinkingLevel.value;
   const hasThinking = explicitThinking !== undefined;
   if (!hasOverrides && !hasThinking) return undefined;
+  const autoCompaction = toolOverrides.value[COMPACT_IN_PLACE_TOOL] === "on";
   return {
     ...(hasOverrides ? { tool_overrides: { ...toolOverrides.value } } : {}),
     ...(explicitThinking ? { thinking_level: explicitThinking } : {}),
+    ...(autoCompaction ? { compact_nudge_tokens: compactNudgeTokens.value } : {}),
   };
 }
 
@@ -2928,8 +2959,7 @@ async function sendFirstMessage(prompt: string) {
     prompt,
     selectedModel.value,
     selectedCwd.value || undefined,
-    Object.keys(toolOverrides.value).length > 0 ? { ...toolOverrides.value } : undefined,
-    thinkingLevel.value === "default" ? undefined : thinkingLevel.value,
+    buildConversationOptions(),
   );
 }
 
@@ -3209,14 +3239,14 @@ async function sendMessage(message: string) {
     }
     return;
   }
-  // /model is handled server-side synchronously (it switches the model and
-  // returns immediately without starting a turn), so it must NOT flip the
-  // agent-working state — otherwise "Agent working..." would stick on. Send it
-  // like a normal message but skip the working indicator.
-  if (
-    (trimmedMessage === "/model" || trimmedMessage.startsWith("/model ")) &&
-    props.conversationId
-  ) {
+  // /model and /compact-debug are handled server-side synchronously (they
+  // return immediately without starting a turn), so they must NOT flip the
+  // agent-working state — otherwise "Agent working..." would stick on. Send
+  // them like a normal message but skip the working indicator.
+  const syncCommand = ["/model", "/compact-debug"].find(
+    (c) => trimmedMessage === c || trimmedMessage.startsWith(`${c} `),
+  );
+  if (syncCommand && props.conversationId) {
     try {
       sending.value = true;
       error.value = null;
@@ -3225,7 +3255,7 @@ async function sendMessage(message: string) {
         model: selectedModel.value,
       });
     } catch (err) {
-      console.error("Failed to run /model:", err);
+      console.error(`Failed to run ${syncCommand}:`, err);
       error.value = err instanceof Error ? err.message : "Unknown error";
     } finally {
       sending.value = false;
@@ -3352,7 +3382,9 @@ async function sendMessage(message: string) {
       await sendFirstMessage(message.trim());
     } else if (effectiveId) {
       const id = effectiveId;
-      const accepted = await postSubmittedDraft(id, submittedDraft, () => api.sendMessage(id, request));
+      const accepted = await postSubmittedDraft(id, submittedDraft, () =>
+        api.sendMessage(id, request),
+      );
       // A queued message starts no turn (e.g. it waits behind a failed
       // recording), so drop the optimistic indicator for the server's state.
       if (accepted.status === "queued") syncTransientFromStore(id);
@@ -3888,6 +3920,9 @@ const statusContentProps = computed(() => {
     onResumeInterrupted: handleResumeInterrupted,
     onDistillNewGeneration: contextBarDistill.value,
     onStartNewGeneration: handleStartNewGeneration,
+    onCompactInPlace: compactInPlaceEnabled.value
+      ? () => sendMessage(COMPACT_IN_PLACE_REQUEST)
+      : undefined,
     onSelectModel: setSelectedModel,
     onSelectCombination: setSelectedCombination,
     // The status readout's inline picker only renders for a conversation that
@@ -3902,6 +3937,8 @@ const statusContentProps = computed(() => {
     onThinkingChange: setThinkingLevel,
     onSetToolOverride: setToolOverride,
     onResetToolOverrides: resetToolOverrides,
+    compactNudgeTokens: compactNudgeTokens.value,
+    onSetCompactNudgeTokens: setCompactNudgeTokens,
     onOpenDirectoryPicker: () => (showDirectoryPicker.value = true),
     onUsageNeeded: () => (usageWanted.value = true),
   };

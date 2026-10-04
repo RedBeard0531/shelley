@@ -413,9 +413,10 @@ type Server struct {
 	// that invoke hooks via the server.
 	hooksDir string
 
-	// piDistillKeepRecentTokens overrides the pi-distillation recent-token
-	// retention budget. Zero means use defaultPiDistillSettings. Tests set it
-	// to force summarization without a giant transcript.
+	// piDistillKeepRecentTokens overrides the recent-token budget (see
+	// keepRecentTokens). Zero means use defaultPiDistillSettings. Tests set it
+	// to force summarization, or a collapsible compact_in_place index, without
+	// a giant transcript.
 	piDistillKeepRecentTokens int
 
 	// IndexedDB cache encryption master secret — see cache_key.go.
@@ -1019,11 +1020,12 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		}
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
+		manager.keepRecentTokens = s.keepRecentTokens()
 		switch role {
 		case roleSubagent:
 		case roleBtwReader:
 			manager.decorateService = func(service llm.Service) (llm.Service, error) {
-				return newBtwService(context.Background(), s.db, btwIdentity.ParentConversationID, btwIdentity.ParentPointer, btwReaderParentHistoryLimit, service)
+				return newBtwService(context.Background(), s.logger, s.db, btwIdentity.ParentConversationID, btwIdentity.ParentPointer, btwReaderParentHistoryLimit, service)
 			}
 		}
 		// Hydrate runs DB transactions, which fire OnCommit hooks. Those hooks

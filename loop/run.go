@@ -13,9 +13,11 @@ import (
 	"shelley.exe.dev/llm/llmhttp"
 )
 
-// PendingMessages drains messages that arrived since the previous check.
-// Run checks before every model request.
-type PendingMessages func(context.Context) ([]llm.Message, error)
+// PendingMessages returns the messages for the next model request: messages
+// with whatever arrived since the previous check appended, or a replacement
+// history (e.g. after an in-place compaction). Run checks before every model
+// request.
+type PendingMessages func(ctx context.Context, messages []llm.Message) ([]llm.Message, error)
 
 // Response is a completed assistant message and its direct model usage.
 type Response struct {
@@ -109,11 +111,11 @@ func (l *RunConfig) run(ctx context.Context) error {
 		}
 		iterations++
 		if l.Pending != nil {
-			pending, err := l.Pending(ctx)
+			next, err := l.Pending(ctx, messages)
 			if err != nil {
 				return fmt.Errorf("load pending messages: %w", err)
 			}
-			messages = append(messages, pending...)
+			messages = next
 		}
 
 		requestMessages := cloneMessages(messages)

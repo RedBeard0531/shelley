@@ -45,6 +45,7 @@
       :messages="messages"
       :on-distill-new-generation="onDistillNewGeneration"
       :on-start-new-generation="onStartNewGeneration"
+      :on-compact-in-place="onCompactInPlace"
       :on-usage-needed="onUsageNeeded"
       :agent-working="agentWorking"
     />
@@ -112,6 +113,7 @@ const props = defineProps<{
   agentWorking?: boolean;
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration?: () => Promise<void> | void;
+  onCompactInPlace?: () => Promise<void> | void;
   onUsageNeeded?: () => void;
   onChangeConversationCwd?: () => void;
   onSwitchConversationModel: (model: string) => void;

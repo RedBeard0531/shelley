@@ -1751,6 +1751,7 @@ body {
 }
 
 .message-warning .message-content {
+  white-space: pre-wrap;
   margin-right: auto;
   max-width: 100%;
   background: var(--warning-bg);
@@ -5657,6 +5658,40 @@ svg {
 .tool-override-choice:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.auto-compaction-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-size-12);
+  color: var(--text-secondary);
+}
+
+.auto-compaction-name {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.auto-compaction-nudge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.auto-compaction-nudge select {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  font-size: var(--font-size-12);
+  padding: 0.15rem 0.3rem;
 }
 
 .advanced-settings-header {
@@ -16139,4 +16174,47 @@ kbd {
   .codicon-notebook-state-executing.codicon-modifier-spin {
     animation-duration: 1.5s !important;
   }
+}
+
+/* In-place compaction record (see InPlaceCompactionMessage.vue). */
+.message.msg-compaction-container {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25em;
+  font-style: normal;
+}
+
+.msg-compaction-op {
+  display: flex;
+  flex-flow: row wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35em;
+}
+
+.msg-compaction-range {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-13);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+.msg-compaction-summary {
+  width: 100%;
+  text-align: center;
+}
+
+.msg-compaction-summary summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.msg-compaction-summary-text {
+  margin-top: 0.25em;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
 }

@@ -72,14 +72,23 @@ type Config struct {
 	// buffered stream deltas so they reach the UI before the full message.
 	OnStreamDone func()
 	// InjectMessages, if set, is called between LLM rounds (immediately
-	// before each request is built, including the first of a turn). Any
-	// messages it returns are appended to history and included in that
-	// request. Used to splice subagent completion notifications into an
-	// in-flight turn as soon as possible instead of waiting for the turn to
-	// end. The callback owns persistence: it must record the messages before
-	// returning them, so the DB sequence order matches the in-memory splice
-	// point.
-	InjectMessages func(ctx context.Context) []llm.Message
+	// before each request is built, including the first of a turn). Its
+	// Injection is applied to history and included in that request. Used to
+	// splice subagent completion notifications into an in-flight turn as soon
+	// as possible instead of waiting for the turn to end, and to swap in the
+	// history after an in-place compaction. The callback owns persistence: it
+	// must record the messages before returning them, so the DB sequence
+	// order matches the in-memory splice point. An error ends the turn.
+	InjectMessages func(ctx context.Context) (Injection, error)
+}
+
+// Injection is what Config.InjectMessages splices into a running turn.
+type Injection struct {
+	// History, if non-nil, replaces the whole conversation history (already
+	// persisted, and not including Messages) before Messages are appended.
+	History []llm.Message
+	// Messages are appended to history.
+	Messages []llm.Message
 }
 
 // Loop manages a conversation turn with an LLM including tool execution and message recording.
@@ -104,7 +113,7 @@ type Loop struct {
 	onToolProgress   llm.ToolProgressFunc
 	onStreamDelta    func(llm.StreamDelta)
 	onStreamDone     func()
-	injectMessages   func(ctx context.Context) []llm.Message
+	injectMessages   func(ctx context.Context) (Injection, error)
 	thinkingLevel    llm.ThinkingLevel
 	promptCacheKey   string
 	notify           chan struct{} // signaled when a message is queued or retry requested
@@ -356,18 +365,28 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 	return nil
 }
 
-func (l *Loop) pending(ctx context.Context) ([]llm.Message, error) {
+func (l *Loop) pending(ctx context.Context, messages []llm.Message) ([]llm.Message, error) {
 	l.mu.Lock()
 	queued := l.messageQueue
 	l.messageQueue = nil
 	l.history = append(l.history, queued...)
 	l.mu.Unlock()
+	messages = append(messages, queued...)
 	if l.injectMessages == nil {
-		return queued, nil
+		return messages, nil
 	}
-	injected := l.injectMessages(ctx)
-	l.appendContext(injected...)
-	return append(queued, injected...), nil
+	inj, err := l.injectMessages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if inj.History != nil {
+		l.mu.Lock()
+		l.history = cloneMessages(inj.History)
+		l.mu.Unlock()
+		messages = cloneMessages(inj.History)
+	}
+	l.appendContext(inj.Messages...)
+	return append(messages, inj.Messages...), nil
 }
 
 // appendContext mirrors recorded messages into the in-memory history. Rows

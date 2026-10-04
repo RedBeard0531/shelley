@@ -138,7 +138,12 @@ export function coalesceMessages(
       return;
     }
 
-    if (message.type === "error" || message.type === "warning" || message.type === "modelchange") {
+    if (
+      message.type === "error" ||
+      message.type === "warning" ||
+      message.type === "modelchange" ||
+      message.type === "inplacecompaction"
+    ) {
       items.push(messageItem(message, carried));
       return;
     }

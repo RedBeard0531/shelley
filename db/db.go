@@ -303,6 +303,10 @@ type ConversationOptions struct {
 	// discord, ntfy) for this conversation. Useful for cron-style or
 	// self-invoked conversations that shouldn't ping the user.
 	DisableNotifications bool `json:"disable_notifications,omitempty"`
+	// CompactNudgeTokens is the context size at which the agent is first told
+	// the size of its context while the compact_in_place tool is enabled.
+	// Zero means the default (160k).
+	CompactNudgeTokens int `json:"compact_nudge_tokens,omitempty"`
 }
 
 // ParseConversationOptions parses a JSON string into ConversationOptions.
@@ -1644,6 +1648,13 @@ const (
 	// It is an appended message rather than a mutable column because of the
 	// append-only invariant described on MessageType above.
 	MessageTypeSlug MessageType = "slug"
+	// MessageTypeInPlaceCompaction rewrites how EARLIER messages of the same
+	// generation are presented to the LLM: it squishes sequence-id ranges into
+	// summaries and/or trims tool results. user_data holds the operations
+	// (server.InPlaceCompaction); llm_data is NULL, so it is never itself sent.
+	// It is a record rather than an edit because of the append-only invariant
+	// described on MessageType above: the original rows stay intact for the UI.
+	MessageTypeInPlaceCompaction MessageType = "inplacecompaction"
 )
 
 // CreateMessageParams contains parameters for creating a message

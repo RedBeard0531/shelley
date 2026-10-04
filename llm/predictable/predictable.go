@@ -315,6 +315,10 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 			return s.makeMessageParentToolResponse(text, inputTokens), nil
 		}
 
+		if input, ok := strings.CutPrefix(inputText, "compact_in_place: "); ok {
+			return s.makeToolResponse("compact_in_place", json.RawMessage(input), inputTokens), nil
+		}
+
 		if path, ok := strings.CutPrefix(inputText, "change_dir: "); ok {
 			return s.makeChangeDirToolResponse(path, inputTokens), nil
 		}
@@ -790,6 +794,25 @@ func (s *Service) makeReadImageToolResponse(path string, inputTokens uint64) *ll
 }
 
 // makeChangeDirToolResponse creates a response that calls the change_dir tool
+// makeToolResponse calls tool with input verbatim.
+func (s *Service) makeToolResponse(tool string, input json.RawMessage, inputTokens uint64) *llm.Response {
+	nano := time.Now().UnixNano()
+	return &llm.Response{
+		ID:    fmt.Sprintf("pred-%s-%d", tool, nano),
+		Type:  "message",
+		Role:  llm.MessageRoleAssistant,
+		Model: "predictable-v1",
+		Content: []llm.Content{{
+			ID:        fmt.Sprintf("tool_%s_%d", tool, nano),
+			Type:      llm.ContentTypeToolUse,
+			ToolName:  tool,
+			ToolInput: input,
+		}},
+		StopReason: llm.StopReasonToolUse,
+		Usage:      llm.Usage{InputTokens: inputTokens, OutputTokens: uint64(len(input)/4 + 1), CostUSD: 0.001},
+	}
+}
+
 func (s *Service) makeChangeDirToolResponse(path string, inputTokens uint64) *llm.Response {
 	toolInputData := map[string]string{"path": path}
 	toolInputBytes, _ := json.Marshal(toolInputData)
@@ -1126,6 +1149,14 @@ func (s *Service) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response 
 		Type:      llm.ContentTypeToolUse,
 		ToolName:  "llm_one_shot",
 		ToolInput: json.RawMessage(llmInput),
+	})
+
+	// compact_in_place tool
+	content = append(content, llm.Content{
+		ID:        fmt.Sprintf("tool_compact_%d", (baseNano+15)%1000),
+		Type:      llm.ContentTypeToolUse,
+		ToolName:  "compact_in_place",
+		ToolInput: json.RawMessage(`{"action":"index"}`),
 	})
 
 	// browser: screencast_stop action (tests screencast UI widget)

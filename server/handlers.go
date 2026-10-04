@@ -1332,6 +1332,9 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	if s.handleModelCommand(ctx, w, conversationID, modelID, manager, req.Message) {
 		return
 	}
+	if s.handleCompactDebugCommand(ctx, w, manager, req.Message) {
+		return
+	}
 
 	// Slash-command hook: if the message starts with /<name> and a matching
 	// executable exists at ~/.config/shelley/hooks/slash/<name>, run it and
@@ -4098,6 +4101,9 @@ func validateConversationOptions(opts db.ConversationOptions) string {
 		if err := validateConversationHookURL(hook.URL); err != nil {
 			return fmt.Sprintf("Invalid end_of_turn_hooks url %q: %v", hook.URL, err)
 		}
+	}
+	if opts.CompactNudgeTokens < 0 {
+		return "compact_nudge_tokens must not be negative"
 	}
 	if opts.ThinkingLevel != "" {
 		switch opts.ThinkingLevel {

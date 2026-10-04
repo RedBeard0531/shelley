@@ -15,6 +15,9 @@
        as a status line rather than a chat bubble. -->
   <CwdChangeMessage v-else-if="isCwdChange" :message="message" />
 
+  <!-- A context-size nudge for the agent (auto compaction); same treatment. -->
+  <ContextNudgeMessage v-else-if="isContextNudge" :message="message" />
+
   <!-- system: render nothing. -->
   <template v-else-if="message.type === 'system'" />
 
@@ -28,6 +31,9 @@
 
   <!-- modelchange -->
   <ModelChangeMessage v-else-if="message.type === 'modelchange'" :message="message" />
+
+  <!-- inplacecompaction -->
+  <InPlaceCompactionMessage v-else-if="message.type === 'inplacecompaction'" :message="message" />
 
   <!-- gitinfo -->
   <GitInfoMessage
@@ -256,6 +262,7 @@ import {
   type LLMContent,
   type Usage,
   cwdChange,
+  contextNudge,
   isDistillStatusMessage,
 } from "../../types";
 import { type MarkdownMode } from "../../services/settings";
@@ -270,8 +277,10 @@ import EditableFileModal from "./EditableFileModal.vue";
 import GitInfoMessage from "./GitInfoMessage.vue";
 import WarningMessage from "./WarningMessage.vue";
 import ModelChangeMessage from "./ModelChangeMessage.vue";
+import InPlaceCompactionMessage from "./InPlaceCompactionMessage.vue";
 import DistillStatusMessage from "./DistillStatusMessage.vue";
 import CwdChangeMessage from "./CwdChangeMessage.vue";
+import ContextNudgeMessage from "./ContextNudgeMessage.vue";
 import ErrorRetryButton from "./ErrorRetryButton.vue";
 import RefusalContinueButton from "./RefusalContinueButton.vue";
 import { RefusalContinueKey } from "./refusalContinue";
@@ -324,6 +333,7 @@ function shouldRenderMarkdown(
 
 const isDistill = computed(() => isDistillStatusMessage(props.message));
 const isCwdChange = computed(() => cwdChange(props.message) !== null);
+const isContextNudge = computed(() => contextNudge(props.message) !== null);
 
 // ---- Action bar state (show on hover or tap) ----
 // One action bar per content entity, keyed by entity key ("main" for the

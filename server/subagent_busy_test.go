@@ -186,6 +186,9 @@ func testSubagentBusy_DeliversDurableInjectionMidTurn(t *testing.T) {
 	if _, err := runner.RunSubagent(t.Context(), f.subagentID, "bash: sleep 1", "predictable", ""); err != nil {
 		t.Fatalf("RunSubagent(start): %v", err)
 	}
+	// As in DeliversMidTurn: queue only once the tool runs, or the turn's
+	// first request may take the message before the tool result exists.
+	waitForToolUseRecorded(t, f.database, f.subagentID)
 	if _, err := f.database.AppendQueuedMessage(t.Context(), f.subagentID, db.QueuedMessage{
 		ID:        "durable-steer",
 		Llm:       []byte(`{"Role":0,"Content":[{"Type":2,"Text":"echo: steered"}]}`),
