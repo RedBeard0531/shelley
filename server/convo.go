@@ -1574,22 +1574,24 @@ func (cm *ConversationManager) drainPendingMessagesOwned(s *Server) {
 func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued []db.QueuedMessage) (bool, error) {
 	cm.mu.Lock()
 	loopInstance := cm.loop
-	modelID := cm.modelID
 	cm.mu.Unlock()
 
 	cm.logger.Info("Draining queued messages", "count", len(queued))
 	if loopInstance == nil {
+		// Hydrate before reading the model: a stopped loop forgets it, and
+		// messages queued by subagents and background jobs carry none.
+		// Queued messages have no messages rows until they are recorded
+		// below, so hydrating history cannot load them twice.
+		if err := cm.Hydrate(ctx); err != nil {
+			return false, fmt.Errorf("failed to hydrate: %w", err)
+		}
+		modelID := cm.GetModel()
 		if i := slices.IndexFunc(queued, func(qm db.QueuedMessage) bool { return qm.Model != "" }); i >= 0 {
 			modelID = queued[i].Model
 		}
 		svc, err := s.llmManager.GetService(modelID)
 		if err != nil {
 			return false, fmt.Errorf("failed to get LLM service %q: %w", modelID, err)
-		}
-		// Queued messages have no messages rows until they are recorded
-		// below, so hydrating history cannot load them twice.
-		if err := cm.Hydrate(ctx); err != nil {
-			return false, fmt.Errorf("failed to hydrate: %w", err)
 		}
 		if err := cm.ensureLoopLocked(svc, modelID); err != nil {
 			return false, fmt.Errorf("failed to start loop: %w", err)
