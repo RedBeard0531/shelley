@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -65,14 +66,14 @@ func TestFindPiCutPointKeepsAllWhenSmall(t *testing.T) {
 	}
 }
 
-func TestEstimatePiMessageTokensCountsImageData(t *testing.T) {
+func TestEstimatePiMessageTokensCountsImages(t *testing.T) {
 	msg := llm.Message{
 		Role: llm.MessageRoleUser,
 		Content: []llm.Content{
 			{
 				Type:      llm.ContentTypeText,
 				MediaType: "image/png",
-				Data:      strings.Repeat("a", 400),
+				Data:      strings.Repeat("a", 400_000),
 			},
 			{
 				Type: llm.ContentTypeToolResult,
@@ -85,40 +86,42 @@ func TestEstimatePiMessageTokensCountsImageData(t *testing.T) {
 		},
 	}
 
-	if got := estimatePiMessageTokens(msg); got != 200 {
-		t.Fatalf("estimated tokens = %d, want 200", got)
+	// An image costs about the same however big its data is.
+	if got := estimatePiMessageTokens(msg); got != 2*piImageTokens {
+		t.Fatalf("estimated tokens = %d, want %d", got, 2*piImageTokens)
 	}
 }
 
 func TestFindPiCutPointExcludesImageHeavyHistory(t *testing.T) {
-	msgs := []llm.Message{
-		textMsg(llm.MessageRoleUser, "inspect the page"),
-		{
+	msgs := []llm.Message{textMsg(llm.MessageRoleUser, "inspect the pages")}
+	for i := range 20 {
+		id := fmt.Sprintf("screenshot-%d", i)
+		msgs = append(msgs, llm.Message{
 			Role: llm.MessageRoleAssistant,
 			Content: []llm.Content{{
-				ID:        "screenshot-1",
+				ID:        id,
 				Type:      llm.ContentTypeToolUse,
 				ToolName:  "browser",
 				ToolInput: json.RawMessage(`{"action":"screenshot"}`),
 			}},
-		},
-		{
+		}, llm.Message{
 			Role: llm.MessageRoleUser,
 			Content: []llm.Content{{
 				Type:      llm.ContentTypeToolResult,
-				ToolUseID: "screenshot-1",
+				ToolUseID: id,
 				ToolResult: []llm.Content{{
 					Type:      llm.ContentTypeText,
 					MediaType: "image/png",
 					Data:      strings.Repeat("a", 100_000),
 				}},
 			}},
-		},
-		textMsg(llm.MessageRoleAssistant, "The page looks correct."),
+		})
 	}
+	msgs = append(msgs, textMsg(llm.MessageRoleAssistant, "The pages look correct."))
 
-	if cut := findPiCutPoint(msgs, 20_000); cut != 3 {
-		t.Fatalf("cut = %d, want 3 so the oversized screenshot is summarized instead of carried", cut)
+	// 20k tokens hold 16 screenshots: the oldest are summarized.
+	if cut := findPiCutPoint(msgs, 20_000); cut != 9 {
+		t.Fatalf("cut = %d, want 9", cut)
 	}
 }
 

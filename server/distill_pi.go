@@ -104,15 +104,19 @@ func (s *Server) keepRecentTokens() int {
 	return defaultPiDistillSettings.keepRecentTokens
 }
 
+// piImageTokens is pi's estimate for an image (4800 chars). The size of its
+// base64 data says little: a 1280x720 screenshot is ~1.2k tokens.
+const piImageTokens = 1200
+
 // estimatePiMessageTokens ports pi's character/4 heuristic for one message.
 func estimatePiMessageTokens(msg llm.Message) int {
-	chars := 0
+	chars, images := 0, 0
 	for _, c := range msg.Content {
 		switch c.Type {
 		case llm.ContentTypeText:
 			chars += len(c.Text)
 			if c.MediaType != "" {
-				chars += len(c.Data)
+				images++
 			}
 		case llm.ContentTypeThinking, llm.ContentTypeRedactedThinking:
 			chars += len(c.Thinking)
@@ -122,13 +126,13 @@ func estimatePiMessageTokens(msg llm.Message) int {
 			for _, r := range c.ToolResult {
 				chars += len(r.Text)
 				if r.MediaType != "" {
-					chars += len(r.Data)
+					images++
 				}
 			}
 		}
 	}
 	// ceil(chars / 4)
-	return (chars + 3) / 4
+	return (chars+3)/4 + images*piImageTokens
 }
 
 // isToolResultMessage reports whether a message carries only tool_result
