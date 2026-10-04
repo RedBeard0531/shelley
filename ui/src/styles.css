@@ -11956,48 +11956,50 @@ kbd {
 }
 
 /* Cost and context graphs in the context usage popup */
-.usage-graph-switch {
+.usage-popup-header {
   display: flex;
-  gap: 4px;
-  margin-left: auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin: 0 0 4px;
 }
 
-.usage-graph-switch-button {
-  padding: 1px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: transparent;
+.usage-popup-title {
+  color: var(--text-primary);
+}
+
+.usage-graph-switch {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
   color: var(--text-secondary);
-  font-size: 0.65rem;
+}
+
+.usage-graph-switch-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--font-size-12);
   line-height: 1.4;
   cursor: pointer;
 }
 
-.usage-graph-switch-button-active {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  border-color: var(--text-secondary);
-}
-
-/* Lines up with the graph column (.token-cost-timeline). */
-.usage-popup-title {
-  max-width: 420px;
-  margin: 0 auto 4px;
+.usage-graph-switch-item:has(:checked) {
   color: var(--text-primary);
 }
 
-.usage-graph-panel {
-  display: grid;
+.usage-graph-switch-box {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--blue-text);
+  cursor: inherit;
 }
 
-.usage-graph-panel-item {
-  grid-area: 1 / 1;
-  min-width: 0;
-}
-
-.usage-graph-panel-item-inactive {
-  visibility: hidden;
-  pointer-events: none;
+.usage-graph-switch-box:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: 2px;
 }
 
 .token-cost-graph {
@@ -12006,24 +12008,14 @@ kbd {
   max-width: 100%;
 }
 
-.context-composition-graph {
-  width: 100%;
-  max-width: 100%;
+.context-legend {
+  margin-top: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1px 12px;
 }
 
-.context-composition-graph-header {
-  color: var(--text-secondary);
-  font-size: 0.68rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.context-composition-graph-header > span:first-child {
-  align-self: center;
-  font-size: 0.65rem;
-  line-height: 1.4;
-}
-
-.context-composition-legend-label {
+.context-legend-label {
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -12031,16 +12023,16 @@ kbd {
   white-space: nowrap;
 }
 
-.context-composition-legend-tokens {
+.context-legend-tokens {
   min-width: 42px;
   text-align: right;
 }
 
-.context-composition-legend-item {
+.context-legend-item {
   min-width: 0;
 }
 
-.context-composition-legend-row {
+.context-legend-row {
   box-sizing: border-box;
   width: 100%;
   padding: 0;
@@ -12053,26 +12045,17 @@ kbd {
   cursor: pointer;
 }
 
-.context-composition-legend-row:focus-visible {
+.context-legend-row:focus-visible {
   outline: 2px solid var(--blue-text);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
-.context-composition-compaction-note {
-  margin-top: 2px;
-  color: var(--text-secondary);
-  font-size: 0.65rem;
-}
-
 .token-cost-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 4px;
-}
-
-.token-cost-controls-spacer {
-  flex: 1;
 }
 
 .token-cost-toggle {
@@ -12092,8 +12075,7 @@ kbd {
   border-color: var(--text-secondary);
 }
 
-.token-cost-graph-svg,
-.context-composition-graph-svg {
+.token-cost-graph-svg {
   display: block;
   width: 100%;
   height: auto;
@@ -12128,7 +12110,7 @@ kbd {
 }
 
 .token-cost-label {
-  font-size: 9px;
+  font-size: 10px;
   fill: var(--text-secondary);
 }
 
@@ -12158,13 +12140,6 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.token-cost-legend {
-  margin-top: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
 }
 
 .token-cost-model-row {
@@ -12217,11 +12192,6 @@ kbd {
   min-width: 52px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-}
-
-.token-cost-timeline {
-  max-width: 420px;
-  margin-inline: auto;
 }
 
 .token-cost-table {
@@ -12315,11 +12285,6 @@ kbd {
 @media (min-width: 769px) {
   .chat-context-popup.p-popover:has(.token-cost-table-with-subagents) {
     width: min(640px, calc(100vw - 1rem));
-  }
-
-  .chat-context-popup:has(.token-cost-table-with-subagents) .context-composition-graph {
-    max-width: 420px;
-    margin-inline: auto;
   }
 }
 

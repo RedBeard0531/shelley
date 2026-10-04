@@ -536,6 +536,46 @@ export function callXLayout(n: number): XLayout {
   return { xs, turns: [[0, n - 1]], activeMs: 0 };
 }
 
+/** Where a stacked area sits: the plot spans [left, right] pixels, and yAt
+ *  maps a value to its pixel row. */
+export interface AreaGeometry {
+  left: number;
+  right: number;
+  yAt: (v: number) => number;
+}
+
+/** One path per layer of a stacked area (layers[s][i] is the upper boundary
+ *  of band s at point i, bottom-to-top). Each turn is a separate subpath so
+ *  idle time between turns renders as a gap in time mode. Zero-width turns
+ *  (single call, or all calls sharing one second-granularity timestamp)
+ *  become narrow slabs so they stay visible. */
+export function stackedAreaPaths(layers: number[][], lay: XLayout, g: AreaGeometry): string[] {
+  const plotW = g.right - g.left;
+  const px = (i: number) => (g.left + lay.xs[i] * plotW).toFixed(1);
+  const lower = (s: number, i: number) => (s === 0 ? 0 : layers[s - 1][i]);
+  return layers.map((layer, s) => {
+    let d = "";
+    for (const [a, b] of lay.turns) {
+      if (lay.xs[a] === lay.xs[b]) {
+        const x = g.left + lay.xs[a] * plotW;
+        const hw = Math.max(1, plotW * 0.006);
+        const x0 = Math.max(g.left, x - hw).toFixed(1);
+        const x1 = Math.min(g.right, x + hw).toFixed(1);
+        const yT = g.yAt(layer[b]).toFixed(1);
+        const yB = g.yAt(lower(s, b)).toFixed(1);
+        d += `M${x0},${yT}L${x1},${yT}L${x1},${yB}L${x0},${yB}Z`;
+        continue;
+      }
+      const top: string[] = [];
+      for (let i = a; i <= b; i++) top.push(`${px(i)},${g.yAt(layer[i]).toFixed(1)}`);
+      const bottom: string[] = [];
+      for (let i = b; i >= a; i--) bottom.push(`${px(i)},${g.yAt(lower(s, i)).toFixed(1)}`);
+      d += `M${top.join("L")}L${bottom.join("L")}Z`;
+    }
+    return d;
+  });
+}
+
 // Per-call bar width bounds, as fractions of the plot. The cap keeps sparse
 // conversations from drawing a handful of calls as wide blocks; the floor
 // (about a pixel at popup size) keeps long conversations' bars from

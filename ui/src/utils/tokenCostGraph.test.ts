@@ -15,6 +15,7 @@ import {
   ModelUsage,
   OtherUsageRow,
   segmentColor,
+  stackedAreaPaths,
   timeXLayout,
   TOKEN_BANDS,
   UsageEntry,
@@ -641,6 +642,48 @@ function modelUsage(
 assert(formatDuration(42_000) === "42s", "formatDuration seconds");
 assert(formatDuration(720_000) === "12m", "formatDuration minutes");
 assert(formatDuration(11_100_000) === "3h 05m", "formatDuration hours");
+
+// stackedAreaPaths: one path per layer, a subpath per turn, slabs for
+// zero-width turns, all within the plot's pixel bounds.
+{
+  const geom = { left: 10, right: 110, yAt: (v: number) => 100 - v };
+  const layers = [
+    [0, 10, 20],
+    [5, 30, 60],
+  ];
+  const paths = stackedAreaPaths(layers, callXLayout(3), geom);
+  assert(paths.length === 2, "stackedAreaPaths: a path per layer");
+  assert(
+    paths[0] === "M10.0,100.0L60.0,90.0L110.0,80.0L110.0,100.0L60.0,100.0L10.0,100.0Z",
+    `stackedAreaPaths: bottom layer rests on zero (${paths[0]})`,
+  );
+  assert(
+    paths[1] === "M10.0,95.0L60.0,70.0L110.0,40.0L110.0,80.0L60.0,90.0L10.0,100.0Z",
+    `stackedAreaPaths: upper layer rests on the one below (${paths[1]})`,
+  );
+
+  const turns = {
+    xs: [0, 0.4, 0.6, 1],
+    turns: [
+      [0, 1],
+      [2, 3],
+    ] as [number, number][],
+    activeMs: 0,
+  };
+  const gapped = stackedAreaPaths([[1, 2, 3, 4]], turns, geom)[0];
+  assert((gapped.match(/M/g) || []).length === 2, "stackedAreaPaths: a subpath per turn");
+
+  const single = stackedAreaPaths([[7]], callXLayout(1), geom)[0];
+  assert(
+    single === "M59.0,93.0L61.0,93.0L61.0,100.0L59.0,100.0Z",
+    `stackedAreaPaths: a lone call is a narrow slab (${single})`,
+  );
+  const edge = stackedAreaPaths([[7, 7]], { xs: [0, 0], turns: [[0, 1]], activeMs: 0 }, geom)[0];
+  assert(
+    edge.startsWith("M10.0,") && !edge.includes("M9"),
+    "stackedAreaPaths: slabs stay in the plot",
+  );
+}
 
 // Formatting.
 assert(formatUsd(0) === "$0", "formatUsd 0");
