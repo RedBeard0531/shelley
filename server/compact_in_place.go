@@ -17,10 +17,10 @@ import (
 )
 
 // The compact_in_place tool lets the agent compact its own context: "index"
-// lists the LLM's current view, "compact" records an in-place compaction
-// (collapsing message ranges into notes, trimming tool outputs) and the turn
-// continues on the compacted history. While the tool is enabled the agent is
-// also nudged with the context size (see contextNudger).
+// lists the older part of the LLM's current view, "compact" records an
+// in-place compaction (collapsing message ranges into notes, trimming tool
+// outputs) and the turn continues on the compacted history. While the tool is
+// enabled the agent is also nudged with the context size (see contextNudger).
 
 const (
 	// defaultCompactNudgeTokens is where the first context nudge fires when
@@ -46,7 +46,7 @@ func (c inPlaceCompactor) Index(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return compactIndex(items, c.cm.keepRecentTokens), nil
+	return compactIndex(items, c.cm.keepRecentTokens)
 }
 
 func (c inPlaceCompactor) Compact(ctx context.Context, in claudetool.CompactInPlaceInput) (string, error) {
@@ -135,19 +135,26 @@ func compactionEvidence(items []contextItem) (seqs []int64, toolUseIDs []string)
 }
 
 // buildCompaction turns the agent's request into a record, validating it
-// against items (the current view) and its recent part. It reports every
-// problem at once.
-func buildCompaction(items []contextItem, keepRecentTokens int, in claudetool.CompactInPlaceInput) (db.InPlaceCompaction, error) {
+// against the compaction view of history and its recent part. It reports
+// every problem at once.
+func buildCompaction(history []contextItem, keepRecentTokens int, in claudetool.CompactInPlaceInput) (db.InPlaceCompaction, error) {
 	var c db.InPlaceCompaction
 	if len(in.Trim) == 0 && len(in.Collapse) == 0 {
 		return c, fmt.Errorf("nothing to compact: give trim and/or collapse")
 	}
+	items, err := compactionView(history)
+	if err != nil {
+		return c, err
+	}
+	recent := recentStart(items, keepRecentTokens)
 	var problems []string
 	for _, id := range in.Trim {
 		i, ok := findToolResult(items, id)
 		switch {
 		case !ok:
 			problems = append(problems, fmt.Sprintf("trim %s: no tool output with that id in the index", id))
+		case i >= recent:
+			problems = append(problems, fmt.Sprintf("trim %s: in the recent part, which is kept as is", id))
 		case slices.ContainsFunc(c.Trims, func(t db.CompactionTrim) bool { return t.ToolUseID == id }):
 			problems = append(problems, fmt.Sprintf("trim %s: listed twice", id))
 		default:
@@ -155,7 +162,6 @@ func buildCompaction(items []contextItem, keepRecentTokens int, in claudetool.Co
 		}
 	}
 
-	recent := recentStart(items, keepRecentTokens)
 	type span struct{ i, j int }
 	var spans []span
 	for _, col := range in.Collapse {
@@ -172,7 +178,7 @@ func buildCompaction(items []contextItem, keepRecentTokens int, in claudetool.Co
 			problem("from comes after to")
 			continue
 		case j >= recent:
-			problem("reaches into the recent part (from %s on), which cannot be collapsed", itemID(items[recent]))
+			problem("reaches into the recent part (from %s on), which is kept as is", itemID(items[recent]))
 			continue
 		case hasContent(items[i].message, llm.ContentTypeToolResult):
 			problem("starts with a tool output, which must stay with its call; start at the call before it, or after the output")
@@ -233,9 +239,36 @@ func findToolResult(items []contextItem, toolUseID string) (int, bool) {
 	return 0, false
 }
 
+// compactionView returns history as the agent can compact it: without the
+// evidence of compacting (see compactionEvidence), which the compaction
+// hides anyway, and without the call now running, which has no output yet.
+// Neither moves the recent part while the agent works.
+func compactionView(history []contextItem) ([]contextItem, error) {
+	seqs, toolUseIDs := compactionEvidence(history)
+	view, err := hideItems(slices.Clone(history), seqs, toolUseIDs)
+	if err != nil {
+		return nil, err
+	}
+	// Like hideItems, remove only the call: other calls in its message stay,
+	// and a message left without a call goes.
+	for i := range view {
+		content := slices.DeleteFunc(slices.Clone(view[i].message.Content), func(c llm.Content) bool {
+			return c.Type == llm.ContentTypeToolUse && c.ToolName == claudetool.CompactInPlaceName
+		})
+		if len(content) == len(view[i].message.Content) {
+			continue
+		}
+		view[i].message.Content = content
+		if !hasContent(view[i].message, llm.ContentTypeToolUse) {
+			view[i].message.Content = nil
+		}
+	}
+	return slices.DeleteFunc(view, func(it contextItem) bool { return len(it.message.Content) == 0 }), nil
+}
+
 // recentStart returns the index of the first item of the recent part, which
-// cannot be collapsed: about keepRecentTokens of the newest history, starting
-// on a message that is not a tool result.
+// is kept as is: about keepRecentTokens of the newest history, starting on a
+// message that is not a tool result.
 func recentStart(items []contextItem, keepRecentTokens int) int {
 	msgs := make([]llm.Message, len(items))
 	for i, it := range items {
@@ -273,18 +306,20 @@ split a call from its output, nor cover more than ~%dk tokens unless it is just
 one tool call and its output.`
 
 // compactIndex renders the index the agent compacts from.
-func compactIndex(items []contextItem, keepRecentTokens int) string {
+func compactIndex(history []contextItem, keepRecentTokens int) (string, error) {
+	items, err := compactionView(history)
+	if err != nil {
+		return "", err
+	}
 	recent := recentStart(items, keepRecentTokens)
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Index\n\n%d messages, ~%d tokens.\n", len(items), itemTokens(items))
-	if recent < len(items) {
-		if recent == 0 {
-			b.WriteString("All of it is recent, so nothing can be collapsed yet; tool outputs can still be trimmed.\n")
-		} else {
-			fmt.Fprintf(&b, "The recent part, from %s on (%d messages, ~%d tokens), cannot be collapsed; its tool outputs can still be trimmed.\n",
-				itemID(items[recent]), len(items)-recent, itemTokens(items[recent:]))
-		}
+	if recent == 0 {
+		b.WriteString("All of it is recent, so nothing can be compacted yet.\n")
+		return b.String(), nil
 	}
+	fmt.Fprintf(&b, "The recent part, from %s on (%d messages, ~%d tokens), is kept as is and not listed.\n",
+		itemID(items[recent]), len(items)-recent, itemTokens(items[recent:]))
 	b.WriteString("\n")
 	fmt.Fprintf(&b, compactIndexGuidance, maxCollapseTokens/1000)
 	b.WriteString("\n\nOne row per message, oldest first. id is the sequence_id, or s<n>.<i> for a note\n" +
@@ -294,11 +329,7 @@ func compactIndex(items []contextItem, keepRecentTokens int) string {
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "id\trole\ttokens\tcontent")
 	toolNames := map[string]string{}
-	for i, it := range items {
-		if i == recent && i > 0 {
-			tw.Flush()
-			b.WriteString("--- recent part: cannot be collapsed ---\n")
-		}
+	for _, it := range items[:recent] {
 		role := "note"
 		switch {
 		case it.source == nil:
@@ -311,7 +342,7 @@ func compactIndex(items []contextItem, keepRecentTokens int) string {
 	}
 	tw.Flush()
 	b.WriteString("```\n")
-	return b.String()
+	return b.String(), nil
 }
 
 // describeItem lists an item's blocks for the index. toolNames maps tool_use

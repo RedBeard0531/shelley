@@ -14,7 +14,7 @@ const CompactInPlaceName = "compact_in_place"
 // InPlaceCompactor indexes and compacts a conversation's context. It is
 // implemented by the server package to avoid import cycles.
 type InPlaceCompactor interface {
-	// Index lists the LLM's current view of the conversation.
+	// Index lists the part of the LLM's current view that can be compacted.
 	Index(ctx context.Context) (string, error)
 	// Compact validates and records in; the turn continues on the compacted
 	// history.
@@ -54,7 +54,7 @@ type CompactInPlaceInput struct {
 }
 
 const compactInPlaceDescription = `Compact this conversation's context in place.
-Call with action "index" first: it lists the messages and explains what to do.
+Call with action "index" first: it lists the older messages and explains what to do.
 Then call with action "compact" to collapse message ranges into short notes
 and trim tool outputs. Originals stay in the database.`
 

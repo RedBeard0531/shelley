@@ -107,6 +107,8 @@ func TestCompactDebugEndToEnd(t *testing.T) {
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		false, "model-a", "")
 	srv.hooksDir = t.TempDir()
+	// The listing leaves out the recent part; keep it to the last message.
+	srv.piDistillKeepRecentTokens = 1
 	ctx := t.Context()
 
 	modelA := "model-a"

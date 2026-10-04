@@ -289,8 +289,12 @@ func (s *Server) handleCompactDebugCommand(ctx context.Context, w http.ResponseW
 	switch {
 	case len(fields) == 1:
 		var items []contextItem
+		var index string
 		if items, err = manager.loadContextItems(ctx); err == nil {
-			err = manager.recordWarning(ctx, compactIndex(items, manager.keepRecentTokens))
+			index, err = compactIndex(items, manager.keepRecentTokens)
+		}
+		if err == nil {
+			err = manager.recordWarning(ctx, index)
 		}
 		if err != nil {
 			s.internalError(w, "Failed to list context", err, "conversationID", manager.conversationID)

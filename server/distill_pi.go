@@ -96,7 +96,7 @@ const piCompactionSummarySuffix = `
 </summary>`
 
 // keepRecentTokens is the budget of recent history kept verbatim: by pi
-// distillation, and as the recent part compact_in_place may not collapse.
+// distillation, and as the recent part compact_in_place leaves as it is.
 func (s *Server) keepRecentTokens() int {
 	if s.piDistillKeepRecentTokens > 0 {
 		return s.piDistillKeepRecentTokens

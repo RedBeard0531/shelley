@@ -195,8 +195,8 @@ type ConversationManager struct {
 	// in-place compaction (compact_in_place) that its history does not yet
 	// reflect; takeInjectable swaps in the rebuilt history. Guarded by cm.mu.
 	compactedGeneration uint64
-	// keepRecentTokens is the budget of the recent part compact_in_place may
-	// not collapse.
+	// keepRecentTokens is the budget of the recent part compact_in_place
+	// leaves as it is.
 	keepRecentTokens int
 }
 
