@@ -92,6 +92,21 @@ func TestEstimatePiMessageTokensCountsImages(t *testing.T) {
 	}
 }
 
+func TestFindPiCutPointKeepsHugeLastToolResultWithItsCall(t *testing.T) {
+	msgs := []llm.Message{
+		textMsg(llm.MessageRoleUser, "first"),
+		textMsg(llm.MessageRoleAssistant, "ok"),
+		textMsg(llm.MessageRoleUser, "second"),
+		{Role: llm.MessageRoleAssistant, Content: []llm.Content{{ID: "t1", Type: llm.ContentTypeToolUse, ToolName: "bash", ToolInput: json.RawMessage(`{}`)}}},
+		toolResultMsg(strings.Repeat("x", 100_000)),
+	}
+	// The result alone fills the budget and no cut point follows it: the
+	// call stays with it and everything before is summarized.
+	if cut := findPiCutPoint(msgs, 20_000); cut != 3 {
+		t.Fatalf("cut = %d, want 3", cut)
+	}
+}
+
 func TestFindPiCutPointExcludesImageHeavyHistory(t *testing.T) {
 	msgs := []llm.Message{textMsg(llm.MessageRoleUser, "inspect the pages")}
 	for i := range 20 {
