@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -231,25 +232,24 @@ func TestSubagentTool_ModelOverride(t *testing.T) {
 		Runner:               runner,
 		ModelID:              "claude-sonnet-4-6",
 		AvailableModels: []AvailableModel{
-			{ID: "claude-sonnet-4-6"},
-			{ID: "claude-haiku-4.5", DisplayName: "Claude Haiku 4.5"},
+			{Name: "claude-sonnet-4-6", ID: "claude-sonnet-4-6"},
+			{Name: "claude-haiku-4.5", ID: "claude-haiku-4.5@subscription"},
 		},
 	}
 
-	// Verify the tool schema includes model enum
+	// The schema exposes short names only; route-specific IDs stay internal.
 	llmTool := tool.Tool()
 	schemaJSON, _ := json.Marshal(llmTool.InputSchema)
 	schemaStr := string(schemaJSON)
-	if !strings.Contains(schemaStr, "claude-haiku-4.5") {
-		t.Errorf("expected schema to contain model enum, got %s", schemaStr)
+	if strings.Contains(schemaStr, "claude-haiku-4.5@subscription") {
+		t.Errorf("schema leaks route-specific model ID: %s", schemaStr)
 	}
-
 	for _, model := range tool.AvailableModels {
-		if !strings.Contains(schemaStr, model.ID) {
-			t.Errorf("model %q missing from schema", model.ID)
+		if !strings.Contains(schemaStr, fmt.Sprintf("%q", model.Name)) {
+			t.Errorf("model %q missing from schema", model.Name)
 		}
-		if strings.Contains(llmTool.Description, model.ID) {
-			t.Errorf("description duplicates model %q from schema", model.ID)
+		if strings.Contains(llmTool.Description, model.Name) {
+			t.Errorf("description duplicates model %q from schema", model.Name)
 		}
 	}
 
@@ -265,13 +265,13 @@ func TestSubagentTool_ModelOverride(t *testing.T) {
 		t.Errorf("model must not be required, got required=%v", schema.Required)
 	}
 
-	// Override model
+	// Choosing a short name runs the model ID it maps to.
 	input := subagentInput{Slug: "test", Prompt: "do something", Model: "claude-haiku-4.5"}
 	inputJSON, _ := json.Marshal(input)
 	tool.Tool().Run(t.Context(), inputJSON)
 
-	if runner.lastModelID != "claude-haiku-4.5" {
-		t.Errorf("expected model 'claude-haiku-4.5', got %q", runner.lastModelID)
+	if runner.lastModelID != "claude-haiku-4.5@subscription" {
+		t.Errorf("expected model 'claude-haiku-4.5@subscription', got %q", runner.lastModelID)
 	}
 }
 
@@ -287,22 +287,26 @@ func TestSubagentTool_ModelOverride_InvalidModel(t *testing.T) {
 		Runner:               runner,
 		ModelID:              "claude-sonnet-4-6",
 		AvailableModels: []AvailableModel{
-			{ID: "claude-sonnet-4-6"},
-			{ID: "claude-haiku-4.5"},
+			{Name: "claude-sonnet-4-6", ID: "claude-sonnet-4-6@subscription"},
+			{Name: "claude-haiku-4.5", ID: "claude-haiku-4.5"},
 		},
 	}
 
-	input := subagentInput{Slug: "test", Prompt: "do something", Model: "nonexistent-model"}
-	inputJSON, _ := json.Marshal(input)
-	result := tool.Tool().Run(t.Context(), inputJSON)
-	if result.Error == nil {
-		t.Fatal("expected error for invalid model")
-	}
-	if !strings.Contains(result.Error.Error(), "nonexistent-model") {
-		t.Errorf("expected error to mention invalid model, got %v", result.Error)
-	}
-	if !strings.Contains(result.Error.Error(), "claude-sonnet-4-6") {
-		t.Errorf("expected error to list available models, got %v", result.Error)
+	// Route-specific IDs are not accepted; only enumerated names are.
+	for _, model := range []string{"nonexistent-model", "claude-sonnet-4-6@subscription"} {
+		input := subagentInput{Slug: "test", Prompt: "do something", Model: model}
+		inputJSON, _ := json.Marshal(input)
+		result := tool.Tool().Run(t.Context(), inputJSON)
+		if result.Error == nil {
+			t.Fatalf("expected error for model %q", model)
+		}
+		msg := result.Error.Error()
+		if !strings.Contains(msg, model) {
+			t.Errorf("expected error to mention %q, got %v", model, result.Error)
+		}
+		if !strings.Contains(msg, "available: claude-sonnet-4-6, claude-haiku-4.5") {
+			t.Errorf("expected error to list model names, got %v", result.Error)
+		}
 	}
 }
 

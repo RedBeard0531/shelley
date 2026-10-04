@@ -101,13 +101,14 @@ type ToolSetConfig struct {
 	// A value of 0 means no limit (but SubagentRunner/SubagentDB must still be set).
 	// Set to 1 to allow only top-level conversations (depth 0) to spawn subagents.
 	MaxSubagentDepth int
-	// BuildAvailableModels, if set, is called by NewToolSet to compute the
-	// list of models that subagent / llm_one_shot tools can choose from.
+	// BuildAvailableModels, if set, is called by NewToolSet with the
+	// conversation's model ID to compute the list of models that subagent /
+	// llm_one_shot tools can choose from.
 	// It is invoked each time a ToolSet is built so new conversations pick
 	// up custom models added at runtime, instead of being stuck with a
 	// snapshot taken at server start. If nil, the list is built from
-	// LLMProvider.GetAvailableModels() (without display names).
-	BuildAvailableModels func() []AvailableModel
+	// LLMProvider.GetAvailableModels(), naming each model by its ID.
+	BuildAvailableModels func(parentModelID string) []AvailableModel
 	// ToolOverrides maps tool name to "on" or "off". Tools not listed use their default.
 	ToolOverrides map[string]string
 	// DisableAllTools disables every tool by default; ToolOverrides with "on" re-enable.
@@ -237,10 +238,10 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 	// custom models added since server start.
 	var availableModels []AvailableModel
 	if cfg.BuildAvailableModels != nil {
-		availableModels = cfg.BuildAvailableModels()
+		availableModels = cfg.BuildAvailableModels(cfg.ModelID)
 	} else if cfg.LLMProvider != nil {
 		for _, id := range cfg.LLMProvider.GetAvailableModels() {
-			availableModels = append(availableModels, AvailableModel{ID: id})
+			availableModels = append(availableModels, AvailableModel{Name: id, ID: id})
 		}
 	}
 

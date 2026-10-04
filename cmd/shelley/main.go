@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -358,6 +359,34 @@ func runVersion() {
 	}
 }
 
+func modelRouteKeys(modelID string, info *models.ModelInfo) []string {
+	if info == nil {
+		return nil
+	}
+	provider := string(info.Provider)
+	// Prefer the wire model identity: integration aliases can share a
+	// catalog ID while actually sending different upstream model names.
+	if info.APIModelName != "" {
+		return []string{"api:" + provider + "/" + info.APIModelName}
+	}
+	baseID := modelID
+	if info.Source != models.SourceCustomLabel {
+		if candidate, _, qualified := strings.Cut(modelID, "@"); qualified && models.ByID(candidate) != nil {
+			baseID = candidate
+		}
+	}
+	keys := []string{"id:" + provider + "/" + baseID}
+	if model := models.ByID(baseID); model != nil {
+		keys = append(keys, "catalog:"+model.ID)
+	}
+	return keys
+}
+
+func isChatGPTSubscriptionRoute(info *models.ModelInfo, baseURL string) bool {
+	return baseURL != "" && info != nil && info.Source != models.SourceCustomLabel &&
+		info.Mode == "chatgpt" && info.BaseURL == baseURL
+}
+
 func setupToolSetConfig(llmProvider claudetool.LLMServiceProvider, llmManager server.LLMProvider, database *db.DB) claudetool.ToolSetConfig {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -368,26 +397,104 @@ func setupToolSetConfig(llmProvider claudetool.LLMServiceProvider, llmManager se
 	// Resolve the list of available models lazily, each time a ToolSet is
 	// built. This lets newly-added custom models become visible to subagents
 	// (and llm_one_shot) without restarting the server. See issue #195.
-	buildAvailableModels := func() []claudetool.AvailableModel {
-		availableIDs := llmManager.GetAvailableModels()
-		tiers := models.AssignTiers(availableIDs)
+	buildAvailableModelsForIDs := func(availableIDs []string, preferredBaseURL, alwaysIncludeID string) []claudetool.AvailableModel {
+		// Integration IDs may have an @integration suffix. Known models on
+		// the preferred subscription go by their catalog ID: that is what
+		// AssignTiers understands and what the agent sees in the tool enum,
+		// while the full ID still routes the request through the subscription.
+		names := make([]string, len(availableIDs))
+		infos := make([]*models.ModelInfo, len(availableIDs))
+		for i, id := range availableIDs {
+			names[i] = id
+			infos[i] = llmManager.GetModelInfo(id)
+			if isChatGPTSubscriptionRoute(infos[i], preferredBaseURL) {
+				if baseID, _, qualified := strings.Cut(id, "@"); qualified && models.ByID(baseID) != nil {
+					names[i] = baseID
+				}
+			}
+		}
+		tiers := models.AssignTiers(names)
 		var out []claudetool.AvailableModel
-		for _, id := range availableIDs {
-			info := llmManager.GetModelInfo(id)
+		nameCount := make(map[string]int)
+		for i, id := range availableIDs {
+			info := infos[i]
 			// Only surface tier-1 models to agents; tier-2 models are
 			// overshadowed by a better available sibling (see
 			// models.AssignTiers) or are unknown integration models and would
 			// just clutter the model enum. Explicit custom models stay visible.
-			if tiers[id] == models.Tier2 && (info == nil || info.Source != models.SourceCustomLabel) {
+			keepParentRoute := alwaysIncludeID != "" && id == alwaysIncludeID
+			if !keepParentRoute && tiers[names[i]] == models.Tier2 && (info == nil || info.Source != models.SourceCustomLabel) {
 				continue
 			}
-			am := claudetool.AvailableModel{ID: id}
-			if info != nil && info.DisplayName != "" && info.DisplayName != id {
-				am.DisplayName = info.DisplayName
+			nameCount[names[i]]++
+			out = append(out, claudetool.AvailableModel{Name: names[i], ID: id})
+		}
+		// Names must identify exactly one route; fall back to the full ID
+		// when two surviving routes would otherwise share a name.
+		for i := range out {
+			if nameCount[out[i].Name] > 1 {
+				out[i].Name = out[i].ID
 			}
-			out = append(out, am)
 		}
 		return out
+	}
+
+	buildAvailableModels := func(parentModelID string) []claudetool.AvailableModel {
+		availableIDs := llmManager.GetAvailableModels()
+		parentInfo := llmManager.GetModelInfo(parentModelID)
+		if parentInfo == nil || !isChatGPTSubscriptionRoute(parentInfo, parentInfo.BaseURL) {
+			return buildAvailableModelsForIDs(availableIDs, "", "")
+		}
+
+		// Prefer the parent's ChatGPT subscription when it also serves a
+		// model available through another route. Keep unrelated models from
+		// other integrations selectable.
+		infos := make(map[string]*models.ModelInfo, len(availableIDs))
+		for _, id := range availableIDs {
+			infos[id] = llmManager.GetModelInfo(id)
+		}
+
+		candidateIDs := append([]string(nil), availableIDs...)
+		if !slices.Contains(candidateIDs, parentModelID) {
+			candidateIDs = append(candidateIDs, parentModelID)
+		}
+		visibleSubscriptionKeys := make(map[string]struct{})
+		for _, model := range buildAvailableModelsForIDs(candidateIDs, parentInfo.BaseURL, parentModelID) {
+			info := infos[model.ID]
+			if info == nil && model.ID == parentModelID {
+				info = parentInfo
+			}
+			if !isChatGPTSubscriptionRoute(info, parentInfo.BaseURL) {
+				continue
+			}
+			for _, key := range modelRouteKeys(model.ID, info) {
+				visibleSubscriptionKeys[key] = struct{}{}
+			}
+		}
+
+		preferredIDs := make([]string, 0, len(availableIDs)+1)
+		foundParent := false
+		for _, id := range availableIDs {
+			info := infos[id]
+			if !isChatGPTSubscriptionRoute(info, parentInfo.BaseURL) && (info == nil || info.Source != models.SourceCustomLabel) {
+				duplicateOfSubscription := false
+				for _, key := range modelRouteKeys(id, info) {
+					if _, ok := visibleSubscriptionKeys[key]; ok {
+						duplicateOfSubscription = true
+						break
+					}
+				}
+				if duplicateOfSubscription {
+					continue
+				}
+			}
+			preferredIDs = append(preferredIDs, id)
+			foundParent = foundParent || id == parentModelID
+		}
+		if !foundParent {
+			preferredIDs = append(preferredIDs, parentModelID)
+		}
+		return buildAvailableModelsForIDs(preferredIDs, parentInfo.BaseURL, parentModelID)
 	}
 
 	flagEnabled := func(name string) func() bool {

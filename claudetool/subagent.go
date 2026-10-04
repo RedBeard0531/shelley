@@ -36,10 +36,22 @@ func isValidReasoningLevel(s string) bool {
 	return false
 }
 
-// AvailableModel describes a model available for subagent use.
+// AvailableModel describes a model that subagent and llm_one_shot can use.
 type AvailableModel struct {
-	ID          string // The model identifier to pass as the "model" parameter
-	DisplayName string // Human-readable name (may equal ID)
+	Name string // Value the agent passes as the "model" parameter
+	ID   string // Model ID to run; may name a specific route (e.g. "gpt-6-sol@sub")
+}
+
+// resolveModel maps the agent-facing model name to the model ID to run.
+func resolveModel(available []AvailableModel, name string) (string, error) {
+	var names []string
+	for _, m := range available {
+		if m.Name == name {
+			return m.ID, nil
+		}
+		names = append(names, m.Name)
+	}
+	return "", fmt.Errorf("unknown model %q; available: %s", name, strings.Join(names, ", "))
 }
 
 // SubagentDB is the database interface for subagent operations.
@@ -115,7 +127,7 @@ func (s *SubagentTool) subagentInputSchema() string {
 		// Build the enum array
 		var enumItems []string
 		for _, m := range s.AvailableModels {
-			enumItems = append(enumItems, fmt.Sprintf("%q", m.ID))
+			enumItems = append(enumItems, fmt.Sprintf("%q", m.Name))
 		}
 		modelProp = fmt.Sprintf(`,
     "model": {
@@ -190,23 +202,10 @@ func (s *SubagentTool) run(ctx context.Context, req subagentInput) llm.ToolOut {
 	// Determine which model to use: explicit choice > parent's model
 	modelID := s.ModelID
 	if req.Model != "" {
-		if len(s.AvailableModels) > 0 {
-			found := false
-			for _, m := range s.AvailableModels {
-				if m.ID == req.Model {
-					found = true
-					break
-				}
-			}
-			if !found {
-				var ids []string
-				for _, m := range s.AvailableModels {
-					ids = append(ids, m.ID)
-				}
-				return llm.ErrorfToolOut("unknown model %q; available: %s", req.Model, strings.Join(ids, ", "))
-			}
+		var err error
+		if modelID, err = resolveModel(s.AvailableModels, req.Model); err != nil {
+			return llm.ErrorToolOut(err)
 		}
-		modelID = req.Model
 	}
 
 	// Determine reasoning level: explicit choice > parent's reasoning level.

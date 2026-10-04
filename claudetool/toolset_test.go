@@ -275,7 +275,7 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 	db := newMockSubagentDB()
 	runner := &mockSubagentRunner{response: "ok"}
 
-	models := []AvailableModel{{ID: "model-a"}}
+	models := []AvailableModel{{Name: "model-a", ID: "model-a"}}
 	calls := 0
 	cfg := ToolSetConfig{
 		LLMProvider:          provider,
@@ -284,8 +284,11 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 		SubagentRunner:       runner,
 		SubagentDB:           db,
 		ParentConversationID: "parent",
-		BuildAvailableModels: func() []AvailableModel {
+		BuildAvailableModels: func(parentModelID string) []AvailableModel {
 			calls++
+			if parentModelID != "test-model" {
+				t.Fatalf("BuildAvailableModels parent model = %q, want test-model", parentModelID)
+			}
 			out := make([]AvailableModel, len(models))
 			copy(out, models)
 			return out
@@ -311,7 +314,7 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 	}
 
 	// Simulate a custom model being added at runtime.
-	models = append(models, AvailableModel{ID: "model-b", DisplayName: "Model B"})
+	models = append(models, AvailableModel{Name: "model-b", ID: "model-b"})
 
 	ts2 := NewToolSet(t.Context(), cfg)
 	schema2 := findSubagentSchema(ts2)
@@ -335,6 +338,35 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 	}
 	if !strings.Contains(schema3, "test-model") {
 		t.Errorf("expected fallback schema to include the provider's model, got: %s", schema3)
+	}
+}
+
+func TestNewToolSetUsesParentAwareModelChoices(t *testing.T) {
+	cfg := ToolSetConfig{
+		LLMProvider:          &mockLLMProvider{},
+		ModelID:              "parent-model",
+		WorkingDir:           "/test",
+		SubagentRunner:       &mockSubagentRunner{},
+		SubagentDB:           &mockSubagentDB{},
+		ParentConversationID: "parent",
+		BuildAvailableModels: func(parentModelID string) []AvailableModel {
+			if parentModelID != "parent-model" {
+				t.Fatalf("BuildAvailableModels parent model = %q, want parent-model", parentModelID)
+			}
+			return []AvailableModel{{Name: "parent-route-model", ID: "parent-route-model"}}
+		},
+	}
+
+	ts := NewToolSet(t.Context(), cfg)
+	schemas := map[string]string{}
+	for _, tool := range ts.Tools() {
+		schemas[tool.Name] = string(tool.InputSchema)
+	}
+	if !strings.Contains(schemas["subagent"], "parent-route-model") {
+		t.Errorf("subagent schema = %q, want parent-route-model", schemas["subagent"])
+	}
+	if !strings.Contains(schemas["llm_one_shot"], "parent-route-model") {
+		t.Errorf("llm_one_shot schema = %q, want parent-route-model", schemas["llm_one_shot"])
 	}
 }
 
