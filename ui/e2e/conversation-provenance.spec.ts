@@ -66,14 +66,20 @@ for (const viewport of [
       await expect(page.getByTestId("message-input")).toBeVisible();
       const background = colorScheme === "dark" ? "rgb(31, 41, 55)" : "rgb(243, 244, 246)";
       const progress = "Backend underway: **API and database** implementation are progressing.";
-      await sendFrom(child.conversation_id, parent.conversationId, `${progress}\nNext: tests.`);
+      const body = `  ${progress}\nNext: tests, preview at https://example.com/api.`;
+      await sendFrom(child.conversation_id, parent.conversationId, body);
       let message = page.getByTestId("message").filter({ hasText: "Backend underway" });
       let card = await expectToolCard(message, progress, background);
       await expect(card.getByRole("link", { name: child.slug, exact: true })).toBeVisible();
-      // Multi-line messages expand into a markdown body.
+      // Multi-line messages expand into the verbatim text, like other tool cards'
+      // details, with URLs linked.
       await card.getByRole("button", { name: "Expand" }).click();
-      await expect(card.locator(".tool-details strong")).toHaveText("API and database");
-      await expect(card.locator(".tool-details")).toContainText("Next: tests.");
+      const code = card.locator(".tool-details .tool-code");
+      await expect(code).toHaveJSProperty("textContent", body);
+      await expect(code.getByRole("link", { name: "https://example.com/api" })).toHaveAttribute(
+        "href",
+        "https://example.com/api",
+      );
 
       // Reload exercises persisted metadata rather than only stream updates.
       await page.reload();

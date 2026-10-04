@@ -172,8 +172,6 @@
               v-if="entityIndex === 0"
               :source="conversationSender"
               :text="messageText"
-              :message-id="message.message_id"
-              :cache-owner="message"
             />
           </template>
 

@@ -2,7 +2,7 @@
      or a parent's message to its subagent), rendered as a tool card: the
      sender's slug, a "message" tag, and the first line. A message that fits on
      one short line shows in full in the header; longer ones expand into the
-     message body, rendered like any other message. -->
+     verbatim text, shown like other tool cards' details, with URLs linked. -->
 <template>
   <div class="tool" data-testid="conversation-message-card">
     <div
@@ -31,42 +31,45 @@
       </button>
     </div>
     <div v-if="isExpanded" class="tool-details">
-      <CitedText
-        :text="text"
-        :markdown-text="text"
-        :citations="[]"
-        :render-markdown="markdownMode !== 'off'"
-        :message-id="messageId"
-        :cache-owner="cacheOwner"
-        run-key="conversation-message"
-        rewrite-localhost-links
-      />
+      <div class="tool-section">
+        <div class="tool-label">Message:</div>
+        <div class="tool-code">
+          <template v-for="(part, i) in bodyParts" :key="i">
+            <a
+              v-if="part.type === 'link'"
+              :href="part.href"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-link"
+              >{{ part.content }}</a
+            >
+            <template v-else>{{ part.content }}</template>
+          </template>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { localhostLinkOptionsFromInit, parseLinks } from "../../utils/linkify";
 import type { ConversationMessageSource } from "../../utils/messageSource";
-import { useMarkdownMode } from "../composables/markdownMode";
-import CitedText from "./CitedText.vue";
 import ConversationSourceLink from "./ConversationSourceLink.vue";
 import ToolChevron from "./tools/ToolChevron.vue";
 
 const props = defineProps<{
   source: ConversationMessageSource;
   text: string;
-  messageId: string;
-  cacheOwner: object;
 }>();
 
 /** Longest single-line message shown in full in the header. */
 const HEADLINE_MAX = 80;
 
-const { markdownMode } = useMarkdownMode();
 const isExpanded = ref(false);
 const trimmed = computed(() => props.text.trim());
 const firstLine = computed(() => trimmed.value.split(/\r?\n/)[0]);
+const bodyParts = computed(() => parseLinks(props.text, localhostLinkOptionsFromInit()));
 const expandable = computed(
   () => firstLine.value !== trimmed.value || trimmed.value.length > HEADLINE_MAX,
 );
@@ -75,9 +78,15 @@ const expandable = computed(
 <style scoped>
 .conversation-message-card-slug {
   flex-shrink: 0;
+  max-width: 40%;
 }
+/* Styled like the subagent card's slug; the link shows only on hover. */
 .conversation-message-card-slug a {
-  color: var(--link-color);
+  color: inherit;
+  text-decoration: none;
+}
+.conversation-message-card-slug a:hover {
+  text-decoration: underline;
 }
 /* Nothing to expand: wrap rather than hide the end of the message. */
 .conversation-message-card-full {
