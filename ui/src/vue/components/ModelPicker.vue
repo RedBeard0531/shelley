@@ -184,7 +184,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, ref } from "vue";
+import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import Select from "primevue/select";
 import { statusPickerDt } from "./statusPickerDt";
 import { prettyModelLabels } from "../../utils/modelNames";
@@ -461,7 +461,18 @@ function isActiveRecentCombination(combination: {
   return (combination.thinkingLevel ?? "default") === effectiveEffort.value;
 }
 
+// Disabling only locks the trigger. A picker already open when it happens
+// (the status bar's, as a turn starts) closes, and anything still in flight
+// from its panel is dropped: switching model mid-turn cancels the turn.
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) selectRef.value?.hide();
+  },
+);
+
 function handleSelect(pickerValue: string) {
+  if (props.disabled) return;
   const option = pickerOptionsByValue.value.get(pickerValue);
   if (!option) throw new Error(`unknown model picker option: ${pickerValue}`);
   if (option.kind === "recent") {
@@ -473,6 +484,7 @@ function handleSelect(pickerValue: string) {
 }
 
 function selectEffort(level: ThinkingLevel) {
+  if (props.disabled) return;
   emit("thinkingChange", level);
 }
 

@@ -50,40 +50,33 @@
     </span>
   </template>
 
-  <!-- Agent working -->
+  <!-- Open conversation: working, interrupted, or ready. One container, so
+       the running-work counts and readout stay mounted (an open popover
+       included) as the turn starts and ends; a job exiting starts one. -->
   <div
-    v-else-if="agentWorking && conversationId"
+    v-else-if="conversationId && (agentWorking || interrupted || !currentConversation?.is_draft)"
     class="status-bar-active"
-    data-testid="agent-thinking"
   >
-    <AnimatedWorkingStatus />
-    <button
-      :disabled="cancelling"
-      class="status-stop-button"
-      v-tooltip.top="'Stop'"
-      :aria-label="cancelling ? 'Cancelling...' : 'Stop'"
-      @click="onCancel"
+    <template v-if="agentWorking">
+      <AnimatedWorkingStatus data-testid="agent-thinking" />
+      <button
+        :disabled="cancelling"
+        class="status-stop-button"
+        v-tooltip.top="'Stop'"
+        :aria-label="cancelling ? 'Cancelling...' : 'Stop'"
+        @click="onCancel"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="6" width="12" height="12" rx="1" />
+        </svg>
+        <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
+      </button>
+    </template>
+    <div
+      v-else-if="interrupted"
+      class="status-interrupted-group"
+      data-testid="conversation-interrupted"
     >
-      <svg viewBox="0 0 24 24" fill="currentColor">
-        <rect x="6" y="6" width="12" height="12" rx="1" />
-      </svg>
-      <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
-    </button>
-    <StatusReadout
-      v-bind="readoutProps"
-      :cwd="cwd"
-      :conversation-id="conversationId"
-      :agent-working="agentWorking"
-    />
-  </div>
-
-  <!-- Interrupted turn awaiting confirmation -->
-  <div
-    v-else-if="interrupted && conversationId"
-    class="status-bar-active"
-    data-testid="conversation-interrupted"
-  >
-    <div class="status-interrupted-group">
       <span class="status-message">Conversation Interrupted</span>
       <button
         type="button"
@@ -96,6 +89,10 @@
         {{ resumingInterrupted ? "Continuing…" : "Continue" }}
       </button>
     </div>
+    <span v-else class="status-message status-ready">
+      <span class="hide-on-mobile">Ready on </span>{{ hostname }}
+    </span>
+    <StatusActivity :conversation-id="conversationId" />
     <StatusReadout
       v-bind="readoutProps"
       :cwd="cwd"
@@ -105,10 +102,7 @@
   </div>
 
   <!-- New conversation or draft -->
-  <div
-    v-else-if="!conversationId || currentConversation?.is_draft"
-    class="status-bar-new-conversation"
-  >
+  <div v-else class="status-bar-new-conversation">
     <div class="status-field status-field-model">
       <ModelPicker
         :models="models"
@@ -239,19 +233,6 @@
       </button>
     </div>
   </div>
-
-  <!-- Active conversation -->
-  <div v-else class="status-bar-active">
-    <span class="status-message status-ready">
-      <span class="hide-on-mobile">Ready on </span>{{ hostname }}
-    </span>
-    <StatusReadout
-      v-bind="readoutProps"
-      :cwd="cwd"
-      :conversation-id="conversationId"
-      :agent-working="agentWorking"
-    />
-  </div>
 </template>
 
 <script setup lang="ts">
@@ -263,6 +244,7 @@ import { useI18n } from "../composables/i18n";
 import type { ThinkingLevel } from "./thinkingLevel";
 import AnimatedWorkingStatus from "./AnimatedWorkingStatus.vue";
 import ModelPicker from "./ModelPicker.vue";
+import StatusActivity from "./StatusActivity.vue";
 import StatusReadout from "./StatusReadout.vue";
 import { COMPACT_IN_PLACE_TOOL, COMPACT_NUDGE_CHOICES } from "./autoCompaction";
 

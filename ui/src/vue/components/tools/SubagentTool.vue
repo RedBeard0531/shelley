@@ -36,18 +36,7 @@
       </button>
     </div>
 
-    <button
-      v-if="showLive"
-      type="button"
-      class="subagent-live"
-      data-testid="subagent-live"
-      :title="`Open subagent '${liveSlug}'`"
-      @click.stop="openSubagent"
-    >
-      <span class="working-indicator" aria-hidden="true" />
-      <span class="subagent-live-slug">{{ liveSlug }}&nbsp;↗</span>
-      <span class="subagent-live-activity">{{ activity || "working\u2026" }}</span>
-    </button>
+    <SubagentLiveStrip v-if="showLive" :slug="liveSlug" :activity="activity" />
 
     <div v-if="isExpanded" class="tool-details">
       <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
@@ -85,6 +74,7 @@
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import { useSubagentLive, navigateToConversationSlug } from "../../composables/subagentLive";
+import SubagentLiveStrip from "../SubagentLiveStrip.vue";
 import ToolChevron from "./ToolChevron.vue";
 import RunningToolTime from "./RunningToolTime.vue";
 
@@ -128,10 +118,6 @@ const { conv, working, activity } = useSubagentLive(
 // acknowledges dispatch), so the strip keys off the conversation's working flag, not the tool-call state.
 const showLive = computed(() => working.value || (!!props.isRunning && !!conv.value));
 const liveSlug = computed(() => conv.value?.slug || slug.value);
-
-function openSubagent() {
-  navigateToConversationSlug(liveSlug.value);
-}
 
 // Extract result text
 const resultText = computed(

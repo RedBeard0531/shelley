@@ -366,6 +366,8 @@
     "
     :conversation-id="conversation.conversation_id"
     :count="convState.running_background_jobs"
+    @click.stop
+    @auxclick.stop
   />
 
   <!-- Subagents -->
@@ -415,6 +417,8 @@
         :conversation-id="sub.conversation_id"
         :count="sub.running_background_jobs"
         nested
+        @click.stop
+        @auxclick.stop
       />
     </template>
   </div>

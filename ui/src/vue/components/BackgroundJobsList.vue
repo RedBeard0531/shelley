@@ -5,8 +5,6 @@
     :class="['drawer-background-jobs-list', { 'drawer-background-jobs-nested': nested }]"
     role="group"
     aria-label="Running background jobs"
-    @click.stop
-    @auxclick.stop
   >
     <div v-if="error" class="background-jobs-error" role="alert">{{ error }}</div>
     <div v-if="jobs === null" class="background-jobs-empty">{{ error ? "" : "Loading…" }}</div>

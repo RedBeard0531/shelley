@@ -889,6 +889,40 @@ test.describe("Status readout controls", () => {
     expect(await page.locator('[data-testid="message-modelchange"]').count()).toBe(markersBefore);
   });
 
+  // The same guard when the picker is already open as a turn starts (a
+  // background job exiting starts one unprompted): the status bar keeps the
+  // picker mounted across the turn, so it has to close itself.
+  test("an open model picker closes when a turn starts", async ({ page, request }) => {
+    test.setTimeout(60000);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(
+      request,
+      "echo open picker",
+      { cwd: testWorkingDirectory() },
+    );
+    await page.goto(`/c/${slug}`);
+    await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
+
+    await page.locator(".model-picker-inline .p-select-label").click();
+    const panel = page.locator(".model-picker-panel");
+    await expect(panel).toBeVisible();
+    const sent: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/chat")) sent.push(r.postData() || "");
+    });
+    expect(
+      (
+        await request.post(`/api/conversation/${conversationId}/chat`, {
+          data: { message: "bash: sleep 8", model: "predictable" },
+        })
+      ).ok(),
+    ).toBe(true);
+    await expect(page.getByTestId("agent-thinking")).toBeVisible({ timeout: 20000 });
+    await expect(panel).toHaveCount(0);
+    expect(sent).toEqual([]);
+    await request.post(`/api/conversation/${conversationId}/cancel`);
+  });
+
   // Switching model rebuilds the conversation's loop, and ApplyModelSettings
   // cancels a running turn to do it. Killing the turn the user is watching
   // because they wanted to read the model name is not acceptable, so the
