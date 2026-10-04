@@ -28,10 +28,6 @@ func (r *lockCheckingSubagentRunner) RunSubagent(context.Context, string, string
 	return "ok", nil
 }
 
-func (r *lockCheckingSubagentRunner) ListSubagents(context.Context, string) ([]SubagentSummary, error) {
-	return nil, nil
-}
-
 func TestSubagentToolRunHoldsSlugLock(t *testing.T) {
 	tool := &SubagentTool{
 		DB:                   newMockSubagentDB(),
@@ -86,10 +82,6 @@ func (m *mockSubagentRunner) RunSubagent(ctx context.Context, conversationID, pr
 		return "", m.err
 	}
 	return m.response, nil
-}
-
-func (m *mockSubagentRunner) ListSubagents(context.Context, string) ([]SubagentSummary, error) {
-	return nil, nil
 }
 
 func TestSubagentTool_SanitizeSlug(t *testing.T) {

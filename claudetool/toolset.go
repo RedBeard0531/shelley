@@ -77,6 +77,8 @@ type ToolSetConfig struct {
 	BackgroundJobs BackgroundJobs
 	// BashBackgroundAfter overrides DefaultBashBackgroundAfter when nonzero.
 	BashBackgroundAfter time.Duration
+	// DBPath is the Shelley database, named in the subagent tool's description.
+	DBPath string
 	// ParentConversationID is the ID of the parent conversation (for subagent tool).
 	ParentConversationID string
 	// ConversationID is the ID of the conversation these tools belong to.
@@ -251,8 +253,9 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 			ModelID:              cfg.ModelID, // Inherit parent's model
 			AvailableModels:      availableModels,
 			ParentReasoning:      cfg.ReasoningLevel,
+			DBPath:               cfg.DBPath,
 		}
-		tools = append(tools, subagentTool.Tool(), subagentTool.ListTool())
+		tools = append(tools, subagentTool.Tool())
 	}
 	if cfg.ParentMessenger != nil {
 		messageParentTool := &MessageParentTool{Messenger: cfg.ParentMessenger, ConversationID: cfg.ConversationID}

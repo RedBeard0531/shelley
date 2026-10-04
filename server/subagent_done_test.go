@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,5 +233,56 @@ func TestSubagentLoadedOutsideSubagentToolKeepsItsRole(t *testing.T) {
 	}
 	if !tools["message_parent"] {
 		t.Error("subagent lacks the message_parent tool")
+	}
+}
+
+// Delegated subagents are told to report with message_parent; workers, which
+// lack that tool, are not.
+func TestSubagentSystemPromptAsksForMessageParent(t *testing.T) {
+	t.Parallel()
+	server, database, ps := newTestServer(t)
+	ctx := t.Context()
+	parent, err := database.CreateConversation(ctx, nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := database.CreateSubagentConversation(ctx, "helper", parent.ConversationID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := database.CreateCommitTourWorker(ctx, parent.ConversationID, t.TempDir(), "predictable", commitTourWorkerOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopActiveConversationLoops(server)
+
+	const instruction = "Send your results with the message_parent tool."
+	for _, tc := range []struct {
+		id, prompt string
+		want       bool
+	}{
+		{sub.ConversationID, "echo: subagent work", true},
+		{worker.ConversationID, "echo: worker work", false},
+	} {
+		if _, err := NewSubagentRunner(server).RunSubagent(ctx, tc.id, tc.prompt, "predictable", ""); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, 15*time.Second, func() bool {
+			return countByType(listMessages(t, database, tc.id), db.MessageTypeAgent) == 1 && !server.IsAgentWorking(tc.id)
+		})
+		var system strings.Builder
+		for _, s := range requestWithText(t, ps, tc.prompt).System {
+			system.WriteString(s.Text)
+		}
+		if got := strings.Contains(system.String(), instruction); got != tc.want {
+			t.Errorf("%s: system prompt has %q = %v, want %v:\n%s", tc.prompt, instruction, got, tc.want, system.String())
+		}
+	}
+}
+
+func commitTourWorkerOptions() db.ConversationOptions {
+	return db.ConversationOptions{
+		Kind:       db.CommitTourKind,
+		CommitTour: &db.CommitTourRequest{Commit: "0123456789abcdef", State: "building", RequestedAt: time.Now().UTC()},
 	}
 }

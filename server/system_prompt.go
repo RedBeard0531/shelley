@@ -965,25 +965,24 @@ type SubagentSystemPromptData struct {
 	GitInfo          *GitInfo
 	ShelleyDBPath    string
 	ConversationID   string
-	SkillsXML        string // XML block for available skills
-	Skills           []skills.Skill
+	// MessageParent is set for delegated subagents, which have the
+	// message_parent tool.
+	MessageParent bool
+	SkillsXML     string // XML block for available skills
+	Skills        []skills.Skill
 }
 
 // GenerateSubagentSystemPrompt generates a minimal system prompt for subagent conversations.
 func GenerateSubagentSystemPrompt(workingDir, parentConversationID string) (string, error) {
-	prompt, _, err := generateSubagentSystemPromptData(workingDir, parentConversationID, nil)
+	prompt, _, err := generateSubagentSystemPromptData(workingDir, parentConversationID, true, nil)
 	return prompt, err
 }
 
-func generateSubagentSystemPrompt(workingDir string) (string, []skills.Skill, error) {
-	return generateSubagentSystemPromptWithIntegrationSkills(workingDir, nil)
+func generateSubagentSystemPromptWithIntegrationSkills(workingDir string, messageParent bool, integrationSkills []skills.Skill) (string, []skills.Skill, error) {
+	return generateSubagentSystemPromptData(workingDir, "", messageParent, integrationSkills)
 }
 
-func generateSubagentSystemPromptWithIntegrationSkills(workingDir string, integrationSkills []skills.Skill) (string, []skills.Skill, error) {
-	return generateSubagentSystemPromptData(workingDir, "", integrationSkills)
-}
-
-func generateSubagentSystemPromptData(workingDir, parentConversationID string, integrationSkills []skills.Skill) (string, []skills.Skill, error) {
+func generateSubagentSystemPromptData(workingDir, parentConversationID string, messageParent bool, integrationSkills []skills.Skill) (string, []skills.Skill, error) {
 	wd := workingDir
 	if wd == "" {
 		var err error
@@ -997,6 +996,7 @@ func generateSubagentSystemPromptData(workingDir, parentConversationID string, i
 		WorkingDirectory: wd,
 		ShelleyDBPath:    DBPath,
 		ConversationID:   parentConversationID,
+		MessageParent:    messageParent,
 	}
 
 	// Try to collect git info

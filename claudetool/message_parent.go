@@ -28,7 +28,7 @@ type MessageParentTool struct {
 func (t *MessageParentTool) Tool() *llm.Tool {
 	return &llm.Tool{
 		Name:        messageParentName,
-		Description: "Send a message to your parent agent now, without ending your turn: a progress note, an interim finding, or a question you need answered. Keep working after sending; replies arrive as new messages. Your final reply is not forwarded to the parent, so send your results with this tool before you finish.",
+		Description: "Send a message to the parent agent",
 		InputSchema: llm.MustSchema(`{
   "type": "object",
   "required": ["text"],

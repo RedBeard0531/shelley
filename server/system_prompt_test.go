@@ -851,7 +851,7 @@ func TestSubagentSystemPromptKeepsStableSkillsFirst(t *testing.T) {
 	DBPath = "/tmp/shelley-test.db"
 	t.Cleanup(func() { DBPath = oldDBPath })
 
-	prompt, _, err := generateSubagentSystemPromptWithIntegrationSkills(t.TempDir(), []skills.Skill{{
+	prompt, _, err := generateSubagentSystemPromptWithIntegrationSkills(t.TempDir(), true, []skills.Skill{{
 		Name:        "stable-prefix",
 		Description: "Keep reusable guidance first.",
 	}})
@@ -1208,7 +1208,7 @@ func TestIntegrationSkillSnapshotIncludedInTopLevelAndSubagentPrompts(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	subagent, subSkills, err := generateSubagentSystemPromptWithIntegrationSkills(workingDir, integrationSkills)
+	subagent, subSkills, err := generateSubagentSystemPromptWithIntegrationSkills(workingDir, true, integrationSkills)
 	if err != nil {
 		t.Fatal(err)
 	}

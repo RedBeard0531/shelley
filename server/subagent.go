@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
@@ -130,33 +129,6 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 	return "message sent; the subagent works in the background and reports back with message_parent.", nil
 }
 
-// ListSubagents implements claudetool.SubagentRunner. It lists delegated
-// subagents only: BTW readers and internal workers are not addressable with
-// the subagent tool.
-func (r *SubagentRunner) ListSubagents(ctx context.Context, parentConversationID string) ([]claudetool.SubagentSummary, error) {
-	s := r.server
-	convs, err := s.db.GetSubagents(ctx, parentConversationID)
-	if err != nil {
-		return nil, err
-	}
-	var out []claudetool.SubagentSummary
-	for _, conv := range convs {
-		if !isDelegatedSubagent(conv) || conv.Slug == nil {
-			continue
-		}
-		text, err := s.lastAgentText(ctx, conv.ConversationID)
-		if err != nil {
-			return nil, fmt.Errorf("read subagent %s: %w", *conv.Slug, err)
-		}
-		out = append(out, claudetool.SubagentSummary{
-			Slug:         *conv.Slug,
-			Working:      s.IsAgentWorking(conv.ConversationID),
-			LastResponse: text,
-		})
-	}
-	return out, nil
-}
-
 // MessageParent implements claudetool.ParentMessenger.
 func (r *SubagentRunner) MessageParent(ctx context.Context, conversationID, text string) error {
 	conv, err := r.server.db.GetConversationByID(ctx, conversationID)
@@ -195,43 +167,6 @@ func (s *Server) messageParent(ctx context.Context, conv generated.Conversation,
 		Text:                 text,
 	})
 	return parent.InjectMessage(ctx, s, modelID, llm.UserStringMessage(text))
-}
-
-// lastAgentText returns the concatenated text content of the most recent
-// type=agent message in a conversation, skipping non-agent rows (gitinfo,
-// user, tool, system, error) appended after it. Gitinfo rows carry
-// assistant-role llm_data but are Shelley's own notes, not the agent's reply.
-//
-// If the latest agent message has no text content (e.g. a pure tool_use), it
-// returns "" rather than walking back to an earlier, stale turn.
-func (s *Server) lastAgentText(ctx context.Context, conversationID string) (string, error) {
-	msgs, err := s.db.ListMessages(ctx, conversationID)
-	if err != nil {
-		return "", err
-	}
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m := msgs[i]
-		if m.Type != string(db.MessageTypeAgent) {
-			continue
-		}
-		if m.LlmData == nil {
-			return "", nil
-		}
-		var llmMsg llm.Message
-		if err := json.Unmarshal([]byte(*m.LlmData), &llmMsg); err != nil {
-			return "", err
-		}
-		var texts []string
-		for _, content := range llmMsg.Content {
-			if content.Type == llm.ContentTypeText && content.Text != "" {
-				texts = append(texts, content.Text)
-			}
-		}
-		// Strip before callers truncate: a byte cut through a marker's
-		// 3-byte sequence would leave an orphan no later strip recognizes.
-		return llm.StripInlineCitationMarkers(strings.Join(texts, "\n")), nil
-	}
-	return "", nil
 }
 
 // Ensure SubagentRunner implements claudetool.SubagentRunner.
