@@ -62,5 +62,15 @@ assert(!JSON.stringify(after.toolBreakdown).includes("-"), "no negative breakdow
 const sum = Object.values(after.parts).reduce((a, b) => a + b, 0);
 assert(Math.abs(sum - 150) <= 5, `after parts sum to the reported total: ${sum}`);
 
+// Tool-argument tokens are split out per tool category: the first call's
+// context holds the bash call's args under bash:file read; nothing else
+// carries args there.
+assert(before.args["bash:file read"] > 0, `args before = ${JSON.stringify(before.args)}`);
+assert(
+  Object.values(before.args).reduce((a, b) => a + b, 0) <= before.parts["bash:file read"]!,
+  "args never exceed their category",
+);
+assert(!("text" in before.args) && !("assistant" in before.args), "non-tool categories have no args");
+
 if (failed) process.exit(1);
 console.log("✓ in-place compaction resets the composition");

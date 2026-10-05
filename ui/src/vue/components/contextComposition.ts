@@ -23,10 +23,12 @@ export type Point = {
   segment: number;
   parts: Composition;
   toolBreakdown: ToolBreakdown;
+  /** Tool-argument tokens per tool category (subset of parts). */
+  args: Composition;
 };
 type Attribution = { key: string; detail?: string };
 type CommandInvocation = { name: string; args: string[] };
-type AddTokens = (toolUseID: string, attribution: Attribution, tokens: number) => void;
+type AddTokens = (toolUseID: string, attribution: Attribution, tokens: number, isArgs?: boolean) => void;
 
 // An entry is what one message contributed for one tool_use_id ("" for the
 // rest); compaction records remove entries.
@@ -35,24 +37,37 @@ type Entry = {
   to: number;
   toolUseID: string;
   parts: Composition;
+  args: Composition;
   toolBreakdown: ToolBreakdown;
 };
 
 class Context {
   entries = new Map<string, Entry>();
   parts: Composition = {};
+  args: Composition = {};
   toolBreakdown: ToolBreakdown = {};
   toolKeys = new Map<string, Attribution>();
 
-  add(from: number, to: number, toolUseID: string, attribution: Attribution, tokens: number) {
+  add(
+    from: number,
+    to: number,
+    toolUseID: string,
+    attribution: Attribution,
+    tokens: number,
+    isArgs = false,
+  ) {
     const key = `${from}-${to}|${toolUseID}`;
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { from, to, toolUseID, parts: {}, toolBreakdown: {} };
+      entry = { from, to, toolUseID, parts: {}, args: {}, toolBreakdown: {} };
       this.entries.set(key, entry);
     }
     addAttributedTokens(entry.parts, entry.toolBreakdown, attribution, tokens);
     addAttributedTokens(this.parts, this.toolBreakdown, attribution, tokens);
+    if (isArgs) {
+      addTokens(entry.args, attribution.key, tokens);
+      addTokens(this.args, attribution.key, tokens);
+    }
   }
 
   remove(match: (entry: Entry) => boolean) {
@@ -60,6 +75,7 @@ class Context {
       if (!match(entry)) continue;
       this.entries.delete(key);
       for (const [part, tokens] of Object.entries(entry.parts)) this.parts[part] -= tokens;
+      for (const [part, tokens] of Object.entries(entry.args)) this.args[part] -= tokens;
       for (const [part, details] of Object.entries(entry.toolBreakdown)) {
         for (const [detail, tokens] of Object.entries(details)) {
           this.toolBreakdown[part][detail] -= tokens;
@@ -122,8 +138,8 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
     }
     const seq = message.sequence_id;
     generationHasMedia =
-      addMessage(context.toolKeys, message, (toolUseID, attribution, tokens) =>
-        context.add(seq, seq, toolUseID, attribution, tokens),
+      addMessage(context.toolKeys, message, (toolUseID, attribution, tokens, isArgs) =>
+        context.add(seq, seq, toolUseID, attribution, tokens, isArgs),
       ) || generationHasMedia;
     if (message.type !== "agent") continue;
     const usage = parseJSON<Usage>(message.usage_data);
@@ -136,6 +152,7 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
       segment,
       parts: estimated > 0 ? { ...context.parts } : generationHasMedia ? {} : { assistant: total },
       toolBreakdown: copyToolBreakdown(context.toolBreakdown),
+      args: { ...context.args },
     });
   }
 
@@ -154,6 +171,9 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
     const parts = Object.fromEntries(
       Object.entries(point.parts).map(([key, tokens]) => [key, Math.round(tokens * scale)]),
     );
+    const args = Object.fromEntries(
+      Object.entries(point.args).map(([key, tokens]) => [key, Math.round(tokens * scale)]),
+    );
     const toolBreakdown = Object.fromEntries(
       Object.entries(point.toolBreakdown).map(([key, details]) => [
         key,
@@ -162,7 +182,7 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
         ),
       ]),
     );
-    return { ...point, parts, toolBreakdown };
+    return { ...point, parts, args, toolBreakdown };
   });
 }
 
@@ -207,6 +227,7 @@ function addContent(
         content.ID,
         attribution,
         estimateTokens(content.ToolName || "") + estimateTokens(stringify(content.ToolInput)),
+        true,
       );
       return false;
     }

@@ -19,6 +19,7 @@ const point = (parts: Record<string, number>, segment = 0): Point => ({
   total: Object.values(parts).reduce((a, b) => a + b, 0),
   segment,
   parts,
+  args: { "repo/read": 3000 },
   toolBreakdown: { "repo/read": { "a.go": 3000, "b.go": 1000 } },
 });
 const points = [
