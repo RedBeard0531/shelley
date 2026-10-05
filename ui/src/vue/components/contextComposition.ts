@@ -10,6 +10,10 @@ const TYPE_TOOL_USE = 5;
 const TYPE_TOOL_RESULT = 6;
 const TYPE_WEB_SEARCH_TOOL_RESULT = 8;
 
+// Tokens attributed per image block, matching the server's pi estimator
+// (piImageTokens); the base64 data itself is stripped from stored llm_data.
+const imageTokens = 1200;
+
 export type Composition = Record<string, number>;
 export type ToolBreakdown = Record<string, Composition>;
 export type Point = {
@@ -188,6 +192,11 @@ function addContent(
   add: AddTokens,
 ): boolean {
   if (content.MediaType || content.DisplayImageURL || content.Data) {
+    // Storage strips image bytes from llm_data, so byte estimates would give
+    // images ~1 token. Attribute a fixed allowance instead, matching the
+    // server's pi estimator (1280x720 screenshot ≈ 1.2k tokens). The
+    // provider-reported total stays exact either way; only the split moves.
+    add(toolUseID, { key: "images" }, imageTokens);
     return true;
   }
   switch (content.Type) {

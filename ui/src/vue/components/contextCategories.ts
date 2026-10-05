@@ -21,6 +21,7 @@ const TOOL_CATEGORIES = ["repo/read", "repo/edit", "tool:browser/web", "tool:oth
 
 const CATEGORY_LABELS: Record<string, string> = {
   text: "text",
+  images: "images",
   "bash:code search": "bash · code search",
   "bash:file read": "bash · file read",
   "bash:build/test": "bash · build/test",
@@ -37,6 +38,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   // Cost graph-adjacent blue, purple, teal, and orange hues, with spaced
   // shades for neighboring context bands.
   text: "hsl(174 58% 48%)",
+  images: "hsl(325 65% 58%)",
   "bash:code search": "hsl(199 92% 56%)",
   "bash:file read": "hsl(199 68% 66%)",
   "bash:build/test": "hsl(234 75% 59%)",
@@ -61,6 +63,7 @@ export function contextCategories(points: Point[]): ContextCategory[] {
   }
   return [
     ...(TEXT_PARTS.some((key) => keys.has(key)) ? [category("text")] : []),
+    ...(keys.has("images") ? [category("images")] : []),
     ...BASH_CATEGORIES.filter((key) => key !== "bash:other" && keys.has(key)).map(category),
     ...TOOL_CATEGORIES.slice(0, 2)
       .filter((key) => keys.has(key))
@@ -103,6 +106,12 @@ export function categoryHint(key: string, point: Point): string {
   if (key === "text") {
     return TEXT_PARTS.map((part) => `${part} ${formatTokenCount(point.parts[part] || 0)}`).join(
       " · ",
+    );
+  }
+  if (key === "images") {
+    return (
+      "Image content in messages or tool results; the server strips image bytes, so each image" +
+      " carries only a rough size allowance"
     );
   }
   const breakdown = point.toolBreakdown[key];
