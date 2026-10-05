@@ -1,39 +1,71 @@
-<!-- Legend for the context graph: what each color is, and how many tokens it
-     holds at one call (the hovered one, else the latest). Hovering or
-     focusing a row names what the category is made of. -->
+<!-- Legend for the context graph: what each color is and how many tokens it
+     holds at one call (the hovered one, else the latest), split for tool
+     categories into args (recorded tool inputs) vs output (tool results),
+     with each row's share of the call's context and what re-warming that
+     category from a cold cache would cost. Hovering a row names what the
+     category is made of. -->
 <template>
-  <div class="context-legend" role="list" aria-label="Estimated context mix">
+  <div
+    v-if="breakdownRows.length > 0"
+    class="context-legend context-breakdown"
+    role="table"
+    aria-label="Estimated context mix"
+  >
+    <div class="context-breakdown-row context-breakdown-head" role="row">
+      <span class="context-breakdown-label" role="columnheader">category</span>
+      <span class="context-breakdown-tokens" role="columnheader">args</span>
+      <span class="context-breakdown-tokens" role="columnheader">output</span>
+      <span class="context-breakdown-total" role="columnheader">total</span>
+      <span class="context-breakdown-pct" role="columnheader" />
+    </div>
     <div
-      v-for="category in categories"
-      :key="category.key"
-      class="context-legend-item"
-      role="listitem"
+      v-for="row in breakdownRows"
+      :key="row.key"
+      v-tooltip.top="row.hint"
+      role="row"
+      :aria-label="`${row.label}: ${row.hint}${rewarmLabel(row.key)}`"
+      class="context-breakdown-row"
     >
-      <button
-        type="button"
-        class="token-cost-legend-row context-legend-row"
-        v-tooltip.focus.top="categoryHint(category.key, point)"
-        :aria-label="`${category.label}: ${formatTokenCount(categoryTokens(point, category.key))}${rewarmLabel(category.key)}. ${categoryHint(category.key, point)}`"
-        @mouseenter="showTooltipOnHover"
-        @mouseleave="hideTooltipOnHover"
-      >
-        <span class="token-cost-chip" :style="{ background: category.color }" aria-hidden="true" />
-        <span class="token-cost-legend-label context-legend-label">{{ category.label }}</span>
-        <span class="token-cost-legend-tokens context-legend-tokens">{{
-          formatTokenCount(categoryTokens(point, category.key))
+      <span class="context-breakdown-label" role="cell">
+        <i :style="{ background: row.color }" />{{ row.label }}
+        <span v-if="rewarm(row.key) !== null" class="context-legend-rewarm">{{
+          formatUsd(rewarm(row.key)!)
         }}</span>
-        <span v-if="rewarm(category.key) !== null" class="context-legend-rewarm">{{
-          formatUsd(rewarm(category.key)!)
-        }}</span>
-      </button>
+      </span>
+      <span class="context-breakdown-tokens" role="cell">
+        <TokenCount v-if="row.args !== null" :tokens="row.args" />
+      </span>
+      <span class="context-breakdown-tokens" role="cell">
+        <TokenCount v-if="row.output !== null" :tokens="row.output" />
+      </span>
+      <span class="context-breakdown-total" role="cell">
+        <TokenCount :tokens="row.total" />
+      </span>
+      <span class="context-breakdown-pct" role="cell">
+        {{ breakdownTotal > 0 ? ((row.total / breakdownTotal) * 100).toFixed(0) + "%" : "" }}
+      </span>
+    </div>
+    <div class="context-breakdown-row context-breakdown-total-row" role="row">
+      <span class="context-breakdown-label" role="cell">total</span>
+      <span class="context-breakdown-tokens" role="cell">
+        <TokenCount v-if="breakdownArgsTotal" :tokens="breakdownArgsTotal" />
+      </span>
+      <span class="context-breakdown-tokens" role="cell">
+        <TokenCount v-if="breakdownOutputTotal" :tokens="breakdownOutputTotal" />
+      </span>
+      <span class="context-breakdown-total" role="cell">
+        <TokenCount :tokens="breakdownTotal" />
+      </span>
+      <span class="context-breakdown-pct" role="cell">100%</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed, defineComponent, h } from "vue";
 import { formatTokenCount, formatUsd, type ModelCost } from "../../utils/tokenCostGraph";
 import { categoryHint, categoryTokens, rewarmUsd, type ContextCategory } from "./contextCategories";
-import type { Point } from "./contextComposition";
+import { isToolCategory, type Point } from "./contextComposition";
 
 const props = defineProps<{
   categories: ContextCategory[];
@@ -42,6 +74,8 @@ const props = defineProps<{
   costs?: Record<string, ModelCost | null | undefined>;
 }>();
 
+/** What re-warming this category's slice of the context would cost at the
+ *  call's model, or null when that model has no known pricing. */
 function rewarm(key: string): number | null {
   return props.costs ? rewarmUsd(props.point, props.costs, key) : null;
 }
@@ -51,16 +85,42 @@ function rewarmLabel(key: string): string {
   return usd === null ? "" : `, ${formatUsd(usd)} to rewarm`;
 }
 
-// The tooltip directive opens on focus; hover borrows that path.
-function dispatchTooltipFocus(target: EventTarget | null, type: "focus" | "blur") {
-  if (target instanceof HTMLElement) target.dispatchEvent(new FocusEvent(type));
-}
+/** Bold-italic unit suffix ("3.0k" → 3.0<i>k</i>), as in the cost table. */
+const TokenCount = (props: { tokens: number }) => {
+  const text = formatTokenCount(props.tokens);
+  const match = text.match(/^([\d,.]+)([kMB]?)$/)!;
+  return match[2]
+    ? [match[1], h("i", { class: "context-breakdown-unit" }, match[2])]
+    : text;
+};
+TokenCount.props = ["tokens"];
 
-function showTooltipOnHover(event: MouseEvent) {
-  dispatchTooltipFocus(event.currentTarget, "focus");
-}
-
-function hideTooltipOnHover(event: MouseEvent) {
-  dispatchTooltipFocus(event.currentTarget, "blur");
-}
+// One row per category present at this call. Tool categories split their
+// tokens into args (recorded tool inputs) and output (tool results); text
+// and images are all "output" of their own kind, shown in the total column
+// only.
+const breakdownRows = computed(() =>
+  props.categories
+    .map((category) => {
+      const total = categoryTokens(props.point, category.key);
+      if (total === 0) return null;
+      const tool = isToolCategory(category.key);
+      const args = tool ? (props.point.args[category.key] || 0) : null;
+      return {
+        ...category,
+        args: tool ? args : null,
+        output: tool ? total - (args || 0) : null,
+        total,
+        hint: categoryHint(category.key, props.point),
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null),
+);
+const breakdownTotal = computed(() => breakdownRows.value.reduce((sum, row) => sum + row.total, 0));
+const breakdownArgsTotal = computed(() =>
+  breakdownRows.value.reduce((sum, row) => sum + (row.args || 0), 0),
+);
+const breakdownOutputTotal = computed(() =>
+  breakdownRows.value.reduce((sum, row) => sum + (row.output || 0), 0),
+);
 </script>

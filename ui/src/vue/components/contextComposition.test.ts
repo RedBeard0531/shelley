@@ -86,6 +86,15 @@ assert(Math.abs(sum - 150) <= 5, `after parts sum to the reported total: ${sum}`
   assert(label(2) === "bash · file read", `after a long result, not its own reply: ${label(2)}`);
   assert(promptGrowth(points, 0, cats) === null, "the first call has nothing to grow from");
 }
+// Tool-argument tokens are split out per tool category: the first call's
+// context holds the bash call's args under bash:file read; nothing else
+// carries args there.
+assert(before.args["bash:file read"] > 0, `args before = ${JSON.stringify(before.args)}`);
+assert(
+  Object.values(before.args).reduce((a, b) => a + b, 0) <= before.parts["bash:file read"]!,
+  "args never exceed their category",
+);
+assert(!("text" in before.args) && !("assistant" in before.args), "non-tool categories have no args");
 
 {
   // Rewarming a cold cache re-writes the whole context at the cache-write price.
