@@ -619,6 +619,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /debug/loremipsum", s.handleDebugLoremIpsum)
 	mux.HandleFunc("POST /debug/loremipsum", s.handleDebugLoremIpsum)
 	mux.HandleFunc("GET /debug/histograms", s.handleDebugHistograms)
+	mux.Handle("GET /debug/llm/", http.FileServerFS(debugLLMAssets))
+	api.HandleFunc("GET /api/debug/llm/exchanges", s.handleDebugLLMList)
+	api.Handle("GET /api/debug/llm/exchanges/{id}", compressionHandler(http.HandlerFunc(s.handleDebugLLMGet)))
 
 	// pprof endpoints
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
