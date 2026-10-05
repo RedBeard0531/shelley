@@ -246,6 +246,35 @@ export const fr: TranslationKeys = {
   noModelsHint:
     "Définissez des variables d'environnement comme ANTHROPIC_API_KEY, utilisez le flag -gateway, ou ajoutez un modèle personnalisé ci-dessous.",
 
+  // MCP Servers Modal
+  mcpServers: "Serveurs MCP",
+  configureMcpServers: "Connecter des serveurs MCP pour l'agent",
+  addMcpServer: "Ajouter un serveur MCP",
+  editMcpServer: "Modifier le serveur MCP",
+  loadingMcpServers: "Chargement des serveurs MCP...",
+  noMcpServers: "Aucun serveur MCP enregistré",
+  noMcpServersHint:
+    "Ajoutez-en un ici, ou demandez à Shelley de le faire. L'agent utilise les serveurs MCP via la commande shelley mcp.",
+  columnDescription: "Description",
+  mcpTools: "Outils",
+  mcpToolsTitle: "Outils de {name}",
+  mcpConnecting: "Connexion à {name}…",
+  mcpNoTools: "Ce serveur n'a aucun outil.",
+  mcpNameHint:
+    "Lettres, chiffres, '_' et '-', en commençant par une lettre ou un chiffre. Utilisé dans les commandes shelley mcp ; non modifiable ensuite.",
+  mcpDescriptionPlaceholder: "À quoi il sert, pour que l'agent sache quand l'utiliser",
+  mcpHeaders: "En-têtes",
+  mcpAddHeader: "Ajouter un en-tête",
+  mcpValue: "Valeur",
+  mcpRemoveHeader: "Retirer l'en-tête {n}",
+  mcpColumnLogin: "Connexion",
+  mcpLoggedIn: "Connecté",
+  mcpLoginRequired: "Connexion requise",
+  mcpLogIn: "Se connecter",
+  mcpLogOut: "Se déconnecter",
+  mcpLoggedInTo: "Connecté à {name}.",
+  mcpDebug: "Débogage",
+
   // Notifications Modal
   notifications: "Notifications",
   browserNotifications: "Notifications du navigateur",

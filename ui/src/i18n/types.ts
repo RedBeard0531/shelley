@@ -236,6 +236,33 @@ export interface TranslationKeys {
   noModelsConfigured: string;
   noModelsHint: string;
 
+  // MCP Servers Modal
+  mcpServers: string;
+  configureMcpServers: string;
+  addMcpServer: string;
+  editMcpServer: string;
+  loadingMcpServers: string;
+  noMcpServers: string;
+  noMcpServersHint: string;
+  columnDescription: string;
+  mcpTools: string;
+  mcpToolsTitle: string;
+  mcpConnecting: string;
+  mcpNoTools: string;
+  mcpNameHint: string;
+  mcpDescriptionPlaceholder: string;
+  mcpHeaders: string;
+  mcpAddHeader: string;
+  mcpValue: string;
+  mcpRemoveHeader: string;
+  mcpColumnLogin: string;
+  mcpLoggedIn: string;
+  mcpLoginRequired: string;
+  mcpLogIn: string;
+  mcpLogOut: string;
+  mcpLoggedInTo: string;
+  mcpDebug: string;
+
   // Notifications Modal
   notifications: string;
   browserNotifications: string;

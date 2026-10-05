@@ -29,6 +29,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/mcp"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/server/diskspace"
 	"shelley.exe.dev/server/notifications"
@@ -384,7 +385,9 @@ type Server struct {
 	diskSpace         atomic.Pointer[diskSpaceMonitor]
 	shutdownCh        chan struct{} // Signals background routines to stop
 	listenPort        int           // TCP port the server is listening on
+	socketPath        string        // Unix socket the server listens on, or ""
 	terminals         *TerminalSessions
+	mcp               *mcp.Manager
 	exitDelay         time.Duration
 	exitProcess       func(int)
 	mediaRun          mediaCommandRunner
@@ -457,6 +460,7 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		commitTourRecoverySlots: make(chan struct{}, 2),
 	}
 
+	s.mcp = mcp.NewManager(database, s.mcpLoginURL)
 	s.conversationListStream = newConversationListStream(s)
 	s.streamPub = subpub.New[StreamResponse]()
 	s.conversationListGitCache = newConversationListGitCache()
@@ -569,6 +573,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.HandleFunc("DELETE /api/custom-models/{id}", func(w http.ResponseWriter, r *http.Request) { s.handleDeleteModel(w, r, r.PathValue("id")) })
 	api.HandleFunc("POST /api/custom-models/{id}/duplicate", func(w http.ResponseWriter, r *http.Request) { s.handleDuplicateModel(w, r, r.PathValue("id")) })
 	api.HandleFunc("POST /api/custom-models-test", s.handleTestModel)
+
+	s.registerMCPRoutes(api, mux)
 
 	// Notification channels API
 	api.HandleFunc("GET /api/notification-channels", s.handleListNotificationChannels)
@@ -1022,6 +1028,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		}
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
+		manager.serverSocket = s.socketPath
 		manager.keepRecentTokens = s.keepRecentTokens()
 		switch role {
 		case roleSubagent:
@@ -1453,11 +1460,15 @@ func publicHostname() string {
 
 // conversationURL returns the full URL for a conversation, using slug if available.
 func (s *Server) conversationURL(slug string) string {
-	hostname := publicHostname()
-	path := "/"
-	if slug != "" {
-		path = "/c/" + slug
+	if slug == "" {
+		return s.publicURL("/")
 	}
+	return s.publicURL("/c/" + slug)
+}
+
+// publicURL returns the absolute URL of path on the server's public address.
+func (s *Server) publicURL(path string) string {
+	hostname := publicHostname()
 	if s.listenPort == 443 || s.listenPort == 0 {
 		return fmt.Sprintf("https://%s%s", hostname, path)
 	}
@@ -1703,6 +1714,17 @@ func (s *Server) StartWithListener(listener net.Listener) error {
 	return s.StartWithListeners(listener, "")
 }
 
+// tcpHandler wraps mux in the TCP listener's full middleware (applied in
+// reverse order: last added = first executed).
+func (s *Server) tcpHandler(mux http.Handler) http.Handler {
+	h := LoggerMiddleware(s.logger)(mux)
+	h = http.NewCrossOriginProtection().Handler(h)
+	if s.requireHeader != "" {
+		h = RequireHeaderMiddleware(s.requireHeader)(h)
+	}
+	return h
+}
+
 // StartWithListeners starts the HTTP server on the given TCP listener and optionally
 // also on a Unix socket. The TCP listener gets full middleware (CSRF, requireHeader, logger).
 // The Unix socket listener gets only the logger middleware (no CSRF, no requireHeader)
@@ -1732,16 +1754,18 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 
-	// TCP handler: full middleware (applied in reverse order: last added = first executed)
-	tcpHandler := LoggerMiddleware(s.logger)(mux)
-	cop := http.NewCrossOriginProtection()
-	tcpHandler = cop.Handler(tcpHandler)
-	if s.requireHeader != "" {
-		tcpHandler = RequireHeaderMiddleware(s.requireHeader)(tcpHandler)
+	tcpServer := &http.Server{
+		Handler: s.tcpHandler(mux),
 	}
 
-	tcpServer := &http.Server{
-		Handler: tcpHandler,
+	// Listen on the socket before serving: conversations export it as SHELLEY_SOCKET.
+	var unixListener net.Listener
+	if socketPath != "" {
+		if unixListener, err = s.listenSocket(socketPath); err != nil {
+			s.logger.Error("Failed to create Unix socket listener", "error", err, "path", socketPath)
+			tcpListener.Close()
+			return err
+		}
 	}
 
 	// Start cleanup routine
@@ -1771,33 +1795,7 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 
 	// Optionally start Unix socket server
 	var socketServer *http.Server
-	var actualSocketPath string
-	if socketPath != "" {
-		actualSocketPath = resolveSocketPath(socketPath, s.logger)
-
-		// Ensure the directory exists
-		if err := os.MkdirAll(filepath.Dir(actualSocketPath), 0o700); err != nil {
-			s.logger.Error("Failed to create socket directory", "error", err)
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer shutdownCancel()
-			tcpServer.Shutdown(shutdownCtx)
-			return err
-		}
-
-		unixListener, err := net.Listen("unix", actualSocketPath)
-		if err != nil {
-			s.logger.Error("Failed to create Unix socket listener", "error", err, "path", actualSocketPath)
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer shutdownCancel()
-			tcpServer.Shutdown(shutdownCtx)
-			return err
-		}
-
-		// Make socket accessible to the current user only
-		if err := os.Chmod(actualSocketPath, 0o600); err != nil {
-			s.logger.Warn("Failed to chmod socket", "path", actualSocketPath, "error", err)
-		}
-
+	if unixListener != nil {
 		// Unix socket handler: relaxed middleware (only logger, no CSRF or
 		// requireHeader). Mark it trusted so the CLI may attach sender
 		// provenance that browser/TCP callers cannot forge. Same-UID processes
@@ -1810,7 +1808,7 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 		}
 
 		go func() {
-			s.logger.Info("Unix socket server starting", "path", actualSocketPath)
+			s.logger.Info("Unix socket server starting", "path", s.socketPath)
 			if err := socketServer.Serve(unixListener); err != nil && err != http.ErrServerClosed {
 				serverErrCh <- err
 			}
@@ -1858,6 +1856,8 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 	// it by the shutdown context so a hung stopLoop can't starve HTTP
 	// shutdown's deadline.
 	s.stopAllConversations(ctx)
+	// Before HTTP shutdown, which waits for in-flight MCP requests.
+	s.mcp.Close()
 
 	if err := tcpServer.Shutdown(ctx); err != nil {
 		s.logger.Error("TCP server forced to shutdown", "error", err)
@@ -1867,7 +1867,7 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 		if err := socketServer.Shutdown(ctx); err != nil {
 			s.logger.Error("Unix socket server forced to shutdown", "error", err)
 		}
-		os.Remove(actualSocketPath)
+		os.Remove(s.socketPath)
 	}
 
 	s.logger.Info("Server exited")
@@ -1990,6 +1990,29 @@ func (s *Server) performUpgradeAndRestart(ctx context.Context, versionInfo *Vers
 	// Exit to trigger restart (systemd will restart us)
 	time.Sleep(100 * time.Millisecond)
 	os.Exit(0)
+}
+
+// listenSocket listens on the Unix socket at socketPath, made absolute, or
+// at the next free variant of it (see resolveSocketPath), and records the
+// path in s.socketPath.
+func (s *Server) listenSocket(socketPath string) (net.Listener, error) {
+	abs, err := filepath.Abs(socketPath)
+	if err != nil {
+		return nil, err
+	}
+	s.socketPath = resolveSocketPath(abs, s.logger)
+	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create socket directory: %w", err)
+	}
+	ln, err := net.Listen("unix", s.socketPath)
+	if err != nil {
+		return nil, err
+	}
+	// Make socket accessible to the current user only
+	if err := os.Chmod(s.socketPath, 0o600); err != nil {
+		s.logger.Warn("Failed to chmod socket", "path", s.socketPath, "error", err)
+	}
+	return ln, nil
 }
 
 // resolveSocketPath finds an available socket path. If the requested path has a

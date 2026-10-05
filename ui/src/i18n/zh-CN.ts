@@ -243,6 +243,34 @@ export const zhCN: TranslationKeys = {
   noModelsHint:
     "设置环境变量（如 ANTHROPIC_API_KEY），或使用 -gateway 参数，或在下方添加自定义模型。",
 
+  // MCP Servers Modal
+  mcpServers: "MCP 服务器",
+  configureMcpServers: "连接供代理使用的 MCP 服务器",
+  addMcpServer: "添加 MCP 服务器",
+  editMcpServer: "编辑 MCP 服务器",
+  loadingMcpServers: "正在加载 MCP 服务器...",
+  noMcpServers: "尚未注册 MCP 服务器",
+  noMcpServersHint: "在此添加，或让 Shelley 添加。代理通过 shelley mcp 命令使用 MCP 服务器。",
+  columnDescription: "描述",
+  mcpTools: "工具",
+  mcpToolsTitle: "{name} 的工具",
+  mcpConnecting: "正在连接 {name}…",
+  mcpNoTools: "此服务器没有工具。",
+  mcpNameHint:
+    "可使用字母、数字、'_' 和 '-'，须以字母或数字开头。用于 shelley mcp 命令，之后无法更改。",
+  mcpDescriptionPlaceholder: "用途，让代理知道何时使用它",
+  mcpHeaders: "请求头",
+  mcpAddHeader: "添加请求头",
+  mcpValue: "值",
+  mcpRemoveHeader: "移除请求头 {n}",
+  mcpColumnLogin: "登录",
+  mcpLoggedIn: "已登录",
+  mcpLoginRequired: "需要登录",
+  mcpLogIn: "登录",
+  mcpLogOut: "退出登录",
+  mcpLoggedInTo: "已登录 {name}。",
+  mcpDebug: "调试",
+
   // Notifications Modal
   notifications: "通知",
   browserNotifications: "浏览器通知",

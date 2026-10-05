@@ -127,6 +127,7 @@ type ConversationManager struct {
 	cwd                   string // working directory for tools
 	userEmail             string // exe.dev auth email, from X-ExeDev-Email header
 	serverPort            int    // TCP port the shelley server listens on, for SHELLEY_PORT/SHELLEY_URL
+	serverSocket          string // Unix socket the shelley server listens on, for SHELLEY_SOCKET
 	slug                  string // conversation slug, for SHELLEY_CONVERSATION_SLUG
 
 	// agentWorking tracks whether the agent is currently working.
@@ -2068,6 +2069,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		Model:            modelID,
 		UserEmail:        cm.userEmail,
 		Port:             cm.serverPort,
+		Socket:           cm.serverSocket,
 	}
 	cm.mu.Unlock()
 

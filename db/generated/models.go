@@ -48,6 +48,22 @@ type Conversation struct {
 	TurnInterrupted      bool      `json:"turn_interrupted"`
 }
 
+type McpOauth struct {
+	ServerName string    `json:"server_name"`
+	Client     string    `json:"client"`
+	Token      string    `json:"token"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type McpServer struct {
+	Name        string    `json:"name"`
+	Url         string    `json:"url"`
+	Description string    `json:"description"`
+	Headers     string    `json:"headers"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 type Message struct {
 	MessageID           string    `json:"message_id"`
 	ConversationID      string    `json:"conversation_id"`

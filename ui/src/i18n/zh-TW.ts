@@ -243,6 +243,34 @@ export const zhTW: TranslationKeys = {
   noModelsHint:
     "設定環境變數（如 ANTHROPIC_API_KEY），或使用 -gateway 參數，或在下方新增自訂模型。",
 
+  // MCP Servers Modal
+  mcpServers: "MCP 伺服器",
+  configureMcpServers: "連接供代理使用的 MCP 伺服器",
+  addMcpServer: "新增 MCP 伺服器",
+  editMcpServer: "編輯 MCP 伺服器",
+  loadingMcpServers: "正在載入 MCP 伺服器...",
+  noMcpServers: "尚未註冊 MCP 伺服器",
+  noMcpServersHint: "在此新增，或請 Shelley 新增。代理透過 shelley mcp 指令使用 MCP 伺服器。",
+  columnDescription: "說明",
+  mcpTools: "工具",
+  mcpToolsTitle: "{name} 的工具",
+  mcpConnecting: "正在連線至 {name}…",
+  mcpNoTools: "此伺服器沒有工具。",
+  mcpNameHint:
+    "可使用字母、數字、'_' 和 '-'，須以字母或數字開頭。用於 shelley mcp 指令，之後無法變更。",
+  mcpDescriptionPlaceholder: "用途，讓代理知道何時使用",
+  mcpHeaders: "標頭",
+  mcpAddHeader: "新增標頭",
+  mcpValue: "值",
+  mcpRemoveHeader: "移除標頭 {n}",
+  mcpColumnLogin: "登入",
+  mcpLoggedIn: "已登入",
+  mcpLoginRequired: "需要登入",
+  mcpLogIn: "登入",
+  mcpLogOut: "登出",
+  mcpLoggedInTo: "已登入 {name}。",
+  mcpDebug: "偵錯",
+
   // Notifications Modal
   notifications: "通知",
   browserNotifications: "瀏覽器通知",

@@ -243,6 +243,35 @@ export const upgoer5: TranslationKeys = {
   noModelsHint:
     "Set the right words where the computer looks for them, or use a way in, or add one down here.",
 
+  // MCP Servers Modal
+  mcpServers: "MCP Tool Boxes",
+  configureMcpServers: "Hook up tool boxes the helper can use",
+  addMcpServer: "Add Tool Box",
+  editMcpServer: "Change Tool Box",
+  loadingMcpServers: "Getting tool boxes...",
+  noMcpServers: "No tool boxes yet",
+  noMcpServersHint:
+    "Add one here, or ask the helper to. The helper opens tool boxes with the shelley mcp word.",
+  columnDescription: "What it is for",
+  mcpTools: "Tools",
+  mcpToolsTitle: "Tools in {name}",
+  mcpConnecting: "Opening {name}…",
+  mcpNoTools: "This box has no tools.",
+  mcpNameHint:
+    "Letters, numbers, '_' and '-', starting with a letter or number. Used with shelley mcp; you can't change it later.",
+  mcpDescriptionPlaceholder: "What it is for, so the helper knows when to use it",
+  mcpHeaders: "Extra lines to send",
+  mcpAddHeader: "Add line",
+  mcpValue: "What it says",
+  mcpRemoveHeader: "Take away line {n}",
+  mcpColumnLogin: "Sign in",
+  mcpLoggedIn: "Signed in",
+  mcpLoginRequired: "You need to sign in",
+  mcpLogIn: "Sign in",
+  mcpLogOut: "Sign out",
+  mcpLoggedInTo: "You are signed in to {name}.",
+  mcpDebug: "Look inside",
+
   // Notifications Modal
   notifications: "Things to Tell You",
   browserNotifications: "Pop ups to tell you",

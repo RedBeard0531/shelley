@@ -243,6 +243,35 @@ export const ja: TranslationKeys = {
   noModelsHint:
     "ANTHROPIC_API_KEY等の環境変数を設定するか、-gatewayフラグを使用するか、以下でカスタムモデルを追加してください。",
 
+  // MCP Servers Modal
+  mcpServers: "MCP サーバー",
+  configureMcpServers: "エージェントが使う MCP サーバーを接続",
+  addMcpServer: "MCP サーバーを追加",
+  editMcpServer: "MCP サーバーを編集",
+  loadingMcpServers: "MCP サーバーを読み込み中...",
+  noMcpServers: "MCP サーバーは登録されていません",
+  noMcpServersHint:
+    "ここで追加するか、Shelley に追加を頼んでください。エージェントは shelley mcp コマンドで MCP サーバーを使います。",
+  columnDescription: "説明",
+  mcpTools: "ツール",
+  mcpToolsTitle: "{name} のツール",
+  mcpConnecting: "{name} に接続中…",
+  mcpNoTools: "このサーバーにはツールがありません。",
+  mcpNameHint:
+    "英数字と '_'、'-' が使えます（先頭は英数字）。shelley mcp コマンドで使用し、後から変更できません。",
+  mcpDescriptionPlaceholder: "用途（エージェントが使いどころを判断するため）",
+  mcpHeaders: "ヘッダー",
+  mcpAddHeader: "ヘッダーを追加",
+  mcpValue: "値",
+  mcpRemoveHeader: "ヘッダー {n} を削除",
+  mcpColumnLogin: "ログイン",
+  mcpLoggedIn: "ログイン済み",
+  mcpLoginRequired: "ログインが必要",
+  mcpLogIn: "ログイン",
+  mcpLogOut: "ログアウト",
+  mcpLoggedInTo: "{name} にログインしました。",
+  mcpDebug: "デバッグ",
+
   // Notifications Modal
   notifications: "通知",
   browserNotifications: "ブラウザ通知",

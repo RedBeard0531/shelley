@@ -4,6 +4,7 @@ package client
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"flag"
@@ -29,8 +30,10 @@ func DefaultSocketPath() string {
 	return filepath.Join(configDir, "shelley", "shelley.sock")
 }
 
+// defaultClientURL is the socket of the Shelley server running this command
+// ($SHELLEY_SOCKET), else the default socket.
 func defaultClientURL() string {
-	return "unix://" + DefaultSocketPath()
+	return "unix://" + cmp.Or(os.Getenv("SHELLEY_SOCKET"), DefaultSocketPath())
 }
 
 func parseClientURL(rawURL string) (scheme, address string, err error) {
@@ -821,7 +824,7 @@ Usage:
   shelley client [flags] <subcommand> [args...]
 
 Flags:
-  -url URL     Server URL (default: unix://%s)
+  -url URL     Server URL (default: unix://$SHELLEY_SOCKET if set, else unix://%s)
   -H HEADER    Extra HTTP header "Name: Value" (can be repeated)
 
 Subcommands:

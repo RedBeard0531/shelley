@@ -186,6 +186,10 @@
           ><kbd>{{ menuShortcutLabel("editFile") }}</kbd></span
         >
       </button>
+      <button class="overflow-menu-item" @click="onMcpServers">
+        <i class="pi pi-server chat-menu-icon" aria-hidden="true" />
+        {{ t("mcpServers") }}
+      </button>
 
       <div class="overflow-menu-divider" />
       <button class="overflow-menu-item" @click="onCheckVersion">
@@ -389,6 +393,7 @@ const emit = defineEmits<{
   (e: "export"): void;
   (e: "edit-agents-md"): void;
   (e: "edit-file"): void;
+  (e: "open-mcp-servers"): void;
   (e: "check-version"): void;
 }>();
 
@@ -418,6 +423,7 @@ const onArchive = () => (emit("archive"), hide());
 const onExport = () => (emit("export"), hide());
 const onEditAgentsMd = () => (emit("edit-agents-md"), hide());
 const onEditFile = () => (emit("edit-file"), hide());
+const onMcpServers = () => (emit("open-mcp-servers"), hide());
 const onCheckVersion = () => (emit("check-version"), hide());
 function onExternalLink(url: string) {
   emit("open-external-link", url);

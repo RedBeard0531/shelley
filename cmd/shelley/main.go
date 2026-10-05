@@ -71,6 +71,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  serve [flags]                 Start the web server\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  models [flags]                List the models the server would expose, without starting it\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  client [flags] <subcommand>   CLI client (chat, read, list, archive) (experimental)\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  mcp <command>                 Use MCP servers (list, call, add, rm, auth, restart)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  skill <cat|ls|new> [name]     Read, list, or create skills\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  dtach <new|attach> ...        Legacy persistent PTY session helper\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  tour <chunks|verify|attach|show> ...  Commit guided tours (git notes)\n")
@@ -97,6 +98,8 @@ func main() {
 		runModels(global, args[1:])
 	case "client":
 		client.Run(args[1:])
+	case "mcp":
+		client.RunMCP(args[1:])
 	case "skill":
 		runSkill(args[1:])
 	case "dtach":

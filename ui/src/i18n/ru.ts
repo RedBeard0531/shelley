@@ -244,6 +244,35 @@ export const ru: TranslationKeys = {
   noModelsHint:
     "Установите переменные окружения, например ANTHROPIC_API_KEY, используйте флаг -gateway или добавьте пользовательскую модель ниже.",
 
+  // MCP Servers Modal
+  mcpServers: "MCP-серверы",
+  configureMcpServers: "Подключить MCP-серверы для агента",
+  addMcpServer: "Добавить MCP-сервер",
+  editMcpServer: "Редактировать MCP-сервер",
+  loadingMcpServers: "Загрузка MCP-серверов...",
+  noMcpServers: "Нет зарегистрированных MCP-серверов",
+  noMcpServersHint:
+    "Добавьте сервер здесь или попросите Shelley. Агент использует MCP-серверы через команду shelley mcp.",
+  columnDescription: "Описание",
+  mcpTools: "Инструменты",
+  mcpToolsTitle: "Инструменты {name}",
+  mcpConnecting: "Подключение к {name}…",
+  mcpNoTools: "У этого сервера нет инструментов.",
+  mcpNameHint:
+    "Буквы, цифры, '_' и '-'; начинается с буквы или цифры. Используется в командах shelley mcp; изменить потом нельзя.",
+  mcpDescriptionPlaceholder: "Для чего он нужен, чтобы агент знал, когда его использовать",
+  mcpHeaders: "Заголовки",
+  mcpAddHeader: "Добавить заголовок",
+  mcpValue: "Значение",
+  mcpRemoveHeader: "Убрать заголовок {n}",
+  mcpColumnLogin: "Вход",
+  mcpLoggedIn: "Вход выполнен",
+  mcpLoginRequired: "Нужен вход",
+  mcpLogIn: "Войти",
+  mcpLogOut: "Выйти",
+  mcpLoggedInTo: "Вход в {name} выполнен.",
+  mcpDebug: "Отладка",
+
   // Notifications Modal
   notifications: "Уведомления",
   browserNotifications: "Уведомления браузера",

@@ -1344,6 +1344,58 @@ class CustomModelsApi {
 
 export const customModelsApi = new CustomModelsApi();
 
+export interface McpServer {
+  name: string;
+  url: string;
+  description: string;
+  headers: Record<string, string>;
+  auth?: "" | "logged_in" | "login_required";
+  login_url?: string;
+}
+
+// The parts of a tool's input JSON Schema that ToolDescriptionCard shows.
+export interface ToolSchema {
+  properties?: Record<string, { type?: string | string[]; description?: string; enum?: unknown[] }>;
+  required?: string[];
+}
+
+export interface McpTool {
+  name: string;
+  description?: string;
+  inputSchema: ToolSchema;
+}
+
+async function mcpFetch(path: string, failure: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(`/api/mcp/servers${path}`, init);
+  if (!response.ok) throw await responseError(response, failure);
+  return response;
+}
+
+const mcpPath = (name: string) => `/${encodeURIComponent(name)}`;
+
+export const mcpServersApi = {
+  async list(): Promise<McpServer[]> {
+    return (await mcpFetch("", "Failed to load MCP servers")).json();
+  },
+  async save(server: McpServer, isNew: boolean): Promise<void> {
+    await mcpFetch(isNew ? "" : mcpPath(server.name), "Failed to save MCP server", {
+      method: isNew ? "POST" : "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(server),
+    });
+  },
+  async remove(name: string): Promise<void> {
+    await mcpFetch(mcpPath(name), "Failed to delete MCP server", { method: "DELETE" });
+  },
+  async logout(name: string): Promise<void> {
+    await mcpFetch(`${mcpPath(name)}/logout`, "Failed to log out", { method: "POST" });
+  },
+  async tools(name: string, signal: AbortSignal): Promise<McpTool[]> {
+    const response = await mcpFetch(`${mcpPath(name)}/tools`, "Failed to list tools", { signal });
+    return ((await response.json()) as { tools: McpTool[] }).tools;
+  },
+};
+
 // Notification channels API
 export interface NotificationChannelAPI {
   channel_id: string;

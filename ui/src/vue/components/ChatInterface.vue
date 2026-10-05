@@ -81,6 +81,7 @@
           @export="openExport"
           @edit-agents-md="showAgentsMdEditor = true"
           @edit-file="props.onOpenFileFinder?.()"
+          @open-mcp-servers="props.onOpenMcpServersModal?.()"
           @check-version="openVersionModal"
         />
       </div>
@@ -680,6 +681,7 @@ const props = withDefaults(
     modelsRefreshTrigger?: number;
     cwdSyncTrigger?: number;
     onOpenModelsModal?: () => void;
+    onOpenMcpServersModal?: () => void;
     onOpenFileFinder?: () => void;
     onOpenCommandPalette?: () => void;
     ephemeralTerminals: EphemeralTerminal[];

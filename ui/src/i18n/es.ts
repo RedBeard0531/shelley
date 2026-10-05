@@ -245,6 +245,35 @@ export const es: TranslationKeys = {
   noModelsHint:
     "Configure variables de entorno como ANTHROPIC_API_KEY, use el flag -gateway, o agregue un modelo personalizado abajo.",
 
+  // MCP Servers Modal
+  mcpServers: "Servidores MCP",
+  configureMcpServers: "Conectar servidores MCP para el agente",
+  addMcpServer: "Agregar servidor MCP",
+  editMcpServer: "Editar servidor MCP",
+  loadingMcpServers: "Cargando servidores MCP...",
+  noMcpServers: "No hay servidores MCP registrados",
+  noMcpServersHint:
+    "Agrega uno aquí o pídeselo a Shelley. El agente usa los servidores MCP mediante el comando shelley mcp.",
+  columnDescription: "Descripción",
+  mcpTools: "Herramientas",
+  mcpToolsTitle: "Herramientas de {name}",
+  mcpConnecting: "Conectando con {name}…",
+  mcpNoTools: "Este servidor no tiene herramientas.",
+  mcpNameHint:
+    "Letras, dígitos, '_' y '-'; debe empezar por letra o dígito. Se usa en los comandos shelley mcp; no se puede cambiar después.",
+  mcpDescriptionPlaceholder: "Para qué sirve, así el agente sabe cuándo usarlo",
+  mcpHeaders: "Encabezados",
+  mcpAddHeader: "Agregar encabezado",
+  mcpValue: "Valor",
+  mcpRemoveHeader: "Quitar encabezado {n}",
+  mcpColumnLogin: "Sesión",
+  mcpLoggedIn: "Sesión iniciada",
+  mcpLoginRequired: "Requiere iniciar sesión",
+  mcpLogIn: "Iniciar sesión",
+  mcpLogOut: "Cerrar sesión",
+  mcpLoggedInTo: "Sesión iniciada en {name}.",
+  mcpDebug: "Depuración",
+
   // Notifications Modal
   notifications: "Notificaciones",
   browserNotifications: "Notificaciones del navegador",

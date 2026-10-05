@@ -244,6 +244,35 @@ export const en: TranslationKeys = {
   noModelsHint:
     "Set environment variables like ANTHROPIC_API_KEY, or use the -gateway flag, or add a custom model below.",
 
+  // MCP Servers Modal
+  mcpServers: "MCP Servers",
+  configureMcpServers: "Connect MCP servers for the agent to use",
+  addMcpServer: "Add MCP Server",
+  editMcpServer: "Edit MCP Server",
+  loadingMcpServers: "Loading MCP servers...",
+  noMcpServers: "No MCP servers registered",
+  noMcpServersHint:
+    "Add one here, or ask Shelley to. The agent uses MCP servers through the shelley mcp command.",
+  columnDescription: "Description",
+  mcpTools: "Tools",
+  mcpToolsTitle: "{name} tools",
+  mcpConnecting: "Connecting to {name}…",
+  mcpNoTools: "This server has no tools.",
+  mcpNameHint:
+    "Letters, digits, '_' and '-', starting with a letter or digit. Used in shelley mcp commands; can't be changed later.",
+  mcpDescriptionPlaceholder: "What it's for, so the agent knows when to use it",
+  mcpHeaders: "Headers",
+  mcpAddHeader: "Add header",
+  mcpValue: "Value",
+  mcpRemoveHeader: "Remove header {n}",
+  mcpColumnLogin: "Login",
+  mcpLoggedIn: "Logged in",
+  mcpLoginRequired: "Login required",
+  mcpLogIn: "Log in",
+  mcpLogOut: "Log out",
+  mcpLoggedInTo: "Logged in to {name}.",
+  mcpDebug: "Debug",
+
   // Notifications Modal
   notifications: "Notifications",
   browserNotifications: "Browser Notifications",
