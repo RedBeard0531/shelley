@@ -314,7 +314,7 @@ test.describe("Context usage popup", () => {
     const titleBox = (await page.locator(".usage-popup-title").boundingBox())!;
     const graphBox = (await page.locator(".token-cost-graph-svg").boundingBox())!;
     const tableBox = (await page.locator(".token-cost-table").boundingBox())!;
-    expect(graphBox.width).toBeGreaterThan(500);
+    expect(graphBox.width).toBeGreaterThan(400);
     expect(Math.abs(graphBox.width - tableBox.width)).toBeLessThan(1);
     expect(Math.abs(titleBox.x - graphBox.x)).toBeLessThan(1);
     const subagentCostBox = await subagentRow.locator(".token-cost-legend-cost").boundingBox();

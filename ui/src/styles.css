@@ -12805,29 +12805,23 @@ kbd {
   border-bottom: 1px solid var(--border);
 }
 
-@media (min-width: 769px) {
-  .chat-context-popup.p-popover:has(.token-cost-table-with-subagents) {
-    width: min(640px, calc(100vw - 1rem));
-  }
+/* With sub-agents the cost table keeps the popup at its regular width; the
+   per-band cells stack their rate under the counts so three columns still
+   fit. (The graphs stretch to the table either way.) */
+.token-cost-table-with-subagents .token-cost-cell {
+  grid-template-columns: 1fr auto;
+  gap: 0 3px;
 }
 
-/* Keep the comparison columns side by side on phones; put rates below counts. */
-@media (max-width: 768px) {
-  .token-cost-table-with-subagents .token-cost-cell {
-    grid-template-columns: 1fr auto;
-    gap: 0 3px;
-  }
+.token-cost-table-with-subagents .token-cost-cell > :last-child {
+  grid-column: 2;
+  grid-row: 1;
+}
 
-  .token-cost-table-with-subagents .token-cost-cell > :last-child {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .token-cost-table-with-subagents .token-cost-cell > .token-cost-legend-unit {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    font-size: 0.6rem;
-  }
+.token-cost-table-with-subagents .token-cost-cell > .token-cost-legend-unit {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  font-size: 0.6rem;
 }
 
 .token-cost-graph-note {
