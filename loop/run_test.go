@@ -19,6 +19,120 @@ type runTestService struct {
 	failure  error
 }
 
+func TestRunDynamicToolEndTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		endTurn    bool
+		wantRounds int
+	}{
+		{name: "final report", endTurn: true, wantRounds: 1},
+		{name: "progress report", endTurn: false, wantRounds: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &runTestService{}
+			var recorded []llm.Message
+			record := func(_ context.Context, m llm.Message) error {
+				recorded = append(recorded, m)
+				return nil
+			}
+			err := Run(t.Context(), RunConfig{
+				LLM:      service,
+				Messages: []llm.Message{llm.UserStringMessage("start")},
+				Tools: []*llm.Tool{{Name: "work", Run: func(context.Context, json.RawMessage) llm.ToolOut {
+					return llm.ToolOut{LLMContent: llm.TextContent("reported"), EndTurn: tc.endTurn}
+				}}},
+				Hooks: Hooks{
+					OnResponse: func(_ context.Context, response Response) error {
+						return record(t.Context(), response.Message)
+					},
+					OnToolResponse: func(_ context.Context, response ToolResponse) error {
+						return record(t.Context(), response.Message)
+					},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(service.requests); got != tc.wantRounds {
+				t.Fatalf("model rounds = %d, want %d", got, tc.wantRounds)
+			}
+			if len(recorded) != 3 {
+				t.Fatalf("recorded %d messages, want tool use, result, and terminal message", len(recorded))
+			}
+			last := recorded[len(recorded)-1]
+			if !last.EndOfTurn || last.ExcludedFromContext != tc.endTurn {
+				t.Fatalf("last message = %+v, want terminal marker only for final report", last)
+			}
+			if tc.endTurn && len(last.Content) != 0 {
+				t.Fatalf("terminal marker should be invisible: %+v", last)
+			}
+		})
+	}
+}
+
+func TestRunToolEndTurnRequiresPersistedMarker(t *testing.T) {
+	service := &runTestService{}
+	err := Run(t.Context(), RunConfig{
+		LLM:      service,
+		Messages: []llm.Message{llm.UserStringMessage("start")},
+		Tools: []*llm.Tool{{Name: "work", Run: func(context.Context, json.RawMessage) llm.ToolOut {
+			return llm.ToolOut{EndTurn: true}
+		}}},
+		Hooks: Hooks{OnResponse: func(_ context.Context, response Response) error {
+			if response.Message.EndOfTurn {
+				return errors.New("marker storage failed")
+			}
+			return nil
+		}},
+	})
+	if !errors.Is(err, errMessagePersistence) {
+		t.Fatalf("marker failure = %v, want message persistence failure", err)
+	}
+	if len(service.requests) != 1 {
+		t.Fatalf("sent %d model requests despite terminal marker failure", len(service.requests))
+	}
+}
+
+func TestRunConditionalTurnEndingToolMustBeCalledAlone(t *testing.T) {
+	service := &runTestService{first: []llm.Content{
+		{Type: llm.ContentTypeToolUse, ID: "final", ToolName: "report", ToolInput: json.RawMessage(`{"end_turn":true}`)},
+		{Type: llm.ContentTypeToolUse, ID: "sibling", ToolName: "work", ToolInput: json.RawMessage(`{}`)},
+	}}
+	reported, worked := false, false
+	err := Run(t.Context(), RunConfig{
+		LLM:      service,
+		Messages: []llm.Message{llm.UserStringMessage("start")},
+		Tools: []*llm.Tool{
+			{Name: "report", EndsTurnWhen: func(input json.RawMessage) bool {
+				var req struct {
+					EndTurn bool `json:"end_turn"`
+				}
+				return json.Unmarshal(input, &req) == nil && req.EndTurn
+			}, Run: func(context.Context, json.RawMessage) llm.ToolOut {
+				reported = true
+				return llm.ToolOut{EndTurn: true}
+			}},
+			{Name: "work", Run: func(context.Context, json.RawMessage) llm.ToolOut {
+				worked = true
+				return llm.ToolOut{}
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reported || !worked {
+		t.Fatalf("final report ran with siblings: reported=%v worked=%v", reported, worked)
+	}
+	if len(service.requests) != 2 {
+		t.Fatalf("model requests=%d, want error result followed by another round", len(service.requests))
+	}
+	result := service.requests[1].Messages[2]
+	if !result.Content[0].ToolError || !strings.Contains(result.Content[0].ToolResult[0].Text, "called alone") {
+		t.Fatalf("final report did not receive a solo-call error: %+v", result)
+	}
+}
+
 func (s *runTestService) Do(_ context.Context, req *llm.Request) (*llm.Response, error) {
 	s.requests = append(s.requests, req)
 	if len(s.requests) == 1 {

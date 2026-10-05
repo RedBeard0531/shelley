@@ -114,6 +114,10 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		Role:    llm.MessageRoleUser,
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: prompt}},
 	}
+	// New delegated work after Stop can report back to its parent again.
+	if convErr == nil && isDelegatedSubagent(*conv) {
+		s.resumeParentCompletions(*conv.ParentConversationID)
+	}
 
 	// A busy subagent receives the message at its current turn's next LLM
 	// round, without interrupting the turn (see InjectMessage).
@@ -135,7 +139,7 @@ func (r *SubagentRunner) MessageParent(ctx context.Context, conversationID, text
 	if err != nil {
 		return fmt.Errorf("load conversation: %w", err)
 	}
-	return r.server.messageParent(ctx, *conv, text)
+	return r.server.messageParent(ctx, *conv, text, "")
 }
 
 // isDelegatedSubagent reports whether conv is a subagent created by the
@@ -149,9 +153,15 @@ func isDelegatedSubagent(conv generated.Conversation) bool {
 // is stored as a user row whose user_data names the subagent, so the parent
 // model sees it wrapped in <subagent_message> and the UI attributes it. A busy
 // parent takes it at its next LLM request; an idle parent starts a turn.
-func (s *Server) messageParent(ctx context.Context, conv generated.Conversation, text string) error {
+func (s *Server) messageParent(ctx context.Context, conv generated.Conversation, text, completionKind string) error {
 	if !isDelegatedSubagent(conv) {
 		return fmt.Errorf("conversation %s is not a subagent", conv.ConversationID)
+	}
+	s.mu.Lock()
+	stopped := s.stoppedParents[*conv.ParentConversationID]
+	s.mu.Unlock()
+	if stopped {
+		return fmt.Errorf("parent conversation %s was stopped", *conv.ParentConversationID)
 	}
 	parent, err := s.getOrCreateConversationManager(ctx, *conv.ParentConversationID, "")
 	if err != nil {
@@ -164,9 +174,42 @@ func (s *Server) messageParent(ctx context.Context, conv generated.Conversation,
 		SenderConversationID: conv.ConversationID,
 		SenderSlug:           derefString(conv.Slug),
 		SenderRelationship:   senderRelationshipSubagent,
+		CompletionKind:       completionKind,
 		Text:                 text,
 	})
 	return parent.InjectMessage(ctx, s, modelID, llm.UserStringMessage(text))
+}
+
+// notifySubagentCompletion sends a lightweight fallback when a subagent ends
+// with a normal assistant message or error rather than message_parent with
+// end_turn=true. The attributed parent row records the kind for DB counting.
+func (s *Server) notifySubagentCompletion(conversationID, kind string) {
+	ctx := context.Background()
+	conv, err := s.db.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		s.logger.Error("failed to load completed subagent", "conversationID", conversationID, "error", err)
+		return
+	}
+	if !isDelegatedSubagent(*conv) {
+		return
+	}
+	s.completionMu.Lock()
+	defer s.completionMu.Unlock()
+	s.mu.Lock()
+	stopped := s.stoppedParents[*conv.ParentConversationID]
+	s.mu.Unlock()
+	if stopped {
+		return
+	}
+	text := fmt.Sprintf("Subagent %q finished a turn. Inspect its latest reply and working state.", derefString(conv.Slug))
+	if kind == "error" {
+		text = fmt.Sprintf("Subagent %q ended a turn with an error. Inspect its conversation for details.", derefString(conv.Slug))
+	}
+	if err := s.messageParent(ctx, *conv, text, kind); err != nil {
+		s.logger.Error("failed to notify parent of subagent completion", "conversationID", conversationID, "error", err)
+		return
+	}
+	s.logger.Info("subagent completion fallback", "conversationID", conversationID, "parentID", *conv.ParentConversationID, "kind", kind)
 }
 
 // Ensure SubagentRunner implements claudetool.SubagentRunner.

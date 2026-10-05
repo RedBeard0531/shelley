@@ -585,7 +585,7 @@ func (l *RunConfig) executeToolCalls(ctx context.Context, content []llm.Content,
 				}
 				return
 			}
-			if tool != nil && tool.EndsTurn && len(calls) != 1 {
+			if tool != nil && (tool.EndsTurn || (tool.EndsTurnWhen != nil && tool.EndsTurnWhen(call.ToolInput))) && len(calls) != 1 {
 				toolResults[i].content = llm.Content{
 					Type:       llm.ContentTypeToolResult,
 					ToolUseID:  call.ID,
@@ -620,6 +620,14 @@ func (l *RunConfig) executeToolCalls(ctx context.Context, content []llm.Content,
 		return ctx.Err()
 	}
 	if endsTurn {
+		// A tool result is a user-role row; by itself it cannot clear the
+		// persisted agent_working flag or signal end-of-turn to subscribers.
+		// The empty excluded assistant marker does both without adding a
+		// visible bubble or another message to the model's future context.
+		marker := llm.Message{Role: llm.MessageRoleAssistant, EndOfTurn: true, ExcludedFromContext: true}
+		if err := l.emitResponse(context.WithoutCancel(ctx), marker, llm.Usage{}, "failed to record tool end-of-turn"); err != nil {
+			return fmt.Errorf("%w: tool end-of-turn: %v", errMessagePersistence, err)
+		}
 		return errToolEndedTurn
 	}
 	return nil
@@ -722,7 +730,7 @@ func (l *RunConfig) executeToolCall(ctx context.Context, call llm.Content, tool 
 			ToolUseEndTime:   &endTime,
 			Display:          result.Display,
 		},
-		endsTurn: tool.EndsTurn && result.Error == nil,
+		endsTurn: (tool.EndsTurn || result.EndTurn) && result.Error == nil,
 	}
 }
 

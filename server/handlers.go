@@ -1629,6 +1629,22 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 // handleCancelConversation handles POST /conversation/<id>/cancel
 func (s *Server) handleCancelConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
 	ctx := r.Context()
+	s.completionMu.Lock()
+	// Take the fence before looking up the manager: a completion arriving
+	// first is cleared by Stop; one arriving later sees the stopped parent.
+	s.mu.Lock()
+	s.stoppedParents[conversationID] = true
+	s.stoppingParents[conversationID] = true
+	s.mu.Unlock()
+	defer func() {
+		// An in-flight subagent send can run while Stop tears down its loop;
+		// keep the fence closed until after that teardown completes.
+		s.mu.Lock()
+		s.stoppedParents[conversationID] = true
+		delete(s.stoppingParents, conversationID)
+		s.mu.Unlock()
+		s.completionMu.Unlock()
+	}()
 
 	s.mu.Lock()
 	manager, exists := s.activeConversations[conversationID]

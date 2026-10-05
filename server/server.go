@@ -354,7 +354,12 @@ type Server struct {
 	llmManager          LLMProvider
 	toolSetConfig       claudetool.ToolSetConfig
 	activeConversations map[string]*ConversationManager
-	backgroundJobsMu    sync.Mutex
+	// Serialize fallback delivery with Stop so a late completion cannot
+	// restart a parent whose queue was just cleared.
+	completionMu     sync.Mutex
+	stoppedParents   map[string]bool // guarded by mu
+	stoppingParents  map[string]bool // guarded by mu; a send during Stop must not reopen the fence
+	backgroundJobsMu sync.Mutex
 	// runningBackgroundJobs holds the background jobs that have not exited,
 	// by conversation ID and job ID.
 	runningBackgroundJobs    map[string]map[string]claudetool.BackgroundJob
@@ -440,6 +445,8 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		llmManager:              llmManager,
 		toolSetConfig:           toolSetConfig,
 		activeConversations:     make(map[string]*ConversationManager),
+		stoppedParents:          make(map[string]bool),
+		stoppingParents:         make(map[string]bool),
 		runningBackgroundJobs:   make(map[string]map[string]claudetool.BackgroundJob),
 		deletingConversations:   make(map[string]bool),
 		logger:                  logger,
@@ -1170,7 +1177,25 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 		return err
 	}
 	_, err = s.insertMessages(ctx, conversationID, []db.CreateMessageParams{params})
-	return err
+	if err != nil {
+		return err
+	}
+	// A final message_parent(end_turn=true) wrote an excluded end marker
+	// after delivering the report. Only a regular final reply (or visible
+	// error) needs a separate completion notice for its parent.
+	if params.MarkAgentDone && !params.ExcludedFromContext && messageText(message) != "[Operation cancelled]" {
+		kind := "regular_final"
+		if params.Type == db.MessageTypeError {
+			kind = "error"
+		}
+		s.mu.Lock()
+		manager := s.activeConversations[conversationID]
+		s.mu.Unlock()
+		if manager != nil && manager.role == roleSubagent {
+			go s.notifySubagentCompletion(conversationID, kind)
+		}
+	}
+	return nil
 }
 
 // insertMessages is the one way recorded rows enter a conversation. It writes
@@ -1310,7 +1335,18 @@ func (s *Server) recordTurnStartMessage(ctx context.Context, conversationID stri
 	if err != nil {
 		return nil, err
 	}
+	s.resumeParentCompletions(conversationID)
 	return &created[0], nil
+}
+
+// resumeParentCompletions reopens report delivery after the user starts new
+// work. A send racing with Stop cannot reopen the fence during its teardown.
+func (s *Server) resumeParentCompletions(conversationID string) {
+	s.mu.Lock()
+	if !s.stoppingParents[conversationID] {
+		delete(s.stoppedParents, conversationID)
+	}
+	s.mu.Unlock()
 }
 
 // recordMessages records several messages for one conversation in a single

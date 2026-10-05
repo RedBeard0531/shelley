@@ -1233,6 +1233,18 @@ func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, mode
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
 	cm.waitForLoopTeardownLocked()
+	// A subagent report must not slip between Stop's initial check and its
+	// queue clear. Stop raises this fence before taking the same lifecycle
+	// lock; whichever obtains it first determines whether the report lands
+	// before Stop (and gets cleared) or is rejected afterward.
+	if source, ok := turnUserDataFromContext(ctx).(senderMessageUserData); ok && source.SenderRelationship == senderRelationshipSubagent {
+		s.mu.Lock()
+		stopped := s.stoppedParents[cm.conversationID]
+		s.mu.Unlock()
+		if stopped {
+			return fmt.Errorf("parent conversation %s was stopped", cm.conversationID)
+		}
+	}
 
 	llmJSON, err := json.Marshal(message)
 	if err != nil {
@@ -1253,6 +1265,9 @@ func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, mode
 	}
 	if _, err := s.db.AppendQueuedMessage(ctx, cm.conversationID, qm); err != nil {
 		return fmt.Errorf("failed to append queued message: %w", err)
+	}
+	if turnUserDataFromContext(ctx) == nil {
+		s.resumeParentCompletions(cm.conversationID)
 	}
 	cm.Touch()
 

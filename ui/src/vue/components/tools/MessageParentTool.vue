@@ -7,6 +7,7 @@
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">💬</span>
         <span class="tool-command">→ parent: {{ firstLine || "..." }}</span>
+        <span v-if="endTurn" class="tool-command">(final)</span>
       </div>
       <button
         class="tool-toggle"
@@ -21,7 +22,7 @@
       <RunningToolTime v-if="isRunning" :start-time="toolInvokedAt" />
       <div class="tool-section">
         <div class="tool-label">
-          Message:
+          {{ messageLabel }}:
           <span v-if="executionTime" class="tool-time">{{ executionTime }}</span>
         </div>
         <div class="tool-code">{{ text || "(empty)" }}</div>
@@ -61,6 +62,19 @@ const text = computed(() => {
 });
 
 const firstLine = computed(() => text.value.trim().split(/\r?\n/)[0] ?? "");
+const endTurnValue = computed(() => {
+  const ti = props.toolInput;
+  if (typeof ti !== "object" || ti === null || !("end_turn" in ti)) return null;
+  return typeof ti.end_turn === "boolean" ? ti.end_turn : null;
+});
+const endTurn = computed(() => endTurnValue.value === true);
+const messageLabel = computed(() =>
+  endTurnValue.value === null
+    ? "Message"
+    : endTurn.value
+      ? "Final report (ends turn)"
+      : "Progress message",
+);
 
 const resultText = computed(
   () =>

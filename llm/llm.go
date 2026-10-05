@@ -311,6 +311,9 @@ type Tool struct {
 	CustomGrammar string
 	// EndsTurn indicates that this tool should cause the model to end its turn when used
 	EndsTurn bool
+	// EndsTurnWhen identifies inputs that may end the turn. Those calls must
+	// run alone, so the loop checks before starting any sibling tools.
+	EndsTurnWhen func(json.RawMessage) bool `json:"-"`
 	// Sequential runs sibling calls to this tool one at a time in request order.
 	// Other tools in the same sibling batch still run concurrently.
 	Sequential bool
@@ -363,6 +366,10 @@ type ToolOut struct {
 	// LLMContent is the output of the tool to be sent back to the LLM.
 	// May be nil on error.
 	LLMContent []Content
+	// EndTurn stops the current turn after this tool result is persisted.
+	// Unlike Tool.EndsTurn, this is chosen per call (e.g. message_parent
+	// distinguishes a progress report from a final report).
+	EndTurn bool
 	// Display is content to be displayed to the user.
 	// The type of content is set by the tool and coordinated with the UIs.
 	// It should be JSON-serializable.

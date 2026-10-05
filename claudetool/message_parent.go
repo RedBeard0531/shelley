@@ -19,7 +19,7 @@ type ParentMessenger interface {
 	MessageParent(ctx context.Context, conversationID, text string) error
 }
 
-// MessageParentTool lets a subagent message its parent before finishing.
+// MessageParentTool lets a subagent send progress or a final report.
 type MessageParentTool struct {
 	Messenger      ParentMessenger
 	ConversationID string
@@ -28,21 +28,29 @@ type MessageParentTool struct {
 func (t *MessageParentTool) Tool() *llm.Tool {
 	return &llm.Tool{
 		Name:        messageParentName,
-		Description: "Send a message to the parent agent",
+		Description: "Send progress to the parent (end_turn=false) or a final report and end this turn (end_turn=true). Call alone when ending the turn.",
 		InputSchema: llm.MustSchema(`{
   "type": "object",
-  "required": ["text"],
+  "required": ["text", "end_turn"],
   "properties": {
-    "text": {"type": "string", "description": "The message for the parent."}
+    "text": {"type": "string", "description": "The message for the parent."},
+    "end_turn": {"type": "boolean", "description": "True when this is the final report; end the subagent turn after sending it. False for progress reports."}
   }
 }`),
+		EndsTurnWhen: func(input json.RawMessage) bool {
+			var req struct {
+				EndTurn bool `json:"end_turn"`
+			}
+			return json.Unmarshal(input, &req) == nil && req.EndTurn
+		},
 		Run: t.run,
 	}
 }
 
 func (t *MessageParentTool) run(ctx context.Context, input json.RawMessage) llm.ToolOut {
 	var req struct {
-		Text string `json:"text"`
+		Text    string `json:"text"`
+		EndTurn *bool  `json:"end_turn"`
 	}
 	if err := json.Unmarshal(input, &req); err != nil {
 		return llm.ErrorfToolOut("parse input: %w", err)
@@ -50,8 +58,11 @@ func (t *MessageParentTool) run(ctx context.Context, input json.RawMessage) llm.
 	if strings.TrimSpace(req.Text) == "" {
 		return llm.ErrorfToolOut("text is required")
 	}
+	if req.EndTurn == nil {
+		return llm.ErrorfToolOut("end_turn is required")
+	}
 	if err := t.Messenger.MessageParent(ctx, t.ConversationID, req.Text); err != nil {
 		return llm.ErrorfToolOut("message parent: %w", err)
 	}
-	return llm.ToolOut{LLMContent: llm.TextContent("Sent to parent.")}
+	return llm.ToolOut{LLMContent: llm.TextContent("Sent to parent."), EndTurn: *req.EndTurn}
 }

@@ -311,8 +311,12 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 			return s.makeBashToolResponse(cmd, false, inputTokens), nil
 		}
 
+		if text, ok := strings.CutPrefix(inputText, "message_parent_final: "); ok {
+			return s.makeMessageParentToolResponse(text, true, inputTokens), nil
+		}
+
 		if text, ok := strings.CutPrefix(inputText, "message_parent: "); ok {
-			return s.makeMessageParentToolResponse(text, inputTokens), nil
+			return s.makeMessageParentToolResponse(text, false, inputTokens), nil
 		}
 
 		if input, ok := strings.CutPrefix(inputText, "compact_in_place: "); ok {
@@ -845,8 +849,8 @@ func (s *Service) makeChangeDirToolResponse(path string, inputTokens uint64) *ll
 	}
 }
 
-func (s *Service) makeMessageParentToolResponse(text string, inputTokens uint64) *llm.Response {
-	toolInput, _ := json.Marshal(map[string]string{"text": text})
+func (s *Service) makeMessageParentToolResponse(text string, endTurn bool, inputTokens uint64) *llm.Response {
+	toolInput, _ := json.Marshal(map[string]any{"text": text, "end_turn": endTurn})
 	return &llm.Response{
 		ID:    fmt.Sprintf("pred-message_parent-%d", time.Now().UnixNano()),
 		Type:  "message",
