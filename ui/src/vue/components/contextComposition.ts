@@ -128,12 +128,17 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
   let generation: number | undefined;
   let segment = 0;
   let generationHasMedia = false;
+  // The first call of a generation measures the fixed request overhead the
+  // walk cannot see (tool definitions, framing): reported prompt size minus
+  // the estimated message bytes so far, folded into the system band once.
+  let measuredSystem = false;
 
   for (const message of messages) {
     if (generation !== undefined && message.generation !== generation) {
       context = new Context();
       segment++;
       generationHasMedia = false;
+      measuredSystem = false;
     }
     generation = message.generation;
     if (message.type === "inplacecompaction") {
@@ -142,6 +147,10 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
       continue;
     }
     const seq = message.sequence_id;
+    const before =
+      message.type === "agent"
+        ? Object.values(context.parts).reduce((sum, tokens) => sum + tokens, 0)
+        : 0;
     const prompt = message.type === "agent" ? { ...context.parts } : {};
     generationHasMedia =
       addMessage(context.toolKeys, message, (toolUseID, attribution, tokens, isArgs) =>
@@ -151,6 +160,17 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
     const usage = parseJSON<Usage>(message.usage_data);
     const total = usage ? contextWindowUsed(usage) : 0;
     if (total === 0) continue;
+
+    if (!measuredSystem) {
+      measuredSystem = true;
+      const reported = total - (usage?.output_tokens || 0);
+      const residual = reported - before;
+      if (residual > 0) {
+        context.add(seq, seq, "", { key: "system" }, residual);
+        // The call was sent with this system overhead; the snapshot must carry it too.
+        prompt.system = (prompt.system || 0) + residual;
+      }
+    }
 
     const estimated = Object.values(context.parts).reduce((sum, tokens) => sum + tokens, 0);
     raw.push({
@@ -199,7 +219,9 @@ function addMessage(toolKeys: Map<string, Attribution>, message: Message, add: A
   try {
     const llm =
       typeof message.llm_data === "string" ? JSON.parse(message.llm_data) : message.llm_data;
-    const fallback = { key: message.type === "user" ? "user" : "assistant" };
+    const fallback = {
+      key: message.type === "user" ? "user" : message.type === "system" ? "system" : "assistant",
+    };
     // Reported output/reasoning tokens are exact: scale this message's block
     // estimates so thinking takes exactly reasoning_tokens out of
     // output_tokens, and the remaining output splits by byte ratio across
