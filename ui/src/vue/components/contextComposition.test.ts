@@ -82,7 +82,7 @@ assert(Math.abs(sum - 150) <= 5, `after parts sum to the reported total: ${sum}`
   ]);
   const cats = contextCategories(points);
   const label = (i: number) => promptGrowth(points, i, cats)?.label;
-  assert(label(1) === "text", `after a long reply and a short result: ${label(1)}`);
+  assert(label(1) === "assistant", `after a long reply and a short result: ${label(1)}`);
   assert(label(2) === "bash · file read", `after a long result, not its own reply: ${label(2)}`);
   assert(promptGrowth(points, 0, cats) === null, "the first call has nothing to grow from");
 }
@@ -108,10 +108,66 @@ assert(!("text" in before.args) && !("assistant" in before.args), "non-tool cate
   assert(point.model === "m1", `point model = ${point.model}`);
   const costs = { m1: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 } };
   assert(rewarmUsd(point, costs) === 7.5, `rewarm = ${rewarmUsd(point, costs)}`);
-  const user = rewarmUsd(point, costs, "text");
-  assert(user === 7.5, `text rewarm = ${user}`);
+  // A keyed rewarm prices that category's slice of the context at the
+  // cache-write rate; the user's text keeps its byte size while the rest of
+  // the reported total lands in system.
+  const user = rewarmUsd(point, costs, "user");
+  assert(user === (point.parts["user"] * 3.75) / 1e6, `user rewarm = ${user}`);
   assert(rewarmUsd(point, {}) === null, "unpriced model has no rewarm cost");
 }
+// Reported output/reasoning tokens are exact: thinking takes exactly
+// reasoning_tokens of output_tokens, the rest splits by byte ratio. With
+// input covering the user message, the segment scale is 1, so the parts
+// hold the exact figures.
+const exactPoints = contextCompositionPoints([
+  msg("user", [{ Type: 2, Text: "go" }]),
+  {
+    ...msg("agent", [
+      { Type: 3, Thinking: "y".repeat(8_000) }, // byte estimate: 2k
+      { Type: 2, Text: "done" },
+    ]),
+    usage_data: JSON.stringify({ input_tokens: 1, output_tokens: 900, reasoning_tokens: 400 }),
+  },
+]);
+const exact = exactPoints[0];
+assert(exact.parts["reasoning"] === 400, `reasoning part is the reported figure: ${exact.parts["reasoning"]}`);
+assert(exact.parts["assistant"] === 500, `remaining output goes to the text band: ${exact.parts["assistant"]}`);
+assert(exact.parts["user"] === 1, `user part untouched: ${exact.parts["user"]}`);
+
+// Without a report, the thinking block's raw byte estimate stands (scale is
+// 1: the reported total matches the byte estimates).
+const bytePoints = contextCompositionPoints([
+  msg("user", [{ Type: 2, Text: "go" }]),
+  msg("agent", [{ Type: 3, Thinking: "y".repeat(8_000) }], { usage_data: JSON.stringify({ input_tokens: 1, output_tokens: 2000 }) }),
+]);
+assert(bytePoints[0].parts["reasoning"] === 2000, `no report, byte estimate stands: ${bytePoints[0].parts["reasoning"]}`);
+
+// Tool-argument bytes belong in the output-side estimate: the remaining
+// output (output_tokens - reasoning_tokens) splits by byte ratio across
+// text and args. A tiny text block next to a large patch must not inflate
+// the args by the text/args estimate mismatch (calibration cancels in the
+// comparisons: it scales every part equally).
+const factorPoints = contextCompositionPoints([
+  msg("user", [{ Type: 2, Text: "go" }]),
+  {
+    ...msg("agent", [
+      { Type: 3, Thinking: "y".repeat(1_200) }, // byte estimate: 300
+      { Type: 2, Text: "ok" }, // byte estimate: 1
+      { Type: 5, ID: "t1", ToolName: "patch", ToolInput: { patch: "x".repeat(8_000) } }, // byte estimate: ~2005
+    ]),
+    usage_data: JSON.stringify({ input_tokens: 1, output_tokens: 320, reasoning_tokens: 300 }),
+  },
+]);
+const fp = factorPoints[0];
+const sumParts = Object.values(fp.parts).reduce((a, b) => a + b, 0);
+assert(
+  fp.parts["repo/edit"] < 40,
+  `args track the byte ratio of the remaining output: ${JSON.stringify(fp.parts)}`,
+);
+assert(
+  Math.abs(fp.parts["reasoning"] / sumParts - 300 / 321) < 0.001,
+  `reasoning holds its share of the context: ${fp.parts["reasoning"]} of ${sumParts}`,
+);
 
 if (failed) process.exit(1);
 console.log("✓ in-place compaction resets the composition");
