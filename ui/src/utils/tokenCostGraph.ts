@@ -455,15 +455,39 @@ export function buildOtherUsageBreakdown(
 }
 
 /** Count only confirmed missing model prices, not pending/failed lookups.
- * Aggregated indirect rows carry their call count; direct rows are one call. */
+ * Aggregated indirect rows carry their call count; direct rows are one call.
+ * A call that reports zero tokens in every band (failed or canceled before
+ * any response) costs nothing under any pricing, so it is not unpriced;
+ * rows that say nothing about tokens keep counting. */
 export function countConfirmedUnpricedCalls(
-  rows: { model?: string; llm_calls?: number }[],
+  rows: {
+    model?: string;
+    llm_calls?: number;
+    input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+    output_tokens?: number;
+  }[],
   costs: Record<string, ModelCost | null | undefined>,
 ): number {
-  return rows.reduce(
-    (sum, row) => sum + (!row.model || costs[row.model] === null ? (row.llm_calls ?? 1) : 0),
-    0,
-  );
+  return rows.reduce((sum, row) => {
+    if (row.model && costs[row.model] !== null) return sum;
+    const reportsTokens =
+      row.input_tokens !== undefined ||
+      row.cache_creation_input_tokens !== undefined ||
+      row.cache_read_input_tokens !== undefined ||
+      row.output_tokens !== undefined;
+    if (
+      reportsTokens &&
+      (row.input_tokens ?? 0) +
+        (row.cache_creation_input_tokens ?? 0) +
+        (row.cache_read_input_tokens ?? 0) +
+        (row.output_tokens ?? 0) ===
+        0
+    )
+      return sum;
+    return sum + (row.llm_calls ?? 1);
+  }, 0);
 }
 
 export interface CostSummaryUsage {

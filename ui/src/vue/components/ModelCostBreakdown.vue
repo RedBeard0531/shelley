@@ -54,7 +54,6 @@ import TokenCostCell from "./TokenCostCell.vue";
 const props = defineProps<{
   model: ModelCostComparison;
   showSubagents: boolean;
-  hideZeroCacheWrite: boolean;
   /** Display name for the model; falls back to the raw recorded name. */
   label?: string;
 }>();
@@ -69,7 +68,6 @@ const rowIndexes = computed(() =>
     .filter(
       (index) =>
         !(
-          props.hideZeroCacheWrite &&
           bands[index].costKey === "cache_write" &&
           scopes.value.every((scope) => (props.model[scope]?.rows[index].tokens ?? 0) === 0)
         ),

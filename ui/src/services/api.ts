@@ -1240,8 +1240,9 @@ export interface SubagentUsageDTO {
   unpriced_reported_usd: number;
   unpriced_models: string[];
   unpriced_calls: number;
-  /** Direct subagents, each folded with its own descendants. */
-  subagents: {
+  /** Direct subagents, each folded with its own descendants. Present from
+   *  the fork's server; absent in mainline responses. */
+  subagents?: {
     conversation_id: string;
     slug: string;
     llm_calls: number;

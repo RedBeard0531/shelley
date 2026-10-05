@@ -12753,6 +12753,19 @@ kbd {
   font-weight: normal;
 }
 
+/* Per-direct-subagent breakdown rows: each subagent folds in its own
+   descendants, so the rows sum to the Sub-agents subtotal. The slug links
+   to the subagent's conversation. */
+.token-cost-table .token-cost-subagent-row a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+}
+
+.token-cost-table .token-cost-subagent-row a:hover {
+  text-decoration-color: inherit;
+}
+
 .token-cost-table .token-cost-chip {
   display: inline-block;
   margin-right: 5px;

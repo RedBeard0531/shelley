@@ -252,7 +252,7 @@ function modelUsage(
     "legend row colors distinct",
   );
   // Rows stay indexed by TOKEN_BANDS position; the table hides zero
-  // cache-write bands itself via its hideZeroCacheWrite prop.
+  // cache-write bands itself (per model, when every scope's usage is zero).
   assert(
     s.perModel.every(
       (m) =>
@@ -394,9 +394,9 @@ function modelUsage(
 {
   const costs = { known: opusCost, unknown: null };
   const entries = [
-    entry({ model: "known" }),
-    entry({ model: "unknown" }),
-    entry({ model: "new-model" }),
+    entry({ model: "known", input_tokens: 100 }),
+    entry({ model: "unknown", input_tokens: 100 }),
+    entry({ model: "new-model", input_tokens: 100 }),
   ];
   assert(
     countConfirmedUnpricedCalls(entries, costs) === 1,
@@ -423,6 +423,16 @@ function modelUsage(
   assert(
     countConfirmedUnpricedCalls([{ model: "unknown", llm_calls: 0 }], costs) === 0,
     "zero calls stay zero",
+  );
+  assert(
+    countConfirmedUnpricedCalls(
+      [
+        { model: "", input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 },
+        { model: "unknown", input_tokens: 5 },
+      ],
+      costs,
+    ) === 1,
+    "zero-usage calls price to nothing; tokened calls still count",
   );
 }
 

@@ -119,7 +119,10 @@ func (s *Server) handleSubagentUsage(w http.ResponseWriter, r *http.Request, con
 				float64(out)*c.Output/1e6
 			row.EstimatedUsd += estimatedUsd
 			resp.EstimatedUsd += estimatedUsd
-		} else {
+		} else if in+cacheWrite+cacheRead+out > 0 {
+			// A call that used no tokens (failed or canceled before any
+			// response) costs nothing under any pricing, so it is not
+			// unpriced — it just has nothing to price.
 			resp.UnpricedReportedUsd += costUsd
 			resp.UnpricedModels = append(resp.UnpricedModels, model)
 			resp.UnpricedCalls += llmCalls
@@ -180,7 +183,9 @@ func (s *Server) handleSubagentUsage(w http.ResponseWriter, r *http.Request, con
 					float64(cacheWrite)*c.CacheWrite/1e6 +
 					float64(cacheRead)*c.CacheRead/1e6 +
 					float64(out)*c.Output/1e6
-			} else {
+			} else if in+cacheWrite+cacheRead+out > 0 {
+				// Zero-usage calls (failed/canceled) price to nothing under
+				// any model; see the aggregate fold above.
 				dto.UnpricedCalls += llmCalls
 			}
 		}

@@ -212,8 +212,38 @@
         :model="model"
         :label="modelLabel(model.model)"
         :show-subagents="hasSubagents"
-        :hide-zero-cache-write="hideZeroCacheWrite(model.model)"
       />
+      <tbody
+        v-if="hasSubagents && (subagentUsage?.subagents?.length ?? 0) > 0"
+        class="token-cost-subagent-breakdown"
+      >
+        <tr
+          v-for="sub in subagentUsage?.subagents ?? []"
+          :key="sub.conversation_id"
+          class="token-cost-legend-row token-cost-subagent-row"
+        >
+          <th scope="row">
+            <a :href="`/c/${sub.slug}`" :title="`Open subagent ${sub.slug}`">{{
+              sub.slug || "subagent"
+            }}</a>
+          </th>
+          <td class="token-cost-empty" aria-label="No direct usage">—</td>
+          <td class="token-cost-cell">
+            <span class="token-cost-legend-tokens"
+              >{{ sub.llm_calls }} {{ sub.llm_calls === 1 ? "call" : "calls" }}</span
+            >
+            <span
+              v-if="sub.estimated_usd > 0 || sub.reported_usd > 0"
+              class="token-cost-legend-cost"
+              >{{ formatUsd(Math.max(sub.estimated_usd, sub.reported_usd)) }}</span
+            >
+            <span v-else-if="sub.unpriced_calls === 0" class="token-cost-legend-cost">{{
+              formatUsd(0)
+            }}</span>
+            <span v-else class="token-cost-empty">no pricing</span>
+          </td>
+        </tr>
+      </tbody>
       <tbody v-if="otherBreakdown && otherBreakdown.perPurpose.length > 0">
         <tr class="token-cost-model-row">
           <th scope="row"><span class="token-cost-model-name">Other (indirect)</span></th>
@@ -537,19 +567,28 @@ const hasSubagents = computed(() => (subagentUsage.value?.llm_calls ?? 0) > 0);
 // Pricing travels with each (model, endpoint) aggregate so its token costs
 // reconcile with the server subtotal, including endpoint-specific pricing.
 const subagentModels = computed<ModelUsage[]>(() =>
-  (subagentUsage.value?.per_model ?? []).map((row) => ({
-    model: row.model || "unknown model",
-    priced: row.cost !== null,
-    totalCost: row.estimated_usd,
-    reportedUsd: row.reported_usd,
-    rows: TOKEN_BANDS.map((band) => ({
-      band,
-      tokens: row[band.key],
-      unitUsdPerMtok: row.cost?.[band.costKey] ?? 0,
-      cost: (row[band.key] * (row.cost?.[band.costKey] ?? 0)) / 1e6,
-      color: "",
+  (subagentUsage.value?.per_model ?? [])
+    // A call that failed or was canceled before any tokens records zero
+    // usage with no model; it prices nowhere and costs nothing, so it
+    // creates no model section.
+    .filter(
+      (row) =>
+        row.input_tokens + row.cache_creation_input_tokens + row.cache_read_input_tokens + row.output_tokens >
+        0,
+    )
+    .map((row) => ({
+      model: row.model || "unknown model",
+      priced: row.cost !== null,
+      totalCost: row.estimated_usd,
+      reportedUsd: row.reported_usd,
+      rows: TOKEN_BANDS.map((band) => ({
+        band,
+        tokens: row[band.key],
+        unitUsdPerMtok: row.cost?.[band.costKey] ?? 0,
+        cost: (row[band.key] * (row.cost?.[band.costKey] ?? 0)) / 1e6,
+        color: "",
+      })),
     })),
-  })),
 );
 
 const modelComparison = computed(() =>
@@ -833,39 +872,6 @@ const cacheMissMarkers = computed<{ index: number; kind: "model" | "miss" }[]>((
   }
   return out;
 });
-
-// ChatGPT subscriptions report zero writes even when caching works.
-// Usage uses native model names, not picker IDs. A graph group can combine
-// endpoints; hide zero writes only when every contribution is subscription-backed.
-const subscriptionOnly = computed(() => {
-  const result = new Map<string, boolean>();
-  for (const usage of props.entries) {
-    if (!usage.model || result.get(usage.model) === false) continue;
-    result.set(usage.model, isSubscriptionUsage(usage.model, usage.url));
-  }
-  return result;
-});
-
-function hideZeroCacheWrite(name: string): boolean {
-  if (
-    stack.value?.perModel.some((model) => model.model === name) &&
-    !subscriptionOnly.value.get(name)
-  )
-    return false;
-  return (subagentUsage.value?.per_model ?? [])
-    .filter((row) => (row.model || "unknown model") === name)
-    .every((row) => isSubscriptionUsage(row.model, row.url));
-}
-
-function isSubscriptionUsage(name: string, url?: string): boolean {
-  const sources = props.models.filter(
-    (model) =>
-      model.api_model_name === name &&
-      model.base_url &&
-      (url === model.base_url || url?.startsWith(`${model.base_url}/`)),
-  );
-  return sources.length > 0 && sources.every((model) => model.mode === "chatgpt");
-}
 
 // Pointer position as a plot fraction. The hovered call is derived from it,
 // so a redraw (pricing arriving, axis switch) can't leave the readout
