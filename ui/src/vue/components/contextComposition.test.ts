@@ -126,5 +126,33 @@ assert(
   `reasoning holds its share of the context: ${fp.parts["reasoning"]} of ${sumParts}`,
 );
 
+// The first call of a generation measures the fixed request overhead the
+// walk cannot see (tool definitions, framing): reported prompt minus the
+// estimated message bytes so far, folded into the system band once. The
+// system message itself is attributed to the system band, not assistant, so
+// the band holds system prompt (100) + invisible overhead (899).
+const sysPoints = contextCompositionPoints([
+  msg("system", [{ Type: 2, Text: "s".repeat(400) }]), // byte estimate: 100
+  msg("user", [{ Type: 2, Text: "go" }]), // byte estimate: 1
+  {
+    ...msg("agent", [{ Type: 2, Text: "d".repeat(400) }]), // byte estimate: 100
+    usage_data: JSON.stringify({ input_tokens: 1000, output_tokens: 100 }),
+  },
+  msg("user", [{ Type: 2, Text: "more" }]),
+  {
+    ...msg("agent", [{ Type: 2, Text: "e".repeat(400) }]), // byte estimate: 100
+    usage_data: JSON.stringify({ input_tokens: 1101, output_tokens: 100 }),
+  },
+]);
+const sys1 = sysPoints[0];
+assert(sys1.parts["system"] === 999, `first call measures system + tools: ${JSON.stringify(sys1.parts)}`);
+assert(sys1.parts["user"] === 1 && sys1.parts["assistant"] === 100, `roles keep their bytes: ${JSON.stringify(sys1.parts)}`);
+// Measured once per generation: the second call adds no system residual; the
+// reported prompt (1101 = the 1100-token prior context + the new message)
+// reconciles with the byte estimates, so every part keeps its exact size.
+const sys2 = sysPoints[1];
+assert(sys2.parts["system"] === 999, `system is measured once: ${JSON.stringify(sys2.parts)}`);
+assert(sys2.parts["user"] === 2 && sys2.parts["assistant"] === 200, `later calls only add: ${JSON.stringify(sys2.parts)}`);
+
 if (failed) process.exit(1);
 console.log("✓ in-place compaction resets the composition");

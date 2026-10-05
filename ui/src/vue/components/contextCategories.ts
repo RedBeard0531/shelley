@@ -21,6 +21,7 @@ const BASH_CATEGORIES = [
 const TOOL_CATEGORIES = ["repo/read", "repo/edit", "tool:browser/web", "tool:other"] as const;
 
 const CATEGORY_LABELS: Record<string, string> = {
+  system: "system",
   user: "user",
   assistant: "assistant",
   reasoning: "reasoning",
@@ -40,6 +41,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 const CATEGORY_COLORS: Record<string, string> = {
   // Cost graph-adjacent blue, purple, teal, and orange hues, with spaced
   // shades for neighboring context bands.
+  system: "hsl(210 30% 55%)",
   user: "hsl(160 64% 48%)",
   assistant: "hsl(140 55% 45%)",
   reasoning: "hsl(184 60% 44%)",
@@ -67,6 +69,7 @@ export function contextCategories(points: Point[]): ContextCategory[] {
     for (const key of Object.keys(point.parts)) keys.add(key);
   }
   return [
+    ...(keys.has("system") ? [category("system")] : []),
     ...ROLE_PARTS.filter((key) => keys.has(key)).map(category),
     ...(keys.has("images") ? [category("images")] : []),
     ...BASH_CATEGORIES.filter((key) => key !== "bash:other" && keys.has(key)).map(category),
@@ -106,6 +109,12 @@ export function contextSegmentStarts(points: Point[]): number[] {
 
 /** What a category is made of at one call, for its legend tooltip. */
 export function categoryHint(key: string, point: Point): string {
+  if (key === "system") {
+    return (
+      "System prompt, tool definitions, and framing — measured once per generation at its first" +
+      " call, as the gap between the reported prompt and the visible messages"
+    );
+  }
   if (key === "reasoning") {
     return "The assistant's thinking, split exactly when the provider reported reasoning tokens";
   }
