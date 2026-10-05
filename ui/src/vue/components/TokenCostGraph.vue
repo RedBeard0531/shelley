@@ -103,6 +103,12 @@
             class="token-cost-gen-line"
           />
           <path
+            v-for="m in cacheMissMarkers"
+            :key="`miss-${m.kind}-${m.index}`"
+            :d="guide(markX(m.index))"
+            :class="m.kind === 'model' ? 'token-cost-model-line' : 'token-cost-miss-line'"
+          />
+          <path
             v-if="hoverX !== null && stack.n > 1"
             :d="guide(hoverX)"
             class="token-cost-hover-line"
@@ -791,7 +797,42 @@ const xAxisLabel = computed(() => {
   return lay.turns.length > 1 ? `${dur} · gaps = idle between turns` : dur;
 });
 
-const hintText = computed(() => (markStarts.value.length ? "Dashed lines mark compactions." : ""));
+const hintText = computed(() => {
+  const parts: string[] = [];
+  if (markStarts.value.length) parts.push("Dashed lines mark compactions.");
+  if (cacheMissMarkers.value.length > 0)
+    parts.push(
+      "Red dashed lines mark mid-generation model switches (the cache was rebuilt); grey ones mark other mid-generation cache misses.",
+    );
+  return parts.join(" ") || "";
+});
+
+// Mid-generation cache-miss markers: red when the model changed (the user's
+// action rebuilds the context and loses the cache), light grey for any other
+// mid-generation cache miss — a turn whose cache read is < 20% of the prior
+// turn's total input. Cross-generation misses are expected after compactions
+// and get no line.
+const cacheMissMarkers = computed<{ index: number; kind: "model" | "miss" }[]>(() => {
+  const entries = props.entries;
+  const out: { kind: "model" | "miss"; index: number }[] = [];
+  for (let i = 1; i < entries.length; i++) {
+    const prev = entries[i - 1];
+    const cur = entries[i];
+    if (prev.generation !== undefined && cur.generation !== undefined && prev.generation !== cur.generation)
+      continue;
+    if (cur.model && prev.model && cur.model !== prev.model) out.push({ kind: "model", index: i });
+    else if (
+      (cur.cache_read_input_tokens || 0) <
+      0.2 *
+        ((prev.input_tokens || 0) +
+          (prev.cache_creation_input_tokens || 0) +
+          (prev.cache_read_input_tokens || 0))
+    ) {
+      out.push({ kind: "miss", index: i });
+    }
+  }
+  return out;
+});
 
 // ChatGPT subscriptions report zero writes even when caching works.
 // Usage uses native model names, not picker IDs. A graph group can combine

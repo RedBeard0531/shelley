@@ -12581,6 +12581,25 @@ kbd {
   pointer-events: none;
 }
 
+/* Mid-generation model switch: the cache was rebuilt through no fault of
+   the model, so mark it strongly (red). */
+.token-cost-model-line {
+  stroke: var(--error-text);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* Other mid-generation cache miss: worth noticing, not alarming. */
+.token-cost-miss-line {
+  stroke: var(--text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
 .token-cost-label {
   font-size: 10px;
   fill: var(--text-secondary);
