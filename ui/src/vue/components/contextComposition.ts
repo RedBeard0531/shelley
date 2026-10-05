@@ -192,9 +192,47 @@ function addMessage(toolKeys: Map<string, Attribution>, message: Message, add: A
     const llm =
       typeof message.llm_data === "string" ? JSON.parse(message.llm_data) : message.llm_data;
     const fallback = { key: message.type === "user" ? "user" : "assistant" };
+    // Reported output/reasoning tokens are exact: scale this message's block
+    // estimates so thinking takes exactly reasoning_tokens out of
+    // output_tokens, and the remaining output splits by byte ratio across
+    // text and tool arguments. Falls back to raw byte estimates when the
+    // provider reported nothing.
+    const usage = parseJSON<Usage>(message.usage_data);
+    const reportedReasoning = usage?.reasoning_tokens || 0;
+    const outputTokens = usage?.output_tokens || 0;
+    const blocks = (llm?.Content || []) as LLMContent[];
+    const estimateOf = (c: LLMContent) => estimateTokens(c.Text || c.Thinking || "");
+    const thinkingEstimate = blocks
+      .filter((c) => c.Type === TYPE_THINKING)
+      .reduce((sum, c) => sum + estimateOf(c), 0);
+    // Tool arguments are part of the assistant's output, so the output-side
+    // estimate must include their bytes — scaling args by a factor computed
+    // without them would inflate args on every call whose visible text is
+    // smaller than its non-reasoning output.
+    const outputEstimate = blocks
+      .filter((c) => c.Type === TYPE_TEXT || c.Type === TYPE_TOOL_USE)
+      .reduce(
+        (sum, c) =>
+          sum +
+          estimateOf(c) +
+          (c.Type === TYPE_TOOL_USE
+            ? estimateTokens(c.ToolName || "") + estimateTokens(stringify(c.ToolInput))
+            : 0),
+        0,
+      );
+    const factors = {
+      thinking:
+        reportedReasoning > 0 && thinkingEstimate > 0
+          ? reportedReasoning / thinkingEstimate
+          : 1,
+      output:
+        reportedReasoning > 0 && outputTokens > reportedReasoning && outputEstimate > 0
+          ? (outputTokens - reportedReasoning) / outputEstimate
+          : 1,
+    };
     let hasMedia = false;
-    for (const content of (llm?.Content || []) as LLMContent[]) {
-      hasMedia = addContent(toolKeys, content, fallback, "", add) || hasMedia;
+    for (const content of blocks) {
+      hasMedia = addContent(toolKeys, content, fallback, "", add, factors) || hasMedia;
     }
     return hasMedia;
   } catch {
@@ -210,6 +248,7 @@ function addContent(
   fallback: Attribution,
   toolUseID: string,
   add: AddTokens,
+  factors: { thinking: number; output: number } = { thinking: 1, output: 1 },
 ): boolean {
   if (content.MediaType || content.DisplayImageURL || content.Data) {
     // Storage strips image bytes from llm_data, so byte estimates would give
@@ -226,7 +265,8 @@ function addContent(
       add(
         content.ID,
         attribution,
-        estimateTokens(content.ToolName || "") + estimateTokens(stringify(content.ToolInput)),
+        (estimateTokens(content.ToolName || "") + estimateTokens(stringify(content.ToolInput))) *
+          factors.output,
         true,
       );
       return false;
@@ -239,22 +279,23 @@ function addContent(
       let hasMedia = false;
       for (const result of content.ToolResult || []) {
         hasMedia =
-          addContent(toolKeys, result, attribution, content.ToolUseID || "", add) || hasMedia;
+          addContent(toolKeys, result, attribution, content.ToolUseID || "", add, factors) ||
+          hasMedia;
       }
       return hasMedia;
     }
     case TYPE_TEXT:
-      add(toolUseID, fallback, estimateTokens(content.Text || content.Thinking || ""));
+      add(toolUseID, fallback, estimateTokens(content.Text || content.Thinking || "") * factors.output);
       return false;
     case TYPE_THINKING:
       add(
         toolUseID,
         isToolCategory(fallback.key) ? fallback : { key: "reasoning" },
-        estimateTokens(content.Text || content.Thinking || ""),
+        estimateTokens(content.Text || content.Thinking || "") * factors.thinking,
       );
       return false;
     default:
-      add(toolUseID, fallback, estimateTokens(content.Text || ""));
+      add(toolUseID, fallback, estimateTokens(content.Text || "") * factors.output);
       return false;
   }
 }

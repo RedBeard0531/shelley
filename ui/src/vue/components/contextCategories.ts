@@ -6,7 +6,8 @@ import type { Point } from "./contextComposition";
 
 export type ContextCategory = { key: string; label: string; color: string };
 
-const TEXT_PARTS = ["user", "assistant", "reasoning"];
+// Displayed as separate bands rather than one "text" lump.
+const ROLE_PARTS = ["user", "assistant", "reasoning"];
 
 const BASH_CATEGORIES = [
   "bash:code search",
@@ -20,7 +21,9 @@ const BASH_CATEGORIES = [
 const TOOL_CATEGORIES = ["repo/read", "repo/edit", "tool:browser/web", "tool:other"] as const;
 
 const CATEGORY_LABELS: Record<string, string> = {
-  text: "text",
+  user: "user",
+  assistant: "assistant",
+  reasoning: "reasoning",
   images: "images",
   "bash:code search": "bash · code search",
   "bash:file read": "bash · file read",
@@ -37,7 +40,9 @@ const CATEGORY_LABELS: Record<string, string> = {
 const CATEGORY_COLORS: Record<string, string> = {
   // Cost graph-adjacent blue, purple, teal, and orange hues, with spaced
   // shades for neighboring context bands.
-  text: "hsl(174 58% 48%)",
+  user: "hsl(160 64% 48%)",
+  assistant: "hsl(140 55% 45%)",
+  reasoning: "hsl(184 60% 44%)",
   images: "hsl(325 65% 58%)",
   "bash:code search": "hsl(199 92% 56%)",
   "bash:file read": "hsl(199 68% 66%)",
@@ -62,7 +67,7 @@ export function contextCategories(points: Point[]): ContextCategory[] {
     for (const key of Object.keys(point.parts)) keys.add(key);
   }
   return [
-    ...(TEXT_PARTS.some((key) => keys.has(key)) ? [category("text")] : []),
+    ...ROLE_PARTS.filter((key) => keys.has(key)).map(category),
     ...(keys.has("images") ? [category("images")] : []),
     ...BASH_CATEGORIES.filter((key) => key !== "bash:other" && keys.has(key)).map(category),
     ...TOOL_CATEGORIES.slice(0, 2)
@@ -75,10 +80,8 @@ export function contextCategories(points: Point[]): ContextCategory[] {
   ];
 }
 
-/** Tokens a category holds at one call; "text" folds user, assistant and
- *  reasoning together. */
+/** Tokens a category holds at one call. */
 export function categoryTokens(point: Point, key: string): number {
-  if (key === "text") return TEXT_PARTS.reduce((sum, part) => sum + (point.parts[part] || 0), 0);
   return point.parts[key] || 0;
 }
 
@@ -103,10 +106,8 @@ export function contextSegmentStarts(points: Point[]): number[] {
 
 /** What a category is made of at one call, for its legend tooltip. */
 export function categoryHint(key: string, point: Point): string {
-  if (key === "text") {
-    return TEXT_PARTS.map((part) => `${part} ${formatTokenCount(point.parts[part] || 0)}`).join(
-      " · ",
-    );
+  if (key === "reasoning") {
+    return "The assistant's thinking, split exactly when the provider reported reasoning tokens";
   }
   if (key === "images") {
     return (
