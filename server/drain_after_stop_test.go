@@ -40,13 +40,12 @@ func TestBackgroundJobNoticeAfterStop(t *testing.T) {
 		StartedAt:      time.Now(),
 	}
 	// A running job holds the end-of-turn notification.
-	server.setBackgroundJobRunning(job, true)
-	cancelConversation(t, server, conv.ConversationID)
-
-	server.setBackgroundJobRunning(job, false)
-	if err := server.deliverBackgroundJobNotice(t.Context(), job); err != nil {
+	if err := server.recordBackgroundJob(t.Context(), job); err != nil {
 		t.Fatal(err)
 	}
+	cancelConversation(t, server, conv.ConversationID)
+
+	server.reportBackgroundJobExit(job)
 	notice := `<background_job id="job1">` + "\n" + xmlProvenanceText(job.Outcome().Notice()) + "\n</background_job>"
 	held.waitCall(t, notice).Release()
 }

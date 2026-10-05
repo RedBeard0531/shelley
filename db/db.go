@@ -856,20 +856,30 @@ func (db *DB) GetConversationBySlug(ctx context.Context, slug string) (*generate
 }
 
 // ConversationListItem is a conversation row plus the derived fields the
-// conversation list needs but that don't live on the conversation row: a
-// one-line preview of the trailing agent message, that message's timestamp,
-// the conversation's current max sequence_id, and its participants. All are
-// computed by correlated subqueries IN the list/search query itself (see
+// conversation list needs but that don't live on the conversation row. All
+// are computed by correlated subqueries IN the list/search query itself (see
 // conversations.sql), scoped to exactly the window of conversations returned,
 // so we never scan or JSON-decode messages for conversations off-window.
 type ConversationListItem struct {
 	generated.Conversation
-	Preview          string
-	PreviewUpdatedAt string // RFC 3339 (trailing Z), empty if there's no preview message
-	MaxSequenceID    int64
-	// Participants are the exe.dev accounts that authored messages in this
-	// conversation, with authored-message counts, sorted by email.
-	Participants []ConversationParticipant
+	// Preview is the trailing text of the most recent agent message, so the
+	// list can show a one-line summary without a separate fetch.
+	Preview string `json:"preview,omitempty"`
+	// PreviewUpdatedAt is that message's CreatedAt, RFC 3339 (trailing Z).
+	PreviewUpdatedAt string `json:"preview_updated_at,omitempty"`
+	// MaxSequenceID is the highest message sequence_id stored for this
+	// conversation. Clients use it to decide whether their cached snapshot
+	// is up to date without a separate /api/conversation/<id> roundtrip.
+	MaxSequenceID int64 `json:"max_sequence_id"`
+	// Participants are the exe.dev accounts (from the X-ExeDev-Email header)
+	// that authored messages in this conversation, with authored-message
+	// counts, sorted by email. Clients use it to filter the list down to
+	// their own conversations.
+	Participants  []ConversationParticipant `json:"participants,omitempty"`
+	SubagentCount int64                     `json:"subagent_count"`
+	// RunningBackgroundJobs counts this conversation's backgrounded bash
+	// commands that have not exited.
+	RunningBackgroundJobs int64 `json:"running_background_jobs"`
 }
 
 type ConversationParticipant struct {
@@ -952,18 +962,20 @@ func splitPreviewPacked(packed string) (preview, updatedAt string) {
 
 // newConversationListItem assembles a list item from a conversation row and
 // the derived columns the list/search queries compute alongside it.
-func newConversationListItem(conv generated.Conversation, previewPacked string, maxSequenceID int64, participantsJSON string) (ConversationListItem, error) {
+func newConversationListItem(conv generated.Conversation, previewPacked string, maxSequenceID int64, participantsJSON string, subagentCount, runningBackgroundJobs int64) (ConversationListItem, error) {
 	participants, err := decodeParticipants(participantsJSON)
 	if err != nil {
 		return ConversationListItem{}, err
 	}
 	preview, updatedAt := splitPreviewPacked(previewPacked)
 	return ConversationListItem{
-		Conversation:     conv,
-		Preview:          preview,
-		PreviewUpdatedAt: updatedAt,
-		MaxSequenceID:    maxSequenceID,
-		Participants:     participants,
+		Conversation:          conv,
+		Preview:               preview,
+		PreviewUpdatedAt:      updatedAt,
+		MaxSequenceID:         maxSequenceID,
+		Participants:          participants,
+		SubagentCount:         subagentCount,
+		RunningBackgroundJobs: runningBackgroundJobs,
 	}, nil
 }
 
@@ -981,7 +993,7 @@ func (db *DB) ListConversations(ctx context.Context, limit, offset int64) ([]Con
 		}
 		items = make([]ConversationListItem, len(rows))
 		for i, r := range rows {
-			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson)
+			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson, r.SubagentCount, r.RunningBackgroundJobs)
 			if err != nil {
 				return err
 			}
@@ -1006,7 +1018,7 @@ func (db *DB) ListAllConversations(ctx context.Context, limit, offset int64) ([]
 		}
 		items = make([]ConversationListItem, len(rows))
 		for i, r := range rows {
-			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson)
+			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson, r.SubagentCount, r.RunningBackgroundJobs)
 			if err != nil {
 				return err
 			}
@@ -1033,7 +1045,7 @@ func (db *DB) SearchConversations(ctx context.Context, query string, limit, offs
 		}
 		items = make([]ConversationListItem, len(rows))
 		for i, r := range rows {
-			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson)
+			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson, r.SubagentCount, r.RunningBackgroundJobs)
 			if err != nil {
 				return err
 			}
@@ -1060,7 +1072,7 @@ func (db *DB) SearchConversationsWithMessages(ctx context.Context, query string,
 		}
 		items = make([]ConversationListItem, len(rows))
 		for i, r := range rows {
-			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson)
+			item, err := newConversationListItem(r.Conversation, r.PreviewPacked, r.MaxSequenceID, r.ParticipantsJson, r.SubagentCount, r.RunningBackgroundJobs)
 			if err != nil {
 				return err
 			}
@@ -1133,7 +1145,7 @@ func (db *DB) SearchConversationsFTS(ctx context.Context, query string, limit, o
 		results = make([]ConversationSearchResult, len(convs))
 		convIDs := make([]string, len(convs))
 		for i, c := range convs {
-			item, err := newConversationListItem(c.Conversation, c.PreviewPacked, c.MaxSequenceID, c.ParticipantsJson)
+			item, err := newConversationListItem(c.Conversation, c.PreviewPacked, c.MaxSequenceID, c.ParticipantsJson, c.SubagentCount, c.RunningBackgroundJobs)
 			if err != nil {
 				return err
 			}
@@ -2390,27 +2402,6 @@ func (db *DB) GetSubagentOtherUsage(ctx context.Context, parentID string) ([]gen
 		return err
 	})
 	return rows, err
-}
-
-// GetSubagentCounts returns a map of parent_conversation_id -> subagent count.
-func (db *DB) GetSubagentCounts(ctx context.Context) (map[string]int64, error) {
-	var rows []generated.GetSubagentCountsRow
-	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
-		q := generated.New(rx.Conn())
-		var err error
-		rows, err = q.GetSubagentCounts(ctx)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	counts := make(map[string]int64, len(rows))
-	for _, r := range rows {
-		if r.ParentConversationID != nil {
-			counts[*r.ParentConversationID] = r.Count
-		}
-	}
-	return counts, nil
 }
 
 // GetMaxSequenceIDsForAllConversations returns a map of conversation_id -> max sequence_id.

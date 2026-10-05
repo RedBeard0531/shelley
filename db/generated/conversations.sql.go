@@ -407,41 +407,6 @@ func (q *Queries) GetConversationQueuedMessages(ctx context.Context, conversatio
 	return queued_messages, err
 }
 
-const getSubagentCounts = `-- name: GetSubagentCounts :many
-SELECT parent_conversation_id, COUNT(*) AS count
-FROM conversations
-WHERE parent_conversation_id IS NOT NULL
-GROUP BY parent_conversation_id
-`
-
-type GetSubagentCountsRow struct {
-	ParentConversationID *string `json:"parent_conversation_id"`
-	Count                int64   `json:"count"`
-}
-
-func (q *Queries) GetSubagentCounts(ctx context.Context) ([]GetSubagentCountsRow, error) {
-	rows, err := q.db.QueryContext(ctx, getSubagentCounts)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []GetSubagentCountsRow{}
-	for rows.Next() {
-		var i GetSubagentCountsRow
-		if err := rows.Scan(&i.ParentConversationID, &i.Count); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getSubagentOtherUsage = `-- name: GetSubagentOtherUsage :many
 WITH RECURSIVE descendants(conversation_id) AS (
   SELECT p.conversation_id FROM conversations p WHERE p.parent_conversation_id = ?
@@ -738,7 +703,13 @@ SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, 
          WHERE m.conversation_id = c.conversation_id
            AND m.user_email IS NOT NULL AND m.user_email <> ''
          GROUP BY m.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 WHERE c.archived = FALSE
 ORDER BY c.updated_at DESC
@@ -751,10 +722,12 @@ type ListAllConversationsParams struct {
 }
 
 type ListAllConversationsRow struct {
-	Conversation     Conversation `json:"conversation"`
-	PreviewPacked    string       `json:"preview_packed"`
-	MaxSequenceID    int64        `json:"max_sequence_id"`
-	ParticipantsJson string       `json:"participants_json"`
+	Conversation          Conversation `json:"conversation"`
+	PreviewPacked         string       `json:"preview_packed"`
+	MaxSequenceID         int64        `json:"max_sequence_id"`
+	ParticipantsJson      string       `json:"participants_json"`
+	SubagentCount         int64        `json:"subagent_count"`
+	RunningBackgroundJobs int64        `json:"running_background_jobs"`
 }
 
 // Like ListConversations but includes subagents. Used by the conversation
@@ -790,6 +763,8 @@ func (q *Queries) ListAllConversations(ctx context.Context, arg ListAllConversat
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
 			&i.ParticipantsJson,
+			&i.SubagentCount,
+			&i.RunningBackgroundJobs,
 		); err != nil {
 			return nil, err
 		}
@@ -949,7 +924,13 @@ SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, 
          WHERE m.conversation_id = c.conversation_id
            AND m.user_email IS NOT NULL AND m.user_email <> ''
          GROUP BY m.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 WHERE c.archived = FALSE AND c.parent_conversation_id IS NULL
 ORDER BY c.updated_at DESC
@@ -962,10 +943,12 @@ type ListConversationsParams struct {
 }
 
 type ListConversationsRow struct {
-	Conversation     Conversation `json:"conversation"`
-	PreviewPacked    string       `json:"preview_packed"`
-	MaxSequenceID    int64        `json:"max_sequence_id"`
-	ParticipantsJson string       `json:"participants_json"`
+	Conversation          Conversation `json:"conversation"`
+	PreviewPacked         string       `json:"preview_packed"`
+	MaxSequenceID         int64        `json:"max_sequence_id"`
+	ParticipantsJson      string       `json:"participants_json"`
+	SubagentCount         int64        `json:"subagent_count"`
+	RunningBackgroundJobs int64        `json:"running_background_jobs"`
 }
 
 func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsParams) ([]ListConversationsRow, error) {
@@ -998,6 +981,8 @@ func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsPa
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
 			&i.ParticipantsJson,
+			&i.SubagentCount,
+			&i.RunningBackgroundJobs,
 		); err != nil {
 			return nil, err
 		}
@@ -1227,7 +1212,13 @@ SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, 
          WHERE m.conversation_id = c.conversation_id
            AND m.user_email IS NOT NULL AND m.user_email <> ''
          GROUP BY m.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 WHERE c.slug LIKE '%' || ? || '%' AND c.archived = FALSE AND c.parent_conversation_id IS NULL
 ORDER BY c.updated_at DESC
@@ -1241,10 +1232,12 @@ type SearchConversationsParams struct {
 }
 
 type SearchConversationsRow struct {
-	Conversation     Conversation `json:"conversation"`
-	PreviewPacked    string       `json:"preview_packed"`
-	MaxSequenceID    int64        `json:"max_sequence_id"`
-	ParticipantsJson string       `json:"participants_json"`
+	Conversation          Conversation `json:"conversation"`
+	PreviewPacked         string       `json:"preview_packed"`
+	MaxSequenceID         int64        `json:"max_sequence_id"`
+	ParticipantsJson      string       `json:"participants_json"`
+	SubagentCount         int64        `json:"subagent_count"`
+	RunningBackgroundJobs int64        `json:"running_background_jobs"`
 }
 
 func (q *Queries) SearchConversations(ctx context.Context, arg SearchConversationsParams) ([]SearchConversationsRow, error) {
@@ -1277,6 +1270,8 @@ func (q *Queries) SearchConversations(ctx context.Context, arg SearchConversatio
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
 			&i.ParticipantsJson,
+			&i.SubagentCount,
+			&i.RunningBackgroundJobs,
 		); err != nil {
 			return nil, err
 		}
@@ -1334,7 +1329,13 @@ SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, 
          WHERE m.conversation_id = c.conversation_id
            AND m.user_email IS NOT NULL AND m.user_email <> ''
          GROUP BY m.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 WHERE c.parent_conversation_id IS NULL
   AND (
@@ -1353,11 +1354,13 @@ type SearchConversationsFTSListParams struct {
 }
 
 type SearchConversationsFTSListRow struct {
-	Conversation     Conversation `json:"conversation"`
-	SlugRank         int64        `json:"slug_rank"`
-	PreviewPacked    string       `json:"preview_packed"`
-	MaxSequenceID    int64        `json:"max_sequence_id"`
-	ParticipantsJson string       `json:"participants_json"`
+	Conversation          Conversation `json:"conversation"`
+	SlugRank              int64        `json:"slug_rank"`
+	PreviewPacked         string       `json:"preview_packed"`
+	MaxSequenceID         int64        `json:"max_sequence_id"`
+	ParticipantsJson      string       `json:"participants_json"`
+	SubagentCount         int64        `json:"subagent_count"`
+	RunningBackgroundJobs int64        `json:"running_background_jobs"`
 }
 
 // Top-level conversations matching either a slug substring or an FTS5 MATCH
@@ -1400,6 +1403,8 @@ func (q *Queries) SearchConversationsFTSList(ctx context.Context, arg SearchConv
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
 			&i.ParticipantsJson,
+			&i.SubagentCount,
+			&i.RunningBackgroundJobs,
 		); err != nil {
 			return nil, err
 		}
@@ -1516,7 +1521,13 @@ SELECT DISTINCT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.upd
          WHERE pm.conversation_id = c.conversation_id
            AND pm.user_email IS NOT NULL AND pm.user_email <> ''
          GROUP BY pm.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 LEFT JOIN messages m ON c.conversation_id = m.conversation_id AND m.type IN ('user', 'agent')
 WHERE c.archived = FALSE
@@ -1536,11 +1547,13 @@ type SearchConversationsWithMessagesParams struct {
 }
 
 type SearchConversationsWithMessagesRow struct {
-	Conversation     Conversation `json:"conversation"`
-	SlugRank         int64        `json:"slug_rank"`
-	PreviewPacked    string       `json:"preview_packed"`
-	MaxSequenceID    int64        `json:"max_sequence_id"`
-	ParticipantsJson string       `json:"participants_json"`
+	Conversation          Conversation `json:"conversation"`
+	SlugRank              int64        `json:"slug_rank"`
+	PreviewPacked         string       `json:"preview_packed"`
+	MaxSequenceID         int64        `json:"max_sequence_id"`
+	ParticipantsJson      string       `json:"participants_json"`
+	SubagentCount         int64        `json:"subagent_count"`
+	RunningBackgroundJobs int64        `json:"running_background_jobs"`
 }
 
 // Search conversations by slug OR message content (user messages and agent responses, not system prompts)
@@ -1576,6 +1589,8 @@ func (q *Queries) SearchConversationsWithMessages(ctx context.Context, arg Searc
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
 			&i.ParticipantsJson,
+			&i.SubagentCount,
+			&i.RunningBackgroundJobs,
 		); err != nil {
 			return nil, err
 		}

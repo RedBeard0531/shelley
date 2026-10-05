@@ -79,33 +79,15 @@ type ConversationState struct {
 	Model          string `json:"model,omitempty"`
 }
 
-// ConversationWithState combines a conversation with its working state.
-// Preview is the trailing text of the most recent agent message, used to
-// render a one-line summary in the conversation list without a separate
-// fetch. PreviewUpdatedAt is the agent message's CreatedAt (RFC 3339).
+// ConversationWithState is a conversation list item as the UI gets it: the
+// list query's row plus git metadata from the filesystem.
 type ConversationWithState struct {
-	generated.Conversation
+	db.ConversationListItem
 	Working         bool   `json:"working"`
 	GitRepoRoot     string `json:"git_repo_root,omitempty"`
 	GitWorktreeRoot string `json:"git_worktree_root,omitempty"`
 	GitCommit       string `json:"git_commit,omitempty"`
 	GitSubject      string `json:"git_subject,omitempty"`
-	SubagentCount   int64  `json:"subagent_count"`
-	// RunningBackgroundJobs counts this conversation's backgrounded bash
-	// commands that have not exited.
-	RunningBackgroundJobs int64  `json:"running_background_jobs"`
-	Preview               string `json:"preview,omitempty"`
-	PreviewUpdatedAt      string `json:"preview_updated_at,omitempty"`
-	// MaxSequenceID is the highest message sequence_id stored for this
-	// conversation. Clients use it to decide whether their cached snapshot
-	// is up to date without a separate /api/conversation/<id> roundtrip.
-	MaxSequenceID int64 `json:"max_sequence_id"`
-	// Participants are the distinct exe.dev accounts (from the X-ExeDev-Email
-	// header) that authored messages in this conversation, sorted. Clients use
-	// it to filter the list down to their own conversations. Empty for
-	// conversations whose messages all arrived without the header (direct or
-	// local access) or predate the user_email column.
-	Participants []db.ConversationParticipant `json:"participants,omitempty"`
 	// SearchSnippet is set on hits from /api/conversations/search. Matched
 	// terms are wrapped in \x02..\x03 sentinels (see db.SnippetMarkStart /
 	// SnippetMarkEnd) so the UI can substitute spans without HTML injection.
@@ -356,13 +338,9 @@ type Server struct {
 	activeConversations map[string]*ConversationManager
 	// Serialize fallback delivery with Stop so a late completion cannot
 	// restart a parent whose queue was just cleared.
-	completionMu     sync.Mutex
-	stoppedParents   map[string]bool // guarded by mu
-	stoppingParents  map[string]bool // guarded by mu; a send during Stop must not reopen the fence
-	backgroundJobsMu sync.Mutex
-	// runningBackgroundJobs holds the background jobs that have not exited,
-	// by conversation ID and job ID.
-	runningBackgroundJobs    map[string]map[string]claudetool.BackgroundJob
+	completionMu             sync.Mutex
+	stoppedParents           map[string]bool // guarded by mu
+	stoppingParents          map[string]bool // guarded by mu; a send during Stop must not reopen the fence
 	mu                       sync.Mutex
 	deletingConversations    map[string]bool
 	logger                   *slog.Logger
@@ -447,7 +425,6 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		activeConversations:     make(map[string]*ConversationManager),
 		stoppedParents:          make(map[string]bool),
 		stoppingParents:         make(map[string]bool),
-		runningBackgroundJobs:   make(map[string]map[string]claudetool.BackgroundJob),
 		deletingConversations:   make(map[string]bool),
 		logger:                  logger,
 		predictableOnly:         predictableOnly,
@@ -1513,18 +1490,21 @@ func (s *Server) publicURL(path string) string {
 
 // hasActiveDelegatedWork reports whether conversationID has a running
 // background job or a working subagent.
-func (s *Server) hasActiveDelegatedWork(conversationID string) bool {
-	if len(s.runningBackgroundJobsOf(conversationID)) > 0 {
-		return true
-	}
-	children, err := s.db.GetSubagents(context.Background(), conversationID)
+func (s *Server) hasActiveDelegatedWork(ctx context.Context, conversationID string) (bool, error) {
+	jobs, err := s.runningBackgroundJobsOf(ctx, conversationID)
 	if err != nil {
-		s.logger.Warn("failed to load subagents", "conversationID", conversationID, "error", err)
-		return false
+		return false, err
+	}
+	if len(jobs) > 0 {
+		return true, nil
+	}
+	children, err := s.db.GetSubagents(ctx, conversationID)
+	if err != nil {
+		return false, fmt.Errorf("load subagents: %w", err)
 	}
 	return slices.ContainsFunc(children, func(c generated.Conversation) bool {
 		return c.AgentWorking && isManagedChild(c) && !isBtwReader(c)
-	})
+	}), nil
 }
 
 // publishConversationState broadcasts a conversation state update to ALL active
@@ -1546,9 +1526,17 @@ func (s *Server) publishConversationState(state ConversationState) {
 		// with disable_notifications suppress all end-of-turn notifications
 		// (push, email, discord, ntfy) and hooks, same as subagents.
 		notifyDisabled := convErr == nil && db.ParseConversationOptions(conv.ConversationOptions).DisableNotifications
-		// Work still running for this conversation will wake it again when it
-		// finishes, so that later turn is the one worth notifying about.
-		suppressNotify := isSubagent || notifyDisabled || s.hasActiveDelegatedWork(state.ConversationID)
+		suppressNotify := isSubagent || notifyDisabled
+		if !suppressNotify {
+			// Work still running for this conversation will wake it again when
+			// it finishes, so that later turn is the one worth notifying about.
+			// If that can't be told, don't announce a finish that may not be one.
+			delegated, err := s.hasActiveDelegatedWork(context.Background(), state.ConversationID)
+			if err != nil {
+				s.logger.Error("Failed to check delegated work", "conversationID", state.ConversationID, "error", err)
+			}
+			suppressNotify = delegated || err != nil
+		}
 		var hooks []db.ConversationHook
 		if !suppressNotify {
 			s.mu.Lock()

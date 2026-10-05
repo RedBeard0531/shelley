@@ -763,10 +763,7 @@ func (s *Server) searchConversationsFTSWithState(ctx context.Context, query stri
 	for i, h := range hits {
 		conversations[i] = h.ConversationListItem
 	}
-	decorated, err := s.decorateConversations(ctx, conversations)
-	if err != nil {
-		return nil, err
-	}
+	decorated := s.decorateConversations(conversations)
 	for i := range decorated {
 		decorated[i].SearchSnippet = hits[i].Snippet
 	}
@@ -793,40 +790,18 @@ func (s *Server) conversationListWithStateInternal(ctx context.Context, limit, o
 	if err != nil {
 		return nil, err
 	}
-	return s.decorateConversations(ctx, conversations)
+	return s.decorateConversations(conversations), nil
 }
 
-// decorateConversations wraps a list of conversation list items with the
-// working/subagent/git metadata used by the conversation list UI. The
-// preview, preview timestamp and max sequence_id are already carried on each
-// item (computed in the very query that listed the conversations, scoped to
-// the visible window — see db.ConversationListItem), so decorate just copies
-// them across rather than running a separate previews/max-sequence query.
-func (s *Server) decorateConversations(ctx context.Context, conversations []db.ConversationListItem) ([]ConversationWithState, error) {
-	// Working state lives on the conversation row itself (see
-	// ResetAllAgentWorking on startup + SetConversationAgentWorking on every
-	// transition), so we don't have to consult the in-memory manager map.
-	subagentCounts, err := s.db.GetSubagentCounts(ctx)
-	if err != nil {
-		s.logger.Error("Failed to get subagent counts", "error", err)
-		subagentCounts = make(map[string]int64)
-	}
-
-	runningJobs := s.runningBackgroundJobCounts()
+// decorateConversations adds git metadata to conversation list items.
+// Everything else, working state and counts included, comes from the query
+// that listed them (see db.ConversationListItem), so the list is one query.
+func (s *Server) decorateConversations(conversations []db.ConversationListItem) []ConversationWithState {
 	now := time.Now()
 	result := make([]ConversationWithState, len(conversations))
 	for i, item := range conversations {
 		conv := item.Conversation
-		cws := ConversationWithState{
-			Conversation:          conv,
-			Working:               conv.AgentWorking,
-			SubagentCount:         subagentCounts[conv.ConversationID],
-			RunningBackgroundJobs: runningJobs[conv.ConversationID],
-			Preview:               item.Preview,
-			PreviewUpdatedAt:      item.PreviewUpdatedAt,
-			MaxSequenceID:         item.MaxSequenceID,
-			Participants:          item.Participants,
-		}
+		cws := ConversationWithState{ConversationListItem: item, Working: conv.AgentWorking}
 		if conv.Cwd != nil {
 			entry, ok := s.conversationListGitCache.get(*conv.Cwd, now)
 			if !ok {
@@ -853,7 +828,7 @@ func (s *Server) decorateConversations(ctx context.Context, conversations []db.C
 		}
 		result[i] = cws
 	}
-	return result, nil
+	return result
 }
 
 // registerConversationRoutes registers the /api/conversation/<id>/* routes.

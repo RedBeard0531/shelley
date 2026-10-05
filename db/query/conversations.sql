@@ -84,7 +84,13 @@ SELECT sqlc.embed(c),
          WHERE m.conversation_id = c.conversation_id
            AND m.user_email IS NOT NULL AND m.user_email <> ''
          GROUP BY m.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 WHERE c.archived = FALSE AND c.parent_conversation_id IS NULL
 ORDER BY c.updated_at DESC
@@ -129,7 +135,13 @@ SELECT sqlc.embed(c),
          WHERE m.conversation_id = c.conversation_id
            AND m.user_email IS NOT NULL AND m.user_email <> ''
          GROUP BY m.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 WHERE c.archived = FALSE
 ORDER BY c.updated_at DESC
@@ -177,7 +189,13 @@ SELECT sqlc.embed(c),
          WHERE m.conversation_id = c.conversation_id
            AND m.user_email IS NOT NULL AND m.user_email <> ''
          GROUP BY m.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 WHERE c.slug LIKE '%' || ? || '%' AND c.archived = FALSE AND c.parent_conversation_id IS NULL
 ORDER BY c.updated_at DESC
@@ -215,7 +233,13 @@ SELECT DISTINCT sqlc.embed(c),
          WHERE pm.conversation_id = c.conversation_id
            AND pm.user_email IS NOT NULL AND pm.user_email <> ''
          GROUP BY pm.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 LEFT JOIN messages m ON c.conversation_id = m.conversation_id AND m.type IN ('user', 'agent')
 WHERE c.archived = FALSE
@@ -274,7 +298,13 @@ SELECT sqlc.embed(c),
          WHERE m.conversation_id = c.conversation_id
            AND m.user_email IS NOT NULL AND m.user_email <> ''
          GROUP BY m.user_email
-      ) participant), '[]') AS TEXT) AS participants_json
+      ) participant), '[]') AS TEXT) AS participants_json,
+  -- Subagents ride idx_conversations_parent_id; running jobs ride
+  -- idx_background_jobs_running.
+  CAST((SELECT COUNT(*) FROM conversations sub
+         WHERE sub.parent_conversation_id = c.conversation_id) AS INTEGER) AS subagent_count,
+  CAST((SELECT COUNT(*) FROM background_jobs bj
+         WHERE bj.conversation_id = c.conversation_id AND NOT bj.exited) AS INTEGER) AS running_background_jobs
 FROM conversations c
 WHERE c.parent_conversation_id IS NULL
   AND (
@@ -418,12 +448,6 @@ GROUP BY je.value ->> 'model', je.value ->> 'url';
 -- name: GetConversationBySlugAndParent :one
 SELECT * FROM conversations
 WHERE slug = ? AND parent_conversation_id = ?;
-
--- name: GetSubagentCounts :many
-SELECT parent_conversation_id, COUNT(*) AS count
-FROM conversations
-WHERE parent_conversation_id IS NOT NULL
-GROUP BY parent_conversation_id;
 
 -- name: UpdateConversationModel :exec
 UPDATE conversations

@@ -42,8 +42,47 @@ func (q *Queries) InsertBackgroundJob(ctx context.Context, arg InsertBackgroundJ
 	return err
 }
 
+const listRunningBackgroundJobs = `-- name: ListRunningBackgroundJobs :many
+SELECT job_id, conversation_id, tool_use_id, command, pid, process_start_time, log_path, exit_path, started_at, notified, exited FROM background_jobs WHERE conversation_id = ? AND NOT exited ORDER BY started_at
+`
+
+func (q *Queries) ListRunningBackgroundJobs(ctx context.Context, conversationID string) ([]BackgroundJob, error) {
+	rows, err := q.db.QueryContext(ctx, listRunningBackgroundJobs, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BackgroundJob{}
+	for rows.Next() {
+		var i BackgroundJob
+		if err := rows.Scan(
+			&i.JobID,
+			&i.ConversationID,
+			&i.ToolUseID,
+			&i.Command,
+			&i.Pid,
+			&i.ProcessStartTime,
+			&i.LogPath,
+			&i.ExitPath,
+			&i.StartedAt,
+			&i.Notified,
+			&i.Exited,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnnotifiedBackgroundJobs = `-- name: ListUnnotifiedBackgroundJobs :many
-SELECT job_id, conversation_id, tool_use_id, command, pid, process_start_time, log_path, exit_path, started_at, notified FROM background_jobs WHERE NOT notified ORDER BY started_at
+SELECT job_id, conversation_id, tool_use_id, command, pid, process_start_time, log_path, exit_path, started_at, notified, exited FROM background_jobs WHERE NOT notified ORDER BY started_at
 `
 
 func (q *Queries) ListUnnotifiedBackgroundJobs(ctx context.Context) ([]BackgroundJob, error) {
@@ -66,6 +105,7 @@ func (q *Queries) ListUnnotifiedBackgroundJobs(ctx context.Context) ([]Backgroun
 			&i.ExitPath,
 			&i.StartedAt,
 			&i.Notified,
+			&i.Exited,
 		); err != nil {
 			return nil, err
 		}
@@ -78,6 +118,15 @@ func (q *Queries) ListUnnotifiedBackgroundJobs(ctx context.Context) ([]Backgroun
 		return nil, err
 	}
 	return items, nil
+}
+
+const markBackgroundJobExited = `-- name: MarkBackgroundJobExited :exec
+UPDATE background_jobs SET exited = TRUE WHERE job_id = ?
+`
+
+func (q *Queries) MarkBackgroundJobExited(ctx context.Context, jobID string) error {
+	_, err := q.db.ExecContext(ctx, markBackgroundJobExited, jobID)
+	return err
 }
 
 const markBackgroundJobNotified = `-- name: MarkBackgroundJobNotified :exec

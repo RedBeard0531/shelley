@@ -767,3 +767,37 @@ func TestCreateMessageFoldsAgentWorkingAndTimestamp(t *testing.T) {
 		t.Fatalf("expected error when both MarkAgentStart and MarkAgentDone are set")
 	}
 }
+
+// Jobs already notified had exited; the rest stay running until watched.
+func TestBackgroundJobsExitedMigration(t *testing.T) {
+	database := setupDBMigratedThrough(t, 41)
+	defer database.Close()
+	ctx := t.Context()
+	// Raw SQL: generated queries assume the latest schema.
+	err := database.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		if _, err := tx.Exec(`INSERT INTO conversations (conversation_id, user_initiated) VALUES ('c', TRUE)`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO background_jobs (job_id, conversation_id, tool_use_id, command, pid, process_start_time, log_path, exit_path, started_at, notified)
+			VALUES ('done', 'c', '', '', 0, 0, '', '', CURRENT_TIMESTAMP, TRUE), ('pending', 'c', '', '', 0, 0, '', '', CURRENT_TIMESTAMP, FALSE)`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var running []generated.BackgroundJob
+	err = database.Queries(ctx, func(q *generated.Queries) error {
+		var err error
+		running, err = q.ListRunningBackgroundJobs(ctx, "c")
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(running) != 1 || running[0].JobID != "pending" {
+		t.Fatalf("running jobs = %+v, want only pending", running)
+	}
+}

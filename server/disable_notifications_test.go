@@ -7,6 +7,7 @@ import (
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/server/notifications"
 )
 
@@ -93,8 +94,20 @@ func TestPublishConversationStateWaitsForDelegatedWork(t *testing.T) {
 			}
 		}, false},
 		{"running background job suppresses", func(t *testing.T, s *Server, database *db.DB, id string) {
-			s.setBackgroundJobRunning(claudetool.BackgroundJob{ID: "job1", ConversationID: id}, true)
+			if err := s.recordBackgroundJob(t.Context(), claudetool.BackgroundJob{ID: "job1", ConversationID: id}); err != nil {
+				t.Fatal(err)
+			}
 		}, false},
+		{"exited background job notifies", func(t *testing.T, s *Server, database *db.DB, id string) {
+			if err := s.recordBackgroundJob(t.Context(), claudetool.BackgroundJob{ID: "job1", ConversationID: id}); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.QueriesTx(t.Context(), func(q *generated.Queries) error {
+				return q.MarkBackgroundJobExited(t.Context(), "job1")
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -129,8 +129,8 @@ func (j stashedJobs) Background(ctx context.Context, job claudetool.BackgroundJo
 }
 
 // After a restart, every job the previous process backgrounded but did not
-// report is reported exactly once: at once if it finished or vanished
-// meanwhile, and when it exits if it is still running.
+// report is reported exactly once: at once if it was seen to exit, finished
+// or vanished meanwhile, and when it exits if it is still running.
 func TestBackgroundJobRecoveryAfterRestart(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir()) // keep job logs out of /tmp
 	server, database, _ := newTestServer(t)
@@ -181,6 +181,18 @@ func TestBackgroundJobRecoveryAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	running, runningGate := start("running-output")
+	// Seen to exit but not reported, so not watched again. (Its process is in
+	// fact still running, which shows that.)
+	unreported, unreportedGate := start("unreported-output")
+	defer func() {
+		release(unreportedGate)
+		<-unreported.exited // before TempDir cleanup races its exit file
+	}()
+	if err := database.QueriesTx(t.Context(), func(q *generated.Queries) error {
+		return q.MarkBackgroundJobExited(t.Context(), unreported.job.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	noticeFor := func(job claudetool.BackgroundJob) backgroundJobUserData {
 		for _, n := range backgroundJobNotices(t, database, id) {
@@ -190,10 +202,21 @@ func TestBackgroundJobRecoveryAfterRestart(t *testing.T) {
 		}
 		return backgroundJobUserData{}
 	}
+	// What the previous process recorded is all there is to know: the
+	// conversation list counts each job as running until it is seen to exit.
+	if n := listedRunningJobs(t, server, id); n != 3 {
+		t.Fatalf("listed %d running jobs before recovery, want 3", n)
+	}
 	if err := server.recoverBackgroundJobs(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, 10*time.Second, func() bool { return len(backgroundJobNotices(t, database, id)) == 2 })
+	waitFor(t, 10*time.Second, func() bool { return len(backgroundJobNotices(t, database, id)) == 3 })
+	if noticeFor(unreported.job).Text == "" {
+		t.Error("no notice for the job seen to exit")
+	}
+	if n := listedRunningJobs(t, server, id); n != 1 {
+		t.Fatalf("listed %d running jobs after recovery, want 1", n)
+	}
 	if got := noticeFor(finished.job).Text; !strings.Contains(got, "finished: exit 0") || !strings.Contains(got, "finished-output") {
 		t.Errorf("finished notice = %q", got)
 	}
@@ -207,15 +230,35 @@ func TestBackgroundJobRecoveryAfterRestart(t *testing.T) {
 		t.Errorf("running notice = %q", got)
 	}
 	waitFor(t, 10*time.Second, func() bool { return len(unnotifiedBackgroundJobs(t, database)) == 0 })
+	if n := listedRunningJobs(t, server, id); n != 0 {
+		t.Fatalf("listed %d running jobs after every exit, want 0", n)
+	}
 
 	// Another restart reports nothing again.
 	if err := server.recoverBackgroundJobs(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	waitForIdle(t, server, id)
-	if n := len(backgroundJobNotices(t, database, id)); n != 3 {
-		t.Fatalf("%d notices, want 3", n)
+	if n := len(backgroundJobNotices(t, database, id)); n != 4 {
+		t.Fatalf("%d notices, want 4", n)
 	}
+}
+
+// listedRunningJobs returns the conversation list's running background job
+// count for conversationID.
+func listedRunningJobs(t *testing.T, server *Server, conversationID string) int64 {
+	t.Helper()
+	list, err := server.conversationListWithStateInternal(t.Context(), 100, 0, "", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range list {
+		if c.ConversationID == conversationID {
+			return c.RunningBackgroundJobs
+		}
+	}
+	t.Fatalf("conversation %s not listed", conversationID)
+	return 0
 }
 
 // waitForListJobCount reads conversation list patch events until one sets
@@ -313,15 +356,20 @@ func TestBackgroundJobsListedAndKilled(t *testing.T) {
 
 // A job whose PID now names another process is never signalled.
 func TestKillBackgroundJobWithReusedPID(t *testing.T) {
-	server, _, _ := newTestServer(t)
+	server, database, _ := newTestServer(t)
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
-	job := claudetool.BackgroundJob{ID: "stale", ConversationID: "c", PID: os.Getpid(), StartTime: 1}
-	server.setBackgroundJobRunning(job, true)
-	defer server.setBackgroundJobRunning(job, false)
+	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := claudetool.BackgroundJob{ID: "stale", ConversationID: conv.ConversationID, PID: os.Getpid(), StartTime: 1}
+	if err := server.recordBackgroundJob(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/conversation/c/background-jobs/stale/kill", nil))
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/conversation/"+conv.ConversationID+"/background-jobs/stale/kill", nil))
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "no longer running") {
 		t.Fatalf("kill: %d %s, want 409", w.Code, w.Body.String())
 	}

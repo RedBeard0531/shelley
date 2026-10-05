@@ -19,6 +19,7 @@ type BackgroundJob struct {
 	ExitPath         string    `json:"exit_path"`
 	StartedAt        time.Time `json:"started_at"`
 	Notified         bool      `json:"notified"`
+	Exited           bool      `json:"exited"`
 }
 
 type CacheSession struct {

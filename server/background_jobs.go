@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"slices"
 	"time"
@@ -16,9 +15,9 @@ import (
 )
 
 // backgroundJobs implements claudetool.BackgroundJobs: when a backgrounded
-// bash command exits, it tells the command's conversation. Jobs are recorded
-// in the database so that a job outliving this process is still reported
-// after a restart (see recoverBackgroundJobs).
+// bash command exits, it tells the command's conversation. Jobs live in the
+// database: a job is running until it is seen to exit, and one outliving
+// this process is still reported after a restart (see recoverBackgroundJobs).
 type backgroundJobs struct {
 	server *Server
 }
@@ -34,7 +33,7 @@ func (b backgroundJobs) Background(ctx context.Context, job claudetool.Backgroun
 	return nil
 }
 
-// recordBackgroundJob stores job until its completion is reported.
+// recordBackgroundJob stores job as running.
 func (s *Server) recordBackgroundJob(ctx context.Context, job claudetool.BackgroundJob) error {
 	err := s.db.QueriesTx(ctx, func(q *generated.Queries) error {
 		return q.InsertBackgroundJob(ctx, generated.InsertBackgroundJobParams{
@@ -57,7 +56,7 @@ func (s *Server) recordBackgroundJob(ctx context.Context, job claudetool.Backgro
 
 // recoverBackgroundJobs resumes reporting the jobs a previous Shelley
 // process backgrounded but did not report: jobs that exited (or vanished)
-// meanwhile are reported now, running ones when they exit.
+// are reported now, running ones when they exit.
 func (s *Server) recoverBackgroundJobs(ctx context.Context) error {
 	var rows []generated.BackgroundJob
 	err := s.db.Queries(ctx, func(q *generated.Queries) error {
@@ -69,19 +68,14 @@ func (s *Server) recoverBackgroundJobs(ctx context.Context) error {
 		return fmt.Errorf("list background jobs: %w", err)
 	}
 	for _, r := range rows {
-		job := claudetool.BackgroundJob{
-			ID:             r.JobID,
-			ConversationID: r.ConversationID,
-			ToolUseID:      r.ToolUseID,
-			Command:        r.Command,
-			PID:            int(r.Pid),
-			StartTime:      uint64(r.ProcessStartTime),
-			LogPath:        r.LogPath,
-			ExitPath:       r.ExitPath,
-			StartedAt:      r.StartedAt,
+		job := backgroundJobFromRow(r)
+		if r.Exited {
+			go s.reportBackgroundJobExit(job)
+			continue
 		}
 		exited, err := job.Exited()
 		if err != nil {
+			// Unwatched, the job stays running until the next startup.
 			s.logger.Error("Failed to watch background job", "job", job.ID, "conversation", job.ConversationID, "error", err)
 			continue
 		}
@@ -90,69 +84,60 @@ func (s *Server) recoverBackgroundJobs(ctx context.Context) error {
 	return nil
 }
 
-// watchBackgroundJob counts job as running in its conversation until it
-// exits, then queues its notice in the conversation and records that it
-// did. A failed delivery is retried at the next startup.
-func (s *Server) watchBackgroundJob(job claudetool.BackgroundJob, exited <-chan struct{}) {
-	select {
-	case <-exited:
-	default:
-		s.setBackgroundJobRunning(job, true)
+func backgroundJobFromRow(r generated.BackgroundJob) claudetool.BackgroundJob {
+	return claudetool.BackgroundJob{
+		ID:             r.JobID,
+		ConversationID: r.ConversationID,
+		ToolUseID:      r.ToolUseID,
+		Command:        r.Command,
+		PID:            int(r.Pid),
+		StartTime:      uint64(r.ProcessStartTime),
+		LogPath:        r.LogPath,
+		ExitPath:       r.ExitPath,
+		StartedAt:      r.StartedAt,
 	}
+}
+
+// watchBackgroundJob reports job once it exits.
+func (s *Server) watchBackgroundJob(job claudetool.BackgroundJob, exited <-chan struct{}) {
 	go func() {
 		<-exited
-		s.setBackgroundJobRunning(job, false)
 		s.reportBackgroundJobExit(job)
 	}()
 }
 
-// setBackgroundJobRunning adds job to or removes it from the running set
-// and refreshes the conversation list, which carries per-conversation
-// counts.
-func (s *Server) setBackgroundJobRunning(job claudetool.BackgroundJob, running bool) {
-	s.backgroundJobsMu.Lock()
-	jobs := s.runningBackgroundJobs[job.ConversationID]
-	switch {
-	case running && jobs == nil:
-		jobs = map[string]claudetool.BackgroundJob{}
-		s.runningBackgroundJobs[job.ConversationID] = jobs
-		fallthrough
-	case running:
-		jobs[job.ID] = job
-	default:
-		delete(jobs, job.ID)
-		if len(jobs) == 0 {
-			delete(s.runningBackgroundJobs, job.ConversationID)
-		}
-	}
-	s.backgroundJobsMu.Unlock()
-	s.notifyConversationListChanged()
-}
-
-// runningBackgroundJobCounts returns the number of running background jobs
-// per conversation.
-func (s *Server) runningBackgroundJobCounts() map[string]int64 {
-	s.backgroundJobsMu.Lock()
-	defer s.backgroundJobsMu.Unlock()
-	counts := make(map[string]int64, len(s.runningBackgroundJobs))
-	for id, jobs := range s.runningBackgroundJobs {
-		counts[id] = int64(len(jobs))
-	}
-	return counts
-}
-
 // runningBackgroundJobsOf returns conversationID's running jobs, oldest first.
-func (s *Server) runningBackgroundJobsOf(conversationID string) []claudetool.BackgroundJob {
-	s.backgroundJobsMu.Lock()
-	defer s.backgroundJobsMu.Unlock()
-	jobs := slices.Collect(maps.Values(s.runningBackgroundJobs[conversationID]))
-	slices.SortFunc(jobs, func(a, b claudetool.BackgroundJob) int { return a.StartedAt.Compare(b.StartedAt) })
-	return jobs
+func (s *Server) runningBackgroundJobsOf(ctx context.Context, conversationID string) ([]claudetool.BackgroundJob, error) {
+	var rows []generated.BackgroundJob
+	err := s.db.Queries(ctx, func(q *generated.Queries) error {
+		var err error
+		rows, err = q.ListRunningBackgroundJobs(ctx, conversationID)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list running background jobs: %w", err)
+	}
+	jobs := make([]claudetool.BackgroundJob, len(rows))
+	for i, r := range rows {
+		jobs[i] = backgroundJobFromRow(r)
+	}
+	return jobs, nil
 }
 
+// reportBackgroundJobExit records that job exited, queues its notice in the
+// conversation and records that it did. Whatever fails is retried at the
+// next startup; until then, a job whose exit was not recorded still counts
+// as running, like a conversation whose agent_working write failed.
 func (s *Server) reportBackgroundJobExit(job claudetool.BackgroundJob) {
 	ctx := context.Background()
-	err := s.deliverBackgroundJobNotice(ctx, job)
+	err := s.db.QueriesTx(ctx, func(q *generated.Queries) error {
+		return q.MarkBackgroundJobExited(ctx, job.ID)
+	})
+	if err != nil {
+		s.logger.Error("Failed to record background job exit", "job", job.ID, "conversation", job.ConversationID, "error", err)
+		return
+	}
+	err = s.deliverBackgroundJobNotice(ctx, job)
 	if err == nil {
 		err = s.db.QueriesTx(ctx, func(q *generated.Queries) error {
 			return q.MarkBackgroundJobNotified(ctx, job.ID)
@@ -202,8 +187,13 @@ type BackgroundJobInfo struct {
 
 // handleListBackgroundJobs handles GET /api/conversation/{id}/background-jobs.
 func (s *Server) handleListBackgroundJobs(w http.ResponseWriter, r *http.Request, conversationID string) {
+	jobs, err := s.runningBackgroundJobsOf(r.Context(), conversationID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	out := []BackgroundJobInfo{}
-	for _, j := range s.runningBackgroundJobsOf(conversationID) {
+	for _, j := range jobs {
 		out = append(out, BackgroundJobInfo{JobID: j.ID, Command: j.Command, Tail: j.Tail(), StartedAt: j.StartedAt})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -215,14 +205,17 @@ func (s *Server) handleListBackgroundJobs(w http.ResponseWriter, r *http.Request
 // SIGTERM to the job's process group; the job's exit then reports through
 // the usual notice.
 func (s *Server) handleKillBackgroundJob(w http.ResponseWriter, r *http.Request, conversationID, jobID string) {
-	s.backgroundJobsMu.Lock()
-	job, ok := s.runningBackgroundJobs[conversationID][jobID]
-	s.backgroundJobsMu.Unlock()
-	if !ok {
+	jobs, err := s.runningBackgroundJobsOf(r.Context(), conversationID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	i := slices.IndexFunc(jobs, func(j claudetool.BackgroundJob) bool { return j.ID == jobID })
+	if i < 0 {
 		http.Error(w, fmt.Sprintf("no running background job %s in this conversation", jobID), http.StatusNotFound)
 		return
 	}
-	err := job.Kill()
+	err = jobs[i].Kill()
 	if errors.Is(err, claudetool.ErrBackgroundJobGone) {
 		http.Error(w, fmt.Sprintf("background job %s is no longer running", jobID), http.StatusConflict)
 		return
