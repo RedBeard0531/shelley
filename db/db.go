@@ -307,6 +307,11 @@ type ConversationOptions struct {
 	// the size of its context while the compact_in_place tool is enabled.
 	// Zero means the default (160k).
 	CompactNudgeTokens int `json:"compact_nudge_tokens,omitempty"`
+	// DisableCompactNudges keeps the agent from being told its context size
+	// even though compact_in_place is enabled. Set when the user enables the
+	// tool mid-conversation (the Compact in Place button): they asked for a
+	// compaction, not for an agent that watches its context.
+	DisableCompactNudges bool `json:"disable_compact_nudges,omitempty"`
 }
 
 // ParseConversationOptions parses a JSON string into ConversationOptions.
@@ -334,9 +339,12 @@ func (db *DB) UpdateConversationOptions(ctx context.Context, conversationID stri
 	})
 }
 
-// RegisterConversationHook atomically adds hook to conversation options if absent.
-func (db *DB) RegisterConversationHook(ctx context.Context, conversationID string, hook ConversationHook) (ConversationOptions, error) {
+// ModifyConversationOptions atomically applies modify to a conversation's
+// stored options, writing them back if modify reports a change. It returns the
+// resulting options and whether they changed.
+func (db *DB) ModifyConversationOptions(ctx context.Context, conversationID string, modify func(*ConversationOptions) bool) (ConversationOptions, bool, error) {
 	var opts ConversationOptions
+	var changed bool
 	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
 		q := generated.New(tx.Conn())
 		raw, err := q.GetConversationOptions(ctx, conversationID)
@@ -344,12 +352,9 @@ func (db *DB) RegisterConversationHook(ctx context.Context, conversationID strin
 			return err
 		}
 		opts = ParseConversationOptions(raw)
-		for _, existing := range opts.EndOfTurnHooks {
-			if existing.URL == hook.URL {
-				return nil
-			}
+		if changed = modify(&opts); !changed {
+			return nil
 		}
-		opts.EndOfTurnHooks = append(append([]ConversationHook(nil), opts.EndOfTurnHooks...), hook)
 		optsJSON, err := json.Marshal(opts)
 		if err != nil {
 			return fmt.Errorf("failed to marshal conversation options: %w", err)
@@ -359,6 +364,20 @@ func (db *DB) RegisterConversationHook(ctx context.Context, conversationID strin
 			ConversationOptions: string(optsJSON),
 		})
 	})
+	return opts, changed, err
+}
+
+// RegisterConversationHook atomically adds hook to conversation options if absent.
+func (db *DB) RegisterConversationHook(ctx context.Context, conversationID string, hook ConversationHook) (ConversationOptions, error) {
+	opts, _, err := db.ModifyConversationOptions(ctx, conversationID, func(o *ConversationOptions) bool {
+		for _, existing := range o.EndOfTurnHooks {
+			if existing.URL == hook.URL {
+				return false
+			}
+		}
+		o.EndOfTurnHooks = append(append([]ConversationHook(nil), o.EndOfTurnHooks...), hook)
+		return true
+	})
 	return opts, err
 }
 
@@ -367,26 +386,12 @@ func (db *DB) RegisterConversationHook(ctx context.Context, conversationID strin
 // returns the resulting options. reasoning is a user-facing level name
 // ("off", "minimal", "low", "medium", "high", "xhigh").
 func (db *DB) SetConversationThinkingLevel(ctx context.Context, conversationID, reasoning string) (ConversationOptions, error) {
-	var opts ConversationOptions
-	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
-		q := generated.New(tx.Conn())
-		raw, err := q.GetConversationOptions(ctx, conversationID)
-		if err != nil {
-			return err
+	opts, _, err := db.ModifyConversationOptions(ctx, conversationID, func(o *ConversationOptions) bool {
+		if o.ThinkingLevel == reasoning {
+			return false
 		}
-		opts = ParseConversationOptions(raw)
-		if opts.ThinkingLevel == reasoning {
-			return nil
-		}
-		opts.ThinkingLevel = reasoning
-		optsJSON, err := json.Marshal(opts)
-		if err != nil {
-			return fmt.Errorf("failed to marshal conversation options: %w", err)
-		}
-		return q.UpdateConversationOptions(ctx, generated.UpdateConversationOptionsParams{
-			ConversationID:      conversationID,
-			ConversationOptions: string(optsJSON),
-		})
+		o.ThinkingLevel = reasoning
+		return true
 	})
 	return opts, err
 }
@@ -1650,7 +1655,8 @@ const (
 	MessageTypeGitInfo MessageType = "gitinfo" // user-visible only, not sent to LLM
 	MessageTypeWarning MessageType = "warning" // user-visible only, not sent to LLM
 	// MessageTypeModelChange marks where the conversation switched models via
-	// the /model command. User-visible only, never sent to the LLM.
+	// the /model command, or otherwise changed what its loop is built with (a
+	// tool enabled mid-conversation). User-visible only, never sent to the LLM.
 	MessageTypeModelChange MessageType = "modelchange"
 	// MessageTypeSlug records the LLM call that generated the conversation's
 	// slug. Rendered as nothing and never sent to the LLM: it exists only to

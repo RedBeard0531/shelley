@@ -920,6 +920,9 @@ func (s *Server) registerConversationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/conversation/{id}/cwd", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSetConversationCwd(w, r, r.PathValue("id"))
 	})
+	mux.HandleFunc("POST /api/conversation/{id}/enable-compact-in-place", func(w http.ResponseWriter, r *http.Request) {
+		s.handleEnableCompactInPlace(w, r, r.PathValue("id"))
+	})
 }
 
 // handleGetConversation handles GET /conversation/<id>

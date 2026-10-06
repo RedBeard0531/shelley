@@ -46,6 +46,7 @@
       :on-distill-new-generation="onDistillNewGeneration"
       :on-start-new-generation="onStartNewGeneration"
       :on-compact-in-place="onCompactInPlace"
+      :compact-in-place-busy="compactInPlaceBusy"
       :on-usage-needed="onUsageNeeded"
       :agent-working="agentWorking"
     />
@@ -114,6 +115,7 @@ const props = defineProps<{
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration?: () => Promise<void> | void;
   onCompactInPlace?: () => Promise<void> | void;
+  compactInPlaceBusy?: boolean;
   onUsageNeeded?: () => void;
   onChangeConversationCwd?: () => void;
   onSwitchConversationModel: (model: string) => void;

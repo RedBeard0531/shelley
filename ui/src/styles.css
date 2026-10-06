@@ -11857,9 +11857,11 @@ kbd {
   color: var(--text-secondary);
 }
 
-/* Customized pill for an actual model/reasoning switch. Override the base
-   .message column flex so the chips lay out inline. */
-.message.msg-modelchange-switch {
+/* Customized pill for an actual model/reasoning switch, and the one-line
+   notice for a tool enabled mid-conversation (unlike the multi-line /model
+   output). Override the base .message column flex so they lay out inline. */
+.message.msg-modelchange-switch,
+.message.msg-modelchange-tool {
   flex-flow: row wrap;
   align-items: center;
   justify-content: center;

@@ -712,7 +712,8 @@ const props = withDefaults(
 
 const { t } = useI18n();
 const { markdownMode } = useMarkdownMode();
-// The tool overrides this conversation was started with.
+// The tool overrides this conversation was started with, plus any turned on
+// since (the Compact in Place button).
 const conversationToolOverrides = computed<Record<string, string>>(() => {
   const raw = props.currentConversation?.conversation_options;
   if (!raw) return {};
@@ -1823,7 +1824,8 @@ const conversationThinkingLevel = computed<string | null>(() => {
   }
 });
 
-// Whether this conversation was started with the compact_in_place tool on.
+// Whether this conversation has the compact_in_place tool on: it was started
+// with it, or the Compact in Place button enabled it.
 const compactInPlaceEnabled = computed(
   () => conversationToolOverrides.value[COMPACT_IN_PLACE_TOOL] === "on",
 );
@@ -3512,6 +3514,30 @@ async function compactAndQueue(message: string) {
   await queueMessageTo(conversationId, model, message);
 }
 
+/** Asks the agent to compact its context in place. A conversation started
+ * without the compact_in_place tool gets it first; the server refuses that
+ * mid-turn (compactInPlaceBusy keeps the button disabled then). */
+async function handleCompactInPlace() {
+  const conversationId = props.conversationId;
+  if (!conversationId) return;
+  if (!compactInPlaceEnabled.value) {
+    error.value = null;
+    let enabled: Conversation;
+    try {
+      enabled = await api.enableCompactInPlace(conversationId);
+    } catch (err) {
+      // The user may have moved on while that was in flight.
+      if (props.conversationId === conversationId) {
+        error.value = err instanceof Error ? err.message : String(err);
+      }
+      return;
+    }
+    props.onConversationUpdate?.(enabled);
+    if (props.conversationId !== conversationId) return;
+  }
+  await sendMessage(COMPACT_IN_PLACE_REQUEST);
+}
+
 async function handleStartNewGeneration() {
   if (!props.conversationId) return;
   const conversation = await api.startNewGeneration(props.conversationId);
@@ -3967,9 +3993,8 @@ const statusContentProps = computed(() => {
     onResumeInterrupted: handleResumeInterrupted,
     onDistillNewGeneration: contextBarDistill.value,
     onStartNewGeneration: handleStartNewGeneration,
-    onCompactInPlace: compactInPlaceEnabled.value
-      ? () => sendMessage(COMPACT_IN_PLACE_REQUEST)
-      : undefined,
+    onCompactInPlace: handleCompactInPlace,
+    compactInPlaceBusy: agentWorking.value && !compactInPlaceEnabled.value,
     onSelectModel: setSelectedModel,
     onSelectCombination: setSelectedCombination,
     // The status readout's inline picker only renders for a conversation that

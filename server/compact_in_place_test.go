@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"slices"
@@ -691,5 +692,120 @@ func TestHideItems(t *testing.T) {
 		if _, err := hideItems(slices.Clone(items), nil, bad); err == nil {
 			t.Errorf("hide %v: want error", bad)
 		}
+	}
+}
+
+// postEnableCompactInPlace presses the Compact in Place button's first half.
+func postEnableCompactInPlace(t *testing.T, s *Server, conversationID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/conversation/"+conversationID+"/enable-compact-in-place", nil)
+	w := httptest.NewRecorder()
+	s.handleEnableCompactInPlace(w, req, conversationID)
+	return w
+}
+
+// toolEnabledMarkers counts the log rows recording compact_in_place being
+// enabled.
+func (c *compactTestConversation) toolEnabledMarkers() int {
+	n := 0
+	for _, m := range listMessages(c.t, c.database, c.id) {
+		if m.Type == string(db.MessageTypeModelChange) && m.UserData != nil &&
+			strings.Contains(*m.UserData, `"tool_enabled":"compact_in_place"`) {
+			n++
+		}
+	}
+	return n
+}
+
+func (c *compactTestConversation) options() db.ConversationOptions {
+	c.t.Helper()
+	conv, err := c.database.GetConversationByID(c.t.Context(), c.id)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return db.ParseConversationOptions(conv.ConversationOptions)
+}
+
+// TestEnableCompactInPlaceMidConversation: a conversation started without
+// compact_in_place gets it on demand. Later turns offer the tool, the log
+// says where it appeared, and the agent is not nudged: the user asked for a
+// compaction, not for an agent that watches its context.
+func TestEnableCompactInPlaceMidConversation(t *testing.T) {
+	t.Parallel()
+	c := newCompactTestConversation(t, db.ConversationOptions{})
+	c.turn("hello")
+	c.turn("bash: echo OUTPUT")
+	if hasTool(c.ps.GetLastRequest(), claudetool.CompactInPlaceName) {
+		t.Fatal("compact_in_place offered before being enabled")
+	}
+	// Were nudges on, the next turns would cross the first threshold.
+	size := lastContextWindowSize(listMessages(t, c.database, c.id))
+	if err := c.database.UpdateConversationOptions(t.Context(), c.id, db.ConversationOptions{CompactNudgeTokens: int(size) + 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := postEnableCompactInPlace(t, c.srv, c.id); w.Code != http.StatusOK {
+		t.Fatalf("enable: got %d: %s", w.Code, w.Body.String())
+	}
+	opts := c.options()
+	if !claudetool.IsToolEnabled(claudetool.CompactInPlaceName, opts.ToolOverrides, opts.DisableAllTools) || !opts.DisableCompactNudges {
+		t.Fatalf("options after enabling: %+v", opts)
+	}
+	if n := c.toolEnabledMarkers(); n != 1 {
+		t.Fatalf("%d markers, want 1", n)
+	}
+
+	c.turn("echo: two" + strings.Repeat(" ", 2000))
+	c.turn("echo: three")
+	for _, m := range listMessages(t, c.database, c.id) {
+		if m.UserData != nil && strings.Contains(*m.UserData, `"context_nudge":true`) {
+			t.Fatalf("nudged: %s", *m.LlmData)
+		}
+	}
+	req := c.ps.GetLastRequest()
+	if !hasTool(req, claudetool.CompactInPlaceName) {
+		t.Fatal("compact_in_place not offered after enabling")
+	}
+	if strings.Contains(requestDump(req), "Enabled the compact_in_place tool") {
+		t.Fatal("the marker reached the model")
+	}
+	useID := c.rows()[c.seqWith(`OUTPUT\n`)].Content[0].ToolUseID
+	c.turn(`compact_in_place: {"action":"compact","trim":["` + useID + `"]}`)
+	if out, isErr := c.lastToolOutput(); isErr {
+		t.Fatalf("compact: %s", out)
+	}
+	if c.records() != 1 {
+		t.Fatalf("%d compaction records, want 1", c.records())
+	}
+
+	// Pressing the button again changes nothing.
+	if w := postEnableCompactInPlace(t, c.srv, c.id); w.Code != http.StatusOK {
+		t.Fatalf("enable again: got %d: %s", w.Code, w.Body.String())
+	}
+	if n := c.toolEnabledMarkers(); n != 1 {
+		t.Fatalf("%d markers after enabling twice, want 1", n)
+	}
+}
+
+// Enabling rebuilds the loop, which would drop a running turn's tools out
+// from under it, so it waits for the turn to end.
+func TestEnableCompactInPlaceRefusesWhileWorking(t *testing.T) {
+	t.Parallel()
+	c := newCompactTestConversation(t, db.ConversationOptions{})
+	c.turn("hello")
+	if w := postChat(t, c.srv, c.id, "bash: sleep 5"); w.Code != http.StatusAccepted {
+		t.Fatalf("chat: got %d: %s", w.Code, w.Body.String())
+	}
+	manager, err := c.srv.getOrCreateConversationManager(t.Context(), c.id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, manager.IsAgentWorking)
+
+	if w := postEnableCompactInPlace(t, c.srv, c.id); w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 while the agent works, got %d: %s", w.Code, w.Body.String())
+	}
+	if opts := c.options(); opts.ToolOverrides[claudetool.CompactInPlaceName] != "" || c.toolEnabledMarkers() != 0 {
+		t.Fatalf("enabled while the agent was working: %+v", opts)
 	}
 }

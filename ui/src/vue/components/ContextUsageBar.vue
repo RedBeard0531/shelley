@@ -53,12 +53,21 @@
         </button>
         <button
           v-if="onCompactInPlace"
-          :disabled="distilling"
+          :disabled="distilling || compactInPlaceBusy"
           class="chat-distill-button chat-distill-generation-button"
+          data-testid="compact-in-place-button"
+          :aria-describedby="compactInPlaceBusy ? compactInPlaceHintId : undefined"
           @click="handleCompactInPlace"
         >
           Compact in Place
         </button>
+        <span
+          v-if="onCompactInPlace && compactInPlaceBusy"
+          :id="compactInPlaceHintId"
+          class="token-cost-graph-note"
+        >
+          Finish or stop the current turn to compact in place.
+        </span>
         <button
           v-if="onStartNewGeneration"
           :disabled="distilling"
@@ -111,8 +120,11 @@ const props = defineProps<{
   messages?: Message[];
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration?: () => Promise<void> | void;
-  /** Asks the agent to use compact_in_place; set when the tool is on. */
+  /** Asks the agent to use compact_in_place, enabling the tool first if the
+   *  conversation was started without it. */
   onCompactInPlace?: () => Promise<void> | void;
+  /** The tool still has to be enabled, which waits for the turn to end. */
+  compactInPlaceBusy?: boolean;
   /** Called just before the popup opens. The parent computes usageEntries /
    *  otherUsageRows lazily (walking every message and parsing its usage data),
    *  so it needs a beat's warning; the graph renders empty for one tick and
@@ -127,6 +139,7 @@ const { panes } = useUsagePanesPreference();
 const popupOpen = ref(false);
 const popupAvailableHeight = ref<string>();
 const popupId = useId();
+const compactInPlaceHintId = useId();
 const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
 const barRef = ref<HTMLElement | null>(null);
 

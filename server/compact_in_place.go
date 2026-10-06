@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,7 +22,8 @@ import (
 // lists the older part of the LLM's current view, "compact" records an
 // in-place compaction (collapsing message ranges into notes, trimming tool
 // outputs) and the turn continues on the compacted history. While the tool is
-// enabled the agent is also nudged with the context size (see contextNudger).
+// enabled the agent is also nudged with the context size (see contextNudger),
+// unless it was enabled mid-conversation (see EnableCompactInPlace).
 
 const (
 	// defaultCompactNudgeTokens is where the first context nudge fires when
@@ -100,6 +103,122 @@ func (cm *ConversationManager) compactMidTurn(ctx context.Context, generation ui
 	}
 	return fmt.Sprintf("Compacted: %d collapsed, %d trimmed; history ~%d -> ~%d tokens.",
 		len(c.Squishes), len(c.Trims), itemTokens(items), itemTokens(after)), nil
+}
+
+var errCompactInPlaceUnavailable = errors.New("compact_in_place is not available in this conversation")
+
+// errCompactInPlaceAlreadyOn ends EnableCompactInPlace's mutation early,
+// leaving the loop alone.
+var errCompactInPlaceAlreadyOn = errors.New("compact_in_place is already on")
+
+// EnableCompactInPlace turns compact_in_place on in a conversation started
+// without it, for the Compact in Place button; the agent is not nudged (see
+// DisableCompactNudges). Tool definitions are not in the log: every loop
+// builds them from the conversation options. So this updates the options,
+// drops the loop so the next turn is built with the tool, and appends a
+// marker that says where it appeared. Enabling it twice is a no-op.
+//
+// It returns errAgentWorking mid-turn: dropping the loop would cut the turn
+// short.
+func (cm *ConversationManager) EnableCompactInPlace(ctx context.Context) error {
+	if cm.role == roleBtwReader {
+		// Its loop has a fixed toolset; see ensureLoop.
+		return errCompactInPlaceUnavailable
+	}
+	// Serializes with ApplyModelSettings, which writes back the in-memory
+	// options it read.
+	cm.modelSettingsMu.Lock()
+	defer cm.modelSettingsMu.Unlock()
+	err := cm.resetLoopAfter(true, func() error {
+		if cm.IsAgentWorking() {
+			return errAgentWorking
+		}
+		opts, changed, err := cm.db.ModifyConversationOptions(ctx, cm.conversationID, func(o *db.ConversationOptions) bool {
+			if claudetool.IsToolEnabled(claudetool.CompactInPlaceName, o.ToolOverrides, o.DisableAllTools) {
+				return false
+			}
+			if o.ToolOverrides == nil {
+				o.ToolOverrides = map[string]string{}
+			}
+			o.ToolOverrides[claudetool.CompactInPlaceName] = "on"
+			o.DisableCompactNudges = true
+			return true
+		})
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return errCompactInPlaceAlreadyOn
+		}
+		cm.mu.Lock()
+		cm.conversationOptions = opts
+		cm.mu.Unlock()
+		return nil
+	})
+	if errors.Is(err, errCompactInPlaceAlreadyOn) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// The tool is on whether or not the marker lands, and a retry would find
+	// nothing to do. So don't fail the caller: the cost is a log that doesn't
+	// show where the tool appeared.
+	if err := cm.recordModelChangeMarker(ctx, ModelChangeUserData{
+		ToolEnabled: claudetool.CompactInPlaceName,
+		Text:        "Enabled the compact_in_place tool.",
+	}); err != nil {
+		cm.logger.Error("compact_in_place enabled, but its marker was not recorded",
+			"conversationID", cm.conversationID, "error", err)
+	}
+	return nil
+}
+
+// handleEnableCompactInPlace handles POST
+// /conversation/<id>/enable-compact-in-place: in a conversation started
+// without compact_in_place, the Compact in Place button enables the tool
+// before asking the agent to use it.
+func (s *Server) handleEnableCompactInPlace(w http.ResponseWriter, r *http.Request, conversationID string) {
+	ctx := r.Context()
+	conversation, err := s.db.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+	if conversation.Archived {
+		http.Error(w, "conversation is archived", http.StatusConflict)
+		return
+	}
+	// A draft's options still travel with its first send.
+	if conversation.IsDraft {
+		http.Error(w, "conversation is still a draft", http.StatusConflict)
+		return
+	}
+	userEmail := r.Header.Get("X-ExeDev-Email")
+	ctx = contextWithUserEmail(ctx, userEmail)
+	manager, err := s.getOrCreateConversationManager(ctx, conversationID, userEmail)
+	if err != nil {
+		s.internalError(w, "Failed to get conversation manager", err, "conversationID", conversationID)
+		return
+	}
+	if err := manager.EnableCompactInPlace(ctx); err != nil {
+		switch {
+		case errors.Is(err, errAgentWorking):
+			http.Error(w, "Finish or stop the current turn to compact in place", http.StatusConflict)
+		case errors.Is(err, errCompactInPlaceUnavailable):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			s.internalError(w, "Failed to enable compact_in_place", err, "conversationID", conversationID)
+		}
+		return
+	}
+	updated, err := s.db.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		s.internalError(w, "Failed to reload conversation", err, "conversationID", conversationID)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(updated)
 }
 
 // compactionEvidence returns the context nudges in items, and the

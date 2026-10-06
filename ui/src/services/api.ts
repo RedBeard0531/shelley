@@ -951,6 +951,22 @@ class ApiService {
     return response.json();
   }
 
+  // Turns the compact_in_place tool on in a conversation started without it
+  // (the Compact in Place button). Refused mid-turn; the message says so.
+  async enableCompactInPlace(conversationId: string): Promise<Conversation> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${conversationId}/enable-compact-in-place`,
+      { method: "POST", headers: this.postHeaders },
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        text.trim() || `Failed to enable compacting in place: ${response.statusText}`,
+      );
+    }
+    return response.json();
+  }
+
   async updateConversationTags(conversationId: string, tags: string[]): Promise<Conversation> {
     const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/tags`, {
       method: "POST",
