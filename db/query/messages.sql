@@ -185,3 +185,31 @@ WHERE m.conversation_id = ? AND m.type = 'agent'
      WHERE u.conversation_id = ? AND u.type = 'user'),
     0)
 ORDER BY m.sequence_id DESC;
+
+-- name: ListTypedUserMessages :many
+-- Messages the user typed: user messages that carry neither a tool result nor
+-- machine metadata, other than the stamps of a copy that a compaction carried
+-- into a later generation. Originals come first, newest first, then copies: a
+-- copy's original, when the conversation has it, is the message the UI shows;
+-- a fork of a compacted generation has only the copies.
+SELECT * FROM messages
+WHERE conversation_id = ? AND type = 'user'
+  AND (user_data IS NULL OR user_data IN ('', 'null') OR (
+    json_valid(user_data) AND NOT EXISTS (
+      SELECT 1 FROM json_each(messages.user_data) u
+      WHERE u.key NOT IN ('compaction_carried', 'carried_from_sequence_id')
+    )
+  ))
+  AND NOT EXISTS (
+    SELECT 1 FROM json_each(messages.llm_data, '$.Content') c
+    WHERE json_extract(c.value, '$.Type') = 6
+  )
+ORDER BY user_data LIKE '%compaction_carried%', sequence_id DESC;
+
+-- name: GetAgentMessageBefore :one
+-- The newest agent message before sequence_id: for a tool-result message,
+-- the message whose tool calls it answers.
+SELECT * FROM messages
+WHERE conversation_id = ? AND type = 'agent' AND sequence_id < ?
+ORDER BY sequence_id DESC
+LIMIT 1;

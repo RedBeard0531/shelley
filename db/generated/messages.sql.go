@@ -197,6 +197,44 @@ func (q *Queries) DeleteMessage(ctx context.Context, messageID string) error {
 	return err
 }
 
+const getAgentMessageBefore = `-- name: GetAgentMessageBefore :one
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
+WHERE conversation_id = ? AND type = 'agent' AND sequence_id < ?
+ORDER BY sequence_id DESC
+LIMIT 1
+`
+
+type GetAgentMessageBeforeParams struct {
+	ConversationID string `json:"conversation_id"`
+	SequenceID     int64  `json:"sequence_id"`
+}
+
+// The newest agent message before sequence_id: for a tool-result message,
+// the message whose tool calls it answers.
+func (q *Queries) GetAgentMessageBefore(ctx context.Context, arg GetAgentMessageBeforeParams) (Message, error) {
+	row := q.db.QueryRowContext(ctx, getAgentMessageBefore, arg.ConversationID, arg.SequenceID)
+	var i Message
+	err := row.Scan(
+		&i.MessageID,
+		&i.ConversationID,
+		&i.SequenceID,
+		&i.Type,
+		&i.LlmData,
+		&i.UserData,
+		&i.UsageData,
+		&i.CreatedAt,
+		&i.DisplayData,
+		&i.ExcludedFromContext,
+		&i.Generation,
+		&i.LlmApiUrl,
+		&i.ModelName,
+		&i.ForkedFromMessageID,
+		&i.UserEmail,
+		&i.OtherUsageData,
+	)
+	return i, err
+}
+
 const getGenerationAtOrBeforeSequence = `-- name: GetGenerationAtOrBeforeSequence :one
 SELECT generation FROM messages
 WHERE conversation_id = ? AND sequence_id <= ? AND type != 'slug'
@@ -689,6 +727,67 @@ type ListMessagesTailParams struct {
 // missing data and re-fetch forever.
 func (q *Queries) ListMessagesTail(ctx context.Context, arg ListMessagesTailParams) ([]Message, error) {
 	rows, err := q.db.QueryContext(ctx, listMessagesTail, arg.ConversationID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Message{}
+	for rows.Next() {
+		var i Message
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.ConversationID,
+			&i.SequenceID,
+			&i.Type,
+			&i.LlmData,
+			&i.UserData,
+			&i.UsageData,
+			&i.CreatedAt,
+			&i.DisplayData,
+			&i.ExcludedFromContext,
+			&i.Generation,
+			&i.LlmApiUrl,
+			&i.ModelName,
+			&i.ForkedFromMessageID,
+			&i.UserEmail,
+			&i.OtherUsageData,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTypedUserMessages = `-- name: ListTypedUserMessages :many
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data FROM messages
+WHERE conversation_id = ? AND type = 'user'
+  AND (user_data IS NULL OR user_data IN ('', 'null') OR (
+    json_valid(user_data) AND NOT EXISTS (
+      SELECT 1 FROM json_each(messages.user_data) u
+      WHERE u.key NOT IN ('compaction_carried', 'carried_from_sequence_id')
+    )
+  ))
+  AND NOT EXISTS (
+    SELECT 1 FROM json_each(messages.llm_data, '$.Content') c
+    WHERE json_extract(c.value, '$.Type') = 6
+  )
+ORDER BY user_data LIKE '%compaction_carried%', sequence_id DESC
+`
+
+// Messages the user typed: user messages that carry neither a tool result nor
+// machine metadata, other than the stamps of a copy that a compaction carried
+// into a later generation. Originals come first, newest first, then copies: a
+// copy's original, when the conversation has it, is the message the UI shows;
+// a fork of a compacted generation has only the copies.
+func (q *Queries) ListTypedUserMessages(ctx context.Context, conversationID string) ([]Message, error) {
+	rows, err := q.db.QueryContext(ctx, listTypedUserMessages, conversationID)
 	if err != nil {
 		return nil, err
 	}

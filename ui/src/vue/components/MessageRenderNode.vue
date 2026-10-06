@@ -47,10 +47,11 @@
     :has-result="node.item.hasResult"
     :tool-interrupted="node.item.toolInterrupted"
     :display="node.item.display"
+    :tool-result-message-id="node.item.toolResultMessageId"
     :on-comment-text-change="onCommentTextChange"
     :tool-use-id="node.item.toolUseId"
   />
-  <CarriedBand v-else-if="node.kind === 'carried-band'" :count="node.count">
+  <CarriedBand v-else-if="node.kind === 'carried-band'" :count="node.count" :band-key="node.key">
     <MessageRenderNode
       v-for="child in node.children"
       :key="child.key"

@@ -27,6 +27,7 @@ export const zhCN: TranslationKeys = {
   conversationView: "对话视图",
   seeAllMessages: "查看全部",
   seeEndOfTurnMessagesOnly: "仅查看回合结束消息",
+  seeChatOnly: "仅查看聊天",
   brevity: "简洁",
   look: "外观",
 

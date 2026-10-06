@@ -2131,6 +2131,36 @@ func (db *DB) ListMessagesByType(ctx context.Context, conversationID string, mes
 	return messages, err
 }
 
+// ListTypedUserMessages returns the messages the user typed in a
+// conversation, newest first.
+func (db *DB) ListTypedUserMessages(ctx context.Context, conversationID string) ([]generated.Message, error) {
+	var messages []generated.Message
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		var err error
+		messages, err = generated.New(rx.Conn()).ListTypedUserMessages(ctx, conversationID)
+		return err
+	})
+	return messages, err
+}
+
+// GetAgentMessageBefore returns the newest agent message of a conversation
+// before sequenceID.
+func (db *DB) GetAgentMessageBefore(ctx context.Context, conversationID string, sequenceID int64) (*generated.Message, error) {
+	var message generated.Message
+	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
+		var err error
+		message, err = generated.New(rx.Conn()).GetAgentMessageBefore(ctx, generated.GetAgentMessageBeforeParams{
+			ConversationID: conversationID,
+			SequenceID:     sequenceID,
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &message, nil
+}
+
 // ListAgentMessagesSinceLastUser returns the agent messages produced since
 // the most recent user message in a conversation, newest first (or all
 // agent messages if there is no user message). Useful for picking a

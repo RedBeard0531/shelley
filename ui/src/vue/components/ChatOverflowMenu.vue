@@ -229,6 +229,25 @@
               </svg>
             </button>
             <button
+              v-if="messageUser"
+              type="button"
+              class="overflow-choice-option"
+              :class="{ 'is-selected': conversationViewMode === 'brief' }"
+              :aria-label="t('seeChatOnly')"
+              :aria-pressed="conversationViewMode === 'brief'"
+              :title="t('seeChatOnly')"
+              data-testid="conversation-view-brief"
+              @click="setConversationViewMode('brief')"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                <path
+                  d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4 4v-4h0.5A2.5 2.5 0 0 1 4 13.5z"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              v-else
               type="button"
               class="overflow-choice-option"
               :class="{ 'is-selected': conversationViewMode === 'end-of-turn' }"
@@ -353,7 +372,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref, toRef } from "vue";
 import Popover from "primevue/popover";
 import Button from "primevue/button";
 import Modal from "./Modal.vue";
@@ -372,7 +391,7 @@ import {
   requestBrowserNotificationPermission,
 } from "../../services/notifications";
 
-defineProps<{
+const props = defineProps<{
   hasCwd: boolean;
   showDirectory: boolean;
   cwd: string;
@@ -380,6 +399,9 @@ defineProps<{
   canArchive: boolean;
   canExport: boolean;
   hasUpdate: boolean;
+  // The conversation has the message_user tool: offer the brief (chat only)
+  // view instead of end-of-turn.
+  messageUser: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -398,7 +420,9 @@ const emit = defineEmits<{
 }>();
 
 const { t, locale, setLocale } = useI18n();
-const { conversationViewMode, setConversationViewMode } = useConversationView();
+const { conversationViewMode, setConversationViewMode } = useConversationView(
+  toRef(props, "messageUser"),
+);
 
 const triggerRef = ref<{ $el: HTMLButtonElement } | null>(null);
 const popoverRef = ref<InstanceType<typeof Popover> | null>(null);

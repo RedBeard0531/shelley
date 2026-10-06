@@ -25,6 +25,7 @@ var ToolRegistry = []ToolInfo{
 	{Name: "browser", Summary: "Browser automation (navigate, eval, screenshot, emulate, network, accessibility, profile).", DefaultOn: true, SourcePath: "claudetool/browse/browse.go"},
 	{Name: "read_image", Summary: "Read an image file for the model.", DefaultOn: true, SourcePath: "claudetool/browse/browse.go"},
 	{Name: "compact_in_place", Summary: "The agent compacts its own context.", DefaultOn: false, SourcePath: "claudetool/compact_in_place.go"},
+	{Name: "message_user", Summary: "Chat with the user: messages, replies, emoji reactions, attachments.", DefaultOn: false, SourcePath: "claudetool/message_user.go"},
 }
 
 // ToolInfoByName returns registry metadata for a tool.

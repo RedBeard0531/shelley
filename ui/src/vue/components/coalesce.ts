@@ -30,6 +30,8 @@ export interface CoalescedItem {
   hasResult?: boolean;
   toolInterrupted?: boolean;
   display?: unknown;
+  /** The message_id of the row holding the tool's result. */
+  toolResultMessageId?: string;
 }
 
 export function coalesceMessages(
@@ -78,6 +80,7 @@ export function coalesceMessages(
       startTime: string | null;
       endTime: string | null;
       interrupted: boolean;
+      messageId: string;
     }
   > = {};
   const displayDataMap: Record<string, unknown> = {};
@@ -100,6 +103,7 @@ export function coalesceMessages(
                 error: content.ToolError || false,
                 startTime: content.ToolUseStartTime || null,
                 endTime: content.ToolUseEndTime || null,
+                messageId: message.message_id,
                 interrupted:
                   userData?.interrupted_tool_result === true ||
                   (content.ToolError === true &&
@@ -255,6 +259,7 @@ export function coalesceMessages(
                   interruptedGeneration !== undefined &&
                   message.generation === interruptedGeneration),
               display: displayData,
+              toolResultMessageId: resultData?.messageId,
             });
           });
 

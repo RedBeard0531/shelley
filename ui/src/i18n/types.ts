@@ -27,6 +27,7 @@ export interface TranslationKeys {
   conversationView: string;
   seeAllMessages: string;
   seeEndOfTurnMessagesOnly: string;
+  seeChatOnly: string;
   brevity: string;
   look: string;
 

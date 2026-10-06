@@ -1833,6 +1833,7 @@ func (cm *ConversationManager) systemPromptDisplayData(promptSkills []skills.Ski
 	cfg.ToolOverrides = cm.conversationOptions.ToolOverrides
 	cfg.DisableAllTools = cm.conversationOptions.DisableAllTools
 	cfg.InPlaceCompactor = inPlaceCompactor{cm: cm}
+	cfg.UserMessageFinder = cm.userMessageFinder()
 	return systemPromptDisplayData(cfg, promptSkills)
 }
 
@@ -2160,6 +2161,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		}
 	}
 	toolSetConfig.InPlaceCompactor = inPlaceCompactor{cm: cm, generation: generation}
+	toolSetConfig.UserMessageFinder = cm.userMessageFinder()
 	toolSet := claudetool.NewToolSet(processCtx, toolSetConfig)
 	var nudger *contextNudger
 	if claudetool.IsToolEnabled(claudetool.CompactInPlaceName, toolSetConfig.ToolOverrides, toolSetConfig.DisableAllTools) {

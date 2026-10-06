@@ -540,6 +540,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.HandleFunc("GET /api/message/{message_id}/image/{content_index}/{toolresult_index}", s.handleMessageImage) // Serves images from DB
 	api.HandleFunc("GET /api/message/{message_id}/file", s.handleMessageFile)                                      // Serves local images referenced in message markdown
 	api.HandleFunc("GET /api/message/{message_id}/download", s.handleMessageDownload)                              // Downloads files linked as sandbox:<path> in message markdown
+	api.HandleFunc("GET /api/message/{message_id}/attachment", s.handleMessageAttachment)                          // Serves files sent with message_user
 	api.HandleFunc("POST /api/write-file", s.handleWriteFile)                                                      // Small response
 	api.Handle("GET /api/read-file", compressionHandler(http.HandlerFunc(s.handleReadFile)))                       // Reads arbitrary text files as JSON
 	api.HandleFunc("GET /api/user-agents-md", s.handleUserAgentsMd)                                                // Small response

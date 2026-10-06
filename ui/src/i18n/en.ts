@@ -27,6 +27,7 @@ export const en: TranslationKeys = {
   conversationView: "Conversation view",
   seeAllMessages: "See All",
   seeEndOfTurnMessagesOnly: "See End of Turn Messages Only",
+  seeChatOnly: "See Chat Only",
   brevity: "Brevity",
   look: "Look",
 

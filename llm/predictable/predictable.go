@@ -323,6 +323,10 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 			return s.makeToolResponse("compact_in_place", json.RawMessage(input), inputTokens), nil
 		}
 
+		if input, ok := strings.CutPrefix(inputText, "message_user: "); ok {
+			return s.makeToolResponse("message_user", json.RawMessage(input), inputTokens), nil
+		}
+
 		if path, ok := strings.CutPrefix(inputText, "change_dir: "); ok {
 			return s.makeChangeDirToolResponse(path, inputTokens), nil
 		}
@@ -1161,6 +1165,14 @@ func (s *Service) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response 
 		Type:      llm.ContentTypeToolUse,
 		ToolName:  "compact_in_place",
 		ToolInput: json.RawMessage(`{"action":"index"}`),
+	})
+
+	// message_user tool (a reply to the smorgasbord request, with a reaction)
+	content = append(content, llm.Content{
+		ID:        fmt.Sprintf("tool_message_user_%d", (baseNano+20)%1000),
+		Type:      llm.ContentTypeToolUse,
+		ToolName:  "message_user",
+		ToolInput: json.RawMessage(`{"text":"On it.","message_prefix":"tool smorgasbord","reaction":"👍"}`),
 	})
 
 	// browser: screencast_stop action (tests screencast UI widget)

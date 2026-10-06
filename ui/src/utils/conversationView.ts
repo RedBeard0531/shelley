@@ -38,13 +38,77 @@ export function isHumanUserMessage(message: Message): boolean {
   return human;
 }
 
+// The user_data a compaction stamps on the copies it carries forward.
+const CARRIED_KEYS = new Set(["compaction_carried", "carried_from_sequence_id"]);
+
+// A message the user typed, as opposed to a user-role message from a subagent,
+// a background job, or another machine source (which carry user_data). Copies
+// carried forward by a compaction still count; they render behind a band.
+export function isTypedUserMessage(message: Message): boolean {
+  if (!isHumanUserMessage(message)) return false;
+  if (!message.user_data) return true;
+  try {
+    const userData =
+      typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
+    return !userData || Object.keys(userData).every((key) => CARRIED_KEYS.has(key));
+  } catch {
+    // As in isHumanUserMessage: malformed metadata should not hide a message.
+    return true;
+  }
+}
+
 export function isVisibleConversationMessage(
   message: Message,
   mode: ConversationViewMode,
 ): boolean {
   if (mode === "all") return true;
+  if (mode === "brief") {
+    if (isTypedUserMessage(message)) return true;
+    return ["error", "warning", "modelchange"].includes(message.type);
+  }
   if (isHumanUserMessage(message)) return true;
   if (isDistillStatusMessage(message)) return true;
   if (message.type === "agent") return !!message.end_of_turn;
   return ["error", "warning", "gitinfo", "modelchange", "inplacecompaction"].includes(message.type);
+}
+
+export const MESSAGE_USER_TOOL = "message_user";
+
+/** Input of a message_user call, as the model sent it. */
+export interface MessageUserInput {
+  text?: string;
+  message_prefix?: string;
+  reaction?: string;
+  attachments?: string[];
+  end_turn?: boolean;
+}
+
+/** Display of a successful message_user call (claudetool.MessageUserDisplay). */
+export interface MessageUserDisplay {
+  target_message_id?: string;
+  target_sequence_id?: number;
+  target_excerpt?: string;
+  attachments?: { path: string; name: string; size: number }[];
+}
+
+export function messageUserInput(toolInput: unknown): MessageUserInput {
+  return typeof toolInput === "object" && toolInput !== null ? (toolInput as MessageUserInput) : {};
+}
+
+export function messageUserDisplay(display: unknown): MessageUserDisplay {
+  return typeof display === "object" && display !== null ? (display as MessageUserDisplay) : {};
+}
+
+/** Whether a message_user call delivered a message (not just a reaction),
+ * which brief view shows. Reactions show on the message they react to. */
+export function isDeliveredUserMessage(item: {
+  toolName?: string;
+  toolInput?: unknown;
+  hasResult?: boolean;
+  toolError?: boolean;
+  display?: unknown;
+}): boolean {
+  if (item.toolName !== MESSAGE_USER_TOOL || !item.hasResult || item.toolError) return false;
+  const input = messageUserInput(item.toolInput);
+  return !!input.text?.trim() || !!messageUserDisplay(item.display).attachments?.length;
 }

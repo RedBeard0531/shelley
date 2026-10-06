@@ -49,6 +49,7 @@ interface CreateConversationOptions {
   agentTimeout?: number;
   cwd?: string;
   model?: string;
+  conversationOptions?: Record<string, unknown>;
 }
 
 function sanitizeSlug(input: string): string {
@@ -134,9 +135,14 @@ export async function createConversationViaAPIWithDetails(
   message: string,
   opts: CreateConversationOptions = {},
 ): Promise<CreatedConversation> {
-  const { agentTimeout = 30000, cwd = testWorkingDirectory(), model = "predictable" } = opts;
+  const {
+    agentTimeout = 30000,
+    cwd = testWorkingDirectory(),
+    model = "predictable",
+    conversationOptions,
+  } = opts;
   const newResp = await request.post("/api/conversations/new", {
-    data: { message, model, cwd },
+    data: { message, model, cwd, conversation_options: conversationOptions },
   });
   expect(newResp.ok()).toBeTruthy();
   const { conversation_id: conversationId } = await newResp.json();

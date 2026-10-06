@@ -143,11 +143,13 @@ import KeywordSearchTool from "./tools/KeywordSearchTool.vue";
 import ChangeDirTool from "./tools/ChangeDirTool.vue";
 import CompactInPlaceTool from "./tools/CompactInPlaceTool.vue";
 import MessageParentTool from "./tools/MessageParentTool.vue";
+import MessageUserTool from "./tools/MessageUserTool.vue";
 import SubagentTool from "./tools/SubagentTool.vue";
 import LLMOneShotTool from "./tools/LLMOneShotTool.vue";
 import OutputIframeTool from "./tools/OutputIframeTool.vue";
 import WebSearchTool from "./tools/WebSearchTool.vue";
 import { toolCardPlaceholderKind } from "./toolCardMount";
+import { MESSAGE_USER_TOOL } from "../../utils/conversationView";
 
 const props = defineProps<{
   toolName: string;
@@ -160,6 +162,7 @@ const props = defineProps<{
   hasResult?: boolean;
   toolInterrupted?: boolean;
   display?: unknown;
+  toolResultMessageId?: string;
   onCommentTextChange?: (text: string) => void;
   toolUseId?: string;
 }>();
@@ -171,7 +174,12 @@ const props = defineProps<{
 const mountPlaceholderEl = ref<HTMLElement | null>(null);
 const nearViewport = useNearViewport(mountPlaceholderEl);
 const startedEager = !props.hasResult;
-const mountSpecializedCard = computed(() => startedEager || !props.hasResult || nearViewport.value);
+// message_user calls are the conversation itself in brief view; a placeholder
+// would make every bubble pop in while scrolling.
+const mountSpecializedCard = computed(
+  () =>
+    startedEager || !props.hasResult || nearViewport.value || props.toolName === MESSAGE_USER_TOOL,
+);
 
 const placeholderKind = computed(() =>
   toolCardPlaceholderKind(props.toolName, props.toolInput, props.display),
@@ -200,6 +208,7 @@ const TOOL_COMPONENTS: Record<string, any> = {
   compact_in_place: CompactInPlaceTool,
   subagent: SubagentTool,
   message_parent: MessageParentTool,
+  message_user: MessageUserTool,
   output_iframe: OutputIframeTool,
   llm_one_shot: LLMOneShotTool,
   browser_emulate: BrowserEmulateTool,
@@ -244,6 +253,9 @@ const toolComponentProps = computed<Record<string, unknown>>(() => {
   }
   if (props.toolName === "subagent") {
     base.displayData = props.display;
+  }
+  if (props.toolName === MESSAGE_USER_TOOL) {
+    base.resultMessageId = props.toolResultMessageId;
   }
   return base;
 });

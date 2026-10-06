@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -421,12 +422,12 @@ func resolvePiSummarizationText(logger logWarner, entry contextItem) llm.Message
 
 // userDataForCopy extracts the parsed user_data map from a source message so it
 // can be preserved when copying the message into the new generation. Returns
-// nil when there is none.
-func userDataForCopy(m generated.Message) map[string]string {
+// nil when there is none. Values keep their JSON types (context_nudge: true).
+func userDataForCopy(m generated.Message) map[string]any {
 	if m.UserData == nil {
 		return nil
 	}
-	var userData map[string]string
+	var userData map[string]any
 	if err := json.Unmarshal([]byte(*m.UserData), &userData); err != nil {
 		return nil
 	}
@@ -697,15 +698,23 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 	// its real summary text would be lost. Stamp compaction_carried=true on every
 	// copy so the UI can collapse the re-played tail behind a "messages carried
 	// forward" band instead of re-rendering each one (slow, jarring scroll).
+	// Stamp carried_from_sequence_id with the sequence_id of the message first
+	// copied, so that copies of copies, and forks (which keep sequence_ids),
+	// still know which message they are: message_user targets messages by it.
 	// An in-place squish summary in the tail has no source row; it is carried
-	// as a plain user message, and trimmed tool results are carried trimmed.
+	// as a user message stamped squish_note, and trimmed tool results are
+	// carried trimmed.
 	for _, entry := range recent {
-		var ud map[string]string
+		ud := map[string]any{}
 		if entry.source != nil {
-			ud = userDataForCopy(*entry.source)
-		}
-		if ud == nil {
-			ud = map[string]string{}
+			if src := userDataForCopy(*entry.source); src != nil {
+				ud = src
+			}
+			if _, ok := ud[carriedFromKey]; !ok {
+				ud[carriedFromKey] = strconv.FormatInt(entry.source.SequenceID, 10)
+			}
+		} else {
+			ud["squish_note"] = entry.noteID
 		}
 		ud["compaction_carried"] = "true"
 		batch = append(batch, recordMessageInput{message: entry.message, userData: []interface{}{ud}})

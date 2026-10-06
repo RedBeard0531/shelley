@@ -71,6 +71,7 @@
           "
           :can-export="!!(conversationId && messages.length > 0)"
           :has-update="hasUpdate"
+          :message-user="messageUserEnabled"
           @open-command-palette="props.onOpenCommandPalette?.()"
           @open-directory-picker="showDirectoryPicker = true"
           @open-diffs="showDiffViewer = true"
@@ -571,6 +572,8 @@ import {
   clearConversationViewCache,
   isHumanUserMessage,
   isVisibleConversationMessage,
+  isDeliveredUserMessage,
+  MESSAGE_USER_TOOL,
 } from "../../utils/conversationView";
 import { SLASH_COMMANDS } from "../../utils/slashCommands";
 import { replaceLocationFragment } from "../../utils/locationFragment";
@@ -636,6 +639,7 @@ import ChatOverflowMenu from "./ChatOverflowMenu.vue";
 import { matchChatInterfaceAction } from "../../utils/menuShortcuts";
 import ChunkHost from "./ChunkHost.vue";
 import { chunkMountKey } from "./chunkMount";
+import { collectReactions, messageUserContextKey, targetResolver } from "./messageUserContext";
 import QueuedGhostMessage from "./QueuedGhostMessage.vue";
 import TranscriptionTask from "./TranscriptionTask.vue";
 import ChatStatusContent from "./ChatStatusContent.vue";
@@ -708,7 +712,22 @@ const props = withDefaults(
 
 const { t } = useI18n();
 const { markdownMode } = useMarkdownMode();
-const { conversationViewMode } = useConversationView();
+// The tool overrides this conversation was started with.
+const conversationToolOverrides = computed<Record<string, string>>(() => {
+  const raw = props.currentConversation?.conversation_options;
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw)?.tool_overrides ?? {};
+  } catch {
+    return {};
+  }
+});
+// With the message_user tool on, the agent chats through it, and the view has
+// its own (brief) default.
+const messageUserEnabled = computed(
+  () => conversationToolOverrides.value[MESSAGE_USER_TOOL] === "on",
+);
+const { conversationViewMode } = useConversationView(messageUserEnabled);
 // A view-mode switch refilters coalescedItems, which renumbers every chunk
 // and can restructure them wholesale; reset the tail-first floor and
 // re-prime for the new model. Synchronous on purpose: renderModel is a
@@ -718,6 +737,9 @@ const { conversationViewMode } = useConversationView();
 // hoisted; safe to reference at setup time.)
 watch(conversationViewMode, () => {
   resetTailFirst();
+  // Band keys are positions in the view's items: another view's bands reuse
+  // them.
+  expandedCarriedBands.clear();
   primeTailFirstMount();
 });
 const compactSendThresholdsEnabled = useFeatureFlag("compact-send-thresholds");
@@ -1193,6 +1215,8 @@ const SWEEP_CHUNKS_PER_STEP = 4;
 const tailFloor = ref(0);
 const sweptTop = ref(0);
 const revealedChunks = reactive(new Set<string>());
+// Keys of the expanded carried bands of this conversation and view.
+const expandedCarriedBands = reactive(new Set<string>());
 let tailSweepToken = 0;
 let tailPrimedFor: string | null = null;
 let tailFloorKey: string | null = null;
@@ -1367,6 +1391,8 @@ interface ChunkTargetIndex {
   // precomputed so fragment resolution (which retries on a timer) is O(1).
   byMessageFrag: Map<string, number>;
   byToolFrag: Map<string, number>;
+  // Message id → key of the carried band it is in.
+  bandByMessage: Map<string, string>;
 }
 const chunkTargetIndexCache = new WeakMap<GenerationBlock[], ChunkTargetIndex>();
 
@@ -1374,12 +1400,18 @@ function fragPrefix(id: string): string {
   return id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8);
 }
 
-function collectChunkTargets(node: RenderNode, index: number, into: ChunkTargetIndex): void {
+function collectChunkTargets(
+  node: RenderNode,
+  index: number,
+  into: ChunkTargetIndex,
+  band?: string,
+): void {
   switch (node.kind) {
     case "message":
       if (node.item.message) {
         into.byMessage.set(node.item.message.message_id, index);
         into.byMessageFrag.set(fragPrefix(node.item.message.message_id), index);
+        if (band) into.bandByMessage.set(node.item.message.message_id, band);
       }
       break;
     case "tool-call":
@@ -1389,7 +1421,7 @@ function collectChunkTargets(node: RenderNode, index: number, into: ChunkTargetI
       }
       break;
     case "carried-band":
-      for (const child of node.children) collectChunkTargets(child, index, into);
+      for (const child of node.children) collectChunkTargets(child, index, into, node.key);
       break;
   }
 }
@@ -1403,6 +1435,7 @@ function chunkTargetIndex(): ChunkTargetIndex {
       byTool: new Map(),
       byMessageFrag: new Map(),
       byToolFrag: new Map(),
+      bandByMessage: new Map(),
     };
     for (const block of model) {
       for (const chunk of block.chunks) {
@@ -1448,6 +1481,7 @@ provide(chunkMountKey, {
   revealed: revealedChunks,
   reveal: revealChunk,
   revealTarget: revealChunkTarget,
+  expandedBands: expandedCarriedBands,
 });
 
 const links = window.__SHELLEY_INIT__?.links || [];
@@ -1790,15 +1824,9 @@ const conversationThinkingLevel = computed<string | null>(() => {
 });
 
 // Whether this conversation was started with the compact_in_place tool on.
-const compactInPlaceEnabled = computed(() => {
-  const raw = props.currentConversation?.conversation_options;
-  if (!raw) return false;
-  try {
-    return JSON.parse(raw)?.tool_overrides?.[COMPACT_IN_PLACE_TOOL] === "on";
-  } catch {
-    return false;
-  }
-});
+const compactInPlaceEnabled = computed(
+  () => conversationToolOverrides.value[COMPACT_IN_PLACE_TOOL] === "on",
+);
 
 const displayTitle = computed(() => {
   const title = props.currentConversation?.slug || "Shelley";
@@ -1817,20 +1845,33 @@ const welcomeParts = computed(() =>
   ),
 );
 
-const coalescedItems = computed(() => {
-  const items = perfWrap("chat.coalesceMessages", () =>
+const allCoalescedItems = computed(() =>
+  perfWrap("chat.coalesceMessages", () =>
     coalesceMessages(
       messages.value,
       conversationInterrupted.value ? props.currentConversation?.current_generation : undefined,
     ),
-  )();
-  if (conversationViewMode.value === "all") return items;
-  return items.filter(
-    (item) =>
-      item.type === "message" &&
-      !!item.message &&
-      isVisibleConversationMessage(item.message, conversationViewMode.value),
+  )(),
+);
+const coalescedItems = computed(() => {
+  const items = allCoalescedItems.value;
+  const mode = conversationViewMode.value;
+  if (mode === "all") return items;
+  return items.filter((item) =>
+    item.type === "tool"
+      ? mode === "brief" && isDeliveredUserMessage(item)
+      : !!item.message && isVisibleConversationMessage(item.message, mode),
   );
+});
+const messageUserResolveTarget = computed(() => targetResolver(messages.value));
+provide(messageUserContextKey, {
+  reactions: computed(() =>
+    messageUserEnabled.value
+      ? collectReactions(allCoalescedItems.value, messageUserResolveTarget.value)
+      : new Map(),
+  ),
+  resolveTarget: messageUserResolveTarget,
+  jumpTo: jumpToMessage,
 });
 const visibleMessages = computed(() =>
   messages.value.filter((message) =>
@@ -3075,7 +3116,11 @@ const ownSends = new Set<string>();
 // postSubmittedDraft runs the chat POST for a composer's text with its mirror
 // entry flagged pending, then clears the accepted text, or unflags it if the
 // POST fails.
-async function postSubmittedDraft<T>(conversationId: string, text: string, post: () => Promise<T>): Promise<T> {
+async function postSubmittedDraft<T>(
+  conversationId: string,
+  text: string,
+  post: () => Promise<T>,
+): Promise<T> {
   const restore = markCachedDraftPending(conversationId, text);
   ownSends.add(conversationId);
   let result: T;
@@ -4214,6 +4259,7 @@ watch(
     // Tail-first mounting is per conversation: cancel the old sweep and mount
     // everything until the new load primes a fresh floor.
     resetTailFirst();
+    expandedCarriedBands.clear();
     if (!id) {
       messages.value = [];
       btwExchanges.value = [];
@@ -4462,24 +4508,53 @@ watch(
     const targetEl = userMessageEls[targetIdx] as HTMLElement;
     markUserScrolledUp();
     targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    highlightMessage(targetEl);
+  },
+);
+
+function highlightMessage(targetEl: HTMLElement) {
+  if (highlightTimeout) {
+    clearTimeout(highlightTimeout);
+    highlightTimeout = null;
+  }
+  targetEl.classList.remove("message-highlight");
+  void targetEl.offsetWidth;
+  targetEl.classList.add("message-highlight");
+  const removeHighlight = () => {
+    targetEl.classList.remove("message-highlight");
     if (highlightTimeout) {
       clearTimeout(highlightTimeout);
       highlightTimeout = null;
     }
-    targetEl.classList.remove("message-highlight");
-    void targetEl.offsetWidth;
-    targetEl.classList.add("message-highlight");
-    const removeHighlight = () => {
-      targetEl.classList.remove("message-highlight");
-      if (highlightTimeout) {
-        clearTimeout(highlightTimeout);
-        highlightTimeout = null;
-      }
-    };
-    targetEl.addEventListener("animationend", removeHighlight, { once: true });
-    highlightTimeout = window.setTimeout(removeHighlight, 2000);
-  },
-);
+  };
+  targetEl.addEventListener("animationend", removeHighlight, { once: true });
+  highlightTimeout = window.setTimeout(removeHighlight, 2000);
+}
+
+// Scroll to and highlight a message, mounting its chunk and expanding its
+// carried band first if need be.
+async function jumpToMessage(messageId: string) {
+  let pending = revealChunkTarget({ messageId });
+  const band = chunkTargetIndex().bandByMessage.get(messageId);
+  if (band && !expandedCarriedBands.has(band)) {
+    expandedCarriedBands.add(band);
+    pending = true;
+  }
+  if (pending) await nextTick();
+  const container = messagesContainerRef.value;
+  const el = container?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+  if (!container || !el) return;
+  // A message already in full view only needs the highlight. Scrolling to it
+  // would not move, and marking the user scrolled up would then stop
+  // following new messages with nothing to undo it.
+  const view = container.getBoundingClientRect();
+  const rect = el.getBoundingClientRect();
+  if (rect.top < view.top || rect.bottom > view.bottom) {
+    markUserScrolledUp();
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  highlightMessage(el);
+}
 
 // Auto-scroll after DOM updates (mirrors the useLayoutEffect).
 watch(
