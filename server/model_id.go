@@ -25,8 +25,8 @@ import (
 //
 //	gpt-4o, https://api.openai.com/v1          -> gpt-4o-api-openai-com
 //	llama3.1, http://localhost:11434           -> llama3-1-localhost-11434
-//	accounts/fireworks/models/glm-5p2,
-//	    https://api.fireworks.ai/inference/v1  -> glm-5p2-api-fireworks-ai
+//	accounts/fireworks/models/glm-5p3,
+//	    https://api.fireworks.ai/inference/v1  -> glm-5p3-api-fireworks-ai
 func slugifyModelID(endpoint, modelName string) string {
 	host, port := hostPort(endpoint)
 

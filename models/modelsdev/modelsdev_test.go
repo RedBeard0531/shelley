@@ -23,7 +23,7 @@ func TestLookupImageSupport(t *testing.T) {
 		{"gemini", "https://generativelanguage.googleapis.com", "gemini-3.1-pro-preview", true, true},
 
 		// Hosts that carry an explicit "api" field in models.dev.
-		{"fireworks text-only", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p2", true, false},
+		{"fireworks text-only", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p3", true, false},
 		{"fireworks glm-5p3 text", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p3", true, false},
 		{"fireworks glm-5p3-flash vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/glm-5p3-flash", true, true},
 		{"fireworks vision", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/kimi-k3", true, true},
@@ -284,7 +284,7 @@ func TestLookupInterleavedReasoningField(t *testing.T) {
 		{
 			name:     "gateway native Fireworks name",
 			endpoint: "https://llm.int.exe.xyz/v1",
-			model:    "accounts/fireworks/models/glm-5p2",
+			model:    "accounts/fireworks/models/glm-5p3",
 			want:     "reasoning_content",
 			found:    true,
 		},
@@ -305,7 +305,7 @@ func TestLookupInterleavedReasoningField(t *testing.T) {
 		{
 			name:     "bare Fireworks name matches final segment",
 			endpoint: "https://proxy.example/v1",
-			model:    "glm-5p2",
+			model:    "glm-5p3",
 			want:     "reasoning_content",
 			found:    true,
 		},
@@ -423,7 +423,7 @@ func TestLookupCost(t *testing.T) {
 		{"sol 6.1 via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6.1-sol", true, Cost{Input: 2, Output: 10, CacheRead: 0.1, CacheWrite: 2.5}},
 		{"sol via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6-sol", true, Cost{Input: 2, Output: 10, CacheRead: 0.2, CacheWrite: 2.5}},
 		{"luna via gateway", "https://llm.int.exe.xyz/v1/responses", "gpt-6-luna", true, Cost{Input: 0.1, Output: 0.5, CacheRead: 0.01, CacheWrite: 0.125}},
-		{"fireworks full path", "", "accounts/fireworks/models/kimi-k2p6", true, Cost{Input: 0.95, Output: 4, CacheRead: 0.16}},
+		{"fireworks full path", "", "accounts/fireworks/models/kimi-k3", true, Cost{Input: 3, Output: 15, CacheRead: 0.3}},
 		{"fireworks glm-5p3", "", "accounts/fireworks/models/glm-5p3", true, Cost{Input: 1.4, Output: 4.4, CacheRead: 0.26}},
 		{"fireworks glm-5p3-flash", "", "accounts/fireworks/models/glm-5p3-flash", true, Cost{Input: 0.15, Output: 0.5, CacheRead: 0.03}},
 		{"unknown model", "", "predictable-v1", false, Cost{}},

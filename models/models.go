@@ -456,12 +456,6 @@ func All() []Model {
 			Build: oaiChatSvc(oai.DeepseekV41FlashFireworks, "fireworks"),
 		},
 		{
-			ID: "glm-5.2-fireworks", Provider: ProviderFireworks,
-			Description: "GLM-5.2 on Fireworks", APIModelName: oai.GLM52Fireworks.ModelName,
-			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.GLM52Fireworks, "fireworks"),
-		},
-		{
 			ID: "predictable", Provider: ProviderBuiltIn,
 			Description:    "Deterministic test model (no API key)",
 			APIType:        APITypeBuiltIn,

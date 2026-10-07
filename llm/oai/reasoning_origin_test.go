@@ -84,7 +84,7 @@ func TestChatServiceEnforcesReasoningOrigin(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(openai.ChatCompletionResponse{
-			ID: "response", Model: "glm-5p2",
+			ID: "response", Model: "glm-5p3",
 			Choices: []openai.ChatCompletionChoice{{
 				Message: openai.ChatCompletionMessage{Role: "assistant", Content: "ok"},
 			}},
@@ -93,13 +93,13 @@ func TestChatServiceEnforcesReasoningOrigin(t *testing.T) {
 	defer server.Close()
 
 	service := &Service{
-		APIKey: "key", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		APIKey: "key", Model: modelForTest("glm-5p3"), ModelURL: server.URL,
 		ProviderName: "fireworks", ReasoningReplay: "reasoning_content",
 	}
 	response, err := service.Do(t.Context(), &llm.Request{Messages: []llm.Message{{
 		Role: llm.MessageRoleAssistant,
 		Origin: &llm.MessageOrigin{
-			Provider: "fireworks", Transport: "openai-chat:https://other.example/v1", Model: "glm-5p2",
+			Provider: "fireworks", Transport: "openai-chat:https://other.example/v1", Model: "glm-5p3",
 		},
 		Content: []llm.Content{
 			{Type: llm.ContentTypeThinking, Thinking: "do not replay"},

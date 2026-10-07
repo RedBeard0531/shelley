@@ -157,7 +157,7 @@ func TestCustomModelAutoInfersReasoningReplay(t *testing.T) {
 		"provider_type":"openai",
 		"endpoint":"https://proxy.example/v1",
 		"api_key":"test-key",
-		"model_name":"fireworks/glm-5p2"
+		"model_name":"fireworks/glm-5p3"
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/custom-models", bytes.NewReader(body))
 	rec := httptest.NewRecorder()

@@ -35,8 +35,8 @@ func TestSlugifyModelID(t *testing.T) {
 		{
 			name:      "namespaced model name uses last segment",
 			endpoint:  "https://api.fireworks.ai/inference/v1",
-			modelName: "accounts/fireworks/models/glm-5p2",
-			want:      "glm-5p2-api-fireworks-ai",
+			modelName: "accounts/fireworks/models/glm-5p3",
+			want:      "glm-5p3-api-fireworks-ai",
 		},
 		{
 			name:      "https on explicit non-default port kept",

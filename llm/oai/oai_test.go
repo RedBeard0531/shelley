@@ -2095,7 +2095,7 @@ func TestServiceDoReasoningContentResponseRoundTrip(t *testing.T) {
 	defer server.Close()
 
 	svc := &Service{
-		APIKey: "k", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		APIKey: "k", Model: modelForTest("glm-5p3"), ModelURL: server.URL,
 		ReasoningReplay: "reasoning_content",
 	}
 	user := llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "use x"}}}
@@ -2130,7 +2130,7 @@ func TestServiceDoReplaysReasoningContent(t *testing.T) {
 	defer server.Close()
 
 	svc := &Service{
-		APIKey: "k", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		APIKey: "k", Model: modelForTest("glm-5p3"), ModelURL: server.URL,
 		ReasoningReplay: "reasoning_content",
 	}
 	req := &llm.Request{Messages: []llm.Message{
@@ -2165,7 +2165,7 @@ func TestServiceDoReasoningContentReplayDoesNotAddPlaceholder(t *testing.T) {
 	defer server.Close()
 
 	svc := &Service{
-		APIKey: "k", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		APIKey: "k", Model: modelForTest("glm-5p3"), ModelURL: server.URL,
 		ReasoningReplay: "reasoning_content",
 	}
 	req := &llm.Request{Messages: []llm.Message{
@@ -2197,7 +2197,7 @@ func TestServiceDoDisabledReasoningReplayDoesNotAddPlaceholder(t *testing.T) {
 	defer server.Close()
 
 	svc := &Service{
-		APIKey: "k", Model: modelForTest("glm-5p2"), ModelURL: server.URL,
+		APIKey: "k", Model: modelForTest("glm-5p3"), ModelURL: server.URL,
 		ReasoningReplay: "none",
 	}
 	req := &llm.Request{Messages: []llm.Message{
@@ -2315,10 +2315,10 @@ func TestServiceReasoningEffort(t *testing.T) {
 		{name: "gpt-6 luna max verbatim", model: GPT6Luna, reqLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "gpt-5.6 minimal rounds to low", model: GPT56Sol, svcLevel: llm.ThinkingLevelMinimal, wantEffort: "low"},
 		{name: "gpt-5.6 off sends none", model: GPT56Sol, reqLevel: llm.ThinkingLevelOff, wantEffort: "none"},
-		{name: "GLM low rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelLow, wantEffort: "high"},
-		{name: "GLM xhigh tie rounds to high", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
+		{name: "GLM low verbatim", model: GLM53Fireworks, svcLevel: llm.ThinkingLevelLow, wantEffort: "low"},
+		{name: "GLM xhigh tie rounds to high", model: GLM53Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
 		{name: "Kimi xhigh tie rounds to high", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelXHigh, wantEffort: "high"},
-		{name: "GLM 5.2 keeps max", model: GLM52Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
+		{name: "GLM 5.3 keeps max", model: GLM53Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "Kimi K3 keeps max", model: KimiK3Fireworks, svcLevel: llm.ThinkingLevelMax, wantEffort: "max"},
 		{name: "svc off, svc verbatim wins", svcLevel: llm.ThinkingLevelOff, svcEffort: "verbatim", wantEffort: "verbatim"},
 		{name: "req override beats svc default", svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelLow, wantEffort: "low"},

@@ -248,7 +248,7 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 			{ID: "openai/gpt-5.6-terra", Provider: "openai", NativeID: "gpt-5.6-terra", APIs: []string{"openai_chat", "openai_responses"}},
 			{ID: "openai/gpt-5.6-luna", Provider: "openai", NativeID: "gpt-5.6-luna", APIs: []string{"openai_chat", "openai_responses"}},
 			{ID: "openai/gpt-5.5", Provider: "openai", NativeID: "gpt-5.5", APIs: []string{"openai_responses"}},
-			{ID: "fireworks/glm-5p2", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p2", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/glm-5p3", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p3", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/glm-5p3", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p3", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/glm-5p3-flash", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p3-flash", APIs: []string{"openai_chat"}},
 			{ID: "fireworks/kimi-k3", Provider: "fireworks", NativeID: "accounts/fireworks/models/kimi-k3", APIs: []string{"openai_chat"}},
@@ -270,7 +270,6 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"gpt-5.6-terra",
 		"gpt-5.6-luna",
 		"gpt-5.5",
-		"glm-5.2-fireworks",
 		"glm-5.3-fireworks",
 		"glm-5.3-flash-fireworks",
 		"kimi-k3-fireworks",
@@ -315,7 +314,6 @@ func TestLLMIntegrationSourceLabelsAndFiltering(t *testing.T) {
 		"anthropic/claude-opus-4-7",
 		"openai/gpt-5.5",
 		"claude-opus-4-7",
-		"glm-5p2",
 		"glm-5p3",
 		"glm-5p3-flash",
 		"kimi-k3",
@@ -745,7 +743,7 @@ func TestIntegrationModelsFromCatalogUsesNativeIDsForSupportedAPIs(t *testing.T)
 			{ID: "anthropic/claude-opus-4-7", Provider: "anthropic", NativeID: "claude-opus-4-7", APIs: []string{"anthropic_messages"}},
 			{ID: "openai/gpt-5.6-sol", Provider: "openai", NativeID: "gpt-5.6-sol", APIs: []string{"openai_chat", "openai_responses"}},
 			{ID: "openai/gpt-5.5", Provider: "openai", NativeID: "gpt-5.5", APIs: []string{"openai_responses"}},
-			{ID: "fireworks/glm-5p2", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p2", APIs: []string{"openai_chat"}},
+			{ID: "fireworks/glm-5p3", Provider: "fireworks", NativeID: "accounts/fireworks/models/glm-5p3", APIs: []string{"openai_chat"}},
 			{ID: "mistral/upstream-chat", Provider: "mistral", NativeID: "upstream-chat", APIs: []string{"openai_chat"}},
 			{Provider: "openai", NativeID: "missing-integration-id", APIs: []string{"openai_responses"}},
 			{ID: "openai/text-embedding-3-small", Provider: "openai", NativeID: "text-embedding-3-small", APIs: []string{"openai_embeddings"}},
@@ -756,7 +754,7 @@ func TestIntegrationModelsFromCatalogUsesNativeIDsForSupportedAPIs(t *testing.T)
 	if len(got) != 5 {
 		t.Fatalf("supported model count = %d, want 5 (%+v)", len(got), got)
 	}
-	for i, want := range []string{"claude-opus-4-7", "gpt-5.6-sol", "gpt-5.5", "accounts/fireworks/models/glm-5p2", "upstream-chat"} {
+	for i, want := range []string{"claude-opus-4-7", "gpt-5.6-sol", "gpt-5.5", "accounts/fireworks/models/glm-5p3", "upstream-chat"} {
 		if got[i].apiModelName() != want {
 			t.Fatalf("model %d apiModelName = %q, want %q", i, got[i].apiModelName(), want)
 		}
@@ -947,7 +945,7 @@ func TestDiscoverLLMIntegrationsReadsModelsJSONCatalog(t *testing.T) {
 					{"id":"anthropic/claude-opus-4-7","provider":"anthropic","native_id":"claude-opus-4-7","apis":["anthropic_messages"]},
 					{"id":"openai/gpt-5.6-sol","provider":"openai","native_id":"gpt-5.6-sol","apis":["openai_chat","openai_responses"]},
 					{"id":"openai/gpt-5.5","provider":"openai","native_id":"gpt-5.5","apis":["openai_responses"]},
-					{"id":"fireworks/glm-5p2","provider":"fireworks","native_id":"accounts/fireworks/models/glm-5p2","apis":["openai_chat"]},
+					{"id":"fireworks/glm-5p3","provider":"fireworks","native_id":"accounts/fireworks/models/glm-5p3","apis":["openai_chat"]},
 					{"id":"openai/gpt-transcribe","provider":"openai","native_id":"gpt-transcribe","apis":["openai_transcriptions"]}
 				]
 			}`
@@ -976,7 +974,7 @@ func TestDiscoverLLMIntegrationsReadsModelsJSONCatalog(t *testing.T) {
 	if len(integ.Models) != 4 {
 		t.Fatalf("models = %+v, want 4", integ.Models)
 	}
-	for i, want := range []string{"claude-opus-4-7", "gpt-5.6-sol", "gpt-5.5", "accounts/fireworks/models/glm-5p2"} {
+	for i, want := range []string{"claude-opus-4-7", "gpt-5.6-sol", "gpt-5.5", "accounts/fireworks/models/glm-5p3"} {
 		if integ.Models[i].apiModelName() != want {
 			t.Fatalf("model %d apiModelName = %q, want %q", i, integ.Models[i].apiModelName(), want)
 		}
