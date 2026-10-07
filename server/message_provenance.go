@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"shelley.exe.dev/db"
@@ -161,9 +162,53 @@ func messageWithSenderProvenance(message llm.Message, rawUserData []byte) (llm.M
 	if err != nil || tag == "" {
 		return message, err
 	}
+	return wrapMessageForLLM(message, tag, attrs...)
+}
+
+// messageWithSequenceID shows the stable sequence ID of a typed user message
+// to the LLM, without changing its persisted or UI text. For channel messages,
+// the transport's own ID stays out of the prompt and is resolved on reply.
+func messageWithSequenceID(message llm.Message, externalID string, sequenceID int64) (llm.Message, error) {
+	tag := "user_message"
+	if externalID != "" {
+		tag = "external_message"
+	}
+	return wrapMessageForLLM(message, tag, xml.Attr{
+		Name: xml.Name{Local: "sequence_id"}, Value: strconv.FormatInt(sequenceID, 10),
+	})
+}
+
+// typedUserForLLM mirrors ListTypedUserMessages: machine notices and tool
+// results aren't reply targets, even when they have the user role. Compaction
+// copies are still the user's messages.
+func typedUserForLLM(message llm.Message, rawUserData []byte) bool {
+	if message.Role != llm.MessageRoleUser {
+		return false
+	}
+	for _, content := range message.Content {
+		if content.Type == llm.ContentTypeToolResult {
+			return false
+		}
+	}
+	if len(rawUserData) == 0 || string(rawUserData) == "null" {
+		return true
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(rawUserData, &data); err != nil {
+		return false
+	}
+	for key := range data {
+		if key != "compaction_carried" && key != carriedFromKey {
+			return false
+		}
+	}
+	return true
+}
+
+func wrapMessageForLLM(message llm.Message, tag string, attrs ...xml.Attr) (llm.Message, error) {
 	opening, err := xmlProvenanceOpeningTag(tag, attrs...)
 	if err != nil {
-		return message, fmt.Errorf("encode sender provenance tag: %w", err)
+		return message, fmt.Errorf("encode %s tag: %w", tag, err)
 	}
 	closing := "</" + tag + ">"
 
@@ -180,7 +225,12 @@ func messageWithSenderProvenance(message llm.Message, rawUserData []byte) (llm.M
 		lastText = i
 	}
 	if firstText < 0 {
-		return message, fmt.Errorf("sender provenance message has no text content")
+		if tag != "user_message" && tag != "external_message" {
+			return message, fmt.Errorf("%s message has no text content", tag)
+		}
+		message.Content = append([]llm.Content{{Type: llm.ContentTypeText, Text: opening}}, message.Content...)
+		message.Content = append(message.Content, llm.Content{Type: llm.ContentTypeText, Text: closing})
+		return message, nil
 	}
 	message.Content[firstText].Text = opening + "\n" + message.Content[firstText].Text
 	message.Content[lastText].Text += "\n" + closing

@@ -706,10 +706,12 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 	// carried trimmed.
 	for _, entry := range recent {
 		ud := map[string]any{}
+		var externalID string
 		if entry.source != nil {
 			if src := userDataForCopy(*entry.source); src != nil {
 				ud = src
 			}
+			externalID = derefString(entry.source.ExternalMessageID)
 			if _, ok := ud[carriedFromKey]; !ok {
 				ud[carriedFromKey] = strconv.FormatInt(entry.source.SequenceID, 10)
 			}
@@ -717,7 +719,7 @@ func (s *Server) performPiDistillation(ctx context.Context, conversationID, sour
 			ud["squish_note"] = entry.noteID
 		}
 		ud["compaction_carried"] = "true"
-		batch = append(batch, recordMessageInput{message: entry.message, userData: []interface{}{ud}})
+		batch = append(batch, recordMessageInput{message: entry.message, userData: []interface{}{ud}, externalMessageID: externalID})
 	}
 
 	// Append the terminal "complete" status message as an additional INSERT in

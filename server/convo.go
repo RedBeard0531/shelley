@@ -182,7 +182,7 @@ type ConversationManager struct {
 	onTurnStartRejected func()
 	// recordDrainedQueued records a queued item's messages and removes the item
 	// from the queue in one transaction.
-	recordDrainedQueued func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) error
+	recordDrainedQueued func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) (int64, error)
 	// userChat, set for a top-level conversation bound to an external chat,
 	// is where message_user's messages also go.
 	userChat claudetool.UserChat
@@ -690,6 +690,12 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 			cm.discardUnstartedLoopLocked(loopInstance)
 		}
 		return false, "", fmt.Errorf("turn-start recorder returned no message")
+	}
+	if turnUserDataFromContext(ctx) == nil && typedUserForLLM(message, nil) {
+		modelMessage, err = messageWithSequenceID(modelMessage, derefString(created.ExternalMessageID), created.SequenceID)
+		if err != nil {
+			return false, created.MessageID, fmt.Errorf("render user message: %w", err)
+		}
 	}
 
 	cm.mu.Lock()
@@ -1437,7 +1443,14 @@ func (cm *ConversationManager) recordQueued(ctx context.Context, qm db.QueuedMes
 	if fed, err = messageWithSenderProvenance(user, qm.UserData); err != nil {
 		return user, fed, err
 	}
-	return user, fed, cm.recordDrainedQueued(ctx, qm, messages)
+	sequenceID, err := cm.recordDrainedQueued(ctx, qm, messages)
+	if err != nil {
+		return user, fed, err
+	}
+	if typedUserForLLM(user, qm.UserData) {
+		fed, err = messageWithSequenceID(fed, qm.ExternalMessageID, sequenceID)
+	}
+	return user, fed, err
 }
 
 // messageText concatenates a message's text blocks.
@@ -1923,6 +1936,16 @@ func (cm *ConversationManager) contextItems(messages []generated.Message) ([]con
 		wrapped, err := messageWithSenderProvenance(history[i].message, userData)
 		if err != nil {
 			return nil, nil, fmt.Errorf("apply sender provenance to message %s: %w", src.MessageID, err)
+		}
+		if typedUserForLLM(history[i].message, userData) {
+			origin, err := originSequenceID(*src)
+			if err != nil {
+				return nil, nil, fmt.Errorf("origin sequence of message %s: %w", src.MessageID, err)
+			}
+			wrapped, err = messageWithSequenceID(wrapped, derefString(src.ExternalMessageID), origin)
+			if err != nil {
+				return nil, nil, fmt.Errorf("render user message %s: %w", src.MessageID, err)
+			}
 		}
 		history[i].message = wrapped
 	}

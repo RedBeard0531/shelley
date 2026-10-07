@@ -29,8 +29,8 @@ import (
 // messages and reactions go to the chat (see channelChat).
 //
 // An endpoint speaks the exe.dev messages gateway's API: POST /send
-// {"text":"..."} answers {"message_id":"..."}, POST /react
-// {"message_id":"...","reaction":"<emoji>"} answers {"ok":true}, and a
+// {"text":"...","reply_to":"<message_id>"} answers {"message_id":"..."}, POST /react
+// {"message_id":"<message_id>","reaction":"<emoji>"} answers {"ok":true}, and a
 // refusal answers {"error":"<code>","message":"..."}.
 
 // messagesIntegration is the exe.dev integration whose chat exed delivers to
@@ -274,11 +274,15 @@ func (e *channelSendError) Error() string {
 
 // sendChannelMessage sends text to the external chat that conversationID is
 // bound to, and returns the channel's id for the sent message.
-func (s *Server) sendChannelMessage(ctx context.Context, conversationID, text string) (string, error) {
+func (s *Server) sendChannelMessage(ctx context.Context, conversationID, text, replyTo string) (string, error) {
 	var sent struct {
 		MessageID string `json:"message_id"`
 	}
-	err := s.callChannel(ctx, conversationID, "/send", map[string]string{"text": text}, &sent)
+	body := map[string]string{"text": text}
+	if replyTo != "" {
+		body["reply_to"] = replyTo
+	}
+	err := s.callChannel(ctx, conversationID, "/send", body, &sent)
 	return sent.MessageID, err
 }
 
@@ -351,15 +355,14 @@ func (e *channelSendError) refused() bool {
 var errChannelMaybeDelivered = errors.New("it may have been delivered anyway")
 
 // channelChat is the claudetool.UserChat of a conversation bound to an
-// external chat: message_user's messages go to the chat. The gateway takes
-// no reply targets, so a reply goes as a plain message.
+// external chat: message_user's messages go to the chat.
 type channelChat struct {
 	s              *Server
 	conversationID string
 }
 
-func (c channelChat) Send(ctx context.Context, text string) error {
-	_, err := c.s.sendChannelMessage(ctx, c.conversationID, text)
+func (c channelChat) Send(ctx context.Context, text string, target claudetool.UserMessage) error {
+	_, err := c.s.sendChannelMessage(ctx, c.conversationID, text, target.ExternalID)
 	return chatDeliveryError(err)
 }
 

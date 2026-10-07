@@ -3,6 +3,7 @@ package predictable
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"strconv"
@@ -147,6 +148,18 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 				}
 			}
 		}
+	}
+	// The real LLM sees the sequence marker; for this test fixture, unwrap
+	// the user text so its deterministic commands still work in channel chats.
+	if strings.HasPrefix(inputText, "<external_message ") || strings.HasPrefix(inputText, "<user_message ") {
+		var external struct {
+			SequenceID int64  `xml:"sequence_id,attr"`
+			Text       string `xml:",chardata"`
+		}
+		if err := xml.Unmarshal([]byte(inputText), &external); err != nil {
+			return nil, fmt.Errorf("decode external message: %w", err)
+		}
+		inputText = strings.TrimSpace(external.Text)
 	}
 
 	// If the message is purely a tool result (no text), acknowledge it and end turn.
@@ -1172,7 +1185,7 @@ func (s *Service) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response 
 		ID:        fmt.Sprintf("tool_message_user_%d", (baseNano+20)%1000),
 		Type:      llm.ContentTypeToolUse,
 		ToolName:  "message_user",
-		ToolInput: json.RawMessage(`{"text":"On it.","message_prefix":"tool smorgasbord","reaction":"👍"}`),
+		ToolInput: json.RawMessage(`{"text":"On it.","reply_to":2,"reaction":"👍"}`),
 	})
 
 	// browser: screencast_stop action (tests screencast UI widget)

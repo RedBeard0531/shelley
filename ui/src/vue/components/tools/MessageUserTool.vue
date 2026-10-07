@@ -63,6 +63,7 @@
       type="button"
       class="message-user-quote-link"
       :disabled="!targetId"
+      :title="input.reply_to ? `Message #${input.reply_to}` : display.target_excerpt"
       @click="jumpToTarget"
     >
       “{{ display.target_excerpt }}”
@@ -76,7 +77,11 @@
         type="button"
         class="message-user-quote"
         data-testid="message-user-quote"
-        :title="display.target_excerpt"
+        :title="
+          input.reply_to
+            ? `Reply to message #${input.reply_to}: ${display.target_excerpt}`
+            : display.target_excerpt
+        "
         :disabled="!targetId"
         @click="jumpToTarget"
       >

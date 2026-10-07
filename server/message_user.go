@@ -32,35 +32,39 @@ func (cm *ConversationManager) userMessageFinder() claudetool.UserMessageFinder 
 	return userMessageFinder{db: cm.db, conversationID: cm.conversationID}
 }
 
-func (f userMessageFinder) FindUserMessage(ctx context.Context, prefix string) (claudetool.UserMessage, bool, error) {
-	prefix = claudetool.NormalizeSpace(prefix)
-	if prefix == "" {
-		return claudetool.UserMessage{}, false, nil
-	}
+func (f userMessageFinder) FindUserMessageBySequence(ctx context.Context, sequenceID int64) (claudetool.UserMessage, bool, error) {
 	msgs, err := f.db.ListTypedUserMessages(ctx, f.conversationID)
 	if err != nil {
 		return claudetool.UserMessage{}, false, err
 	}
 	for _, m := range msgs {
+		origin, err := originSequenceID(m)
+		if err != nil {
+			return claudetool.UserMessage{}, false, fmt.Errorf("message %s: %w", m.MessageID, err)
+		}
+		if m.SequenceID != sequenceID && origin != sequenceID {
+			continue
+		}
 		msg, err := parseLLMData(m.LlmData)
 		if err != nil {
 			return claudetool.UserMessage{}, false, fmt.Errorf("message %s: %w", m.MessageID, err)
 		}
-		text := userMessageText(*msg)
-		if !strings.HasPrefix(claudetool.NormalizeSpace(text), prefix) {
-			continue
-		}
-		seq, err := originSequenceID(m)
-		if err != nil {
-			return claudetool.UserMessage{}, false, fmt.Errorf("message %s: %w", m.MessageID, err)
-		}
-		um := claudetool.UserMessage{ID: m.MessageID, SequenceID: seq, Text: text}
-		if m.ExternalMessageID != nil {
-			um.ExternalID = *m.ExternalMessageID
-		}
-		return um, true, nil
+		um, err := typedUserMessage(m, userMessageText(*msg))
+		return um, err == nil, err
 	}
 	return claudetool.UserMessage{}, false, nil
+}
+
+func typedUserMessage(m generated.Message, text string) (claudetool.UserMessage, error) {
+	seq, err := originSequenceID(m)
+	if err != nil {
+		return claudetool.UserMessage{}, fmt.Errorf("message %s: %w", m.MessageID, err)
+	}
+	um := claudetool.UserMessage{ID: m.MessageID, SequenceID: seq, Text: text}
+	if m.ExternalMessageID != nil {
+		um.ExternalID = *m.ExternalMessageID
+	}
+	return um, nil
 }
 
 // carriedFromKey is the user_data key of a compaction's copy that holds the

@@ -222,7 +222,7 @@ func (r *recordingService) turnIndex(t *testing.T, userText string) int {
 			if m.Role != llm.MessageRoleUser {
 				continue
 			}
-			if strings.TrimSpace(messageTextContent(m)) == strings.TrimSpace(userText) {
+			if plainUserMessageText(strings.TrimSpace(messageTextContent(m))) == strings.TrimSpace(userText) {
 				return i
 			}
 		}

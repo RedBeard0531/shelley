@@ -35,10 +35,17 @@ test("message_user conversations show the chat", async ({ page, request }) => {
       "Please check the build",
       { cwd: dir, conversationOptions: { tool_overrides: { message_user: "on" } } },
     );
+    const initial = await request.get(`/api/conversation/${conversationId}`);
+    expect(initial.ok()).toBeTruthy();
+    const { messages: initialMessages } = (await initial.json()) as {
+      messages: { type: string; sequence_id: number }[];
+    };
+    const firstSeq = initialMessages.find((m) => m.type === "user")?.sequence_id;
+    expect(firstSeq).toBeGreaterThan(0);
     await chat(
       request,
       conversationId,
-      messageUser({ text: "Looking now.", message_prefix: "Please check", reaction: "👀" }),
+      messageUser({ text: "Looking now.", reply_to: firstSeq, reaction: "👀" }),
     );
     await chat(
       request,
@@ -49,7 +56,7 @@ test("message_user conversations show the chat", async ({ page, request }) => {
         end_turn: true,
       }),
     );
-    await chat(request, conversationId, messageUser({ text: "x", message_prefix: "nope" }));
+    await chat(request, conversationId, messageUser({ text: "x", reply_to: 99999999 }));
 
     await page.goto(`/c/${slug}`);
     const bubbles = page.getByTestId("message-user-bubble");
@@ -110,11 +117,7 @@ test("message_user conversations show the chat", async ({ page, request }) => {
     const resp = await request.post(`/api/conversation/${conversationId}/fork`, { data: {} });
     expect(resp.ok()).toBeTruthy();
     const fork = await resp.json();
-    await chat(
-      request,
-      fork.conversation_id,
-      messageUser({ message_prefix: "Please check", reaction: "🍴" }),
-    );
+    await chat(request, fork.conversation_id, messageUser({ reply_to: firstSeq, reaction: "🍴" }));
     await page.goto(`/c/${fork.slug}`);
     const forkAsked = page
       .getByTestId("message")
@@ -147,10 +150,17 @@ test("message_user targets survive compaction and forks", async ({ page, request
     "Please check the build",
     { conversationOptions: { tool_overrides: { message_user: "on" } } },
   );
+  const initial = await request.get(`/api/conversation/${conversationId}`);
+  expect(initial.ok()).toBeTruthy();
+  const { messages: initialMessages } = (await initial.json()) as {
+    messages: { type: string; sequence_id: number }[];
+  };
+  const firstSeq = initialMessages.find((m) => m.type === "user")?.sequence_id;
+  expect(firstSeq).toBeGreaterThan(0);
   await chat(
     request,
     conversationId,
-    messageUser({ text: "Looking now.", message_prefix: "Please check", reaction: "👀" }),
+    messageUser({ text: "Looking now.", reply_to: firstSeq, reaction: "👀" }),
   );
   const compact = await request.post("/api/conversations/distill-new-generation", {
     data: { source_conversation_id: conversationId, model: "predictable", method: "compact" },
@@ -180,7 +190,7 @@ test("message_user targets survive compaction and forks", async ({ page, request
   await chat(
     request,
     fork.conversation_id,
-    messageUser({ text: "Still on it.", message_prefix: "Please check" }),
+    messageUser({ text: "Still on it.", reply_to: firstSeq }),
   );
 
   await page.goto(`/c/${fork.slug}`);

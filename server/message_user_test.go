@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -79,15 +80,19 @@ func TestMessageUserEndToEnd(t *testing.T) {
 		t.Fatal("message_user not offered, or missing from the system prompt card")
 	}
 	var firstID string
+	var firstSeq, secondSeq int64
 	for _, m := range listMessages(t, c.database, c.id) {
 		if m.Type == string(db.MessageTypeUser) && m.LlmData != nil && strings.Contains(*m.LlmData, "first   message") {
 			firstID = m.MessageID
+			firstSeq = m.SequenceID
+		}
+		if m.Type == string(db.MessageTypeUser) && m.LlmData != nil && strings.Contains(*m.LlmData, "second message") {
+			secondSeq = m.SequenceID
 		}
 	}
 
-	// A reply and reaction resolve the prefix, whitespace-normalized, to the
-	// message's id, which is stored with the call.
-	c.turn(`message_user: {"text":"Got it","message_prefix":"echo: first message from","reaction":"👍"}`)
+	// A reply and reaction resolve the sequence ID to the message's ID.
+	c.turn(fmt.Sprintf(`message_user: {"text":"Got it","reply_to":%d,"reaction":"👍"}`, firstSeq))
 	_, result := c.lastMessageUserResult()
 	if result.ToolError {
 		t.Fatalf("reply failed: %s", result.ToolResult[0].Text)
@@ -95,19 +100,19 @@ func TestMessageUserEndToEnd(t *testing.T) {
 	if want := `Sent, in response to the user's message "echo: first message from the user", and reacted 👍 to it.`; result.ToolResult[0].Text != want {
 		t.Fatalf("result = %q, want %q", result.ToolResult[0].Text, want)
 	}
-	if d := messageUserDisplay(t, result); d.TargetMessageID != firstID || d.TargetExcerpt != "echo: first message from the user" {
+	if d := messageUserDisplay(t, result); d.TargetMessageID != firstID || d.TargetSequenceID != firstSeq || d.TargetExcerpt != "echo: first message from the user" {
 		t.Fatalf("display = %+v, want target %s", d, firstID)
 	}
 
-	// Unknown prefixes, tool results, and the agent's own text are refused.
-	for _, prefix := range []string{"no such message", "first message", "Sent"} {
-		in, _ := json.Marshal(claudetool.MessageUserInput{Text: "x", MessagePrefix: prefix})
+	// Unknown sequence IDs and the agent's own messages are refused.
+	for _, seq := range []int64{1 << 62, firstSeq + 1} {
+		in, _ := json.Marshal(claudetool.MessageUserInput{Text: "x", ReplyTo: seq})
 		c.turn("message_user: " + string(in))
-		if _, result := c.lastMessageUserResult(); !result.ToolError || !strings.Contains(result.ToolResult[0].Text, "no user message starts with") {
-			t.Fatalf("prefix %q: want refusal, got %+v", prefix, result)
+		if _, result := c.lastMessageUserResult(); !result.ToolError || !strings.Contains(result.ToolResult[0].Text, "no user message has sequence_id") {
+			t.Fatalf("sequence %d: want refusal, got %+v", seq, result)
 		}
 	}
-	c.turn(`message_user: {"message_prefix":"echo: second","reaction":"🎉"}`)
+	c.turn(fmt.Sprintf(`message_user: {"reply_to":%d,"reaction":"🎉"}`, secondSeq))
 	if _, result := c.lastMessageUserResult(); result.ToolError || result.ToolResult[0].Text != `Reacted 🎉 to the user's message "echo: second message".` {
 		t.Fatalf("reaction: %+v", result)
 	}
@@ -115,7 +120,7 @@ func TestMessageUserEndToEnd(t *testing.T) {
 	if _, result := c.lastMessageUserResult(); !result.ToolError {
 		t.Fatal("reaction without a target accepted")
 	}
-	c.turn(`message_user: {"message_prefix":"echo: second","reaction":"ok"}`)
+	c.turn(fmt.Sprintf(`message_user: {"reply_to":%d,"reaction":"ok"}`, secondSeq))
 	if _, result := c.lastMessageUserResult(); !result.ToolError {
 		t.Fatal("non-emoji reaction accepted")
 	}
@@ -183,9 +188,8 @@ func TestMessageUserEndToEnd(t *testing.T) {
 	}
 }
 
-// FindUserMessage matches only what the user typed, including the copies a
-// compaction carries forward, and prefers a copy's original.
-func TestFindUserMessage(t *testing.T) {
+// Sequence lookup matches only typed messages, including compaction copies.
+func TestFindUserMessageBySequence(t *testing.T) {
 	database, _ := setupTestDB(t)
 	ctx := t.Context()
 	conv, err := database.CreateConversation(ctx, nil, true, nil, nil, db.ConversationOptions{})
@@ -214,25 +218,39 @@ func TestFindUserMessage(t *testing.T) {
 	add(db.MessageTypeAgent, nil, text("Deploy agent text"))
 
 	f := userMessageFinder{db: database, conversationID: conv.ConversationID}
-	for prefix, want := range map[string]string{
-		"Deploy the":    original,
-		"Carried  only": carriedOnly,
-		"Deploy report": "",
-		"Deploy result": "",
-		"Deploy agent":  "",
-	} {
-		m, ok, err := f.FindUserMessage(ctx, prefix)
-		if err != nil {
-			t.Fatal(err)
+	typed, err := database.ListTypedUserMessages(ctx, conv.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(typed) != 3 {
+		t.Fatalf("typed user messages = %d, want original, carried copy, and carried-only", len(typed))
+	}
+	seen := make(map[string]bool)
+	for _, row := range typed {
+		seen[row.MessageID] = true
+		m, ok, err := f.FindUserMessageBySequence(ctx, row.SequenceID)
+		if err != nil || !ok || m.ID != row.MessageID {
+			t.Fatalf("FindUserMessageBySequence(%d) = %q, %v, %v; want %q", row.SequenceID, m.ID, ok, err, row.MessageID)
 		}
-		if ok != (want != "") || m.ID != want {
-			t.Errorf("FindUserMessage(%q) = %q, %v; want %q", prefix, m.ID, ok, want)
+	}
+	if !seen[original] || !seen[carriedOnly] {
+		t.Fatalf("typed user messages omitted original or carried-only: %v", seen)
+	}
+	for _, row := range listMessages(t, database, conv.ConversationID) {
+		if seen[row.MessageID] {
+			continue
 		}
+		if m, ok, err := f.FindUserMessageBySequence(ctx, row.SequenceID); err != nil || ok {
+			t.Fatalf("machine/agent sequence %d matched %q: %v", row.SequenceID, m.ID, err)
+		}
+	}
+	if m, ok, err := f.FindUserMessageBySequence(ctx, 1<<62); err != nil || ok {
+		t.Fatalf("unknown sequence matched %q: %v", m.ID, err)
 	}
 }
 
 // After a compaction and a fork, which copies only the compacted generation,
-// FindUserMessage finds the copy of a typed message, under its original's
+// FindUserMessageBySequence finds the copy of a typed message, under its original's
 // sequence_id, and not the carried squish summary nor a carried notice.
 func TestFindUserMessageAcrossCompactionAndFork(t *testing.T) {
 	t.Parallel()
@@ -261,9 +279,22 @@ func TestFindUserMessageAcrossCompactionAndFork(t *testing.T) {
 		}
 
 		f := userMessageFinder{db: h.db, conversationID: h.convID}
-		beta, ok, err := f.FindUserMessage(ctx, "echo: BETA")
+		var betaSeq int64
+		typed, err := h.db.ListTypedUserMessages(ctx, h.convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range typed {
+			if m.LlmData != nil && strings.Contains(*m.LlmData, "BETA_TURN") && m.UserData == nil {
+				betaSeq = m.SequenceID
+			}
+		}
+		if betaSeq == 0 {
+			t.Fatal("missing BETA user message")
+		}
+		beta, ok, err := f.FindUserMessageBySequence(ctx, betaSeq)
 		if err != nil || !ok {
-			t.Fatalf("FindUserMessage(BETA) = %v, %v", ok, err)
+			t.Fatalf("FindUserMessageBySequence(BETA) = %v, %v", ok, err)
 		}
 		var note string
 		for _, m := range rows {
@@ -289,14 +320,17 @@ func TestFindUserMessageAcrossCompactionAndFork(t *testing.T) {
 		}
 		for _, convID := range []string{h.convID, fork.ConversationID} {
 			f := userMessageFinder{db: h.db, conversationID: convID}
-			for _, prefix := range []string{note, "Context is"} {
-				if m, ok, err := f.FindUserMessage(ctx, prefix); ok || err != nil {
-					t.Errorf("%s: %q matched %s (err %v)", convID, prefix, m.ID, err)
+			for _, row := range listMessages(t, h.db, convID) {
+				if row.UserData == nil || (!strings.Contains(*row.UserData, `"squish_note"`) && !strings.Contains(*row.UserData, `"context_nudge"`)) {
+					continue
+				}
+				if m, ok, err := f.FindUserMessageBySequence(ctx, row.SequenceID); ok || err != nil {
+					t.Errorf("%s: machine notice %d matched %s (err %v)", convID, row.SequenceID, m.ID, err)
 				}
 			}
-			m, ok, err := f.FindUserMessage(ctx, "echo: BETA")
+			m, ok, err := f.FindUserMessageBySequence(ctx, beta.SequenceID)
 			if err != nil || !ok {
-				t.Fatalf("%s: FindUserMessage(BETA) = %v, %v", convID, ok, err)
+				t.Fatalf("%s: FindUserMessageBySequence(BETA) = %v, %v", convID, ok, err)
 			}
 			if m.SequenceID != beta.SequenceID || (convID == fork.ConversationID) == (m.ID == beta.ID) {
 				t.Errorf("%s: found %s at %d; original %s at %d", convID, m.ID, m.SequenceID, beta.ID, beta.SequenceID)

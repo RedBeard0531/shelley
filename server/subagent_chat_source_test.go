@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -186,7 +187,7 @@ func TestDirectManagedChatProvenanceReachesModelWithoutChangingStoredText(t *tes
 	}
 }
 
-func TestOrdinaryChatReachesModelUnwrapped(t *testing.T) {
+func TestOrdinaryChatReachesModelWithSequenceID(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	held := newHeldLLMService()
 	server.llmManager = &testLLMManager{service: held}
@@ -208,7 +209,12 @@ func TestOrdinaryChatReachesModelUnwrapped(t *testing.T) {
 	}
 	call := held.waitCall(t, rawText)
 	if requestHasText(call.request, "<subagent_message") || requestHasText(call.request, "<parent_message") {
-		t.Fatalf("ordinary model request was wrapped: %#v", call.request.Messages)
+		t.Fatalf("ordinary model request had sender provenance: %#v", call.request.Messages)
+	}
+	stored := userMessageContaining(t, database, conversation.ConversationID, rawText)
+	want := fmt.Sprintf("<user_message sequence_id=\"%d\">\nplain &lt;text&gt; &amp; \"quotes\"\n</user_message>", stored.SequenceID)
+	if !requestHasText(call.request, want) {
+		t.Fatalf("ordinary model request has no user sequence wrapper: %#v", call.request.Messages)
 	}
 	releaseAndWaitIdle(t, server, conversation.ConversationID, call)
 }

@@ -33,13 +33,12 @@ type UserMessage struct {
 	ExternalID string
 }
 
-// UserMessageFinder resolves the message_prefix of a message_user call. It is
+// UserMessageFinder resolves the reply target of a message_user call. It is
 // implemented by the server package to avoid import cycles.
 type UserMessageFinder interface {
-	// FindUserMessage returns the newest message the user typed whose text,
-	// with runs of whitespace collapsed, starts with prefix, also so
-	// collapsed. ok is false when no message matches.
-	FindUserMessage(ctx context.Context, prefix string) (m UserMessage, ok bool, err error)
+	// FindUserMessageBySequence finds a user message by its sequence_id in
+	// this conversation, as shown to the model.
+	FindUserMessageBySequence(ctx context.Context, sequenceID int64) (m UserMessage, ok bool, err error)
 }
 
 // UserChat is an external chat the conversation is bound to, such as the
@@ -47,27 +46,28 @@ type UserMessageFinder interface {
 // by the server package. Errors say whether the chat refused or delivery
 // is unknown.
 type UserChat interface {
-	// Send delivers a text message. Chats take no attachments yet.
-	Send(ctx context.Context, text string) error
+	// Send delivers a text message, optionally replying to target's external
+	// message. Chats take no attachments yet.
+	Send(ctx context.Context, text string, target UserMessage) error
 	// React delivers a reaction to target, the user's message.
 	React(ctx context.Context, target UserMessage, emoji string) error
 }
 
 // MessageUserInput is the message_user tool's input.
 type MessageUserInput struct {
-	Text          string   `json:"text"`
-	MessagePrefix string   `json:"message_prefix"`
-	Reaction      string   `json:"reaction"`
-	Attachments   []string `json:"attachments"`
-	EndTurn       bool     `json:"end_turn"`
+	Text string `json:"text"`
+	// ReplyTo is Shelley's sequence_id, not the external chat's message ID.
+	ReplyTo     int64    `json:"reply_to"`
+	Reaction    string   `json:"reaction"`
+	Attachments []string `json:"attachments"`
+	EndTurn     bool     `json:"end_turn"`
 }
 
 // MessageUserDisplay is the Display of a successful message_user call. It is
 // persisted with the tool result, which is how the UI learns which message a
 // reply or reaction targets and which files it may serve.
 type MessageUserDisplay struct {
-	// TargetMessageID is the resolved message_prefix: the message_id of the
-	// user's message.
+	// TargetMessageID is the resolved reply target: the user's message_id.
 	TargetMessageID string `json:"target_message_id,omitempty"`
 	// TargetSequenceID is the target's sequence_id, or for a compaction's copy
 	// its original's. Forks copy messages with new ids but their sequence_ids,
@@ -92,8 +92,8 @@ type MessageUserAttachment struct {
 
 const messageUserDescription = `Send a message to the user. The user sees their own messages and what you send with this tool; your other output is hidden from them.
 Write plain text, not markdown.
-To reply or react to one of the user's messages, set message_prefix to the beginning of that message, copied verbatim.
-To react, set reaction to a single emoji; text is then optional.
+To reply or react to a user message, set reply_to to its sequence_id shown in the message's wrapper.
+To react, set reaction to a single emoji and a reply target; text is then optional.
 Attach files by path.
 Set end_turn when you are done and waiting for the user; then call this tool alone.`
 
@@ -105,8 +105,8 @@ const messageUserSchema = `{
   "type": "object",
   "properties": {
     "text": {"type": "string", "description": "Plain-text message (no markdown)."},
-    "message_prefix": {"type": "string", "description": "Beginning of the user's message to reply or react to, copied verbatim."},
-    "reaction": {"type": "string", "description": "A single emoji to react to the message_prefix message with."},
+    "reply_to": {"type": "integer", "description": "Shelley sequence_id of the user message to reply or react to, as shown in its wrapper."},
+    "reaction": {"type": "string", "description": "A single emoji to react to the reply target message with."},
     "attachments": {"type": "array", "items": {"type": "string"}, "description": "Paths of files to send."},
     "end_turn": {"type": "boolean", "description": "End your turn after sending."}
   }
@@ -141,17 +141,15 @@ func MessageUserTool(finder UserMessageFinder, chat UserChat, wd *MutableWorking
 func runMessageUser(ctx context.Context, finder UserMessageFinder, chat UserChat, cwd string, in MessageUserInput) llm.ToolOut {
 	in.Text = strings.TrimSpace(in.Text)
 	in.Reaction = strings.TrimSpace(in.Reaction)
-	prefixSet := in.MessagePrefix != ""
-	in.MessagePrefix = NormalizeSpace(in.MessagePrefix)
 	if in.Text == "" && in.Reaction == "" && len(in.Attachments) == 0 {
 		return llm.ErrorfToolOut("nothing to send: set text, reaction, or attachments")
 	}
-	if prefixSet && in.MessagePrefix == "" {
-		return llm.ErrorfToolOut("message_prefix is blank; nothing was sent")
+	if in.ReplyTo < 0 {
+		return llm.ErrorfToolOut("reply_to must be a positive sequence_id; nothing was sent")
 	}
 	if in.Reaction != "" {
-		if in.MessagePrefix == "" {
-			return llm.ErrorfToolOut("reaction requires message_prefix, the message to react to")
+		if in.ReplyTo == 0 {
+			return llm.ErrorfToolOut("reaction requires reply_to, the sequence_id of the message to react to")
 		}
 		if !isEmoji(in.Reaction) {
 			return llm.ErrorfToolOut("reaction must be a single emoji, got %q", in.Reaction)
@@ -174,13 +172,13 @@ func runMessageUser(ctx context.Context, finder UserMessageFinder, chat UserChat
 
 	var result, quoted string
 	var target UserMessage
-	if in.MessagePrefix != "" {
-		found, ok, err := finder.FindUserMessage(ctx, in.MessagePrefix)
+	if in.ReplyTo != 0 {
+		found, ok, err := finder.FindUserMessageBySequence(ctx, in.ReplyTo)
 		if err != nil {
 			return llm.ErrorfToolOut("find user message: %w", err)
 		}
 		if !ok {
-			return llm.ErrorfToolOut("no user message starts with %q; nothing was sent. Copy the beginning of the user's message verbatim", in.MessagePrefix)
+			return llm.ErrorfToolOut("no user message has sequence_id %d; nothing was sent", in.ReplyTo)
 		}
 		target = found
 		display.TargetMessageID = target.ID
@@ -206,7 +204,7 @@ func runMessageUser(ctx context.Context, finder UserMessageFinder, chat UserChat
 			return llm.ToolOut{Error: fmt.Errorf(format, err), Display: MessageUserDisplay{ChatFailed: true}}
 		}
 		if in.Text != "" {
-			if err := chat.Send(ctx, in.Text); err != nil {
+			if err := chat.Send(ctx, in.Text, target); err != nil {
 				return failed("sending to the user's chat failed: %w", err)
 			}
 		}
@@ -255,9 +253,7 @@ func isEmoji(s string) bool {
 	})
 }
 
-// NormalizeSpace collapses each run of whitespace in s to one space and trims
-// the ends. message_prefix is matched on normalized text, so a model that
-// re-wraps or re-indents the user's text still finds the message.
+// NormalizeSpace collapses runs of whitespace for short reply excerpts.
 func NormalizeSpace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

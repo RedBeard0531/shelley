@@ -77,7 +77,7 @@ export const MESSAGE_USER_TOOL = "message_user";
 /** Input of a message_user call, as the model sent it. */
 export interface MessageUserInput {
   text?: string;
-  message_prefix?: string;
+  reply_to?: number;
   reaction?: string;
   attachments?: string[];
   end_turn?: boolean;

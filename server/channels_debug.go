@@ -87,6 +87,7 @@ type debugChatEvent struct {
 	MessageID string `json:"message_id,omitempty"`
 	Text      string `json:"text,omitempty"`
 	MediaURL  string `json:"media_url,omitempty"`
+	ReplyTo   string `json:"reply_to,omitempty"`
 	// Error is why an "in" message was not delivered, or a refusal.
 	Error string `json:"error,omitempty"`
 }
@@ -184,6 +185,7 @@ func (s *Server) handleDebugChannelGateway(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		Text      string `json:"text"`
 		MediaURL  string `json:"media_url"`
+		ReplyTo   string `json:"reply_to"`
 		MessageID string `json:"message_id"`
 		Reaction  string `json:"reaction"`
 		Remove    bool   `json:"remove"`
@@ -241,7 +243,7 @@ func (s *Server) handleDebugChannelGateway(w http.ResponseWriter, r *http.Reques
 	case "POST send":
 		c.Typing = false
 		c.Unanswered++
-		ev := d.addLocked(c, debugChatEvent{Kind: "out", Text: req.Text, MediaURL: req.MediaURL})
+		ev := d.addLocked(c, debugChatEvent{Kind: "out", Text: req.Text, MediaURL: req.MediaURL, ReplyTo: req.ReplyTo})
 		writeChannelJSON(w, http.StatusOK, map[string]string{"message_id": ev.MessageID})
 		return
 	case "POST typing":
@@ -361,7 +363,7 @@ func (s *Server) handleDebugChannelSend(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "chat has no conversation; write from the phone first", http.StatusNotFound)
 		return
 	}
-	id, err := s.sendChannelMessage(r.Context(), conv.ConversationID, req.Text)
+	id, err := s.sendChannelMessage(r.Context(), conv.ConversationID, req.Text, "")
 	var rf *channelSendError
 	if errors.As(err, &rf) {
 		writeDebugGatewayError(w, rf.Status, rf.Code, rf.Message)

@@ -133,7 +133,7 @@ assert.equal(isDeliveredUserMessage({ ...call, hasResult: false }), false);
 assert.equal(isDeliveredUserMessage({ ...call, toolError: true }), false);
 assert.equal(isDeliveredUserMessage({ ...call, toolName: "bash" }), false);
 assert.equal(
-  isDeliveredUserMessage({ ...call, toolInput: { reaction: "👍", message_prefix: "hi" } }),
+  isDeliveredUserMessage({ ...call, toolInput: { reaction: "👍", reply_to: 2 } }),
   false,
 );
 assert.equal(

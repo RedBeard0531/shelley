@@ -55,19 +55,19 @@ assert.equal(compacted({ target_message_id: "gone", target_sequence_id: 1 }), "m
 const compactedFork = targetResolver([user("fc1", 9, 1)]);
 assert.equal(compactedFork({ target_message_id: "m1", target_sequence_id: 1 }), "fc1");
 
-const carried = call({ reaction: "🔁", message_prefix: "b" }, { target_message_id: "m2" });
+const carried = call({ reaction: "🔁", reply_to: 3 }, { target_message_id: "m2" });
 const reactions = collectReactions(
   [
-    call({ reaction: "👍", message_prefix: "a" }, { target_message_id: "m1" }),
-    call({ reaction: "👍", text: "yes", message_prefix: "a" }, { target_message_id: "m1" }),
-    call({ reaction: "🎉", message_prefix: "b" }, { target_message_id: "m2" }),
+    call({ reaction: "👍", reply_to: 2 }, { target_message_id: "m1" }),
+    call({ reaction: "👍", text: "yes", reply_to: 2 }, { target_message_id: "m1" }),
+    call({ reaction: "🎉", reply_to: 3 }, { target_message_id: "m2" }),
     carried,
     // A compaction's copy of a call is the same call.
     { ...carried, carried: true, anchorKey: "copy" },
     // Not reactions: failed, plain replies, unresolved targets, other tools.
-    call({ reaction: "❌", message_prefix: "a" }, {}, { toolError: true }),
-    call({ text: "reply", message_prefix: "a" }, { target_message_id: "m1" }),
-    call({ reaction: "👻", message_prefix: "z" }, { target_message_id: "elsewhere" }),
+    call({ reaction: "❌", reply_to: 2 }, {}, { toolError: true }),
+    call({ text: "reply", reply_to: 2 }, { target_message_id: "m1" }),
+    call({ reaction: "👻", reply_to: 99 }, { target_message_id: "elsewhere" }),
     call({ reaction: "🛠" }, { target_message_id: "m1" }, { toolName: "bash" }),
   ],
   resolve,

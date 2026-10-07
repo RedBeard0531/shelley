@@ -46,6 +46,13 @@ func newGateLLMService(held ...string) *gateLLMService {
 func (s *gateLLMService) Do(ctx context.Context, request *llm.Request) (*llm.Response, error) {
 	text := lastRequestUserText(request)
 	s.mu.Lock()
+	for held := range s.gates {
+		if (strings.HasPrefix(text, "<external_message sequence_id=\"") && strings.HasSuffix(text, "\n"+held+"\n</external_message>")) ||
+			(strings.HasPrefix(text, "<user_message sequence_id=\"") && strings.HasSuffix(text, "\n"+held+"\n</user_message>")) {
+			text = held
+			break
+		}
+	}
 	gate, started := s.gates[text], s.started[text]
 	if started != nil {
 		close(started)
@@ -162,6 +169,68 @@ func channelUserMessages(t *testing.T, database *db.DB, conversationID string) [
 	return out
 }
 
+func TestChannelMessageExternalIDOnlyInLLM(t *testing.T) {
+	t.Parallel()
+	model := predictable.NewService()
+	server, database, h := channelTestServer(t, model)
+	const chat, id, text = "chat-model", `m<&"`, "hi <tag> & team"
+	if w := postJSON(t, h, "/api/channels/messages", channelEvent{
+		Type: "message", ID: id, ChatID: chat, Sender: "+15550100", Text: text,
+	}); w.Code != http.StatusNoContent {
+		t.Fatalf("receive: %d %s", w.Code, w.Body.String())
+	}
+	conv, err := conversationByExternalID(t, database, chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed, err := database.ListTypedUserMessages(t.Context(), conv.ConversationID)
+	if err != nil || len(typed) != 1 {
+		t.Fatalf("typed user messages = %d: %v", len(typed), err)
+	}
+	want := fmt.Sprintf("<external_message sequence_id=\"%d\">\nhi &lt;tag&gt; &amp; team\n</external_message>", typed[0].SequenceID)
+	var live *llm.Request
+	waitFor(t, 5*time.Second, func() bool {
+		for _, req := range model.GetRecentRequests() {
+			if hasTool(req, claudetool.MessageUserName) {
+				live = req
+				return true
+			}
+		}
+		return false
+	})
+	if got := lastRequestUserText(live); got != want {
+		t.Fatalf("live LLM message = %q, want %q", got, want)
+	}
+	if got := channelUserMessages(t, database, conv.ConversationID); !slices.Equal(got, []string{id + ": " + text}) {
+		t.Fatalf("stored channel message = %q, want original text", got)
+	}
+
+	manager, err := server.getOrCreateConversationManager(t.Context(), conv.ConversationID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []generated.Message
+	if err := database.Queries(t.Context(), func(q *generated.Queries) (err error) {
+		rows, err = q.ListMessagesForContext(t.Context(), conv.ConversationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	history, _, err := manager.partitionMessages(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rehydrated string
+	for _, msg := range history {
+		if msg.Role == llm.MessageRoleUser && strings.Contains(messageText(msg), "external_message") {
+			rehydrated = messageText(msg)
+		}
+	}
+	if got := rehydrated; got != want {
+		t.Fatalf("rehydrated LLM message = %q, want %q", got, want)
+	}
+}
+
 func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 	t.Parallel()
 	gate := newGateLLMService("first")
@@ -232,6 +301,21 @@ func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 	if want := "m1: first\nm2: second\n: from the UI\nm3: third\nm4: fourth"; got != want {
 		t.Fatalf("user messages:\n%s\nwant:\n%s", got, want)
 	}
+	var sawQueued, sawUI bool
+	for _, req := range gate.Service.(*predictable.Service).GetRecentRequests() {
+		for _, msg := range req.Messages {
+			if msg.Role != llm.MessageRoleUser {
+				continue
+			}
+			sawQueued = sawQueued || strings.HasPrefix(messageText(msg), "<external_message sequence_id=\"") &&
+				strings.HasSuffix(messageText(msg), "\nthird\n</external_message>")
+			sawUI = sawUI || strings.HasPrefix(messageText(msg), "<user_message sequence_id=\"") &&
+				strings.HasSuffix(messageText(msg), "\nfrom the UI\n</user_message>")
+		}
+	}
+	if !sawQueued || !sawUI {
+		t.Fatalf("queued channel and UI messages in LLM requests: channel=%v UI=%v", sawQueued, sawUI)
+	}
 
 	// Another chat gets its own conversation.
 	deliver(channelEvent{Type: "message", ID: "m1", ChatID: "chat-2", Text: "other chat"})
@@ -293,10 +377,10 @@ func TestDebugChannelRoundTrip(t *testing.T) {
 	}
 
 	send := func(text string) error {
-		_, err := server.sendChannelMessage(t.Context(), conv.ConversationID, text)
+		_, err := server.sendChannelMessage(t.Context(), conv.ConversationID, text, "")
 		return err
 	}
-	id, err := server.sendChannelMessage(t.Context(), conv.ConversationID, "hi back")
+	id, err := server.sendChannelMessage(t.Context(), conv.ConversationID, "hi back", "")
 	if err != nil || !strings.HasPrefix(id, "debug-out-") || !strings.HasSuffix(id, "-2") {
 		t.Fatalf("send = %q, %v", id, err)
 	}
@@ -486,7 +570,7 @@ func TestSendChannelMessageNeedsBoundConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := server.sendChannelMessage(t.Context(), conv.ConversationID, "hi"); err == nil || !strings.Contains(err.Error(), "not bound") {
+	if _, err := server.sendChannelMessage(t.Context(), conv.ConversationID, "hi", ""); err == nil || !strings.Contains(err.Error(), "not bound") {
 		t.Fatalf("send from unbound conversation: %v", err)
 	}
 }
@@ -667,20 +751,45 @@ func TestChannelConversationRepliesWithMessageUser(t *testing.T) {
 	if last := evs[len(evs)-1]; last.Kind != "out" || last.Text != "Hello from Shelley" {
 		t.Fatalf("last event = %+v", last)
 	}
+	if evs[len(evs)-1].ReplyTo != "" {
+		t.Fatalf("unthreaded send has reply target: %+v", evs[len(evs)-1])
+	}
 	firstIn := evs[0].MessageID
+	typed, err := database.ListTypedUserMessages(t.Context(), conversationID)
+	if err != nil || len(typed) != 1 {
+		t.Fatalf("typed user messages = %d: %v", len(typed), err)
+	}
+	firstSeq := typed[0].SequenceID
 
-	// A reply goes as a plain message; a reaction lands on the chat's
-	// message by its id, as a tapback if it is one.
-	call(claudetool.MessageUserInput{Text: "Sure", MessagePrefix: `message_user: {"text":"Hello`, Reaction: "👍"})
+	// A reply targets the chat's message by its id; a reaction lands there
+	// as a tapback if it is one.
+	call(claudetool.MessageUserInput{Text: "Sure", ReplyTo: firstSeq, Reaction: "👍"})
 	evs = events()
-	if got := evs[len(evs)-2:]; got[0].Kind != "out" || got[0].Text != "Sure" || got[1].Kind != "react" || got[1].MessageID != firstIn || got[1].Text != "like" {
+	if got := evs[len(evs)-2:]; got[0].Kind != "out" || got[0].Text != "Sure" || got[0].ReplyTo != firstIn || got[1].Kind != "react" || got[1].MessageID != firstIn || got[1].Text != "like" {
 		t.Fatalf("events = %+v", got)
 	}
 	for emoji, want := range map[string]string{"🎉": "🎉", "‼️": "emphasize", "❤️": "love"} {
-		call(claudetool.MessageUserInput{MessagePrefix: `message_user: {"text":"Hello`, Reaction: emoji})
+		call(claudetool.MessageUserInput{ReplyTo: firstSeq, Reaction: emoji})
 		if evs = events(); evs[len(evs)-1].Text != want {
 			t.Fatalf("reaction %s = %+v, want %s", emoji, evs[len(evs)-1], want)
 		}
+	}
+	conv, err := database.GetConversationByID(t.Context(), conversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := url.Parse(*conv.ExternalEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := postJSON(t, h, endpoint.Path+"/react", map[string]string{"message_id": firstIn, "reaction": "like"}); w.Code != http.StatusOK {
+		t.Fatalf("debug gateway message_id reaction: %d %s", w.Code, w.Body.String())
+	}
+	if evs = events(); evs[len(evs)-1].MessageID != firstIn {
+		t.Fatalf("debug gateway reaction target: %+v", evs[len(evs)-1])
+	}
+	if w := postJSON(t, h, endpoint.Path+"/react", map[string]string{"reply_to": firstIn, "reaction": "like"}); w.Code != http.StatusBadRequest {
+		t.Fatalf("reaction reply_to target: status %d, want 400", w.Code)
 	}
 
 	// The chat takes no attachments, and says so before sending anything.
@@ -750,11 +859,11 @@ func TestChannelChatSaysWhetherDeliveryFailed(t *testing.T) {
 	}
 
 	refuse := chat("refuse")
-	if err := refuse.Send(t.Context(), "hi"); err == nil || !strings.Contains(err.Error(), "refused") || !strings.Contains(err.Error(), "line_paused") {
+	if err := refuse.Send(t.Context(), "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "refused") || !strings.Contains(err.Error(), "line_paused") {
 		t.Fatalf("refused send: %v", err)
 	}
 	for name, want := range map[string]string{"upstream": "may have been delivered", "internal": "may have been delivered", "upstream-refused": "refused"} {
-		if err := chat(name).Send(t.Context(), "hi"); err == nil || !strings.Contains(err.Error(), want) {
+		if err := chat(name).Send(t.Context(), "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: %v, want %q", name, err, want)
 		}
 	}
@@ -766,7 +875,7 @@ func TestChannelChatSaysWhetherDeliveryFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (channelChat{s: server, conversationID: unbound.ConversationID}).Send(t.Context(), "hi"); err == nil || !strings.Contains(err.Error(), "nothing was sent") {
+	if err := (channelChat{s: server, conversationID: unbound.ConversationID}).Send(t.Context(), "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "nothing was sent") {
 		t.Fatalf("send from unbound conversation: %v", err)
 	}
 
@@ -775,7 +884,7 @@ func TestChannelChatSaysWhetherDeliveryFailed(t *testing.T) {
 		<-got
 		cancel()
 	}()
-	if err := chat("hang").Send(ctx, "hi"); err == nil || !strings.Contains(err.Error(), "may have been delivered") {
+	if err := chat("hang").Send(ctx, "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "may have been delivered") {
 		t.Fatalf("cancelled send: %v", err)
 	}
 }
