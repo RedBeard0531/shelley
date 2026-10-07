@@ -691,7 +691,7 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 		}
 		return false, "", fmt.Errorf("turn-start recorder returned no message")
 	}
-	if turnUserDataFromContext(ctx) == nil && typedUserForLLM(message, nil) {
+	if turnUserDataFromContext(ctx) == nil && cm.showsSequenceIDs() && typedUserForLLM(message, nil) {
 		modelMessage, err = messageWithSequenceID(modelMessage, derefString(created.ExternalMessageID), created.SequenceID)
 		if err != nil {
 			return false, created.MessageID, fmt.Errorf("render user message: %w", err)
@@ -1447,7 +1447,7 @@ func (cm *ConversationManager) recordQueued(ctx context.Context, qm db.QueuedMes
 	if err != nil {
 		return user, fed, err
 	}
-	if typedUserForLLM(user, qm.UserData) {
+	if cm.showsSequenceIDs() && typedUserForLLM(user, qm.UserData) {
 		fed, err = messageWithSequenceID(fed, qm.ExternalMessageID, sequenceID)
 	}
 	return user, fed, err
@@ -1955,6 +1955,7 @@ func (cm *ConversationManager) contextItems(messages []generated.Message) ([]con
 			}
 		}
 	}
+	showSequenceIDs := cm.showsSequenceIDs()
 	for i := range history {
 		src := history[i].source
 		if src == nil || src.Type != string(db.MessageTypeUser) {
@@ -1969,7 +1970,7 @@ func (cm *ConversationManager) contextItems(messages []generated.Message) ([]con
 		if err != nil {
 			return nil, nil, fmt.Errorf("apply sender provenance to message %s: %w", src.MessageID, err)
 		}
-		if typedUserForLLM(history[i].message, userData) {
+		if showSequenceIDs && typedUserForLLM(history[i].message, userData) {
 			origin, err := originSequenceID(*src)
 			if err != nil {
 				return nil, nil, fmt.Errorf("origin sequence of message %s: %w", src.MessageID, err)

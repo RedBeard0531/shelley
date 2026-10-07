@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/http"
@@ -47,7 +46,7 @@ func newHeldLLMService() *heldLLMService {
 
 func (s *heldLLMService) Do(ctx context.Context, request *llm.Request) (*llm.Response, error) {
 	call := &heldLLMCall{request: request, release: make(chan struct{})}
-	text := plainUserMessageText(lastRequestUserText(request))
+	text := lastRequestUserText(request)
 	s.mu.Lock()
 	s.calls[text] = append(s.calls[text], call)
 	close(s.changed)
@@ -95,21 +94,6 @@ func lastRequestUserText(request *llm.Request) string {
 		}
 	}
 	return ""
-}
-
-// plainUserMessageText is for test fixtures that match a user's command.
-// The request itself still carries the sequence wrapper for assertion.
-func plainUserMessageText(text string) string {
-	if !strings.HasPrefix(text, "<user_message ") {
-		return text
-	}
-	var wrapped struct {
-		Text string `xml:",chardata"`
-	}
-	if err := xml.Unmarshal([]byte(text), &wrapped); err != nil {
-		panic(err)
-	}
-	return strings.TrimSpace(wrapped.Text)
 }
 
 func postBtwChat(t *testing.T, server *Server, conversationID string, request any) *httptest.ResponseRecorder {

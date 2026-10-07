@@ -13,6 +13,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
@@ -212,6 +213,9 @@ func TestPiDistillCopiesRecentMessagesIntoNewGeneration(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := NewTestHarness(t)
 		defer stopActiveConversationLoops(h.server)
+		// Like a channel conversation, which the external message below
+		// stands for, this one offers message_user.
+		h.convOpts = &db.ConversationOptions{ToolOverrides: map[string]string{claudetool.MessageUserName: "on"}}
 
 		h.NewConversation("echo: first thing", "")
 		h.WaitResponse()

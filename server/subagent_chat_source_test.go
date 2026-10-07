@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
@@ -187,10 +188,11 @@ func TestDirectManagedChatProvenanceReachesModelWithoutChangingStoredText(t *tes
 	}
 }
 
-func TestOrdinaryChatReachesModelWithSequenceID(t *testing.T) {
-	server, database, _ := newTestServer(t)
-	held := newHeldLLMService()
-	server.llmManager = &testLLMManager{service: held}
+// An ordinary conversation, one without message_user, gives the model exactly
+// what the user typed: no wrapper, sequence_id, or escaping, whether the
+// message is hydrated from history, sent live, or drained from the queue.
+func TestOrdinaryChatReachesModelUnwrapped(t *testing.T) {
+	server, database, model := newTestServer(t)
 	t.Cleanup(func() { stopActiveConversationLoops(server) })
 
 	slug := "ordinary"
@@ -198,25 +200,68 @@ func TestOrdinaryChatReachesModelWithSequenceID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawText := `plain <text> & "quotes"`
-	w := httptest.NewRecorder()
-	server.handleChatConversation(w, senderChatRequest(t, conversation.ConversationID, ChatRequest{
-		Message: rawText,
-		Model:   "predictable",
-	}, true), conversation.ConversationID)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("chat status = %d: %s", w.Code, w.Body.String())
+	const hydrated, live, queued = `hydrated <a> & "b"`, `live <text> & "quotes"`, `queued <c> & "d"`
+	if _, err := database.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: conversation.ConversationID,
+		Type:           db.MessageTypeUser,
+		LLMData:        llm.UserStringMessage(hydrated),
+	}); err != nil {
+		t.Fatal(err)
 	}
-	call := held.waitCall(t, rawText)
-	if requestHasText(call.request, "<subagent_message") || requestHasText(call.request, "<parent_message") {
-		t.Fatalf("ordinary model request had sender provenance: %#v", call.request.Messages)
+	send := func(text string, queue bool) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		server.handleChatConversation(w, senderChatRequest(t, conversation.ConversationID, ChatRequest{
+			Message: text,
+			Model:   "predictable",
+			Queue:   queue,
+		}, true), conversation.ConversationID)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("chat %q status = %d: %s", text, w.Code, w.Body.String())
+		}
 	}
-	stored := userMessageContaining(t, database, conversation.ConversationID, rawText)
-	want := fmt.Sprintf("<user_message sequence_id=\"%d\">\nplain &lt;text&gt; &amp; \"quotes\"\n</user_message>", stored.SequenceID)
-	if !requestHasText(call.request, want) {
-		t.Fatalf("ordinary model request has no user sequence wrapper: %#v", call.request.Messages)
+	// sentUserMessages returns, block by block, the user messages of the
+	// model request whose last user message mentions word. Only a block's
+	// type and text are kept: cache breakpoints are not the message.
+	type block struct {
+		Type llm.ContentType
+		Text string
 	}
-	releaseAndWaitIdle(t, server, conversation.ConversationID, call)
+	sentUserMessages := func(word string) [][]block {
+		t.Helper()
+		var got [][]block
+		waitFor(t, 5*time.Second, func() bool {
+			for _, request := range model.GetRecentRequests() {
+				got = nil
+				for _, m := range request.Messages {
+					if m.Role != llm.MessageRoleUser {
+						continue
+					}
+					var blocks []block
+					for _, c := range m.Content {
+						blocks = append(blocks, block{c.Type, c.Text})
+					}
+					got = append(got, blocks)
+				}
+				if len(got) > 0 && strings.Contains(got[len(got)-1][0].Text, word) {
+					return true
+				}
+			}
+			return false
+		})
+		return got
+	}
+
+	send(live, false)
+	want := [][]block{{{llm.ContentTypeText, hydrated}}, {{llm.ContentTypeText, live}}}
+	if got := sentUserMessages("live"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("user messages sent to the model:\n got %+v\nwant %+v", got, want)
+	}
+	send(queued, true)
+	want = append(want, []block{{llm.ContentTypeText, queued}})
+	if got := sentUserMessages("queued"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("user messages sent to the model:\n got %+v\nwant %+v", got, want)
+	}
 }
 
 func TestUntrustedSenderIDDoesNotReachModelOrStorage(t *testing.T) {

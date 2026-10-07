@@ -222,11 +222,8 @@ func TestCompactDebugEndToEnd(t *testing.T) {
 	if first.Role != llm.MessageRoleUser || first.Content[0].Text != compactionNoteText(id, helloSeq, hiSeq, "The user  said hello.") {
 		t.Fatalf("first message is not the summary:\n%s", got)
 	}
-	if strings.Contains(got, "Well, hi there!") {
+	if strings.Contains(got, "Well, hi there!") || strings.Contains(got, "compact-me-please\\n") {
 		t.Fatalf("compacted content leaked into request:\n%s", got)
-	}
-	if !strings.Contains(got, "compact-me-please") || !strings.Contains(got, "user_message sequence_id") {
-		t.Fatalf("recent user message lost its sequence wrapper:\n%s", got)
 	}
 	if !strings.Contains(got, trimmedToolOutputText(id, toolResultSeq)) || !strings.Contains(got, `"ToolName":"bash"`) {
 		t.Fatalf("expected trimmed tool result and intact tool use:\n%s", got)

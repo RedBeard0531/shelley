@@ -24,6 +24,8 @@ type TestHarness struct {
 	convID         string
 	timeout        time.Duration
 	responsesCount int // Number of agent responses seen so far
+	// convOpts, if set, are the options of conversations NewConversation starts.
+	convOpts *db.ConversationOptions
 }
 
 // NewTestHarness creates a new test harness with a predictable LLM and bash tool.
@@ -46,9 +48,10 @@ func (h *TestHarness) NewConversation(msg, cwd string) *TestHarness {
 	h.t.Helper()
 
 	chatReq := ChatRequest{
-		Message: msg,
-		Model:   "predictable",
-		Cwd:     cwd,
+		Message:             msg,
+		Model:               "predictable",
+		Cwd:                 cwd,
+		ConversationOptions: h.convOpts,
 	}
 	chatBody, _ := json.Marshal(chatReq)
 

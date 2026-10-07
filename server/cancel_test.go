@@ -562,7 +562,7 @@ func TestRetryAfterLLMFailure(t *testing.T) {
 			if strings.Contains(c.Text, "LLM request failed") {
 				t.Errorf("retry request contained error text in LLM context: %q", c.Text)
 			}
-			if m.Role == llm.MessageRoleUser && plainUserMessageText(strings.TrimSpace(c.Text)) == "hello" {
+			if m.Role == llm.MessageRoleUser && strings.TrimSpace(c.Text) == "hello" {
 				sawUser = true
 			}
 		}

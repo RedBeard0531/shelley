@@ -32,6 +32,20 @@ func (cm *ConversationManager) userMessageFinder() claudetool.UserMessageFinder 
 	return userMessageFinder{db: cm.db, conversationID: cm.conversationID}
 }
 
+// showsSequenceIDs reports whether the model sees the sequence_id of each
+// message the user typed, which message_user's reply_to names. Only
+// conversations offering message_user do; elsewhere the model sees exactly
+// what the user typed.
+func (cm *ConversationManager) showsSequenceIDs() bool {
+	if cm.userMessageFinder() == nil {
+		return false
+	}
+	cm.mu.Lock()
+	opts := cm.conversationOptions
+	cm.mu.Unlock()
+	return claudetool.IsToolEnabled(claudetool.MessageUserName, opts.ToolOverrides, opts.DisableAllTools)
+}
+
 func (f userMessageFinder) FindUserMessageBySequence(ctx context.Context, sequenceID int64) (claudetool.UserMessage, bool, error) {
 	msgs, err := f.db.ListTypedUserMessages(ctx, f.conversationID)
 	if err != nil {
