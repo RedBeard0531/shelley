@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
@@ -67,7 +68,8 @@ func compactionNoteText(conversationID string, from, to int64, summary string) s
 	return fmt.Sprintf("[Messages compacted: conversation_id %s sequence_id %d-%d. Summary:]\n%s", conversationID, from, to, summary)
 }
 
-// trimmedToolOutputPrefix starts every trimmed tool output.
+// trimmedToolOutputPrefix starts every trimmed tool output. Real tool output
+// may start with it too; see isTrimmedOutput.
 const trimmedToolOutputPrefix = "[Tool output compacted"
 
 // trimmedToolOutputText is what the model sees in place of a trimmed tool
@@ -270,7 +272,7 @@ func (cm *ConversationManager) RecordInPlaceCompaction(ctx context.Context, c db
 	return cm.publishCreated(ctx, created)
 }
 
-const compactDebugUsage = "usage: /compact-debug | /compact-debug squish <from>-<to> <summary> | /compact-debug trim <tool_use_id>"
+const compactDebugUsage = "usage: /compact-debug | /compact-debug squish <from>-<to> <summary> | /compact-debug trim <id>"
 
 // handleCompactDebugCommand intercepts "/compact-debug", a testing aid for
 // in-place compaction. It reports whether message was the command (and the
@@ -278,7 +280,7 @@ const compactDebugUsage = "usage: /compact-debug | /compact-debug squish <from>-
 //
 //	/compact-debug                          — shows the compact_in_place index as a warning
 //	/compact-debug squish <from>-<to> <sum> — squishes a sequence-id range into sum
-//	/compact-debug trim <tool_use_id>       — trims a tool output
+//	/compact-debug trim <id>                — trims the tool outputs of an index row
 func (s *Server) handleCompactDebugCommand(ctx context.Context, w http.ResponseWriter, manager *ConversationManager, message string) bool {
 	fields := strings.Fields(message)
 	if len(fields) == 0 || fields[0] != "/compact-debug" {
@@ -313,12 +315,21 @@ func (s *Server) handleCompactDebugCommand(ctx context.Context, w http.ResponseW
 			s.internalError(w, "Failed to list context", err, "conversationID", manager.conversationID)
 			return true
 		}
-		i, ok := findToolResult(items, fields[2])
-		if !ok {
-			http.Error(w, "compact-debug: no tool output "+fields[2], http.StatusBadRequest)
+		var view []contextItem
+		if view, err = compactionView(items); err != nil {
+			s.internalError(w, "Failed to list context", err, "conversationID", manager.conversationID)
 			return true
 		}
-		c.Trims = []db.CompactionTrim{{SequenceID: items[i].from, ToolUseID: fields[2]}}
+		rows, _ := splitRows(view, len(view))
+		r := indexOfRow(rows, claudetool.IndexID(fields[2]))
+		if r < 0 {
+			http.Error(w, "compact-debug: no index row "+fields[2], http.StatusBadRequest)
+			return true
+		}
+		if c.Trims = rowTrims(rows[r]); len(c.Trims) == 0 {
+			http.Error(w, "compact-debug: no tool output to trim in "+fields[2], http.StatusBadRequest)
+			return true
+		}
 	default:
 		http.Error(w, compactDebugUsage, http.StatusBadRequest)
 		return true

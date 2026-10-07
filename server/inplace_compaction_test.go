@@ -161,23 +161,15 @@ func TestCompactDebugEndToEnd(t *testing.T) {
 	hiSeq := seqOf(db.MessageTypeAgent, "Well, hi there!")
 	toolUseSeq := seqOf(db.MessageTypeAgent, `"ToolName":"bash"`)
 	toolResultSeq := seqOf(db.MessageTypeUser, "compact-me-please\\n")
-	var toolUseID string
-	for _, m := range listMessages(t, database, id) {
-		if m.SequenceID == toolUseSeq {
-			var msg llm.Message
-			if err := json.Unmarshal([]byte(*m.LlmData), &msg); err != nil {
-				t.Fatal(err)
-			}
-			toolUseID = msg.Content[len(msg.Content)-1].ID
-		}
-	}
 
 	// Invalid requests are rejected and record nothing.
 	chat("/compact-debug squish "+strconv.FormatInt(toolUseSeq, 10)+"-"+strconv.FormatInt(toolUseSeq, 10)+" x", http.StatusBadRequest)
 	chat("/compact-debug trim nope", http.StatusBadRequest)
+	chat("/compact-debug trim "+strconv.FormatInt(helloSeq, 10), http.StatusBadRequest) // no tool output
 	chat("/compact-debug squish nope", http.StatusBadRequest)
 
-	chat("/compact-debug trim "+toolUseID, http.StatusAccepted)
+	// Trim takes an id from the index: the call's.
+	chat("/compact-debug trim "+strconv.FormatInt(toolUseSeq, 10), http.StatusAccepted)
 	chat("/compact-debug squish "+strconv.FormatInt(helloSeq, 10)+"-"+strconv.FormatInt(hiSeq, 10)+" The user  said hello.", http.StatusAccepted)
 
 	var records []db.InPlaceCompaction
@@ -205,7 +197,7 @@ func TestCompactDebugEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	listing := listingData.Text
-	if want := `note "The user said hello."`; !strings.Contains(listing, want) || !strings.Contains(listing, "bash output (trimmed)") {
+	if want := `note "The user said hello."`; !strings.Contains(listing, want) || !strings.Contains(listing, `bash "echo compact-me-please" → trimmed`) {
 		t.Fatalf("listing %s missing %q", listing, want)
 	}
 

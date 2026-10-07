@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -271,23 +272,32 @@ func buildCompaction(history []contextItem, keepRecentTokens int, in claudetool.
 	if err != nil {
 		return c, err
 	}
-	alone, err := aloneRows(items)
+	rows, recent := splitRows(items, recentStart(items, keepRecentTokens))
+	alone, err := aloneRows(rows)
 	if err != nil {
 		return c, err
 	}
-	recent := recentStart(items, keepRecentTokens)
 	var problems []string
+	var trimmed []int
 	for _, id := range in.Trim {
-		i, ok := findToolResult(items, id)
+		r := indexOfRow(rows, id)
+		problem := func(format string, args ...any) {
+			problems = append(problems, fmt.Sprintf("trim %s: ", id)+fmt.Sprintf(format, args...))
+		}
 		switch {
-		case !ok:
-			problems = append(problems, fmt.Sprintf("trim %s: no tool output with that id in the index", id))
-		case i >= recent:
-			problems = append(problems, fmt.Sprintf("trim %s: in the recent part, which is kept as is", id))
-		case slices.ContainsFunc(c.Trims, func(t db.CompactionTrim) bool { return t.ToolUseID == id }):
-			problems = append(problems, fmt.Sprintf("trim %s: listed twice", id))
+		case r < 0:
+			problem("unknown id; use ids from the index")
+		case r >= recent:
+			problem("in the recent part, which is kept as is")
+		case slices.Contains(trimmed, r):
+			problem("listed twice")
+		case !slices.ContainsFunc(rows[r], func(it contextItem) bool { return hasContent(it.message, llm.ContentTypeToolResult) }):
+			problem("has no tool output")
+		case len(rowTrims(rows[r])) == 0:
+			problem("already trimmed")
 		default:
-			c.Trims = append(c.Trims, db.CompactionTrim{SequenceID: items[i].from, ToolUseID: id})
+			trimmed = append(trimmed, r)
+			c.Trims = append(c.Trims, rowTrims(rows[r])...)
 		}
 	}
 
@@ -298,7 +308,7 @@ func buildCompaction(history []contextItem, keepRecentTokens int, in claudetool.
 		problem := func(format string, args ...any) {
 			problems = append(problems, name+": "+fmt.Sprintf(format, args...))
 		}
-		i, j := indexOfIndexID(items, col.From), indexOfIndexID(items, col.To)
+		i, j := indexOfRow(rows, col.From), indexOfRow(rows, col.To)
 		switch {
 		case i < 0 || j < 0:
 			problem("unknown id; use ids from the index")
@@ -307,13 +317,13 @@ func buildCompaction(history []contextItem, keepRecentTokens int, in claudetool.
 			problem("from comes after to")
 			continue
 		case j >= recent:
-			problem("reaches into the recent part (from %s on), which is kept as is", itemID(items[recent]))
+			problem("reaches into the recent part (from %s on), which is kept as is", rowID(rows[recent]))
 			continue
-		case hasContent(items[i].message, llm.ContentTypeToolResult):
-			problem("starts with a tool output, which must stay with its call; start at the call before it, or after the output")
+		case orphanOutput(rows[i]):
+			problem("%s is a tool output without its call; start the range after it", rowID(rows[i]))
 			continue
-		case hasContent(items[j].message, llm.ContentTypeToolUse):
-			problem("ends with a tool call, which must stay with its output; extend it to include the output, or end before the call")
+		case orphanCall(rows[j]):
+			problem("%s is a tool call without its output; end the range before it", rowID(rows[j]))
 			continue
 		case slices.ContainsFunc(spans, func(s span) bool { return i <= s.j && s.i <= j }):
 			problem("overlaps another collapse")
@@ -322,27 +332,31 @@ func buildCompaction(history []contextItem, keepRecentTokens int, in claudetool.
 		// A row that can only be collapsed on its own may not share a range.
 		if k := slices.Index(alone[i:j+1], true); k >= 0 && j > i {
 			instead := "collapse each of those rows on its own"
-			if r := suggestRanges(items, alone, i, j); r != "" {
+			if r := suggestRanges(rows, alone, i, j); r != "" {
 				instead = "collapse e.g. " + r + " instead"
 			}
-			problem("covers %s, which can only be collapsed on its own; %s", itemID(items[i+k]), instead)
+			problem("covers %s, which can only be collapsed on its own; %s", rowID(rows[i+k]), instead)
 			continue
 		}
 		// The range is sound; whatever else is wrong with it, it is taken.
 		spans = append(spans, span{i, j})
-		tokens := itemTokens(items[i : j+1])
+		tokens := 0
+		for _, row := range rows[i : j+1] {
+			tokens += itemTokens(row)
+		}
 		switch {
 		case strings.TrimSpace(col.Note) == "":
 			problem("note is empty")
 			continue
-		case tokens > maxCollapseTokens && j-i > 1:
-			problem("covers ~%d tokens; at most ~%d per collapse unless it is one tool call and its output, so split it", tokens, maxCollapseTokens)
+		case tokens > maxCollapseTokens && j > i:
+			problem("covers ~%d tokens; at most ~%d per collapse unless it is a single row, so split it", tokens, maxCollapseTokens)
 			continue
 		case (len(col.Note)+3)/4 >= tokens:
 			problem("note is not shorter than the ~%d tokens it replaces", tokens)
 			continue
 		}
-		c.Squishes = append(c.Squishes, db.CompactionSquish{FromSequenceID: items[i].from, ToSequenceID: items[j].to, Summary: col.Note})
+		last := rows[j][len(rows[j])-1]
+		c.Squishes = append(c.Squishes, db.CompactionSquish{FromSequenceID: rows[i][0].from, ToSequenceID: last.to, Summary: col.Note})
 	}
 	switch len(problems) {
 	case 0:
@@ -377,21 +391,68 @@ func collapsesAlone(it contextItem) (bool, error) {
 	return tag == "" || tag == "parent_message", nil
 }
 
-// aloneRows applies collapsesAlone to items.
-func aloneRows(items []contextItem) ([]bool, error) {
-	alone := make([]bool, len(items))
-	for i, it := range items {
+// splitRows groups items into the index's rows, and returns the index of the
+// first row of the recent part, which starts at items[recent]. A message with
+// tool calls shares a row with the message carrying their outputs, which
+// follows it; so a range of rows cannot split a call from its output. The
+// recent part never starts at an output, so no row straddles it.
+func splitRows(items []contextItem, recent int) (rows [][]contextItem, recentRow int) {
+	group := func(items []contextItem) {
+		for k := 0; k < len(items); k++ {
+			if k+1 < len(items) && hasContent(items[k].message, llm.ContentTypeToolUse) && isToolResultMessage(items[k+1].message) {
+				rows = append(rows, items[k:k+2])
+				k++
+				continue
+			}
+			rows = append(rows, items[k:k+1])
+		}
+	}
+	group(items[:recent])
+	recentRow = len(rows)
+	group(items[recent:])
+	return rows, recentRow
+}
+
+// rowID is the id of a row in the index: that of its first item.
+func rowID(row []contextItem) string {
+	return itemID(row[0])
+}
+
+func indexOfRow(rows [][]contextItem, id claudetool.IndexID) int {
+	return slices.IndexFunc(rows, func(row []contextItem) bool { return rowID(row) == string(id) })
+}
+
+// aloneRows reports for each row whether a collapse may cover it only on its
+// own (see collapsesAlone). Rows of a call and its output never are.
+func aloneRows(rows [][]contextItem) ([]bool, error) {
+	alone := make([]bool, len(rows))
+	for i, row := range rows {
+		if len(row) > 1 {
+			continue
+		}
 		var err error
-		if alone[i], err = collapsesAlone(it); err != nil {
+		if alone[i], err = collapsesAlone(row[0]); err != nil {
 			return nil, err
 		}
 	}
 	return alone, nil
 }
 
-// suggestRanges lists the ranges of items[i..j] between the rows that can
-// only be collapsed on their own.
-func suggestRanges(items []contextItem, alone []bool, i, j int) string {
+// Rows keep calls with their outputs, but a call can lack its output (the
+// server stopped while it ran), or an output its call. A range may not start
+// at such an output or end at such a call: it would leave the call, or the
+// output, behind.
+func orphanOutput(row []contextItem) bool {
+	return hasContent(row[0].message, llm.ContentTypeToolResult)
+}
+
+func orphanCall(row []contextItem) bool {
+	return hasContent(row[len(row)-1].message, llm.ContentTypeToolUse)
+}
+
+// suggestRanges lists the ranges of rows[i..j] between the rows that can only
+// be collapsed on their own.
+func suggestRanges(rows [][]contextItem, alone []bool, i, j int) string {
 	var ranges []string
 	start := -1
 	for k := i; k <= j+1; k++ {
@@ -401,35 +462,50 @@ func suggestRanges(items []contextItem, alone []bool, i, j int) string {
 				start = k
 			}
 		case start >= 0:
-			r := itemID(items[start])
-			if start < k-1 {
-				r += "-" + itemID(items[k-1])
+			end := k - 1
+			for start <= end && orphanOutput(rows[start]) {
+				start++
 			}
-			ranges = append(ranges, r)
+			for start <= end && orphanCall(rows[end]) {
+				end--
+			}
+			if start <= end {
+				r := rowID(rows[start])
+				if start < end {
+					r += "-" + rowID(rows[end])
+				}
+				ranges = append(ranges, r)
+			}
 			start = -1
 		}
 	}
 	return strings.Join(ranges, ", ")
 }
 
-func indexOfIndexID(items []contextItem, id claudetool.IndexID) int {
-	return indexOfItem(items, func(it contextItem) bool { return itemID(it) == string(id) })
-}
-
-// findToolResult returns the index of the original message carrying the tool
-// result for toolUseID.
-func findToolResult(items []contextItem, toolUseID string) (int, bool) {
-	for i, it := range items {
-		if it.source == nil {
-			continue
-		}
+// rowTrims lists the trims of a row's tool outputs not trimmed yet.
+func rowTrims(row []contextItem) []db.CompactionTrim {
+	var trims []db.CompactionTrim
+	for _, it := range row {
 		for _, c := range it.message.Content {
-			if c.Type == llm.ContentTypeToolResult && c.ToolUseID == toolUseID {
-				return i, true
+			if c.Type == llm.ContentTypeToolResult && !isTrimmedOutput(c) {
+				trims = append(trims, db.CompactionTrim{SequenceID: it.from, ToolUseID: c.ToolUseID})
 			}
 		}
 	}
-	return 0, false
+	return trims
+}
+
+// isTrimmedOutput reports whether c is a tool output trimmed by an in-place
+// compaction: its text is all a placeholder trimmedToolOutputText made.
+func isTrimmedOutput(c llm.Content) bool {
+	if len(c.ToolResult) != 1 {
+		return false
+	}
+	text := c.ToolResult[0].Text
+	var conversationID string
+	var seq int64
+	_, err := fmt.Sscanf(text, trimmedToolOutputPrefix+": conversation_id %s sequence_id %d]", &conversationID, &seq)
+	return err == nil && text == trimmedToolOutputText(conversationID, seq)
 }
 
 // compactionView returns history as the agent can compact it: without the
@@ -493,20 +569,16 @@ outputs are most of the context, so focus there. Compacting only a little is
 fine; when unsure, leave it. Originals stay retrievable by conversation_id and
 sequence_id (see the previous-conversations skill).
 
-Then call compact_in_place with action "compact": trim lists tool_use_ids;
-collapse lists {from, to, note} ranges of ids from the table. A range may not
-split a call from its output, nor cover more than ~%dk tokens unless it is just
-one tool call and its output. Rows marked * are messages from the user or the
-parent and notes and summaries from earlier compactions: they carry the task
-and its rules, so a range may not cover one unless it is just that row.`
+Then call compact_in_place with action "compact": trim lists ids of rows whose
+tool outputs you no longer need; collapse lists {from, to, note} ranges of ids
+from the table. A range may not cover more than ~%dk tokens unless it is a
+single row. Rows marked * are messages from the user or the parent and notes
+and summaries from earlier compactions: they carry the task and its rules, so a
+range may not cover one unless it is just that row.`
 
 // compactIndex renders the index the agent compacts from.
 func compactIndex(history []contextItem, keepRecentTokens int) (string, error) {
 	items, err := compactionView(history)
-	if err != nil {
-		return "", err
-	}
-	alone, err := aloneRows(items)
 	if err != nil {
 		return "", err
 	}
@@ -521,18 +593,24 @@ func compactIndex(history []contextItem, keepRecentTokens int) (string, error) {
 		itemID(items[recent]), len(items)-recent, itemTokens(items[recent:]))
 	b.WriteString("\n")
 	fmt.Fprintf(&b, compactIndexGuidance, maxCollapseTokens/1000)
-	b.WriteString("\n\nOne row per message, oldest first. id is the sequence_id, or s<n>.<i> for a note\n" +
-		"from an earlier compaction; tokens are estimated; `trim <tool_use_id>` marks a\n" +
-		"tool output you may trim.\n\n```\n")
+	b.WriteString("\n\nOne row per message, oldest first, except that a tool call and its output\n" +
+		"share a row. id is the sequence_id (of the call, for a shared row), or s<n>.<i>\n" +
+		"for a note from an earlier compaction. tokens are estimated; `→ N` gives the\n" +
+		"tokens of a call's output, or says it is trimmed or missing.\n\n```\n")
 
+	rows, recentRow := splitRows(items, recent)
+	alone, err := aloneRows(rows)
+	if err != nil {
+		return "", err
+	}
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "id\trole\ttokens\tcontent")
 	toolNames := map[string]string{}
-	for i, it := range items[:recent] {
+	for i, row := range rows[:recentRow] {
 		role := "note"
 		switch {
-		case it.source == nil:
-		case it.message.Role == llm.MessageRoleAssistant:
+		case row[0].source == nil:
+		case row[0].message.Role == llm.MessageRoleAssistant:
 			role = "assistant"
 		default:
 			role = "user"
@@ -540,57 +618,102 @@ func compactIndex(history []contextItem, keepRecentTokens int) (string, error) {
 		if alone[i] {
 			role += "*"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", itemID(it), role, estimatePiMessageTokens(it.message), describeItem(it, toolNames))
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", rowID(row), role, itemTokens(row), describeRow(row, toolNames))
 	}
 	tw.Flush()
 	b.WriteString("```\n")
 	return b.String(), nil
 }
 
-// describeItem lists an item's blocks for the index. toolNames maps tool_use
-// ids seen so far to tool names, so outputs can be named after their calls.
-func describeItem(it contextItem, toolNames map[string]string) string {
-	if it.source == nil {
-		return "note " + quoteStart(it.note)
+// describeRow lists a row's blocks for the index, each tool call with the
+// size of its output. toolNames maps tool_use ids seen so far to tool names,
+// so outputs without their call in the row can be named after it.
+func describeRow(row []contextItem, toolNames map[string]string) string {
+	if row[0].source == nil {
+		return "note " + quoteStart(row[0].note)
 	}
-	results := 0
-	for _, c := range it.message.Content {
-		if c.Type == llm.ContentTypeToolResult {
-			results++
+	outputs := map[string]string{}
+	for _, it := range row {
+		for _, c := range it.message.Content {
+			if c.Type == llm.ContentTypeToolResult {
+				outputs[c.ToolUseID] = "→ trimmed"
+				if !isTrimmedOutput(c) {
+					outputs[c.ToolUseID] = fmt.Sprintf("→ %d", estimatePiMessageTokens(llm.Message{Content: []llm.Content{c}}))
+				}
+			}
 		}
 	}
+	called := map[string]bool{}
 	var parts []string
-	for _, c := range it.message.Content {
-		switch c.Type {
-		case llm.ContentTypeText:
-			if c.MediaType != "" {
-				parts = append(parts, "image")
-			} else {
-				parts = append(parts, "text "+quoteStart(c.Text))
+	for _, it := range row {
+		for _, c := range it.message.Content {
+			switch c.Type {
+			case llm.ContentTypeText:
+				if c.MediaType != "" {
+					parts = append(parts, "image")
+				} else {
+					parts = append(parts, "text "+quoteStart(c.Text))
+				}
+			case llm.ContentTypeThinking, llm.ContentTypeRedactedThinking:
+				parts = append(parts, "thinking")
+			case llm.ContentTypeToolUse:
+				toolNames[c.ID] = c.ToolName
+				called[c.ID] = true
+				part := c.ToolName
+				if in := readableToolInput(c.ToolInput); in != "" {
+					part += " " + quoteStart(in)
+				}
+				if out, ok := outputs[c.ID]; ok {
+					part += " " + out
+				} else {
+					part += " → no output"
+				}
+				parts = append(parts, part)
+			case llm.ContentTypeToolResult:
+				if called[c.ToolUseID] {
+					continue
+				}
+				name := toolNames[c.ToolUseID]
+				if name == "" {
+					name = "tool"
+				}
+				parts = append(parts, name+" output "+outputs[c.ToolUseID])
 			}
-		case llm.ContentTypeThinking, llm.ContentTypeRedactedThinking:
-			parts = append(parts, "thinking")
-		case llm.ContentTypeToolUse:
-			toolNames[c.ID] = c.ToolName
-			parts = append(parts, c.ToolName+" call "+quoteStart(string(c.ToolInput)))
-		case llm.ContentTypeToolResult:
-			name := toolNames[c.ToolUseID]
-			if name == "" {
-				name = "tool"
-			}
-			part := name + " output"
-			switch {
-			case len(c.ToolResult) == 1 && strings.HasPrefix(c.ToolResult[0].Text, trimmedToolOutputPrefix):
-				part += " (trimmed)"
-			case results > 1:
-				part += fmt.Sprintf(" (trim %s, ~%d)", c.ToolUseID, estimatePiMessageTokens(llm.Message{Content: []llm.Content{c}}))
-			default:
-				part += " (trim " + c.ToolUseID + ")"
-			}
-			parts = append(parts, part)
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+// readableToolInput renders a tool call's input the way one would type it:
+// the values of its fields in order, strings as they are and other scalars as
+// key=value, leaving out empty strings and nested objects and arrays. Input
+// that is not an object is shown as it is.
+func readableToolInput(input json.RawMessage) string {
+	var fields []string
+	dec := json.NewDecoder(bytes.NewReader(input))
+	dec.UseNumber()
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return string(input)
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return string(input)
+		}
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			return string(input)
+		}
+		switch v := v.(type) {
+		case string:
+			if v != "" {
+				fields = append(fields, v)
+			}
+		case json.Number, bool:
+			fields = append(fields, fmt.Sprintf("%s=%v", key, v))
+		}
+	}
+	return strings.Join(fields, " ")
 }
 
 // quoteStart quotes the start of s on one line.

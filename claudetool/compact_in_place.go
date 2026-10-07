@@ -49,7 +49,7 @@ type CompactCollapse struct {
 // CompactInPlaceInput is the compact_in_place tool's input.
 type CompactInPlaceInput struct {
 	Action   string            `json:"action"`
-	Trim     []string          `json:"trim"`
+	Trim     []IndexID         `json:"trim"`
 	Collapse []CompactCollapse `json:"collapse"`
 }
 
@@ -66,7 +66,7 @@ const compactInPlaceSchema = `{
     "action": {"type": "string", "enum": ["index", "compact"]},
     "trim": {
       "type": "array",
-      "description": "compact: tool_use_ids whose outputs to trim",
+      "description": "compact: ids of index rows whose tool outputs to trim",
       "items": {"type": "string"}
     },
     "collapse": {
