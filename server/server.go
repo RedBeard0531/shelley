@@ -611,18 +611,16 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.HandleFunc("GET /api/cache-key", s.handleCacheKey)
 	api.HandleFunc("POST /api/cache-session/clear", s.handleCacheSessionClear)
 
-	// Debug endpoints
-	mux.HandleFunc("GET /debug/conversations", s.handleDebugConversationsPage)
+	// Debug endpoints. List new pages in debug/index.html.
+	mux.Handle("GET /debug/", http.FileServerFS(debugAssets))
 	mux.HandleFunc("GET /debug/conversation-stream", s.handleDebugConversationStreamPage)
 	mux.HandleFunc("GET /debug/conversation-stream/history", s.handleDebugConversationStreamHistory)
 	mux.HandleFunc("GET /debug/stylebook", s.handleDebugStylebook)
 	mux.HandleFunc("GET /debug/loremipsum", s.handleDebugLoremIpsum)
 	mux.HandleFunc("POST /debug/loremipsum", s.handleDebugLoremIpsum)
 	mux.HandleFunc("GET /debug/histograms", s.handleDebugHistograms)
-	mux.Handle("GET /debug/llm/", http.FileServerFS(debugLLMAssets))
 	api.HandleFunc("GET /api/debug/llm/exchanges", s.handleDebugLLMList)
 	api.Handle("GET /api/debug/llm/exchanges/{id}", compressionHandler(http.HandlerFunc(s.handleDebugLLMGet)))
-	mux.Handle("GET /debug/channels/", http.FileServerFS(debugChannelsAssets))
 	mux.HandleFunc("POST /debug/channels/gateway/{chat}/{token}/{action}", s.handleDebugChannelGateway)
 	mux.HandleFunc("DELETE /debug/channels/gateway/{chat}/{token}/{action}", s.handleDebugChannelGateway)
 	api.HandleFunc("GET /api/debug/channels", s.handleDebugChannelsList)

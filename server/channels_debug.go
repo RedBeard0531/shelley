@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +17,7 @@ import (
 	"shelley.exe.dev/db/generated"
 )
 
-// debugChannelsAssets is the /debug/channels/ page: a stand-in for the
+// The /debug/channels/ page (debug/channels/) is a stand-in for the
 // exe.dev messages service, for trying channels without a phone. The page
 // plays the phone: what it types is delivered to the chat's conversation
 // like exed delivers a text, and the chat's replies land in memory at this
@@ -31,9 +30,6 @@ import (
 // checks against the conversation's stored endpoint: the gateway is outside
 // /api/ (Shelley calls it without the API's headers), so the token is what
 // keeps others from writing to it.
-//
-//go:embed debug/channels
-var debugChannelsAssets embed.FS
 
 // debugChatIDPattern matches debug chat ids.
 var debugChatIDPattern = regexp.MustCompile(`^debug-[A-Za-z0-9_-]{1,64}$`)

@@ -32,13 +32,6 @@ const state = {
   mode: "tree",
 };
 
-// Follow the Shelley app's theme setting.
-const theme = localStorage.getItem("shelley-theme");
-document.documentElement.classList.toggle(
-  "dark",
-  theme === "dark" || (theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches),
-);
-
 // ---- formatting ----
 
 function fmtBytes(n) {

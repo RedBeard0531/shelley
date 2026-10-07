@@ -299,7 +299,6 @@ fresh reset event.
 
 ### Debug
 
-- `GET /debug/conversations` — HTML dump of the conversation list.
-- `GET /debug/conversation-stream` — HTML viewer over the patch stream.
+- `GET /debug/` — index of the debug pages.
 - `GET /debug/conversation-stream/history` — JSON dump of the last 100
   patch events.

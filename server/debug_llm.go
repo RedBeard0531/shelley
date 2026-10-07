@@ -1,7 +1,6 @@
 package server
 
 import (
-	"embed"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -9,12 +8,9 @@ import (
 	"shelley.exe.dev/llm/llmhttp"
 )
 
-// debugLLMAssets is the /debug/llm/ page: an always-on view of the recent
-// LLM HTTP exchanges held in memory by llmhttp.Recent. Its data, which holds
+// The /debug/llm/ page (debug/llm/) is an always-on view of the recent LLM
+// HTTP exchanges held in memory by llmhttp.Recent. Its data, which holds
 // prompts, is served under /api/ for the same protection as the rest of the API.
-//
-//go:embed debug/llm
-var debugLLMAssets embed.FS
 
 func (s *Server) handleDebugLLMList(w http.ResponseWriter, r *http.Request) {
 	type summary struct {
