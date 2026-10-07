@@ -64,3 +64,45 @@ func (s Server) OAuthCapable() bool {
 func (s Server) sameConnection(o Server) bool {
 	return s.URL == o.URL && maps.Equal(s.Headers, o.Headers)
 }
+
+// sameLoginScope reports whether an OAuth login for o still applies to s. A
+// login belongs to the authorization server that protects an origin, so
+// editing only the path or query of a URL (a common way to pick which tools a
+// server exposes) keeps the login; changing scheme or host drops it.
+func (s Server) sameLoginScope(o Server) bool {
+	so, ok1 := origin(s.URL)
+	oo, ok2 := origin(o.URL)
+	if !ok1 || !ok2 {
+		return s.URL == o.URL
+	}
+	return so == oo
+}
+
+// origin returns rawURL's scheme://host:port with the scheme and host
+// lowercased and the default port for the scheme filled in, so that
+// "https://h" and "https://H:443" compare equal. ok is false if rawURL can't
+// be parsed as an absolute http(s) URL.
+func origin(rawURL string) (o string, ok bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	if port == "" {
+		switch scheme {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	return scheme + "://" + strings.ToLower(u.Hostname()) + ":" + port, true
+}
+
+// SameLoginScope reports whether an OAuth login made for the URL oldURL still
+// applies after the URL changes to newURL: it does when only the path or query
+// changed, not the scheme or host.
+func SameLoginScope(oldURL, newURL string) bool {
+	return Server{URL: newURL}.sameLoginScope(Server{URL: oldURL})
+}

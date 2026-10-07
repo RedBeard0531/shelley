@@ -1721,10 +1721,32 @@ func (cm *ConversationManager) recreateBtwReaderSystemPrompt(ctx context.Context
 	return created, nil
 }
 
+// mcpServerInfos lists the registered MCP servers for the system prompt.
+func (cm *ConversationManager) mcpServerInfos(ctx context.Context) ([]MCPServerInfo, error) {
+	var rows []generated.McpServer
+	err := cm.db.Queries(ctx, func(q *generated.Queries) (err error) {
+		rows, err = q.ListMCPServers(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	servers := make([]MCPServerInfo, len(rows))
+	for i, row := range rows {
+		servers[i] = MCPServerInfo{Name: row.Name, Description: row.Description}
+	}
+	return servers, nil
+}
+
 func (cm *ConversationManager) createSystemPrompt(ctx context.Context) (*generated.Message, error) {
 	var opts []SystemPromptOption
 	if cm.userEmail != "" {
 		opts = append(opts, WithUserEmail(cm.userEmail))
+	}
+	if servers, err := cm.mcpServerInfos(ctx); err != nil {
+		cm.logger.Warn("failed to list MCP servers for system prompt", "error", err)
+	} else if len(servers) > 0 {
+		opts = append(opts, WithMCPServers(servers))
 	}
 	systemPrompt, promptSkills, err := generateSystemPromptWithIntegrationSkills(cm.cwd, cm.integrationSkills.Skills(ctx), opts...)
 	if err != nil {
@@ -1856,7 +1878,17 @@ func (cm *ConversationManager) systemPromptDisplayData(promptSkills []skills.Ski
 }
 
 func (cm *ConversationManager) createSubagentSystemPrompt(ctx context.Context) (*generated.Message, error) {
-	systemPrompt, promptSkills, err := generateSubagentSystemPromptWithIntegrationSkills(cm.cwd, cm.role == roleSubagent, cm.integrationSkills.Skills(ctx))
+	// Only subagents use MCP tools; internal workers (commit tours,
+	// transcriptions) don't, and notifyMCPServersChanged skips them too.
+	var mcpServers []MCPServerInfo
+	if cm.role == roleSubagent {
+		if servers, err := cm.mcpServerInfos(ctx); err != nil {
+			cm.logger.Warn("failed to list MCP servers for subagent system prompt", "error", err)
+		} else {
+			mcpServers = servers
+		}
+	}
+	systemPrompt, promptSkills, err := generateSubagentSystemPromptWithIntegrationSkills(cm.cwd, cm.role == roleSubagent, cm.integrationSkills.Skills(ctx), mcpServers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate subagent system prompt: %w", err)
 	}

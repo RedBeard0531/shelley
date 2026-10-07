@@ -23,6 +23,14 @@ export interface BackgroundJobMessageSource {
 
 export type MessageSource = ConversationMessageSource | BackgroundJobMessageSource;
 
+// An MCP notice is a user message to the model (that the registered MCP
+// servers changed mid-turn) but a system notice to the reader.
+export interface McpNoticeMessageSource {
+  // "added", "updated" or "removed".
+  mcpServerChange: string;
+  serverName: string;
+}
+
 // Persisted messages carry JSON text; queued ghosts carry the decoded object.
 function parseUserData(userData: unknown): Record<string, unknown> | null {
   if (!userData) return null;
@@ -64,6 +72,17 @@ export function messageSource(userData: unknown): MessageSource | null {
     return null;
   }
   return { conversationId, slug, relationship };
+}
+
+// mcpNoticeSource identifies a notice that the registered MCP servers changed
+// while the agent was working. It is separate from messageSource so the
+// MessageSource union (and its consumers) stay unchanged.
+export function mcpNoticeSource(userData: unknown): McpNoticeMessageSource | null {
+  const parsed = parseUserData(userData);
+  if (!parsed) return null;
+  const { mcp_server_change: change, server_name: name } = parsed;
+  if (typeof change !== "string" || !change) return null;
+  return { mcpServerChange: change, serverName: typeof name === "string" ? name : "" };
 }
 
 function backgroundJobOutcome(parsed: Record<string, unknown>): BackgroundJobOutcome | null {

@@ -854,7 +854,7 @@ func TestSubagentSystemPromptKeepsStableSkillsFirst(t *testing.T) {
 	prompt, _, err := generateSubagentSystemPromptWithIntegrationSkills(t.TempDir(), true, []skills.Skill{{
 		Name:        "stable-prefix",
 		Description: "Keep reusable guidance first.",
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1208,7 +1208,7 @@ func TestIntegrationSkillSnapshotIncludedInTopLevelAndSubagentPrompts(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	subagent, subSkills, err := generateSubagentSystemPromptWithIntegrationSkills(workingDir, true, integrationSkills)
+	subagent, subSkills, err := generateSubagentSystemPromptWithIntegrationSkills(workingDir, true, integrationSkills, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1222,5 +1222,35 @@ func TestIntegrationSkillSnapshotIncludedInTopLevelAndSubagentPrompts(t *testing
 	}
 	if len(subSkills) == 0 || subSkills[0].Name != "remote-release" {
 		t.Fatalf("subagent prompt skills = %+v", subSkills)
+	}
+}
+
+// TestSystemPromptListsMCPServers verifies the registered MCP servers appear
+// in the system prompt with their descriptions.
+func TestSystemPromptListsMCPServers(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// No servers: no block.
+	prompt, _, err := generateSystemPrompt(tmpDir)
+	if err != nil {
+		t.Fatalf("generateSystemPrompt: %v", err)
+	}
+	if strings.Contains(prompt, "<mcp_servers>") {
+		t.Fatalf("mcp_servers block present with no servers:\n%s", prompt)
+	}
+
+	// With servers: names and descriptions listed.
+	prompt, _, err = generateSystemPrompt(tmpDir, WithMCPServers([]MCPServerInfo{
+		{Name: "linear", Description: "issue tracker"},
+		{Name: "bare", Description: ""},
+	}))
+	if err != nil {
+		t.Fatalf("generateSystemPrompt: %v", err)
+	}
+	for _, want := range []string{"<mcp_servers>", "shelley mcp", "- linear: issue tracker", "- bare\n", "</mcp_servers>"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }

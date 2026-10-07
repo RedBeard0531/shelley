@@ -247,6 +247,12 @@ func TestMCPOAuthLogout(t *testing.T) {
 
 	put := func(body string) { e.want(200, "PUT", "/api/mcp/servers/linear", "", body) }
 	e.login()
+	// Editing only the path or query keeps the login: its origin is unchanged.
+	put(fmt.Sprintf(`{"url":%q}`, as.MCP.URL+"/mcp?tools=all"))
+	e.wantAuth("logged_in")
+	put(fmt.Sprintf(`{"url":%q}`, as.MCP.URL+"/mcp"))
+	e.wantAuth("logged_in")
+	// Changing the host drops it: the login was for the old origin.
 	put(fmt.Sprintf(`{"url":%q}`, mcptest.NewServer(t).URL))
 	e.wantAuth("")
 	put(fmt.Sprintf(`{"url":%q}`, as.MCP.URL+"/mcp"))

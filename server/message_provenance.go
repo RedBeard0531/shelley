@@ -53,6 +53,17 @@ type backgroundJobUserData struct {
 	Text string `json:"Text"`
 }
 
+// mcpNoticeUserData marks a notice that the registered MCP servers changed
+// while the agent was working; it is not from a human. MCPServerChange is
+// "added", "updated" or "removed".
+type mcpNoticeUserData struct {
+	MCPServerChange string `json:"mcp_server_change"`
+	ServerName      string `json:"server_name"`
+	// Text duplicates the message for full-text search, as in
+	// senderMessageUserData.
+	Text string `json:"Text"`
+}
+
 func provenanceEligibleConversation(conversation generated.Conversation) bool {
 	return !isBtwReader(conversation) && db.ParseConversationOptions(conversation.ConversationOptions).Kind != transcriptionKind
 }
@@ -141,6 +152,13 @@ func provenanceTag(rawUserData []byte) (string, []xml.Attr, error) {
 		var job backgroundJobUserData
 		if err := json.Unmarshal(rawUserData, &job); err == nil && job.BackgroundJobID != "" {
 			return "background_job", []xml.Attr{{Name: xml.Name{Local: "id"}, Value: job.BackgroundJobID}}, nil
+		}
+		var mcpN mcpNoticeUserData
+		if err := json.Unmarshal(rawUserData, &mcpN); err == nil && mcpN.MCPServerChange != "" {
+			return "mcp_servers_changed", []xml.Attr{
+				{Name: xml.Name{Local: "server"}, Value: mcpN.ServerName},
+				{Name: xml.Name{Local: "change"}, Value: mcpN.MCPServerChange},
+			}, nil
 		}
 	}
 	data, ok, err := parseSenderMessageUserData(rawUserData)

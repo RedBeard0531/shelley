@@ -39,7 +39,38 @@ type SystemPromptData struct {
 	DefaultPort      int    // For exe.dev, the auto-routed HTTP port, 0 if unknown
 	SkillsXML        string // XML block for available skills
 	Skills           []skills.Skill
-	UserEmail        string // The exe.dev auth email of the user, if known
+	UserEmail        string          // The exe.dev auth email of the user, if known
+	MCPServers       []MCPServerInfo // Registered MCP servers, for the mcp skill
+}
+
+// MCPServerInfo is a registered MCP server, named in the system prompt so the
+// model knows which external services it can reach with `shelley mcp`.
+type MCPServerInfo struct {
+	Name        string
+	Description string
+}
+
+// MCPServersXML renders the registered MCP servers as a block for the system
+// prompt, or "" when none are registered.
+func (d *SystemPromptData) MCPServersXML() string { return mcpServersXML(d.MCPServers) }
+
+// mcpServersXML renders servers as an <mcp_servers> block, or "" when empty.
+func mcpServersXML(servers []MCPServerInfo) string {
+	if len(servers) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<mcp_servers>\n")
+	b.WriteString("These MCP servers are registered. Reach them with `shelley mcp` (see the mcp skill); they are not model tools.\n")
+	for _, s := range servers {
+		if desc := strings.TrimSpace(s.Description); desc != "" {
+			fmt.Fprintf(&b, "- %s: %s\n", s.Name, desc)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", s.Name)
+		}
+	}
+	b.WriteString("</mcp_servers>")
+	return b.String()
 }
 
 // DBPath is the path to the shelley database, set at startup
@@ -84,6 +115,13 @@ type SystemPromptOption func(*SystemPromptData)
 func WithUserEmail(email string) SystemPromptOption {
 	return func(d *SystemPromptData) {
 		d.UserEmail = email
+	}
+}
+
+// WithMCPServers lists the registered MCP servers in the system prompt.
+func WithMCPServers(servers []MCPServerInfo) SystemPromptOption {
+	return func(d *SystemPromptData) {
+		d.MCPServers = servers
 	}
 }
 
@@ -970,19 +1008,23 @@ type SubagentSystemPromptData struct {
 	MessageParent bool
 	SkillsXML     string // XML block for available skills
 	Skills        []skills.Skill
+	MCPServers    []MCPServerInfo // Registered MCP servers, for the mcp skill
 }
+
+// MCPServersXML renders the registered MCP servers for the subagent prompt.
+func (d *SubagentSystemPromptData) MCPServersXML() string { return mcpServersXML(d.MCPServers) }
 
 // GenerateSubagentSystemPrompt generates a minimal system prompt for subagent conversations.
 func GenerateSubagentSystemPrompt(workingDir, parentConversationID string) (string, error) {
-	prompt, _, err := generateSubagentSystemPromptData(workingDir, parentConversationID, true, nil)
+	prompt, _, err := generateSubagentSystemPromptData(workingDir, parentConversationID, true, nil, nil)
 	return prompt, err
 }
 
-func generateSubagentSystemPromptWithIntegrationSkills(workingDir string, messageParent bool, integrationSkills []skills.Skill) (string, []skills.Skill, error) {
-	return generateSubagentSystemPromptData(workingDir, "", messageParent, integrationSkills)
+func generateSubagentSystemPromptWithIntegrationSkills(workingDir string, messageParent bool, integrationSkills []skills.Skill, mcpServers []MCPServerInfo) (string, []skills.Skill, error) {
+	return generateSubagentSystemPromptData(workingDir, "", messageParent, integrationSkills, mcpServers)
 }
 
-func generateSubagentSystemPromptData(workingDir, parentConversationID string, messageParent bool, integrationSkills []skills.Skill) (string, []skills.Skill, error) {
+func generateSubagentSystemPromptData(workingDir, parentConversationID string, messageParent bool, integrationSkills []skills.Skill, mcpServers []MCPServerInfo) (string, []skills.Skill, error) {
 	wd := workingDir
 	if wd == "" {
 		var err error
@@ -997,6 +1039,7 @@ func generateSubagentSystemPromptData(workingDir, parentConversationID string, m
 		ShelleyDBPath:    DBPath,
 		ConversationID:   parentConversationID,
 		MessageParent:    messageParent,
+		MCPServers:       mcpServers,
 	}
 
 	// Try to collect git info

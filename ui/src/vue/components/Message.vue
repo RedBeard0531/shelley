@@ -181,6 +181,10 @@
             />
           </template>
 
+          <template v-else-if="mcpNotice">
+            <McpServerNoticeCard v-if="entityIndex === 0" :source="mcpNotice" :text="messageText" />
+          </template>
+
           <!-- Distillation box takes precedence over content blocks. -->
           <div
             v-else-if="isDistilledUser"
@@ -300,9 +304,10 @@ import MessageContentBlock from "./MessageContentBlock.vue";
 import CitedText from "./CitedText.vue";
 import { coalesceContent, splitContentEntities } from "../../utils/coalesceContent";
 import { perfCount } from "../../utils/perf";
-import { messageSource } from "../../utils/messageSource";
+import { messageSource, mcpNoticeSource } from "../../utils/messageSource";
 import ConversationMessageCard from "./ConversationMessageCard.vue";
 import BackgroundJobNoticeCard from "./BackgroundJobNoticeCard.vue";
+import McpServerNoticeCard from "./McpServerNoticeCard.vue";
 import MessageDisplayData from "./MessageDisplayData.vue";
 
 interface ToolDisplay {
@@ -436,6 +441,10 @@ const jobNotice = computed(() =>
 // Messages from another conversation render as a tool card.
 const conversationSender = computed(() =>
   sender.value && "conversationId" in sender.value ? sender.value : null,
+);
+// Notices that the registered MCP servers changed render as a system card.
+const mcpNotice = computed(() =>
+  isUser.value && !isDistilledUser.value ? mcpNoticeSource(props.message.user_data) : null,
 );
 const authorEmail = computed(() =>
   isUser.value && !isDistilledUser.value && showUserEmails?.value

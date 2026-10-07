@@ -212,6 +212,45 @@ func TestMCPList(t *testing.T) {
 	requireContains(t, e.fail(1, "list", "nope"), "shelley mcp: ", "nope")
 }
 
+func TestMCPSearch(t *testing.T) {
+	e := newMCPEnv(t)
+	f := mcptest.NewServer(t)
+	g := mcptest.NewServer(t)
+	e.ok("add", "f", f.URL)
+	e.ok("add", "g", g.URL)
+
+	// A term in a description matches, across every server, with the full tool
+	// documentation and a server heading.
+	out := e.ok("search", "echo")
+	requireContains(t, out, "# f\n\nf.echo\n", "Echo text back.", "# g\n\ng.echo\n")
+	if strings.Contains(out, "function add(") {
+		t.Fatalf("search echo returned add: %q", out)
+	}
+
+	// A leading server name limits the search to that server.
+	out = e.ok("search", "f", "echo")
+	if !strings.Contains(out, "f.echo") || strings.Contains(out, "g.echo") {
+		t.Fatalf("search f echo: %q", out)
+	}
+
+	// Every term must match (AND).
+	if out := e.ok("search", "echo", "nonesuch"); !strings.Contains(out, "no tools match") {
+		t.Fatalf("search echo nonesuch: %q", out)
+	}
+
+	// -json returns the matches as an array of {server, tool}.
+	var matches []struct {
+		Server string         `json:"server"`
+		Tool   map[string]any `json:"tool"`
+	}
+	if err := json.Unmarshal([]byte(e.ok("search", "-json", "add")), &matches); err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 || matches[0].Tool["name"] != "add" {
+		t.Fatalf("search -json add: %v", matches)
+	}
+}
+
 func TestMCPCall(t *testing.T) {
 	e := newMCPEnv(t)
 	f := mcptest.NewServer(t)
@@ -288,7 +327,9 @@ func TestMCPLoginRequired(t *testing.T) {
 
 	out := e.ok("auth", "locked")
 	link := strings.TrimPrefix(strings.Split(out, "\n")[1], "Log in: ")
-	if !strings.HasPrefix(out, "locked: not logged in\nLog in: http") || !strings.HasSuffix(link, "/mcp/login/locked") {
+	// The login link is root-relative so it resolves against whatever host the
+	// user reached Shelley on (see mcpLoginURL).
+	if out != "locked: not logged in\nLog in: /mcp/login/locked\n" {
 		t.Fatalf("auth: %q", out)
 	}
 	want := "shelley mcp: MCP server \"locked\" needs you to log in: open " + link + "\n"

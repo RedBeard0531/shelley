@@ -34,6 +34,10 @@ Commands:
   list SERVER                       List SERVER's tools as TypeScript-style signatures
   list SERVER.TOOL [-schema]        Show a tool; -schema adds its JSON schemas
   list -json [SERVER[.TOOL]]        Print servers, tools or a tool as JSON
+  search [SERVER] QUERY...          Show tools matching every QUERY term (in a
+                                    name, description or parameter); searches
+                                    every server unless one is named. -json
+                                    prints the matches as JSON
   call SERVER.TOOL [KEY=VALUE...]   Call a tool; VALUE is used as is for string
                                     parameters and parsed as JSON otherwise
   call SERVER.TOOL -                Call a tool with a JSON object of arguments on stdin
@@ -100,6 +104,7 @@ func (c *mcpCLI) run(args []string) error {
 	}
 	cmd, ok := map[string]func([]string) error{
 		"list":    c.list,
+		"search":  c.search,
 		"call":    c.call,
 		"add":     c.add,
 		"rm":      c.named("DELETE", ""),
@@ -313,6 +318,88 @@ func (c *mcpCLI) printTools(server string, ts *mcpTools) error {
 	}
 	_, err := io.WriteString(c.stdout, b.String())
 	return err
+}
+
+// searchMatch is a tool that matched a search, with its server.
+type searchMatch struct {
+	Server string   `json:"server"`
+	Tool   *mcpTool `json:"tool"`
+}
+
+// search prints the tools whose documentation contains every query term. It
+// takes an optional leading SERVER argument (a term that names a server, or
+// "SERVER" when the only argument) to limit the search to one server;
+// otherwise it searches every registered server.
+func (c *mcpCLI) search(args []string) error {
+	fs := flag.NewFlagSet("search", flag.ContinueOnError)
+	jsonOut := fs.Bool("json", false, "")
+	pos, err := parse(fs, args, 1, math.MaxInt)
+	if err != nil {
+		return err
+	}
+	servers, err := c.servers()
+	if err != nil {
+		return err
+	}
+	// A leading argument that names a server, when it isn't the only argument,
+	// limits the search to that server.
+	terms := pos
+	if len(pos) > 1 {
+		if j := slices.IndexFunc(servers, func(s mcpServer) bool { return s.Name == pos[0] }); j >= 0 {
+			servers, terms = servers[j:j+1], pos[1:]
+		}
+	}
+	for j := range terms {
+		terms[j] = strings.ToLower(terms[j])
+	}
+	matches := []searchMatch{}
+	for _, s := range servers {
+		ts, err := c.tools(s.Name)
+		if err != nil {
+			// A server that won't connect (needs a login, say) mustn't stop the
+			// search of the others; note it and move on.
+			fmt.Fprintf(c.stderr, "skipping %s: %v\n", s.Name, err)
+			continue
+		}
+		for _, t := range ts.Tools {
+			if toolMatches(t, terms) {
+				matches = append(matches, searchMatch{Server: s.Name, Tool: t})
+			}
+		}
+	}
+	if *jsonOut {
+		return printJSON(c.stdout, matches)
+	}
+	if len(matches) == 0 {
+		fmt.Fprintf(c.stdout, "no tools match %s\n", strings.Join(terms, " "))
+		return nil
+	}
+	var b strings.Builder
+	prev := ""
+	for _, m := range matches {
+		if m.Server != prev {
+			if prev != "" {
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "# %s\n\n", m.Server)
+			prev = m.Server
+		}
+		fmt.Fprintf(&b, "%s.%s\n%s\n", m.Server, m.Tool.Name, m.Tool.doc())
+	}
+	_, err = io.WriteString(c.stdout, b.String())
+	return err
+}
+
+// toolMatches reports whether t's documentation contains every term (already
+// lowercased).
+func toolMatches(t *mcpTool, terms []string) bool {
+	hay := strings.ToLower(t.Name + "\n" + t.Title + "\n" + t.doc())
+	for _, term := range terms {
+		if !strings.Contains(hay, term) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *mcpCLI) call(args []string) error {

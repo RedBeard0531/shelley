@@ -12,9 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/mcp/mcptest"
 )
@@ -264,5 +266,100 @@ func TestShelleySocketEnv(t *testing.T) {
 	h.NewConversation(`bash: printf %s "$SHELLEY_SOCKET"`, t.TempDir())
 	if got := strings.TrimSpace(h.WaitToolResult()); got != want {
 		t.Fatalf("SHELLEY_SOCKET=%q, want %q", got, want)
+	}
+}
+
+func TestMCPNoticeProvenanceTag(t *testing.T) {
+	raw, err := json.Marshal(mcpNoticeUserData{MCPServerChange: "added", ServerName: "linear", Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, attrs, err := provenanceTag(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag != "mcp_servers_changed" {
+		t.Fatalf("tag = %q", tag)
+	}
+	got := map[string]string{}
+	for _, a := range attrs {
+		got[a.Name.Local] = a.Value
+	}
+	if got["server"] != "linear" || got["change"] != "added" {
+		t.Fatalf("attrs = %v", got)
+	}
+
+	// The notice reaches the model wrapped, with its text escaped.
+	msg, err := messageWithSenderProvenance(llm.UserStringMessage("added <linear>"), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := msg.Content[0].Text
+	if !strings.Contains(text, `<mcp_servers_changed server="linear" change="added">`) ||
+		!strings.Contains(text, "&lt;linear&gt;") ||
+		!strings.HasSuffix(text, "</mcp_servers_changed>") {
+		t.Fatalf("wrapped text = %q", text)
+	}
+}
+
+// TestMCPNoticeInjectedWhileWorking verifies that adding an MCP server while an
+// agent is working injects a notice the model sees, wrapped in
+// <mcp_servers_changed>.
+func TestMCPNoticeInjectedWhileWorking(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server, database, _ := newTestServer(t)
+	held := newHeldLLMService()
+	server.llmManager = &testLLMManager{service: held}
+	t.Cleanup(func() { stopActiveConversationLoops(server) })
+
+	slug := "mcp-notice"
+	conversation, err := database.CreateConversation(t.Context(), &slug, true, nil, strPtr("predictable"), db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Start a turn; the held service blocks the first call, so the agent is
+	// working when we add the server.
+	w := httptest.NewRecorder()
+	server.handleChatConversation(w, httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader(`{"message":"start","model":"predictable"}`)), conversation.ConversationID)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("chat status = %d: %s", w.Code, w.Body.String())
+	}
+	first := held.waitCall(t, "start")
+
+	// Add a server while the agent is working.
+	addW := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp/servers",
+		strings.NewReader(`{"name":"linear","url":"https://example.com/mcp","description":"issues"}`))
+	server.handleCreateMCPServer(addW, req)
+	if addW.Code != http.StatusOK {
+		t.Fatalf("create status = %d: %s", addW.Code, addW.Body.String())
+	}
+
+	// Let the turn run; the injected notice reaches a later model request.
+	first.Release()
+	deadline := time.After(5 * time.Second)
+	for {
+		held.mu.Lock()
+		var found bool
+		for _, calls := range held.calls {
+			for _, c := range calls {
+				if requestHasText(c.request, `<mcp_servers_changed server="linear" change="added">`) {
+					found = true
+				}
+				c.Release() // keep the turn progressing so the drained notice runs
+			}
+		}
+		changed := held.changed
+		held.mu.Unlock()
+		if found {
+			return
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatal("notice did not reach the model")
+		}
 	}
 }

@@ -12,11 +12,66 @@ import (
 	"time"
 
 	"shelley.exe.dev/db/generated"
+	"shelley.exe.dev/llm"
 	"shelley.exe.dev/mcp"
 )
 
 // CloseMCP closes all MCP sessions.
 func (s *Server) CloseMCP() { s.mcp.Close() }
+
+// mcpServerChangeNotice is the text that tells a working agent the registered
+// MCP servers changed. action is "added", "updated" or "removed".
+func mcpServerChangeNotice(action, name string) string {
+	switch action {
+	case "added":
+		return fmt.Sprintf("The MCP server %q was just registered. Use it with `shelley mcp` (see the mcp skill).", name)
+	case "updated":
+		return fmt.Sprintf("The MCP server %q was just reconfigured; its tools may have changed.", name)
+	case "removed":
+		return fmt.Sprintf("The MCP server %q was just removed.", name)
+	default:
+		return fmt.Sprintf("The registered MCP servers changed (%s %q).", action, name)
+	}
+}
+
+// notifyMCPServersChanged injects a short notice into every agent-driven
+// conversation whose agent is currently working, so the model learns the
+// registered MCP servers changed mid-turn. Idle conversations aren't woken;
+// their model can still run `shelley mcp list`, and conversations created after
+// the change list the new set in their system prompt (an existing
+// conversation's system prompt is written once and not regenerated). Internal
+// children (btw readers, commit tours, transcriptions) are skipped: a foreign
+// user message would corrupt their fixed flow. It runs in its own goroutine,
+// off the request path.
+func (s *Server) notifyMCPServersChanged(ctx context.Context, action, name string) {
+	s.mu.Lock()
+	managers := make([]*ConversationManager, 0, len(s.activeConversations))
+	for _, cm := range s.activeConversations {
+		managers = append(managers, cm)
+	}
+	s.mu.Unlock()
+	text := mcpServerChangeNotice(action, name)
+	for _, cm := range managers {
+		// Only conversations a human or the subagent tool drives use MCP tools.
+		if cm.role != roleTopLevel && cm.role != roleSubagent {
+			continue
+		}
+		// This check and the InjectMessage below aren't atomic: a conversation
+		// that finishes its turn in between is woken for one short turn carrying
+		// just this notice. That's rare and harmless, so we accept the race
+		// rather than hold a lock across the injection.
+		if !cm.IsAgentWorking() {
+			continue
+		}
+		cm.mu.Lock()
+		modelID := cm.modelID
+		cm.mu.Unlock()
+		data := mcpNoticeUserData{MCPServerChange: action, ServerName: name, Text: text}
+		if err := cm.InjectMessage(contextWithTurnUserData(ctx, data), s, modelID, llm.UserStringMessage(text)); err != nil {
+			s.logger.Warn("failed to inject MCP server change notice", "conversation", cm.conversationID, "error", err)
+		}
+	}
+}
 
 func (s *Server) registerMCPRoutes(api, mux *http.ServeMux) {
 	api.HandleFunc("GET /api/mcp/servers", s.handleListMCPServers)
@@ -62,9 +117,12 @@ func mcpServerFromRow(row generated.McpServer) (mcp.Server, error) {
 	return srv, json.Unmarshal([]byte(row.Headers), &srv.Headers)
 }
 
-// mcpLoginURL is the link that logs the user in to the named server.
+// mcpLoginURL is the link that logs the user in to the named server. It's a
+// root-relative path so it resolves against whatever host the user reached
+// Shelley on (localhost, a LAN address, or the exe.dev proxy), rather than a
+// guessed public hostname that may be wrong off exe.dev.
 func (s *Server) mcpLoginURL(name string) string {
-	return s.publicURL("/mcp/login/" + name)
+	return "/mcp/login/" + name
 }
 
 func writeMCPJSON(w http.ResponseWriter, v any) {
@@ -169,6 +227,9 @@ func (s *Server) handleCreateMCPServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("MCP server %q already exists", srv.Name), http.StatusBadRequest)
 		return
 	}
+	if err == nil {
+		go s.notifyMCPServersChanged(context.WithoutCancel(r.Context()), "added", srv.Name)
+	}
 	s.writeMCPServer(w, r, row, err)
 }
 
@@ -191,13 +252,21 @@ func (s *Server) handleUpdateMCPServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, mcpNotFound(srv.Name), http.StatusNotFound)
 		return
 	}
-	if err == nil {
-		// A login is for its URL, and unused with an Authorization header.
-		if old.Url != srv.URL || !srv.OAuthCapable() {
+	// A description-only edit leaves the connection and tools unchanged, so it
+	// mustn't drop sessions or nudge working agents.
+	connectionChanged := old.Url != srv.URL || old.Headers != string(headers)
+	if err == nil && connectionChanged {
+		// A login is for its origin, and unused with an Authorization header.
+		// Editing only the path or query (a common way to pick which tools a
+		// server exposes) keeps the login so the user needn't log in again.
+		if !srv.OAuthCapable() || !mcp.SameLoginScope(old.Url, srv.URL) {
 			err = s.mcp.Logout(r.Context(), srv.Name)
 		} else {
 			s.mcp.CloseServer(srv.Name)
 		}
+	}
+	if err == nil && connectionChanged {
+		go s.notifyMCPServersChanged(context.WithoutCancel(r.Context()), "updated", srv.Name)
 	}
 	s.writeMCPServer(w, r, row, err)
 }
@@ -230,6 +299,7 @@ func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
 	case n == 0:
 		http.Error(w, mcpNotFound(name), http.StatusNotFound)
 	default:
+		go s.notifyMCPServersChanged(context.WithoutCancel(r.Context()), "removed", name)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
