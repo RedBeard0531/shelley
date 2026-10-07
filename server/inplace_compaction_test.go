@@ -281,6 +281,22 @@ func compactGeneration(t *testing.T, h *TestHarness) []generated.Message {
 	return rows
 }
 
+// addContextNudge records a context nudge like recordContextNudge's.
+func addContextNudge(t *testing.T, h *TestHarness) {
+	t.Helper()
+	if _, err := h.db.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: h.convID,
+		Type:           db.MessageTypeUser,
+		LLMData: llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{
+			{Type: llm.ContentTypeText, Text: "Context is 50k."},
+			{Type: llm.ContentTypeText, Text: "## Index NUDGE_INDEX"},
+		}},
+		UserData: map[string]any{"context_nudge": true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func llmDataText(rows []generated.Message) string {
 	var b strings.Builder
 	for _, m := range rows {
@@ -294,6 +310,8 @@ func llmDataText(rows []generated.Message) string {
 // TestPiCompactionCarriesInPlaceCompactedTail: with a budget large enough to
 // keep everything, generation compaction copies the compacted view forward,
 // so the squish summary replaces the squished turn in the new generation.
+// Context nudges are left behind: their sizes and indexes are of the old
+// generation.
 func TestPiCompactionCarriesInPlaceCompactedTail(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -306,16 +324,19 @@ func TestPiCompactionCarriesInPlaceCompactedTail(t *testing.T) {
 		h.WaitResponse()
 		synctest.Wait()
 		squishFirstTurn(t, h.server, h.db, h.convID, "SQUISHED_ALPHA")
+		addContextNudge(t, h)
 
 		got := llmDataText(compactGeneration(t, h))
-		if !strings.Contains(got, "SQUISHED_ALPHA") || !strings.Contains(got, "BETA_TURN") || strings.Contains(got, "ALPHA_TURN") {
+		if !strings.Contains(got, "SQUISHED_ALPHA") || !strings.Contains(got, "BETA_TURN") || strings.Contains(got, "ALPHA_TURN") ||
+			strings.Contains(got, "NUDGE_INDEX") {
 			t.Fatalf("new generation should carry the compacted view:\n%s", got)
 		}
 	})
 }
 
 // TestPiCompactionSummarizesInPlaceCompactedView: when older history is
-// summarized, the summarizer sees the squish summary, not the squished turn.
+// summarized, the summarizer sees the squish summary, not the squished turn,
+// and not context nudges.
 func TestPiCompactionSummarizesInPlaceCompactedView(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -325,6 +346,7 @@ func TestPiCompactionSummarizesInPlaceCompactedView(t *testing.T) {
 		h.NewConversation("echo: ALPHA_TURN", "")
 		h.WaitResponse()
 		synctest.Wait()
+		addContextNudge(t, h)
 		h.Chat("echo: BETA_TURN")
 		h.WaitResponse()
 		synctest.Wait()
@@ -342,7 +364,8 @@ func TestPiCompactionSummarizesInPlaceCompactedView(t *testing.T) {
 				}
 			}
 		}
-		if !strings.Contains(prompt, "SQUISHED_ALPHA") || strings.Contains(prompt, "ALPHA_TURN") {
+		if !strings.Contains(prompt, "SQUISHED_ALPHA") || !strings.Contains(prompt, "BETA_TURN") || strings.Contains(prompt, "ALPHA_TURN") ||
+			strings.Contains(prompt, "NUDGE_INDEX") {
 			t.Fatalf("summarizer prompt should see the compacted view:\n%s", prompt)
 		}
 	})

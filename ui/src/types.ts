@@ -383,10 +383,11 @@ export function cwdChange(message: Message): { from: string; to: string } | null
   }
 }
 
-// The text of a context-size nudge (see recordContextNudge), or null if the
-// message isn't one. Like cwd changes, the agent reads it but the user didn't
-// type it, so it renders as a status line.
-export function contextNudge(message: Message): string | null {
+// A context-size nudge (see recordContextNudge): the size line and the
+// compact_in_place index sent with it; null if the message isn't one. Like cwd
+// changes, the agent reads it but the user didn't type it, so it renders as a
+// status line.
+export function contextNudge(message: Message): { size: string; index: string } | null {
   if (!message.user_data || !message.llm_data) return null;
   try {
     const userData =
@@ -394,7 +395,7 @@ export function contextNudge(message: Message): string | null {
     if (!userData?.context_nudge) return null;
     const llmData =
       typeof message.llm_data === "string" ? JSON.parse(message.llm_data) : message.llm_data;
-    return llmData?.Content?.[0]?.Text ?? "";
+    return { size: llmData?.Content?.[0]?.Text ?? "", index: llmData?.Content?.[1]?.Text ?? "" };
   } catch {
     return null;
   }

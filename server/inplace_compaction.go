@@ -288,12 +288,8 @@ func (s *Server) handleCompactDebugCommand(ctx context.Context, w http.ResponseW
 	var err error
 	switch {
 	case len(fields) == 1:
-		var items []contextItem
 		var index string
-		if items, err = manager.loadContextItems(ctx); err == nil {
-			index, err = compactIndex(items, manager.keepRecentTokens)
-		}
-		if err == nil {
+		if index, err = manager.contextIndex(ctx); err == nil {
 			err = manager.recordWarning(ctx, index)
 		}
 		if err != nil {

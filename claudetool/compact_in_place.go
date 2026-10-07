@@ -55,6 +55,7 @@ type CompactInPlaceInput struct {
 
 const compactInPlaceDescription = `Compact this conversation's context in place.
 Call with action "index" first: it lists the older messages and explains what to do.
+(Right after a "Context is Nk." nudge, which carries the index, you can skip it.)
 Then call with action "compact" to collapse message ranges into short notes
 and trim tool outputs. Originals stay in the database.`
 

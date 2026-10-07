@@ -268,13 +268,13 @@ func TestFindUserMessageAcrossCompactionAndFork(t *testing.T) {
 		if _, err := h.db.CreateMessage(ctx, db.CreateMessageParams{
 			ConversationID: h.convID,
 			Type:           db.MessageTypeUser,
-			LLMData:        llm.UserStringMessage("Context is 50k."),
-			UserData:       map[string]any{"context_nudge": true},
+			LLMData:        llm.UserStringMessage("JOB_DONE"),
+			UserData:       map[string]any{"background_job_id": "job1", "command": "true"},
 		}); err != nil {
 			t.Fatal(err)
 		}
 		rows := compactGeneration(t, h)
-		if !strings.Contains(llmDataText(rows), "Context is 50k.") {
+		if !strings.Contains(llmDataText(rows), "JOB_DONE") {
 			t.Fatal("the notice was not carried")
 		}
 
@@ -321,7 +321,7 @@ func TestFindUserMessageAcrossCompactionAndFork(t *testing.T) {
 		for _, convID := range []string{h.convID, fork.ConversationID} {
 			f := userMessageFinder{db: h.db, conversationID: convID}
 			for _, row := range listMessages(t, h.db, convID) {
-				if row.UserData == nil || (!strings.Contains(*row.UserData, `"squish_note"`) && !strings.Contains(*row.UserData, `"context_nudge"`)) {
+				if row.UserData == nil || (!strings.Contains(*row.UserData, `"squish_note"`) && !strings.Contains(*row.UserData, `"background_job_id"`)) {
 					continue
 				}
 				if m, ok, err := f.FindUserMessageBySequence(ctx, row.SequenceID); ok || err != nil {

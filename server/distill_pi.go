@@ -341,7 +341,8 @@ func formatPiFileOperations(readFiles, modifiedFiles []string) string {
 }
 
 // piContextMessages returns the source generation's compacted context (see
-// compactedContext), without the system prompt. Each original message keeps
+// compactedContext), without the system prompt and context nudges: their
+// sizes and indexes are of the source generation. Each original message keeps
 // its source row, so the pi flow can (a) resolve distillation-summary content
 // for summarization and (b) preserve user_data when copying messages verbatim
 // into the new generation.
@@ -353,7 +354,11 @@ func piContextMessages(logger logWarner, sourceGeneration int64, messages []gene
 		}
 	}
 	items, _, err := compactedContext(logger, rows)
-	return items, err
+	if err != nil {
+		return nil, err
+	}
+	nudges, _ := compactionEvidence(items)
+	return hideItems(items, nudges, nil)
 }
 
 // resolveDistilledContent returns the real distillation summary text for a

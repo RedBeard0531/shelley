@@ -1379,8 +1379,8 @@ func (cm *ConversationManager) takeInjectable(ctx context.Context, generation ui
 	// Right after a compaction the nudger only knows the size from before
 	// it; the next response reports the new one.
 	if nudger != nil && !compacted {
-		if text, ok := nudger.take(); ok {
-			nudge, err := cm.recordContextNudge(ctx, text)
+		if size, ok := nudger.take(); ok {
+			nudge, err := cm.recordContextNudge(ctx, size)
 			if err != nil {
 				return inj, err
 			}

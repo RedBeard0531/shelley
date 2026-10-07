@@ -305,11 +305,15 @@ func TestCompactInPlaceNudge(t *testing.T) {
 		ToolOverrides:      map[string]string{claudetool.CompactInPlaceName: "on"},
 		CompactNudgeTokens: 1,
 	})
-	nudges := func() []string {
-		var out []string
+	nudges := func() []llm.Message {
+		var out []llm.Message
 		for _, m := range listMessages(t, c.database, c.id) {
 			if m.UserData != nil && strings.Contains(*m.UserData, `"context_nudge":true`) {
-				out = append(out, *m.LlmData)
+				var msg llm.Message
+				if err := json.Unmarshal([]byte(*m.LlmData), &msg); err != nil {
+					t.Fatal(err)
+				}
+				out = append(out, msg)
 			}
 		}
 		return out
@@ -320,21 +324,28 @@ func TestCompactInPlaceNudge(t *testing.T) {
 	}
 	c.turn("echo: two")
 	got := nudges()
-	if len(got) != 1 || !strings.Contains(got[0], `"Text":"Context is 0k."`) {
-		t.Fatalf("nudges = %v", got)
+	// The nudge comes with the index, so the agent can compact right away.
+	if len(got) != 1 || len(got[0].Content) != 2 || got[0].Content[0].Text != "Context is 0k." ||
+		!strings.HasPrefix(got[0].Content[1].Text, "## Index") || !strings.Contains(got[0].Content[1].Text, `text "hello"`) {
+		t.Fatalf("nudges = %+v", got)
 	}
-	if !strings.Contains(requestDump(c.ps.GetLastRequest()), "Context is 0k.") {
-		t.Fatal("nudge not sent to the model")
+	if req := requestDump(c.ps.GetLastRequest()); !strings.Contains(req, "Context is 0k.") || !strings.Contains(req, "## Index") {
+		t.Fatalf("nudge not sent to the model:\n%s", req)
 	}
 	c.turn("echo: three")
 	if n := len(nudges()); n != 1 {
 		t.Fatalf("nudged again below the next step: %d", n)
 	}
 
-	// A compaction hides the nudges from the model.
-	c.turn("bash: echo OUTPUT")
-	useID := c.rows()[c.seqWith(`OUTPUT\n`)].Content[0].ToolUseID
-	c.turn(`compact_in_place: {"action":"compact","trim":["` + useID + `"]}`)
+	// The agent can compact from the nudge's index, without asking for one,
+	// and the compaction hides the nudges from the model.
+	var id string
+	for _, line := range strings.Split(got[0].Content[1].Text, "\n") {
+		if strings.Contains(line, `text "Well, hi there!"`) {
+			id = strings.Fields(line)[0]
+		}
+	}
+	c.turn(`compact_in_place: {"action":"compact","collapse":[{"from":"` + id + `","to":"` + id + `","note":"hi"}]}`)
 	if out, isErr := c.lastToolOutput(); isErr {
 		t.Fatalf("compact: %s", out)
 	}
@@ -346,7 +357,7 @@ func TestCompactInPlaceNudge(t *testing.T) {
 	// (here, as its input carries a long message). Right after the
 	// compaction that size is stale: no nudge.
 	c.turn("bash: echo AGAIN")
-	useID = c.rows()[c.seqWith(`AGAIN\n`)].Content[0].ToolUseID
+	useID := c.rows()[c.seqWith(`AGAIN\n`)].Content[0].ToolUseID
 	size := lastContextWindowSize(listMessages(t, c.database, c.id))
 	if err := c.database.UpdateConversationOptions(t.Context(), c.id, db.ConversationOptions{
 		ToolOverrides:      map[string]string{claudetool.CompactInPlaceName: "on"},

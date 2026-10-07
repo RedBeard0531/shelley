@@ -22,8 +22,9 @@ import (
 // lists the older part of the LLM's current view, "compact" records an
 // in-place compaction (collapsing message ranges into notes, trimming tool
 // outputs) and the turn continues on the compacted history. While the tool is
-// enabled the agent is also nudged with the context size (see contextNudger),
-// unless it was enabled mid-conversation (see EnableCompactInPlace).
+// enabled the agent is also nudged with the context size and the index (see
+// contextNudger), unless it was enabled mid-conversation (see
+// EnableCompactInPlace).
 
 const (
 	// defaultCompactNudgeTokens is where the first context nudge fires when
@@ -45,11 +46,16 @@ type inPlaceCompactor struct {
 }
 
 func (c inPlaceCompactor) Index(ctx context.Context) (string, error) {
-	items, err := c.cm.loadContextItems(ctx)
+	return c.cm.contextIndex(ctx)
+}
+
+// contextIndex renders the index of the current context.
+func (cm *ConversationManager) contextIndex(ctx context.Context) (string, error) {
+	items, err := cm.loadContextItems(ctx)
 	if err != nil {
 		return "", err
 	}
-	return compactIndex(items, c.cm.keepRecentTokens)
+	return compactIndex(items, cm.keepRecentTokens)
 }
 
 func (c inPlaceCompactor) Compact(ctx context.Context, in claudetool.CompactInPlaceInput) (string, error) {
@@ -634,8 +640,8 @@ func (n *contextNudger) observe(usage llm.Usage) {
 	n.mu.Unlock()
 }
 
-// take returns the nudge due now, if any. Dropping below a level (after a
-// compaction) re-arms it.
+// take returns the size line of the nudge due now, if any. Dropping below a
+// level (after a compaction) re-arms it.
 func (n *contextNudger) take() (string, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -648,9 +654,17 @@ func (n *contextNudger) take() (string, bool) {
 	return fmt.Sprintf("Context is %dk.", (n.tokens+5000)/10000*10), true
 }
 
-// recordContextNudge records text as a user message marked context_nudge.
-func (cm *ConversationManager) recordContextNudge(ctx context.Context, text string) (llm.Message, error) {
-	message := llm.Message{Role: llm.MessageRoleUser, Content: llm.TextContent(text)}
+// recordContextNudge records a user message marked context_nudge: size,
+// then the index, so the agent can compact without asking for it.
+func (cm *ConversationManager) recordContextNudge(ctx context.Context, size string) (llm.Message, error) {
+	index, err := cm.contextIndex(ctx)
+	if err != nil {
+		return llm.Message{}, fmt.Errorf("index for context nudge: %w", err)
+	}
+	message := llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{
+		{Type: llm.ContentTypeText, Text: size},
+		{Type: llm.ContentTypeText, Text: index},
+	}}
 	created, err := cm.db.CreateMessage(ctx, db.CreateMessageParams{
 		ConversationID: cm.conversationID,
 		Type:           db.MessageTypeUser,
