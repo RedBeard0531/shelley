@@ -169,19 +169,20 @@ func (s *Server) receiveChannelEvent(ctx context.Context, endpoint string, ev ch
 		return fmt.Errorf("model %s: %w", modelID, err)
 	}
 	ctx = contextWithExternalMessageID(ctx, ev.ID)
-	// Like a message typed into the UI: it waits behind queued messages and
-	// distillation, and otherwise starts a turn or joins the running one.
+	// A busy turn takes channel messages at its next model request, after
+	// the current tool round finishes, even with UI messages queued for later.
+	// Distillation still holds them for the new generation.
 	message := llm.UserStringMessage(ev.Text)
 	hasQueued, err := manager.HasQueuedMessages(ctx)
 	if err != nil {
 		return err
 	}
-	if hasQueued || manager.IsDistilling() {
-		return manager.QueueMessage(ctx, s, modelID, message)
+	if hasQueued || manager.IsAgentWorking() || manager.IsDistilling() {
+		return manager.InjectMessage(ctx, s, modelID, message)
 	}
 	first, err := manager.AcceptUserMessage(ctx, service, modelID, message)
 	if errors.Is(err, errQueuedMessagesPending) {
-		return manager.QueueMessage(ctx, s, modelID, message)
+		return manager.InjectMessage(ctx, s, modelID, message)
 	}
 	if err != nil {
 		return err

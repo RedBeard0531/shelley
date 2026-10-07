@@ -1230,8 +1230,7 @@ func (cm *ConversationManager) QueueMessage(ctx context.Context, s *Server, mode
 }
 
 // InjectMessage queues message like QueueMessage, but a running turn takes
-// it at its next LLM round instead of after the turn ends. A parent uses it
-// to steer a busy subagent.
+// it at its next LLM round instead of after the turn ends.
 func (cm *ConversationManager) InjectMessage(ctx context.Context, s *Server, modelID string, message llm.Message) error {
 	return cm.queueMessage(ctx, s, modelID, message, true)
 }

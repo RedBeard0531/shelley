@@ -30,13 +30,14 @@ import (
 // user text is held waits until that text is released.
 type gateLLMService struct {
 	llm.Service
-	mu      sync.Mutex
-	gates   map[string]chan struct{}
-	started map[string]chan struct{}
+	mu       sync.Mutex
+	gates    map[string]chan struct{}
+	started  map[string]chan struct{}
+	requests map[string]*llm.Request
 }
 
 func newGateLLMService(held ...string) *gateLLMService {
-	s := &gateLLMService{Service: predictable.NewService(), gates: map[string]chan struct{}{}, started: map[string]chan struct{}{}}
+	s := &gateLLMService{Service: predictable.NewService(), gates: map[string]chan struct{}{}, started: map[string]chan struct{}{}, requests: map[string]*llm.Request{}}
 	for _, text := range held {
 		s.gates[text] = make(chan struct{})
 		s.started[text] = make(chan struct{})
@@ -55,6 +56,7 @@ func (s *gateLLMService) Do(ctx context.Context, request *llm.Request) (*llm.Res
 		}
 	}
 	gate, started := s.gates[text], s.started[text]
+	s.requests[text] = request
 	if started != nil {
 		close(started)
 		delete(s.started, text)
@@ -71,19 +73,23 @@ func (s *gateLLMService) Do(ctx context.Context, request *llm.Request) (*llm.Res
 }
 
 // waitStarted waits for the held request for text to reach the model.
-func (s *gateLLMService) waitStarted(t *testing.T, text string) {
+func (s *gateLLMService) waitStarted(t *testing.T, text string) *llm.Request {
 	t.Helper()
 	s.mu.Lock()
 	started := s.started[text]
+	request := s.requests[text]
 	s.mu.Unlock()
 	if started == nil {
-		return
+		return request
 	}
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for LLM call %q", text)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requests[text]
 }
 
 func (s *gateLLMService) release(text string) { close(s.gates[text]) }
@@ -161,6 +167,9 @@ func channelUserMessages(t *testing.T, database *db.DB, conversationID string) [
 		if err := json.Unmarshal([]byte(*m.LlmData), &msg); err != nil {
 			t.Fatal(err)
 		}
+		if len(msg.Content) == 0 || msg.Content[0].Type != llm.ContentTypeText {
+			continue
+		}
 		id := ""
 		if m.ExternalMessageID != nil {
 			id = *m.ExternalMessageID
@@ -232,6 +241,103 @@ func TestChannelMessageExternalIDOnlyInLLM(t *testing.T) {
 	}
 }
 
+func TestChannelMessageInjectsAfterCurrentTool(t *testing.T) {
+	for _, queuedUI := range []bool{false, true} {
+		t.Run(fmt.Sprintf("queuedUI=%t", queuedUI), func(t *testing.T) {
+			t.Parallel()
+			gate := newGateLLMService("third", "from the UI")
+			server, database, h := channelTestServer(t, gate)
+			started, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			releaseTool := func() { once.Do(func() { close(release) }) }
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/send" {
+					t.Errorf("unexpected request: %s", r.URL.Path)
+				}
+				close(started)
+				<-release
+				fmt.Fprint(w, `{"message_id":"reply-1"}`)
+			}))
+			t.Cleanup(endpoint.Close)
+			t.Cleanup(releaseTool)
+			conv, err := server.channelConversation(t.Context(), endpoint.URL, "chat-tool")
+			if err != nil {
+				t.Fatal(err)
+			}
+			deliver := func(id, text string) {
+				t.Helper()
+				if w := postJSON(t, h, "/api/channels/messages", channelEvent{Type: "message", ID: id, ChatID: "chat-tool", Text: text}); w.Code != http.StatusNoContent {
+					t.Fatalf("deliver %s: status %d: %s", id, w.Code, w.Body.String())
+				}
+			}
+			prompt := `message_user: {"text":"working"}`
+			deliver("m1", prompt)
+
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("tool did not start")
+			}
+			manager, err := server.getOrCreateConversationManager(t.Context(), conv.ConversationID, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if queuedUI {
+				if err := manager.QueueMessage(t.Context(), server, "predictable", llm.UserStringMessage("from the UI")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			deliver("m2", "second")
+			deliver("m3", "third")
+			deliver("m2", "second")
+			queued, err := database.GetQueuedMessages(t.Context(), conv.ConversationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offset := 0
+			if queuedUI {
+				offset = 1
+			}
+			if len(queued) != offset+2 || !queued[offset].Inject || !queued[offset+1].Inject {
+				t.Fatalf("webhook messages must wait for the tool as injectable entries: %+v", queued)
+			}
+			if got := channelUserMessages(t, database, conv.ConversationID); len(got) != 1 {
+				t.Fatalf("messages recorded before tool finished: %v", got)
+			}
+			releaseTool()
+			next := gate.waitStarted(t, "third")
+			messages := next.Messages
+			if len(messages) < 3 {
+				t.Fatalf("next request lacks tool result and incoming messages: %+v", messages)
+			}
+			tail := messages[len(messages)-3:]
+			if tail[0].Content[0].Type != llm.ContentTypeToolResult || tail[0].Content[0].ToolError ||
+				!strings.HasSuffix(messageText(tail[1]), "\nsecond\n</external_message>") ||
+				!strings.HasSuffix(messageText(tail[2]), "\nthird\n</external_message>") {
+				t.Fatalf("next request must contain tool result followed by webhook messages: %+v", tail)
+			}
+			for _, m := range listMessages(t, database, conv.ConversationID) {
+				if m.Type == string(db.MessageTypeAgent) && storedLLMMessage(t, &m).EndOfTurn {
+					t.Fatal("webhook message waited until the turn ended")
+				}
+			}
+			want := []string{"m1: " + prompt, "m2: second", "m3: third"}
+			if got := channelUserMessages(t, database, conv.ConversationID); !slices.Equal(got, want) {
+				t.Fatalf("user messages = %v, want %v", got, want)
+			}
+			gate.release("third")
+			if queuedUI {
+				gate.waitStarted(t, "from the UI")
+				gate.release("from the UI")
+			}
+			waitFor(t, 5*time.Second, func() bool {
+				c, err := database.GetConversationByID(t.Context(), conv.ConversationID)
+				return err == nil && !c.AgentWorking && c.QueuedMessages == "[]"
+			})
+		})
+	}
+}
+
 func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 	t.Parallel()
 	gate := newGateLLMService("first")
@@ -253,17 +359,16 @@ func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 	}
 	gate.waitStarted(t, "first")
 
-	// While the agent works, a message joins the running turn, as typed into
-	// the UI; a retry of a recorded message is dropped.
+	// While the agent works, a message waits for the next model request;
+	// retries of both recorded and queued messages are dropped.
 	deliver(channelEvent{Type: "message", ID: "m2", ChatID: "chat-1", Text: "second"})
 	deliver(channelEvent{Type: "message", ID: "m1", ChatID: "chat-1", Text: "first"})
 	deliver(channelEvent{Type: "message", ID: "m2", ChatID: "chat-1", Text: "second"})
-	if got := strings.Join(channelUserMessages(t, database, conv.ConversationID), "\n"); got != "m1: first\nm2: second" {
+	if got := strings.Join(channelUserMessages(t, database, conv.ConversationID), "\n"); got != "m1: first" {
 		t.Fatalf("user messages mid-turn:\n%s", got)
 	}
 
-	// Behind a queued message, a message waits in the queue, where a retry
-	// finds it too.
+	// Channel messages are injectable even behind a queued UI message.
 	manager, err := server.getOrCreateConversationManager(t.Context(), conv.ConversationID, "")
 	if err != nil {
 		t.Fatal(err)
@@ -277,8 +382,9 @@ func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(queued) != 2 || queued[1].ExternalMessageID != "m3" {
-		t.Fatalf("queue = %+v, want the UI message and m3", queued)
+	if len(queued) != 3 || queued[0].ExternalMessageID != "m2" || !queued[0].Inject ||
+		queued[1].Inject || queued[2].ExternalMessageID != "m3" || !queued[2].Inject {
+		t.Fatalf("queue = %+v, want injectable m2, the UI message, and injectable m3", queued)
 	}
 
 	gate.release("first")
