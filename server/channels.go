@@ -49,6 +49,12 @@ type channelEvent struct {
 	// Sender is the handle (phone number or email) that sent the message.
 	Sender string `json:"sender"`
 	Text   string `json:"text"`
+	// Web marks a web chat: one shown on a web page that reads the
+	// conversation's stream (GET /api/channels/messages/{chat}/stream)
+	// instead of taking replies. Its conversation has no endpoint, so
+	// message_user's messages stay in the conversation. The chat's first
+	// message decides.
+	Web bool `json:"web"`
 	// OptOut marks a message (like "STOP") with which the user opted out.
 	// exed recorded it and answered; replies are refused until they write
 	// again.
@@ -56,8 +62,8 @@ type channelEvent struct {
 }
 
 // handleChannelMessage serves POST /api/channels/messages: exed delivers an
-// event on the VM owner's messages chat. A non-2xx answer makes exed's
-// provider retry the delivery.
+// event on one of the VM owner's chats with exe.dev, their messages chat or
+// a web chat. A non-2xx answer makes exed's provider retry the delivery.
 func (s *Server) handleChannelMessage(w http.ResponseWriter, r *http.Request) {
 	var ev channelEvent
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&ev); err != nil {
@@ -73,7 +79,11 @@ func (s *Server) handleChannelMessage(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "Cannot determine exe.dev environment", err)
 		return
 	}
-	if err := s.receiveChannelEvent(r.Context(), env.IntegrationURL(messagesIntegration, false), ev); err != nil {
+	endpoint := env.IntegrationURL(messagesIntegration, false)
+	if ev.Web {
+		endpoint = ""
+	}
+	if err := s.receiveChannelEvent(r.Context(), endpoint, ev); err != nil {
 		if errors.Is(err, errInvalidChannelEvent) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -86,9 +96,31 @@ func (s *Server) handleChannelMessage(w http.ResponseWriter, r *http.Request) {
 
 var errInvalidChannelEvent = errors.New("channel event has no chat_id")
 
+// handleChannelStream serves GET /api/channels/messages/{chat}/stream: the
+// chat's conversation stream, as GET /api/conversation/{id}/stream serves
+// it, or 204 No Content before the chat's first message.
+func (s *Server) handleChannelStream(w http.ResponseWriter, r *http.Request) {
+	chatID := r.PathValue("chat")
+	var conv generated.Conversation
+	err := s.db.Queries(r.Context(), func(q *generated.Queries) (err error) {
+		conv, err = q.GetConversationByExternalID(r.Context(), &chatID)
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		s.internalError(w, "Failed to look up chat conversation", err, "chat_id", chatID)
+		return
+	}
+	s.handleStreamConversation(w, r, conv.ConversationID)
+}
+
 // receiveChannelEvent delivers ev, an event on the external chat whose
-// replies go to endpoint, to the chat's conversation as a user message. A
-// message that was already delivered (a retry) is dropped.
+// replies go to endpoint ("" for a web chat, whose replies stay in the
+// conversation), to the chat's conversation as a user message. A message
+// that was already delivered (a retry) is dropped.
 func (s *Server) receiveChannelEvent(ctx context.Context, endpoint string, ev channelEvent) error {
 	if ev.ChatID == "" {
 		return errInvalidChannelEvent

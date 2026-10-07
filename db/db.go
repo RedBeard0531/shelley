@@ -424,7 +424,7 @@ func (db *DB) CreateConversation(ctx context.Context, slug *string, userInitiate
 
 // CreateChannelConversation creates the conversation for an external chat:
 // externalID is the channel's chat id, endpoint the base URL its replies
-// are sent to, and opts its options.
+// are sent to ("" for none), and opts its options.
 func (db *DB) CreateChannelConversation(ctx context.Context, externalID, endpoint, model string, opts ConversationOptions) (*generated.Conversation, error) {
 	conversationID, err := GenerateConversationID()
 	if err != nil {
@@ -434,6 +434,10 @@ func (db *DB) CreateChannelConversation(ctx context.Context, externalID, endpoin
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal conversation options: %w", err)
 	}
+	var ep *string
+	if endpoint != "" {
+		ep = &endpoint
+	}
 	var conversation generated.Conversation
 	err = db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
 		conversation, err = generated.New(tx.Conn()).CreateChannelConversation(ctx, generated.CreateChannelConversationParams{
@@ -441,7 +445,7 @@ func (db *DB) CreateChannelConversation(ctx context.Context, externalID, endpoin
 			Model:                  &model,
 			ConversationOptions:    string(optsJSON),
 			ExternalConversationID: &externalID,
-			ExternalEndpoint:       &endpoint,
+			ExternalEndpoint:       ep,
 		})
 		return err
 	})

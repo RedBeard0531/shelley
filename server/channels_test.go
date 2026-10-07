@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -887,4 +888,75 @@ func TestChannelChatSaysWhetherDeliveryFailed(t *testing.T) {
 	if err := chat("hang").Send(ctx, "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "may have been delivered") {
 		t.Fatalf("cancelled send: %v", err)
 	}
+}
+
+// A web chat's conversation keeps message_user's messages, and the web page
+// reads them from the chat's stream.
+func TestWebChatRoundTrip(t *testing.T) {
+	t.Parallel()
+	_, database, h := channelTestServer(t, nil)
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	const chat = "web-usr123"
+
+	resp, err := http.Get(ts.URL + "/api/channels/messages/" + chat + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("stream before the first message: status %d, want 204", resp.StatusCode)
+	}
+
+	if w := postJSON(t, h, "/api/channels/messages", channelEvent{Type: "message", ID: "m1", ChatID: chat, Web: true, Text: `message_user: {"text":"hello from the VM"}`}); w.Code != http.StatusNoContent {
+		t.Fatalf("deliver: status %d: %s", w.Code, w.Body.String())
+	}
+	conv, err := conversationByExternalID(t, database, chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.ExternalEndpoint != nil {
+		t.Fatalf("external_endpoint = %q, want none", *conv.ExternalEndpoint)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		c, err := database.GetConversationByID(t.Context(), conv.ConversationID)
+		return err == nil && !c.AgentWorking && c.QueuedMessages == "[]"
+	})
+	c := &compactTestConversation{t: t, database: database, id: conv.ConversationID}
+	if _, r := c.lastMessageUserResult(); r.ToolError {
+		t.Fatalf("message_user result = %+v", r)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/channels/messages/"+chat+"/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(nil, 1<<20)
+	for scanner.Scan() {
+		data, ok := strings.CutPrefix(scanner.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var sr StreamResponse
+		if err := json.Unmarshal([]byte(data), &sr); err != nil {
+			t.Fatal(err)
+		}
+		if sr.ConversationID != conv.ConversationID && len(sr.Messages) > 0 {
+			t.Fatalf("stream of conversation %s, want %s", sr.ConversationID, conv.ConversationID)
+		}
+		for _, m := range sr.Messages {
+			if m.LlmData != nil && strings.Contains(*m.LlmData, "hello from the VM") && m.Type == string(db.MessageTypeAgent) {
+				return
+			}
+		}
+	}
+	t.Fatalf("stream ended without the reply: %v", scanner.Err())
 }

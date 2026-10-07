@@ -632,6 +632,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Channels: external chats bound to conversations.
 	api.HandleFunc("POST /api/channels/messages", s.handleChannelMessage)
+	api.HandleFunc("GET /api/channels/messages/{chat}/stream", s.handleChannelStream)
 
 	// pprof endpoints
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
