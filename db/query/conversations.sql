@@ -616,3 +616,18 @@ WHERE parent_conversation_id IS NOT NULL
   AND user_initiated = FALSE
   AND conversation_options LIKE '%"kind":"commit-tour"%'
 ORDER BY created_at ASC, rowid ASC;
+
+-- name: CreateChannelConversation :one
+INSERT INTO conversations (conversation_id, user_initiated, model, conversation_options, external_conversation_id, external_endpoint)
+VALUES (?, TRUE, ?, ?, ?, ?)
+RETURNING *;
+
+-- name: GetConversationByExternalID :one
+SELECT * FROM conversations WHERE external_conversation_id = ?;
+
+-- name: ListChannelConversationsWithQueuedMessages :many
+-- Conversations bound to an external chat with queued messages. Used once
+-- at startup to drain them.
+SELECT * FROM conversations
+WHERE external_conversation_id IS NOT NULL AND queued_messages != '[]'
+ORDER BY created_at ASC;

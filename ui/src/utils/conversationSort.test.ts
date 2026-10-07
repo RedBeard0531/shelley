@@ -23,6 +23,8 @@ function conv(id: string, updatedAt: string): ConversationWithState {
     current_generation: 0,
     agent_working: false,
     turn_interrupted: false,
+    external_conversation_id: null,
+    external_endpoint: null,
     tags: "[]",
     is_draft: false,
     draft: "",

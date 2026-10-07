@@ -80,6 +80,9 @@ type ToolSetConfig struct {
 	// enabled by ToolOverrides). The server sets it only for top-level
 	// conversations.
 	UserMessageFinder UserMessageFinder
+	// UserChat, if set, is the external chat message_user's messages also
+	// go to.
+	UserChat UserChat
 	// BackgroundJobs is told about bash commands moved to the background.
 	BackgroundJobs BackgroundJobs
 	// BashBackgroundAfter overrides DefaultBashBackgroundAfter when nonzero.
@@ -273,7 +276,7 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		tools = append(tools, CompactInPlaceTool(cfg.InPlaceCompactor))
 	}
 	if cfg.UserMessageFinder != nil {
-		tools = append(tools, MessageUserTool(cfg.UserMessageFinder, wd))
+		tools = append(tools, MessageUserTool(cfg.UserMessageFinder, cfg.UserChat, wd))
 	}
 
 	// Add LLM one-shot tool if LLM provider is configured

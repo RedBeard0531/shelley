@@ -183,6 +183,9 @@ type ConversationManager struct {
 	// recordDrainedQueued records a queued item's messages and removes the item
 	// from the queue in one transaction.
 	recordDrainedQueued func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) error
+	// userChat, set for a top-level conversation bound to an external chat,
+	// is where message_user's messages also go.
+	userChat claudetool.UserChat
 
 	// idleWaiters are closed at the next working→idle transition; see idle.
 	idleWaiters []chan struct{}
@@ -1255,13 +1258,14 @@ func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, mode
 		return fmt.Errorf("failed to marshal queued user data: %w", err)
 	}
 	qm := db.QueuedMessage{
-		ID:        uuid.New().String(),
-		Llm:       llmJSON,
-		CreatedAt: time.Now().UTC(),
-		Model:     modelID,
-		UserEmail: userEmailFromContext(ctx),
-		UserData:  userData,
-		Inject:    midTurn,
+		ID:                uuid.New().String(),
+		Llm:               llmJSON,
+		CreatedAt:         time.Now().UTC(),
+		Model:             modelID,
+		UserEmail:         userEmailFromContext(ctx),
+		UserData:          userData,
+		Inject:            midTurn,
+		ExternalMessageID: externalMessageIDFromContext(ctx),
 	}
 	if _, err := s.db.AppendQueuedMessage(ctx, cm.conversationID, qm); err != nil {
 		return fmt.Errorf("failed to append queued message: %w", err)
@@ -1834,6 +1838,7 @@ func (cm *ConversationManager) systemPromptDisplayData(promptSkills []skills.Ski
 	cfg.DisableAllTools = cm.conversationOptions.DisableAllTools
 	cfg.InPlaceCompactor = inPlaceCompactor{cm: cm}
 	cfg.UserMessageFinder = cm.userMessageFinder()
+	cfg.UserChat = cm.userChat
 	return systemPromptDisplayData(cfg, promptSkills)
 }
 
@@ -2162,6 +2167,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 	}
 	toolSetConfig.InPlaceCompactor = inPlaceCompactor{cm: cm, generation: generation}
 	toolSetConfig.UserMessageFinder = cm.userMessageFinder()
+	toolSetConfig.UserChat = cm.userChat
 	toolSet := claudetool.NewToolSet(processCtx, toolSetConfig)
 	var nudger *contextNudger
 	if claudetool.IsToolEnabled(claudetool.CompactInPlaceName, toolSetConfig.ToolOverrides, toolSetConfig.DisableAllTools) &&

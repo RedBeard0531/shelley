@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { Message } from "../types";
 import {
   isDeliveredUserMessage,
+  isFailedChatDelivery,
   isHumanUserMessage,
   isTypedUserMessage,
   isVisibleConversationMessage,
@@ -143,5 +144,12 @@ assert.equal(
   }),
   true,
 );
+
+const refused = { ...call, toolError: true, display: { chat_failed: true } };
+assert.equal(isFailedChatDelivery(refused), true);
+assert.equal(isDeliveredUserMessage(refused), false);
+assert.equal(isFailedChatDelivery({ ...refused, display: {} }), false);
+assert.equal(isFailedChatDelivery({ ...refused, hasResult: false }), false);
+assert.equal(isFailedChatDelivery(call), false);
 
 console.log("conversationView tests passed");

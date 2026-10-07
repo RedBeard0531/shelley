@@ -364,11 +364,18 @@ type Server struct {
 	// streamPub is the server-wide subpub that fans out per-conversation
 	// events to every /api/stream2 subscriber. Events are tagged with their
 	// ConversationID so clients can route them.
-	streamPub         *subpub.SubPub[StreamResponse]
-	diskSpace         atomic.Pointer[diskSpaceMonitor]
-	shutdownCh        chan struct{} // Signals background routines to stop
-	listenPort        int           // TCP port the server is listening on
-	socketPath        string        // Unix socket the server listens on, or ""
+	streamPub  *subpub.SubPub[StreamResponse]
+	diskSpace  atomic.Pointer[diskSpaceMonitor]
+	shutdownCh chan struct{} // Signals background routines to stop
+	// channelChatLocks serializes deliveries per chat; see
+	// lockChannelChat. Guarded by mu.
+	channelChatLocks map[string]*channelChatLock
+	// channelClient sends replies to channel endpoints.
+	channelClient *http.Client
+	// channelDebug is the in-memory chat service behind /debug/channels.
+	channelDebug      channelDebug
+	listenPort        int    // TCP port the server is listening on
+	socketPath        string // Unix socket the server listens on, or ""
 	terminals         *TerminalSessions
 	mcp               *mcp.Manager
 	exitDelay         time.Duration
@@ -439,6 +446,8 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		mediaRun:                runMediaCommand,
 		transcriber:             newOpenAIRecordingTranscriber(llmManager, predictableOnly),
 		transcriptionJobs:       make(map[string]transcriptionJob),
+		channelClient:           &http.Client{Timeout: 30 * time.Second},
+		channelChatLocks:        make(map[string]*channelChatLock),
 		reflectionEmoji:         cachedReflectionEmoji,
 		commitTourJobs:          make(map[string]*commitTourJob),
 		commitTourRecoverySlots: make(chan struct{}, 2),
@@ -613,6 +622,16 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /debug/llm/", http.FileServerFS(debugLLMAssets))
 	api.HandleFunc("GET /api/debug/llm/exchanges", s.handleDebugLLMList)
 	api.Handle("GET /api/debug/llm/exchanges/{id}", compressionHandler(http.HandlerFunc(s.handleDebugLLMGet)))
+	mux.Handle("GET /debug/channels/", http.FileServerFS(debugChannelsAssets))
+	mux.HandleFunc("POST /debug/channels/gateway/{chat}/{token}/{action}", s.handleDebugChannelGateway)
+	mux.HandleFunc("DELETE /debug/channels/gateway/{chat}/{token}/{action}", s.handleDebugChannelGateway)
+	api.HandleFunc("GET /api/debug/channels", s.handleDebugChannelsList)
+	api.HandleFunc("POST /api/debug/channels/{chat}/receive", s.handleDebugChannelReceive)
+	api.HandleFunc("POST /api/debug/channels/{chat}/send", s.handleDebugChannelSend)
+	api.HandleFunc("POST /api/debug/channels/{chat}/refuse", s.handleDebugChannelRefuse)
+
+	// Channels: external chats bound to conversations.
+	api.HandleFunc("POST /api/channels/messages", s.handleChannelMessage)
 
 	// pprof endpoints
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
@@ -1009,7 +1028,10 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		manager.role = role
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.recordDrainedQueued = func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) error {
-			return s.recordDrainedQueuedMessages(ctx, conversationID, qm.ID, messages, qm.UserEmail, qm.UserData)
+			return s.recordDrainedQueuedMessages(ctx, conversationID, qm, messages)
+		}
+		if role == roleTopLevel && conversation.ExternalEndpoint != nil {
+			manager.userChat = channelChat{s: s, conversationID: conversationID}
 		}
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
@@ -1208,22 +1230,23 @@ func (s *Server) insertMessages(ctx context.Context, conversationID string, para
 // twice. The first row removes the queued entry; the last row carries the
 // user provenance captured at queue time (drain runs on a background
 // context). Synthetic transcription audit rows stay unattributed.
-func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID, queuedID string, messages []llm.Message, userEmail string, userData json.RawMessage) error {
+func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID string, qm db.QueuedMessage, messages []llm.Message) error {
 	paramsList := make([]db.CreateMessageParams, 0, len(messages))
 	for i, message := range messages {
 		var userDataArgs []interface{}
-		if i == len(messages)-1 && len(userData) > 0 {
-			userDataArgs = append(userDataArgs, userData)
+		if i == len(messages)-1 && len(qm.UserData) > 0 {
+			userDataArgs = append(userDataArgs, qm.UserData)
 		}
 		params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil, userDataArgs...)
 		if err != nil {
 			return err
 		}
 		if i == 0 {
-			params.RemoveQueuedID = queuedID
+			params.RemoveQueuedID = qm.ID
 		}
 		if i == len(messages)-1 {
-			params.UserEmail = userEmail
+			params.UserEmail = qm.UserEmail
+			params.ExternalMessageID = qm.ExternalMessageID
 		}
 		paramsList = append(paramsList, params)
 	}
@@ -1237,9 +1260,10 @@ func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID
 // Only the immediate-send path uses this; queued messages persist the email in
 // their QueuedMessage entry instead (drain runs on a background context).
 type (
-	userEmailContextKey       struct{}
-	turnUserDataContextKey    struct{}
-	localCLIRequestContextKey struct{}
+	userEmailContextKey         struct{}
+	externalMessageIDContextKey struct{}
+	turnUserDataContextKey      struct{}
+	localCLIRequestContextKey   struct{}
 )
 
 // contextWithUserEmail returns a child context carrying userEmail. An empty
@@ -1253,6 +1277,17 @@ func contextWithUserEmail(ctx context.Context, userEmail string) context.Context
 func userEmailFromContext(ctx context.Context) string {
 	email, _ := ctx.Value(userEmailContextKey{}).(string)
 	return email
+}
+
+// contextWithExternalMessageID carries a channel message's id, like
+// contextWithUserEmail, to the row that records the user turn.
+func contextWithExternalMessageID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, externalMessageIDContextKey{}, id)
+}
+
+func externalMessageIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(externalMessageIDContextKey{}).(string)
+	return id
 }
 
 func contextWithTurnUserData(ctx context.Context, userData any) context.Context {
@@ -1309,6 +1344,7 @@ func (s *Server) recordTurnStartMessage(ctx context.Context, conversationID stri
 	// serves tool_result rows that carry MessageRoleUser — it's safe to stamp
 	// the email here unconditionally.
 	params.UserEmail = userEmailFromContext(ctx)
+	params.ExternalMessageID = externalMessageIDFromContext(ctx)
 	created, err := s.insertMessages(ctx, conversationID, []db.CreateMessageParams{params})
 	if err != nil {
 		return nil, err
@@ -1842,7 +1878,16 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 
 	// Resume conversations interrupted by an upgrade restart now that the
 	// listeners (and therefore ports, streams and the subagent runner) are live.
-	go s.resumeInterruptedConversations(context.Background(), resumeTurns)
+	// Channel queues drain now, and again once the resumes settle: a resumed
+	// turn drains its queue when it ends, but one whose resume failed is left
+	// idle. Draining twice is harmless; idle drains coalesce.
+	go s.recoverChannelQueues(context.Background())
+	go func() {
+		s.resumeInterruptedConversations(context.Background(), resumeTurns)
+		if len(resumeTurns) > 0 {
+			s.recoverChannelQueues(context.Background())
+		}
+	}()
 
 	// Report background jobs a previous process left running or unreported.
 	if err := s.recoverBackgroundJobs(context.Background()); err != nil {

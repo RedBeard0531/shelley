@@ -54,7 +54,11 @@ func (f userMessageFinder) FindUserMessage(ctx context.Context, prefix string) (
 		if err != nil {
 			return claudetool.UserMessage{}, false, fmt.Errorf("message %s: %w", m.MessageID, err)
 		}
-		return claudetool.UserMessage{ID: m.MessageID, SequenceID: seq, Text: text}, true, nil
+		um := claudetool.UserMessage{ID: m.MessageID, SequenceID: seq, Text: text}
+		if m.ExternalMessageID != nil {
+			um.ExternalID = *m.ExternalMessageID
+		}
+		return um, true, nil
 	}
 	return claudetool.UserMessage{}, false, nil
 }

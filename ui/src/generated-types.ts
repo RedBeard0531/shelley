@@ -21,6 +21,8 @@ export interface Conversation {
   draft: string;
   queued_messages: string;
   turn_interrupted: boolean;
+  external_conversation_id: string | null;
+  external_endpoint: string | null;
 }
 
 export interface Usage {
@@ -129,6 +131,8 @@ export interface ConversationWithStateForTS {
   draft: string;
   queued_messages: string;
   turn_interrupted: boolean;
+  external_conversation_id: string | null;
+  external_endpoint: string | null;
   working: boolean;
   git_repo_root?: string;
   git_worktree_root?: string;

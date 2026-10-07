@@ -14,7 +14,7 @@ const archiveConversation = `-- name: ArchiveConversation :one
 UPDATE conversations
 SET archived = TRUE
 WHERE conversation_id = ?
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 func (q *Queries) ArchiveConversation(ctx context.Context, conversationID string) (Conversation, error) {
@@ -38,6 +38,8 @@ func (q *Queries) ArchiveConversation(ctx context.Context, conversationID string
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -104,10 +106,57 @@ func (q *Queries) CountConversations(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const createChannelConversation = `-- name: CreateChannelConversation :one
+INSERT INTO conversations (conversation_id, user_initiated, model, conversation_options, external_conversation_id, external_endpoint)
+VALUES (?, TRUE, ?, ?, ?, ?)
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
+`
+
+type CreateChannelConversationParams struct {
+	ConversationID         string  `json:"conversation_id"`
+	Model                  *string `json:"model"`
+	ConversationOptions    string  `json:"conversation_options"`
+	ExternalConversationID *string `json:"external_conversation_id"`
+	ExternalEndpoint       *string `json:"external_endpoint"`
+}
+
+func (q *Queries) CreateChannelConversation(ctx context.Context, arg CreateChannelConversationParams) (Conversation, error) {
+	row := q.db.QueryRowContext(ctx, createChannelConversation,
+		arg.ConversationID,
+		arg.Model,
+		arg.ConversationOptions,
+		arg.ExternalConversationID,
+		arg.ExternalEndpoint,
+	)
+	var i Conversation
+	err := row.Scan(
+		&i.ConversationID,
+		&i.Slug,
+		&i.UserInitiated,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Cwd,
+		&i.Archived,
+		&i.ParentConversationID,
+		&i.Model,
+		&i.ConversationOptions,
+		&i.CurrentGeneration,
+		&i.AgentWorking,
+		&i.Tags,
+		&i.IsDraft,
+		&i.Draft,
+		&i.QueuedMessages,
+		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
+	)
+	return i, err
+}
+
 const createConversation = `-- name: CreateConversation :one
 INSERT INTO conversations (conversation_id, slug, user_initiated, cwd, model, conversation_options)
 VALUES (?, ?, ?, ?, ?, ?)
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type CreateConversationParams struct {
@@ -147,6 +196,8 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -154,7 +205,7 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 const createDraftConversation = `-- name: CreateDraftConversation :one
 INSERT INTO conversations (conversation_id, slug, user_initiated, cwd, model, conversation_options, is_draft, draft)
 VALUES (?, ?, TRUE, ?, ?, ?, TRUE, ?)
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type CreateDraftConversationParams struct {
@@ -197,6 +248,8 @@ func (q *Queries) CreateDraftConversation(ctx context.Context, arg CreateDraftCo
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -204,7 +257,7 @@ func (q *Queries) CreateDraftConversation(ctx context.Context, arg CreateDraftCo
 const createSubagentConversation = `-- name: CreateSubagentConversation :one
 INSERT INTO conversations (conversation_id, slug, user_initiated, cwd, parent_conversation_id)
 VALUES (?, ?, FALSE, ?, ?)
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type CreateSubagentConversationParams struct {
@@ -240,6 +293,8 @@ func (q *Queries) CreateSubagentConversation(ctx context.Context, arg CreateSuba
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -289,7 +344,7 @@ func (q *Queries) ForceUpdateConversationModel(ctx context.Context, arg ForceUpd
 }
 
 const getConversation = `-- name: GetConversation :one
-SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted FROM conversations
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
 WHERE conversation_id = ?
 `
 
@@ -314,12 +369,45 @@ func (q *Queries) GetConversation(ctx context.Context, conversationID string) (C
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
+	)
+	return i, err
+}
+
+const getConversationByExternalID = `-- name: GetConversationByExternalID :one
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations WHERE external_conversation_id = ?
+`
+
+func (q *Queries) GetConversationByExternalID(ctx context.Context, externalConversationID *string) (Conversation, error) {
+	row := q.db.QueryRowContext(ctx, getConversationByExternalID, externalConversationID)
+	var i Conversation
+	err := row.Scan(
+		&i.ConversationID,
+		&i.Slug,
+		&i.UserInitiated,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Cwd,
+		&i.Archived,
+		&i.ParentConversationID,
+		&i.Model,
+		&i.ConversationOptions,
+		&i.CurrentGeneration,
+		&i.AgentWorking,
+		&i.Tags,
+		&i.IsDraft,
+		&i.Draft,
+		&i.QueuedMessages,
+		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
 
 const getConversationBySlug = `-- name: GetConversationBySlug :one
-SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted FROM conversations
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
 WHERE slug = ?
 `
 
@@ -344,12 +432,14 @@ func (q *Queries) GetConversationBySlug(ctx context.Context, slug *string) (Conv
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
 
 const getConversationBySlugAndParent = `-- name: GetConversationBySlugAndParent :one
-SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted FROM conversations
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
 WHERE slug = ? AND parent_conversation_id = ?
 `
 
@@ -379,6 +469,8 @@ func (q *Queries) GetConversationBySlugAndParent(ctx context.Context, arg GetCon
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -555,7 +647,7 @@ func (q *Queries) GetSubagentUsage(ctx context.Context, parentConversationID *st
 }
 
 const getSubagents = `-- name: GetSubagents :many
-SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted FROM conversations
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
 WHERE parent_conversation_id = ?
 ORDER BY created_at ASC
 `
@@ -587,6 +679,8 @@ func (q *Queries) GetSubagents(ctx context.Context, parentConversationID *string
 			&i.Draft,
 			&i.QueuedMessages,
 			&i.TurnInterrupted,
+			&i.ExternalConversationID,
+			&i.ExternalEndpoint,
 		); err != nil {
 			return nil, err
 		}
@@ -607,7 +701,7 @@ SET current_generation = current_generation + 1,
     turn_interrupted = FALSE,
     updated_at = CURRENT_TIMESTAMP
 WHERE conversation_id = ?
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 func (q *Queries) IncrementConversationGeneration(ctx context.Context, conversationID string) (Conversation, error) {
@@ -631,6 +725,8 @@ func (q *Queries) IncrementConversationGeneration(ctx context.Context, conversat
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -668,7 +764,7 @@ func (q *Queries) ListAgentWorkingConversationIDs(ctx context.Context) ([]string
 }
 
 const listAllConversations = `-- name: ListAllConversations :many
-SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted,
+SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted, c.external_conversation_id, c.external_endpoint,
   -- preview_packed: locate the newest agent message that actually contains a
   -- text block (the EXISTS short-circuits on the first one), then pull that
   -- block. The outer ORDER BY rides idx_messages_conv_type_seq, so we stop at
@@ -760,6 +856,8 @@ func (q *Queries) ListAllConversations(ctx context.Context, arg ListAllConversat
 			&i.Conversation.Draft,
 			&i.Conversation.QueuedMessages,
 			&i.Conversation.TurnInterrupted,
+			&i.Conversation.ExternalConversationID,
+			&i.Conversation.ExternalEndpoint,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
 			&i.ParticipantsJson,
@@ -780,7 +878,7 @@ func (q *Queries) ListAllConversations(ctx context.Context, arg ListAllConversat
 }
 
 const listArchivedConversations = `-- name: ListArchivedConversations :many
-SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted FROM conversations
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
 WHERE archived = TRUE
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?
@@ -818,6 +916,59 @@ func (q *Queries) ListArchivedConversations(ctx context.Context, arg ListArchive
 			&i.Draft,
 			&i.QueuedMessages,
 			&i.TurnInterrupted,
+			&i.ExternalConversationID,
+			&i.ExternalEndpoint,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelConversationsWithQueuedMessages = `-- name: ListChannelConversationsWithQueuedMessages :many
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
+WHERE external_conversation_id IS NOT NULL AND queued_messages != '[]'
+ORDER BY created_at ASC
+`
+
+// Conversations bound to an external chat with queued messages. Used once
+// at startup to drain them.
+func (q *Queries) ListChannelConversationsWithQueuedMessages(ctx context.Context) ([]Conversation, error) {
+	rows, err := q.db.QueryContext(ctx, listChannelConversationsWithQueuedMessages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Conversation{}
+	for rows.Next() {
+		var i Conversation
+		if err := rows.Scan(
+			&i.ConversationID,
+			&i.Slug,
+			&i.UserInitiated,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Cwd,
+			&i.Archived,
+			&i.ParentConversationID,
+			&i.Model,
+			&i.ConversationOptions,
+			&i.CurrentGeneration,
+			&i.AgentWorking,
+			&i.Tags,
+			&i.IsDraft,
+			&i.Draft,
+			&i.QueuedMessages,
+			&i.TurnInterrupted,
+			&i.ExternalConversationID,
+			&i.ExternalEndpoint,
 		); err != nil {
 			return nil, err
 		}
@@ -833,7 +984,7 @@ func (q *Queries) ListArchivedConversations(ctx context.Context, arg ListArchive
 }
 
 const listCommitTourWorkers = `-- name: ListCommitTourWorkers :many
-SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted FROM conversations
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
 WHERE parent_conversation_id IS NOT NULL
   AND user_initiated = FALSE
   AND conversation_options LIKE '%"kind":"commit-tour"%'
@@ -868,6 +1019,8 @@ func (q *Queries) ListCommitTourWorkers(ctx context.Context) ([]Conversation, er
 			&i.Draft,
 			&i.QueuedMessages,
 			&i.TurnInterrupted,
+			&i.ExternalConversationID,
+			&i.ExternalEndpoint,
 		); err != nil {
 			return nil, err
 		}
@@ -883,7 +1036,7 @@ func (q *Queries) ListCommitTourWorkers(ctx context.Context) ([]Conversation, er
 }
 
 const listConversations = `-- name: ListConversations :many
-SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted,
+SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted, c.external_conversation_id, c.external_endpoint,
   -- preview_packed: locate the newest agent message that actually contains a
   -- text block (the EXISTS short-circuits on the first one), then pull that
   -- block. The outer ORDER BY rides idx_messages_conv_type_seq, so we stop at
@@ -978,6 +1131,8 @@ func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsPa
 			&i.Conversation.Draft,
 			&i.Conversation.QueuedMessages,
 			&i.Conversation.TurnInterrupted,
+			&i.Conversation.ExternalConversationID,
+			&i.Conversation.ExternalEndpoint,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
 			&i.ParticipantsJson,
@@ -998,7 +1153,7 @@ func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsPa
 }
 
 const listConversationsWithQueuedTranscriptions = `-- name: ListConversationsWithQueuedTranscriptions :many
-SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted FROM conversations
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
 WHERE queued_messages LIKE '%"kind":"transcription"%'
 ORDER BY created_at ASC
 `
@@ -1032,6 +1187,8 @@ func (q *Queries) ListConversationsWithQueuedTranscriptions(ctx context.Context)
 			&i.Draft,
 			&i.QueuedMessages,
 			&i.TurnInterrupted,
+			&i.ExternalConversationID,
+			&i.ExternalEndpoint,
 		); err != nil {
 			return nil, err
 		}
@@ -1080,7 +1237,7 @@ const promoteDraftConversation = `-- name: PromoteDraftConversation :one
 UPDATE conversations
 SET is_draft = FALSE, draft = '', updated_at = CURRENT_TIMESTAMP
 WHERE conversation_id = ? AND is_draft = TRUE
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 // Clears the draft state when the user sends the first message.
@@ -1105,6 +1262,8 @@ func (q *Queries) PromoteDraftConversation(ctx context.Context, conversationID s
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -1123,7 +1282,7 @@ func (q *Queries) ResetAllAgentWorking(ctx context.Context) error {
 }
 
 const searchArchivedConversations = `-- name: SearchArchivedConversations :many
-SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted FROM conversations
+SELECT conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint FROM conversations
 WHERE slug LIKE '%' || ? || '%' AND archived = TRUE
 ORDER BY updated_at DESC
 LIMIT ? OFFSET ?
@@ -1162,6 +1321,8 @@ func (q *Queries) SearchArchivedConversations(ctx context.Context, arg SearchArc
 			&i.Draft,
 			&i.QueuedMessages,
 			&i.TurnInterrupted,
+			&i.ExternalConversationID,
+			&i.ExternalEndpoint,
 		); err != nil {
 			return nil, err
 		}
@@ -1177,7 +1338,7 @@ func (q *Queries) SearchArchivedConversations(ctx context.Context, arg SearchArc
 }
 
 const searchConversations = `-- name: SearchConversations :many
-SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted,
+SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted, c.external_conversation_id, c.external_endpoint,
   -- preview_packed: locate the newest agent message that actually contains a
   -- text block (the EXISTS short-circuits on the first one), then pull that
   -- block. The outer ORDER BY rides idx_messages_conv_type_seq, so we stop at
@@ -1267,6 +1428,8 @@ func (q *Queries) SearchConversations(ctx context.Context, arg SearchConversatio
 			&i.Conversation.Draft,
 			&i.Conversation.QueuedMessages,
 			&i.Conversation.TurnInterrupted,
+			&i.Conversation.ExternalConversationID,
+			&i.Conversation.ExternalEndpoint,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
 			&i.ParticipantsJson,
@@ -1293,7 +1456,7 @@ WITH fts_hits AS (
   JOIN messages_fts ON messages_fts.rowid = m.rowid
   WHERE messages_fts MATCH ?4
 )
-SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted,
+SELECT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted, c.external_conversation_id, c.external_endpoint,
   CAST(CASE WHEN c.slug LIKE ?1 ESCAPE '\' THEN 0 ELSE 1 END AS INTEGER) AS slug_rank,
   -- preview_packed: locate the newest agent message that actually contains a
   -- text block (the EXISTS short-circuits on the first one), then pull that
@@ -1399,6 +1562,8 @@ func (q *Queries) SearchConversationsFTSList(ctx context.Context, arg SearchConv
 			&i.Conversation.Draft,
 			&i.Conversation.QueuedMessages,
 			&i.Conversation.TurnInterrupted,
+			&i.Conversation.ExternalConversationID,
+			&i.Conversation.ExternalEndpoint,
 			&i.SlugRank,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
@@ -1492,7 +1657,7 @@ func (q *Queries) SearchConversationsFTSSnippets(ctx context.Context, arg Search
 }
 
 const searchConversationsWithMessages = `-- name: SearchConversationsWithMessages :many
-SELECT DISTINCT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted,
+SELECT DISTINCT c.conversation_id, c.slug, c.user_initiated, c.created_at, c.updated_at, c.cwd, c.archived, c.parent_conversation_id, c.model, c.conversation_options, c.current_generation, c.agent_working, c.tags, c.is_draft, c.draft, c.queued_messages, c.turn_interrupted, c.external_conversation_id, c.external_endpoint,
   CAST(CASE WHEN c.slug LIKE '%' || ?1 || '%' THEN 0 ELSE 1 END AS INTEGER) AS slug_rank,
   -- See preview_packed note on ListConversations. Inner messages alias is
   -- pm here to avoid colliding with the outer LEFT JOIN messages m.
@@ -1585,6 +1750,8 @@ func (q *Queries) SearchConversationsWithMessages(ctx context.Context, arg Searc
 			&i.Conversation.Draft,
 			&i.Conversation.QueuedMessages,
 			&i.Conversation.TurnInterrupted,
+			&i.Conversation.ExternalConversationID,
+			&i.Conversation.ExternalEndpoint,
 			&i.SlugRank,
 			&i.PreviewPacked,
 			&i.MaxSequenceID,
@@ -1635,7 +1802,7 @@ SET current_generation = ?1,
     turn_interrupted = ?2,
     updated_at = CURRENT_TIMESTAMP
 WHERE conversation_id = ?3
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type SetConversationGenerationParams struct {
@@ -1668,6 +1835,8 @@ func (q *Queries) SetConversationGeneration(ctx context.Context, arg SetConversa
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -1694,7 +1863,7 @@ const unarchiveConversation = `-- name: UnarchiveConversation :one
 UPDATE conversations
 SET archived = FALSE
 WHERE conversation_id = ?
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 func (q *Queries) UnarchiveConversation(ctx context.Context, conversationID string) (Conversation, error) {
@@ -1718,6 +1887,8 @@ func (q *Queries) UnarchiveConversation(ctx context.Context, conversationID stri
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -1726,7 +1897,7 @@ const updateConversationCwd = `-- name: UpdateConversationCwd :one
 UPDATE conversations
 SET cwd = ?, updated_at = CURRENT_TIMESTAMP
 WHERE conversation_id = ?
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type UpdateConversationCwdParams struct {
@@ -1755,6 +1926,8 @@ func (q *Queries) UpdateConversationCwd(ctx context.Context, arg UpdateConversat
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -1766,7 +1939,7 @@ SET draft = COALESCE(?1, draft),
     cwd = COALESCE(?3, cwd),
     updated_at = CURRENT_TIMESTAMP
 WHERE conversation_id = ?4 AND is_draft = TRUE
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type UpdateConversationDraftParams struct {
@@ -1809,6 +1982,8 @@ func (q *Queries) UpdateConversationDraft(ctx context.Context, arg UpdateConvers
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -1849,7 +2024,7 @@ const updateConversationParent = `-- name: UpdateConversationParent :one
 UPDATE conversations
 SET parent_conversation_id = ?, updated_at = CURRENT_TIMESTAMP
 WHERE conversation_id = ?
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type UpdateConversationParentParams struct {
@@ -1878,6 +2053,8 @@ func (q *Queries) UpdateConversationParent(ctx context.Context, arg UpdateConver
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -1904,7 +2081,7 @@ const updateConversationSlug = `-- name: UpdateConversationSlug :one
 UPDATE conversations
 SET slug = ?, updated_at = CURRENT_TIMESTAMP
 WHERE conversation_id = ?
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type UpdateConversationSlugParams struct {
@@ -1933,6 +2110,8 @@ func (q *Queries) UpdateConversationSlug(ctx context.Context, arg UpdateConversa
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }
@@ -1941,7 +2120,7 @@ const updateConversationTags = `-- name: UpdateConversationTags :one
 UPDATE conversations
 SET tags = ?
 WHERE conversation_id = ?
-RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted
+RETURNING conversation_id, slug, user_initiated, created_at, updated_at, cwd, archived, parent_conversation_id, model, conversation_options, current_generation, agent_working, tags, is_draft, draft, queued_messages, turn_interrupted, external_conversation_id, external_endpoint
 `
 
 type UpdateConversationTagsParams struct {
@@ -1972,6 +2151,8 @@ func (q *Queries) UpdateConversationTags(ctx context.Context, arg UpdateConversa
 		&i.Draft,
 		&i.QueuedMessages,
 		&i.TurnInterrupted,
+		&i.ExternalConversationID,
+		&i.ExternalEndpoint,
 	)
 	return i, err
 }

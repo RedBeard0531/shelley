@@ -20,6 +20,8 @@ function conv(id: string, slug: string, working = false): ConversationWithState 
     current_generation: 0,
     agent_working: working,
     turn_interrupted: false,
+    external_conversation_id: null,
+    external_endpoint: null,
     tags: "[]",
     is_draft: false,
     draft: "",

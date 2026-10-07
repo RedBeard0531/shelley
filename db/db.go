@@ -422,6 +422,32 @@ func (db *DB) CreateConversation(ctx context.Context, slug *string, userInitiate
 	return &conversation, err
 }
 
+// CreateChannelConversation creates the conversation for an external chat:
+// externalID is the channel's chat id, endpoint the base URL its replies
+// are sent to, and opts its options.
+func (db *DB) CreateChannelConversation(ctx context.Context, externalID, endpoint, model string, opts ConversationOptions) (*generated.Conversation, error) {
+	conversationID, err := GenerateConversationID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate conversation ID: %w", err)
+	}
+	optsJSON, err := json.Marshal(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal conversation options: %w", err)
+	}
+	var conversation generated.Conversation
+	err = db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		conversation, err = generated.New(tx.Conn()).CreateChannelConversation(ctx, generated.CreateChannelConversationParams{
+			ConversationID:         conversationID,
+			Model:                  &model,
+			ConversationOptions:    string(optsJSON),
+			ExternalConversationID: &externalID,
+			ExternalEndpoint:       &endpoint,
+		})
+		return err
+	})
+	return &conversation, err
+}
+
 // CreateDraftConversation creates a new draft conversation. Drafts have
 // no messages; their body lives in the draft column until promoted by
 // the chat handler. They appear in the normal conversation list and can
@@ -599,10 +625,14 @@ type QueuedMessage struct {
 	// UserData is message provenance and other presentation metadata captured at
 	// queue time. It is copied to messages.user_data when the item drains.
 	UserData json.RawMessage `json:"user_data,omitempty"`
+	// ExternalMessageID is the channel's id for a message that arrived from
+	// an external chat; it is stamped onto the messages row on drain.
+	ExternalMessageID string `json:"external_message_id,omitempty"`
 	// Inject lets a running turn take the message at its next LLM round
 	// instead of waiting for the turn to end.
 	Inject bool `json:"inject,omitempty"`
-	// ID, CreatedAt, Model, UserEmail, and UserData are shared queue metadata.
+	// ID, CreatedAt, Model, UserEmail, UserData, and ExternalMessageID are
+	// shared queue metadata.
 	// Kind, State, Transcription, Error, and the optional ready Llm payload form
 	// the specialized-work variant.
 	Kind          QueuedMessageKind    `json:"kind,omitempty"`
@@ -1692,7 +1722,10 @@ type CreateMessageParams struct {
 	// HTTPS proxy stamps) that authored a user message. Empty strings are
 	// stored as NULL: only user messages carry it, and requests without the
 	// header (direct/local access) leave it unset.
-	UserEmail           string
+	UserEmail string
+	// ExternalMessageID is the channel's id for a user message that arrived
+	// from an external chat. Empty strings are stored as NULL.
+	ExternalMessageID   string
 	DisplayData         interface{} // Will be JSON marshalled, tool-specific display content
 	ExcludedFromContext bool        // If true, message is stored but not sent to LLM
 	// OtherUsageData is the usage of indirect LLM calls affiliated with this
@@ -1829,6 +1862,7 @@ func insertMessageTx(ctx context.Context, q *generated.Queries, params CreateMes
 		ModelName:           nullableString(params.ModelName),
 		UserEmail:           nullableString(params.UserEmail),
 		OtherUsageData:      otherUsageDataJSON,
+		ExternalMessageID:   nullableString(params.ExternalMessageID),
 		CreatedAt:           sqliteTimeArg(params.CreatedAt),
 	})
 	if err != nil {

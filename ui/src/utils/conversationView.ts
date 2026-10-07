@@ -83,12 +83,14 @@ export interface MessageUserInput {
   end_turn?: boolean;
 }
 
-/** Display of a successful message_user call (claudetool.MessageUserDisplay). */
+/** Display of a message_user call (claudetool.MessageUserDisplay). */
 export interface MessageUserDisplay {
   target_message_id?: string;
   target_sequence_id?: number;
   target_excerpt?: string;
   attachments?: { path: string; name: string; size: number }[];
+  /** Set on a call that failed in the user's chat (e.g. their phone). */
+  chat_failed?: boolean;
 }
 
 export function messageUserInput(toolInput: unknown): MessageUserInput {
@@ -111,4 +113,21 @@ export function isDeliveredUserMessage(item: {
   if (item.toolName !== MESSAGE_USER_TOOL || !item.hasResult || item.toolError) return false;
   const input = messageUserInput(item.toolInput);
   return !!input.text?.trim() || !!messageUserDisplay(item.display).attachments?.length;
+}
+
+/** Whether a message_user call failed in the user's chat, such as a phone
+ * the messages service refused to send to. Brief view shows it: unlike a
+ * mistake in the call, the agent cannot fix it, so it may show nothing else. */
+export function isFailedChatDelivery(item: {
+  toolName?: string;
+  hasResult?: boolean;
+  toolError?: boolean;
+  display?: unknown;
+}): boolean {
+  return (
+    item.toolName === MESSAGE_USER_TOOL &&
+    !!item.hasResult &&
+    !!item.toolError &&
+    !!messageUserDisplay(item.display).chat_failed
+  );
 }

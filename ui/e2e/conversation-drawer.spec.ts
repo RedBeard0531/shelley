@@ -31,6 +31,8 @@ function conversation(
     draft: isDraft ? "unfinished message" : "",
     queued_messages: "[]",
     turn_interrupted: false,
+    external_conversation_id: null,
+    external_endpoint: null,
     working: false,
     subagent_count: 0,
     preview: "Preview",
