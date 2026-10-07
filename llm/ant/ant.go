@@ -29,6 +29,7 @@ const (
 )
 
 const (
+	Claude55Haiku  = "claude-haiku-5-5"
 	Claude45Haiku  = "claude-haiku-4-5-20251001"
 	Claude4Sonnet  = "claude-sonnet-4-20250514"
 	Claude45Sonnet = "claude-sonnet-4-5-20250929"

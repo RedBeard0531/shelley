@@ -78,6 +78,30 @@ func TestSonnet55InBuiltInCatalog(t *testing.T) {
 	}
 }
 
+func TestHaiku55InBuiltInCatalog(t *testing.T) {
+	models := All()
+	for i, m := range models {
+		if m.ID != "claude-haiku-5.5" {
+			continue
+		}
+		if m.Provider != ProviderAnthropic || m.APIModelName != "claude-haiku-5-5" ||
+			m.Description != "Claude Haiku 5.5" || m.APIType != APITypeAnthropicMessages ||
+			m.DefaultBaseURL != DefaultAnthropicBaseURL || m.Build == nil {
+			t.Fatalf("Haiku 5.5 = %+v", m)
+		}
+		for j, old := range models {
+			if old.ID == "claude-haiku-4.5" {
+				if i >= j {
+					t.Fatalf("new Haiku at %d after old Haiku at %d", i, j)
+				}
+				return
+			}
+		}
+		t.Fatal("Claude Haiku 4.5 was removed")
+	}
+	t.Fatal("Claude Haiku 5.5 not in built-in catalog")
+}
+
 func TestIDs(t *testing.T) {
 	ids := IDs()
 	if len(ids) == 0 {
