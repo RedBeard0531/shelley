@@ -45,8 +45,10 @@ type TerminalSession struct {
 	// global. On the wire this is represented as null (see terminalDTO); the
 	// "" <-> null conversion happens only in terminalDTO and in the scope
 	// handler.
-	ConversationID string    `json:"conversation_id"`
-	CreatedAt      time.Time `json:"created_at"`
+	ConversationID string `json:"conversation_id"`
+	// CloseOnExit closes the UI tab on a confirmed child exit, regardless of code.
+	CloseOnExit bool      `json:"close_on_exit"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // SpawnerFunc starts the legacy dtach server used by tests and compatibility
@@ -178,7 +180,7 @@ func (t *TerminalSessions) Get(id string) *TerminalSession {
 
 // Spawn launches a new persistent session and immediately attaches to it.
 // Production sessions use exe-scroll; tests can set a legacy dtach spawner.
-func (t *TerminalSessions) Spawn(command, cwd, conversationID string, cols, rows uint16, extraEnv []string) (*TerminalSession, terminalClient, error) {
+func (t *TerminalSessions) Spawn(command, cwd, conversationID string, closeOnExit bool, cols, rows uint16, extraEnv []string) (*TerminalSession, terminalClient, error) {
 	if command == "" {
 		return nil, nil, errors.New("terminals: empty command")
 	}
@@ -199,12 +201,12 @@ func (t *TerminalSessions) Spawn(command, cwd, conversationID string, cols, rows
 	env := append([]string(nil), extraEnv...)
 	env = append(env, "SHELLEY_TERMINAL_ID="+id)
 	if t.spawner != nil {
-		return t.spawnDtach(id, command, cwd, conversationID, cols, rows, env)
+		return t.spawnDtach(id, command, cwd, conversationID, closeOnExit, cols, rows, env)
 	}
-	return t.spawnExeScroll(id, command, cwd, conversationID, cols, rows, env)
+	return t.spawnExeScroll(id, command, cwd, conversationID, closeOnExit, cols, rows, env)
 }
 
-func (t *TerminalSessions) spawnDtach(id, command, cwd, conversationID string, cols, rows uint16, env []string) (*TerminalSession, terminalClient, error) {
+func (t *TerminalSessions) spawnDtach(id, command, cwd, conversationID string, closeOnExit bool, cols, rows uint16, env []string) (*TerminalSession, terminalClient, error) {
 	socket := filepath.Join(t.dir, id+".sock")
 	logFile := filepath.Join(t.dir, id+".log")
 	pid, err := t.spawner(socket, logFile, cwd, command, cols, rows, env)
@@ -224,6 +226,7 @@ func (t *TerminalSessions) spawnDtach(id, command, cwd, conversationID string, c
 		LogFile:        logFile,
 		PID:            pid,
 		ConversationID: conversationID,
+		CloseOnExit:    closeOnExit,
 		CreatedAt:      time.Now().UTC(),
 	}
 	if err := t.writeSession(sess); err != nil {
@@ -247,7 +250,7 @@ mv -f "$exit_tmp" "$3" || exit 125
 exit "$status"
 `
 
-func (t *TerminalSessions) spawnExeScroll(id, command, cwd, conversationID string, cols, rows uint16, extraEnv []string) (*TerminalSession, terminalClient, error) {
+func (t *TerminalSessions) spawnExeScroll(id, command, cwd, conversationID string, closeOnExit bool, cols, rows uint16, extraEnv []string) (*TerminalSession, terminalClient, error) {
 	socket := filepath.Join(t.dir, id+".sock")
 	pidFile := t.serverPIDFile(id)
 	exitFile := t.exitFile(id)
@@ -287,6 +290,7 @@ func (t *TerminalSessions) spawnExeScroll(id, command, cwd, conversationID strin
 		PID:            pid,
 		Engine:         terminalEngineExeScroll,
 		ConversationID: conversationID,
+		CloseOnExit:    closeOnExit,
 		CreatedAt:      time.Now().UTC(),
 	}
 	if err := t.writeSession(sess); err != nil {

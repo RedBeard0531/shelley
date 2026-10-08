@@ -462,8 +462,10 @@ function setEphemeralTerminals(
   ephemeralTerminals.value = typeof next === "function" ? next(ephemeralTerminals.value) : next;
 }
 
-function handleTerminalAttached(id: string, termId: string) {
-  setEphemeralTerminals((prev) => prev.map((tm) => (tm.id === id ? { ...tm, termId } : tm)));
+function handleTerminalAttached(id: string, termId: string, closeOnExit: boolean) {
+  setEphemeralTerminals((prev) =>
+    prev.map((tm) => (tm.id === id ? { ...tm, termId, closeOnExit } : tm)),
+  );
 }
 
 // Applied only after the server has persisted the new scope.
@@ -991,6 +993,7 @@ onMounted(() => {
         rows: Array<{
           id: string;
           command: string;
+          close_on_exit: boolean;
           cwd: string;
           conversation_id: string | null;
           created_at: string;
@@ -1005,6 +1008,7 @@ onMounted(() => {
               id: r.id,
               termId: r.id,
               command: r.command,
+              closeOnExit: r.close_on_exit,
               cwd: r.cwd,
               conversationId: r.conversation_id ?? null,
               createdAt: new Date(r.created_at || Date.now()),

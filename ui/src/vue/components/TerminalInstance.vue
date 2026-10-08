@@ -38,8 +38,8 @@ const emit = defineEmits<{
   // register/unregister: id, xterm instance, and its fit callback
   (e: "register", id: string, xterm: Terminal, fit: () => void): void;
   (e: "unregister", id: string): void;
-  // attached: id, termId (React onAttached)
-  (e: "attached", id: string, termId: string): void;
+  // attached: id, termId, server-persisted exit policy
+  (e: "attached", id: string, termId: string, closeOnExit: boolean): void;
 }>();
 
 const containerRef = ref<HTMLDivElement | null>(null);
@@ -165,6 +165,7 @@ onMounted(() => {
   } else {
     params.set("cmd", props.term.command);
     params.set("cwd", props.term.cwd);
+    params.set("close_on_exit", String(props.term.closeOnExit));
     if (props.term.conversationId) params.set("conversation_id", props.term.conversationId);
     if (props.model) params.set("model", props.model);
   }
@@ -183,7 +184,7 @@ onMounted(() => {
       if (msg.type === "output" && msg.data) {
         xterm.write(base64ToUint8Array(msg.data));
       } else if (msg.type === "attached" && msg.term_id) {
-        emit("attached", props.term.id, msg.term_id);
+        emit("attached", props.term.id, msg.term_id, msg.close_on_exit);
       } else if (msg.type === "exit") {
         const code = parseInt(msg.data, 10) || 0;
         const color = code === 0 ? "32" : "31";

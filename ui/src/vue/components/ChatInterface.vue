@@ -301,7 +301,7 @@
       :model="selectedModel"
       :auto-focus-id="terminalAutoFocusId"
       :can-insert-into-input="true"
-      @attached="(id, termId) => onTerminalAttached?.(id, termId)"
+      @attached="(id, termId, closeOnExit) => onTerminalAttached?.(id, termId, closeOnExit)"
       @scope-change="(id, cid) => onTerminalScopeChange?.(id, cid)"
       @scope-error="(message) => (error = message)"
       @close="onTerminalCloseHandler"
@@ -612,6 +612,7 @@ import {
 import { coalesceMessages, type CoalescedItem } from "./coalesce";
 import type { RenderNode, RenderChunk, GenerationBlock } from "./renderNode";
 import type { EphemeralTerminal } from "./terminalTypes";
+import { isInteractiveShellLaunch } from "./terminalHelpers";
 import {
   THINKING_LEVELS,
   normalizeThinkingLevelForModel,
@@ -693,7 +694,7 @@ const props = withDefaults(
     setEphemeralTerminals: (
       next: EphemeralTerminal[] | ((prev: EphemeralTerminal[]) => EphemeralTerminal[]),
     ) => void;
-    onTerminalAttached?: (id: string, termId: string) => void;
+    onTerminalAttached?: (id: string, termId: string, closeOnExit: boolean) => void;
     onTerminalScopeChange?: (id: string, conversationId: string | null) => void;
     onTerminalClose?: (id: string) => void;
     navigateUserMessageTrigger?: number;
@@ -3387,6 +3388,7 @@ async function sendMessage(message: string) {
       const terminal: EphemeralTerminal = {
         id: `term-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         command: shellCommand,
+        closeOnExit: isInteractiveShellLaunch(shellCommand),
         cwd:
           props.currentConversation?.cwd ||
           selectedCwd.value ||
@@ -3398,10 +3400,7 @@ async function sendMessage(message: string) {
         conversationId: props.conversationId ?? null,
       };
       props.setEphemeralTerminals((prev) => [...prev, terminal]);
-      const firstWord = shellCommand.split(/\s+/)[0];
-      const baseName = firstWord.split("/").pop() || firstWord;
-      const interactiveShells = ["bash", "sh", "zsh", "fish", "nu", "nushell"];
-      if (interactiveShells.includes(baseName)) {
+      if (terminal.closeOnExit) {
         terminalAutoFocusId.value = terminal.id;
       }
       setTimeout(() => scrollToBottom(), 100);
@@ -3633,6 +3632,7 @@ function openInAppTerminal() {
   const terminal: EphemeralTerminal = {
     id: `term-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     command: 'exec "${SHELL:-bash}" -i',
+    closeOnExit: true,
     cwd,
     createdAt: new Date(),
     conversationId: props.conversationId ?? null,

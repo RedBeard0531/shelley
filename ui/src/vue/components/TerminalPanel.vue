@@ -172,7 +172,7 @@
         @status-change="handleStatusChange"
         @register="registerXterm"
         @unregister="unregisterXterm"
-        @attached="(id, termId) => emit('attached', id, termId)"
+        @attached="(id, termId, closeOnExit) => emit('attached', id, termId, closeOnExit)"
       />
     </div>
   </div>
@@ -218,7 +218,7 @@ const emit = defineEmits<{
   (e: "insert-into-input", text: string): void;
   (e: "auto-focus-consumed"): void;
   (e: "active-terminal-exited"): void;
-  (e: "attached", id: string, termId: string): void;
+  (e: "attached", id: string, termId: string, closeOnExit: boolean): void;
   // scope-change: terminal id, new owner (null for global). Emitted only after
   // the server has accepted the change.
   (e: "scope-change", id: string, conversationId: string | null): void;
@@ -352,6 +352,11 @@ function handleStatusChange(id: string, status: TermStatus, exitCode: number | n
     exitCode: exitCode ?? existing?.exitCode ?? null,
   });
   statusMap.value = next;
+  const term = props.terminals.find((t) => t.id === id);
+  if (status === "exited" && exitCode !== null && term?.closeOnExit) {
+    // Let the exit watcher restore chat focus before removing the active tab.
+    void nextTick(() => emit("close", id));
+  }
 }
 
 // Resize drag

@@ -137,7 +137,7 @@ func TestTerminalSessionsDirCreatedOnFirstSpawn(t *testing.T) {
 	ts.SetSpawner(func(socket, logFile, cwd, command string, cols, rows uint16, env []string) (int, error) {
 		return 0, errSpawnerCalled
 	})
-	if _, _, err := ts.Spawn("true", t.TempDir(), "", 80, 24, nil); !errors.Is(err, errSpawnerCalled) {
+	if _, _, err := ts.Spawn("true", t.TempDir(), "", false, 80, 24, nil); !errors.Is(err, errSpawnerCalled) {
 		t.Fatalf("Spawn err = %v, want %v", err, errSpawnerCalled)
 	}
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
