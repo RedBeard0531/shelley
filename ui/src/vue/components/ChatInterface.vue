@@ -49,17 +49,6 @@
       </div>
 
       <div class="header-actions">
-        <button class="btn-new" :aria-label="t('newConversation')" @click="onNewConversationClick">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="chat-icon-1rem">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              :stroke-width="2"
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-        </button>
-
         <!-- Overflow menu (PrimeVue Popover + Select) -->
         <ChatOverflowMenu
           :has-cwd="hasCwd"
@@ -84,7 +73,22 @@
           @edit-file="props.onOpenFileFinder?.()"
           @open-mcp-servers="props.onOpenMcpServersModal?.()"
           @check-version="openVersionModal"
-        />
+        >
+          <button
+            class="btn-new"
+            :aria-label="t('newConversation')"
+            @click="onNewConversationClick"
+          >
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="chat-icon-1rem">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                :stroke-width="2"
+                d="M12 4v16m8-8H4"
+              />
+            </svg>
+          </button>
+        </ChatOverflowMenu>
       </div>
     </div>
 

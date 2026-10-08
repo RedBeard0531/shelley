@@ -208,6 +208,28 @@ func TestIndexInitDataCarriesUserEmail(t *testing.T) {
 	}
 }
 
+func TestIndexInitDataLinksToVMManagement(t *testing.T) {
+	if !isExeDev() {
+		t.Skip("VM management links are only provided on exe.dev")
+	}
+	srv, _, _ := newTestServer(t)
+	init := indexInitData(t, srv)
+	hostname := init["hostname"].(string)
+	links := init["links"].([]any)
+	if len(links) != 2 {
+		t.Fatalf("links = %#v, want VM website and management links", links)
+	}
+	website := links[0].(map[string]any)
+	if website["title"] != hostname || website["url"] != "https://"+hostname {
+		t.Fatalf("VM website link = %#v", website)
+	}
+	management := links[1].(map[string]any)
+	wantURL := "https://exe.dev/vm/" + strings.SplitN(hostname, ".", 2)[0]
+	if management["title"] != "Manage on exe.dev" || management["url"] != wantURL {
+		t.Fatalf("management link = %#v, want Manage on exe.dev at %s", management, wantURL)
+	}
+}
+
 // TestIndexInitDataOmitsHintWithModels: a healthy server must not ship setup
 // advice (and must not pay for a reflection probe on every page load).
 func TestIndexInitDataOmitsHintWithModels(t *testing.T) {

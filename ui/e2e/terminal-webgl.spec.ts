@@ -1,5 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
-import { createConversationViaAPIWithDetails } from "./helpers";
+import { openWorkspaceTool, createConversationViaAPIWithDetails } from "./helpers";
 
 // At 1x the WebGL renderer rounds cells to whole pixels (8px rather than the
 // DOM renderer's 8.4px), so the two renderers fit different column counts.
@@ -11,8 +11,7 @@ async function openTerminal(page: Page, request: APIRequestContext) {
     "terminal webgl test",
   );
   await page.goto(`/c/${conversationId}`);
-  await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
-  await page.locator(".overflow-menu-item", { hasText: /terminal/i }).click();
+  await openWorkspaceTool(page, "Terminal");
   const terminal = page.locator(
     '.terminal-panel-content [data-terminal-id][style*="display: block"]',
   );

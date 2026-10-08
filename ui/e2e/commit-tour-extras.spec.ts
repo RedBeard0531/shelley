@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createConversationViaAPI, makePNG, withTempDir } from "./helpers";
+import { openWorkspaceTool, createConversationViaAPI, makePNG, withTempDir } from "./helpers";
 
 // Tours can carry key design decisions, questions for the reader, and
 // screenshots or recordings. Each is commentable, and every comment lands in
@@ -35,8 +35,7 @@ async function openDiffViewer(page: Page, slug: string): Promise<Locator> {
   await page.addInitScript(() => localStorage.setItem("diff-viewer-layout", "sidebar"));
   await page.goto(`/c/${slug}`);
   await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
-  await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
-  await page.locator(".overflow-menu-item", { hasText: /diffs/i }).click();
+  await openWorkspaceTool(page, "Diffs");
   const overlay = page.locator(".diff-viewer-overlay");
   await expect(overlay).toBeVisible({ timeout: 30000 });
   return overlay;

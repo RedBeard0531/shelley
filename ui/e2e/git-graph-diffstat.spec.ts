@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { createConversationViaAPI } from "./helpers";
+import { openWorkspaceTool, createConversationViaAPI } from "./helpers";
 
 test.describe("Git graph diffstat links", () => {
   test("opens the selected changed file in the diff viewer", async ({ page, request }) => {
@@ -13,8 +13,7 @@ test.describe("Git graph diffstat links", () => {
 
     await page.goto(`/c/${slug}`);
     await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
-    await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
-    await page.locator(".overflow-menu-item", { hasText: /git graph/i }).click();
+    await openWorkspaceTool(page, "Git Graph");
 
     const graph = page.locator(".git-graph-container");
     await expect(graph).toBeVisible({ timeout: 30000 });

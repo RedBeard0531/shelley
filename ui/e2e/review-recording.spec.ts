@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  openWorkspaceTool,
   createConversationViaAPI,
   createConversationViaAPIWithDetails,
   installTranscriptionAvailability,
@@ -120,8 +121,7 @@ async function openTour(page: Page, slug: string, viewport = { width: 1500, heig
   await page.setViewportSize(viewport);
   await page.goto(`/c/${slug}`);
   await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
-  await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
-  await page.locator(".overflow-menu-item", { hasText: /diffs/i }).click();
+  await openWorkspaceTool(page, "Diffs");
   const overlay = page.locator(".diff-viewer-overlay");
   await expect(overlay.locator(".commit-tour-view")).toBeVisible({ timeout: 30000 });
   return overlay;

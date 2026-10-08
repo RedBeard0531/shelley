@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  openWorkspaceTool,
   createConversationViaAPI,
   createConversationViaAPIWithDetails,
   git,
@@ -51,8 +52,7 @@ test("git graph shows and opens an attached commit tour", async ({ page, request
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/c/${slug}`);
     await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
-    await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
-    await page.locator(".overflow-menu-item", { hasText: /git graph/i }).click();
+    await openWorkspaceTool(page, "Git Graph");
 
     const graph = page.locator(".git-graph-container");
     await expect(graph).toBeVisible({ timeout: 30_000 });
@@ -105,16 +105,12 @@ test("git graph links to the builder and exposes the tour on return", async ({ p
     git(repo, "commit", "-am", "Build a graph tour");
     const hash = git(repo, "rev-parse", "HEAD");
 
-    const { conversationId, slug } = await createConversationViaAPIWithDetails(
-      request,
-      "Hello",
-      { cwd: repo },
-    );
-    const { slug: builderSlug } = await createConversationViaAPIWithDetails(
-      request,
-      "Hello",
-      { cwd: repo },
-    );
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(request, "Hello", {
+      cwd: repo,
+    });
+    const { slug: builderSlug } = await createConversationViaAPIWithDetails(request, "Hello", {
+      cwd: repo,
+    });
     let state: "absent" | "building" | "present" = "absent";
     let failNextStatus = false;
     await page.route("**/api/git/tour/status?*", async (route) => {
@@ -149,8 +145,7 @@ test("git graph links to the builder and exposes the tour on return", async ({ p
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/c/${slug}`);
     await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
-    await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
-    await page.locator(".overflow-menu-item", { hasText: /git graph/i }).click();
+    await openWorkspaceTool(page, "Git Graph");
     const graph = page.locator(".git-graph-container");
     const actions = graph.locator(".git-graph-detail-actions");
     await expect(actions.getByRole("link", { name: "Open diff" })).toBeVisible();
@@ -188,11 +183,12 @@ test("git graph links to the builder and exposes the tour on return", async ({ p
     await expect(page.locator(".diff-viewer-container:not(.git-graph-container)")).toHaveCount(0);
     await page.goto(`/c/${slug}`);
     await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30_000 });
-    await page.locator(".chat-overflow-menu-wrapper .btn-icon").click();
-    await page.locator(".overflow-menu-item", { hasText: /git graph/i }).click();
+    await openWorkspaceTool(page, "Git Graph");
     const returnedGraph = page.locator(".git-graph-container");
     await expect(returnedGraph.getByRole("link", { name: "Open tour" })).toBeVisible();
-    await expect(returnedGraph.locator(".git-graph-row-selected").getByTestId("git-graph-tour-link")).toBeVisible();
+    await expect(
+      returnedGraph.locator(".git-graph-row-selected").getByTestId("git-graph-tour-link"),
+    ).toBeVisible();
     await returnedGraph.getByRole("link", { name: "Open tour" }).click();
     await expect(page.locator(".commit-tour-introduction h1")).toHaveText("Graph tour");
   });

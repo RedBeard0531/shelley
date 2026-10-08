@@ -1,10 +1,25 @@
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { hermeticGitEnvironment } from "../scripts/git-test-env";
+
+export async function openWorkspaceTool(page: Page, name: string): Promise<void> {
+  const toolbar = page.locator(".chat-workspace-actions");
+  await expect(toolbar).toBeVisible();
+  const button = toolbar.getByRole("button", { name, exact: true });
+  if (await button.isVisible()) {
+    await button.click();
+    return;
+  }
+  await page.getByRole("button", { name: "More options", exact: true }).click();
+  await page
+    .locator(".chat-overflow-popover")
+    .getByRole("button", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) })
+    .click();
+}
 
 export function git(cwd: string, ...args: string[]): string {
   return execFileSync(
@@ -286,4 +301,24 @@ export async function installTranscriptionAvailability(page: Page, available: bo
       },
     });
   }, available);
+}
+
+// Keep link ordering deliberate: the VM link is not the first configured link.
+export async function installServerLinks(page: Page, includeVM = true) {
+  const links = [
+    { title: "Manage on exe.dev", url: "https://exe.example/vm/vm" },
+    ...(includeVM ? [{ title: "vm.example", url: "https://vm.example/website" }] : []),
+    { title: "Documentation", url: "https://docs.example/documentation" },
+  ];
+  await page.addInitScript((serverLinks) => {
+    let init: Record<string, unknown> | undefined;
+    Object.defineProperty(window, "__SHELLEY_INIT__", {
+      configurable: true,
+      get: () => init,
+      set: (value) => {
+        init = { ...value, hostname: "vm.example", links: serverLinks };
+      },
+    });
+  }, links);
+  return links;
 }

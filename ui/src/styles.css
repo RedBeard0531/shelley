@@ -508,7 +508,7 @@ body {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--header-left-gap, 0.75rem);
   min-width: 0; /* Allow shrinking below content size */
   flex: 1 1 auto;
   overflow: hidden;
@@ -524,8 +524,46 @@ body {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--header-actions-gap, 0.5rem);
   flex-shrink: 0; /* Never shrink the actions */
+}
+
+.chat-workspace-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--workspace-actions-gap, 0.25rem);
+}
+
+.chat-workspace-divider {
+  height: 1.5rem;
+  border-left: 1px solid var(--border);
+  margin: 0 var(--workspace-actions-gap, 0.25rem);
+}
+
+.header .btn-icon {
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+}
+
+/* Keep all phone header controls touch-sized, without sacrificing the title. */
+@media (max-width: 767px) {
+  .header .btn-icon,
+  .header .btn-new {
+    width: var(--header-action-size, 2.25rem);
+    height: var(--header-action-size, 2.25rem);
+  }
+}
+
+/* Small phones still keep a readable conversation title beside the tools. */
+@media (max-width: 359px) {
+  .header {
+    --header-action-size: 2rem;
+    --workspace-actions-gap: 0.125rem;
+  }
+  .header > .header-actions {
+    --header-actions-gap: 0.125rem;
+  }
 }
 
 /* Top-of-page banner. A full-width bar pinned to the very top of the
@@ -6563,6 +6601,8 @@ svg {
 /* Mobile optimizations for tighter spacing */
 @media (max-width: 767px) {
   .header {
+    --header-left-gap: 0.375rem;
+    --header-actions-gap: 0.25rem;
     padding: 0.375rem 0.75rem;
     padding-top: calc(0.375rem + env(safe-area-inset-top, 0px));
   }
@@ -15399,6 +15439,7 @@ kbd {
    inline top/left), so we only theme it; we must NOT set position/top/right
    like the legacy .overflow-menu does. */
 .chat-overflow-popover.p-popover {
+  margin-block: 0;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
@@ -15406,17 +15447,17 @@ kbd {
     0 4px 6px -1px rgba(0, 0, 0, 0.1),
     0 2px 4px -1px rgba(0, 0, 0, 0.06);
   min-width: 16rem;
+  max-width: calc(100vw - 1rem);
 }
 
-/* PrimeVue draws a little arrow via :before/:after; we don't want it for a
-   menu, so hide it and remove the default content padding (our items own it). */
+/* The menu needs neither PrimeVue's arrow nor its gutter. Its rows own padding. */
 .chat-overflow-popover.p-popover:before,
 .chat-overflow-popover.p-popover:after {
   display: none;
 }
 .chat-overflow-popover .overflow-menu-panel {
   padding: 0.25rem 0;
-  max-height: calc(100vh - 1rem);
+  max-height: calc(100dvh - 2rem);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -15461,6 +15502,7 @@ kbd {
   flex-shrink: 0;
 }
 /* SVG-path icons (custom server links) keep their box sizing. */
+.chat-workspace-action > svg,
 .overflow-menu-panel svg.chat-menu-icon {
   width: 1.25rem;
   height: 1.25rem;
