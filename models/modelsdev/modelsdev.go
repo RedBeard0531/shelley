@@ -583,8 +583,8 @@ func lookupExactInProvider(p providerEntry, modelName string) (modelEntry, bool)
 }
 
 func lookupTailInProvider(p providerEntry, modelName string) (modelEntry, bool) {
-	// Match the final path segment on both sides (e.g. "glm-5p2" or
-	// "fireworks/glm-5p2" -> "accounts/fireworks/models/glm-5p2").
+	// Match the final path segment on both sides (e.g. "glm-5p3" or
+	// "fireworks/glm-5p3" -> "accounts/fireworks/models/glm-5p3").
 	// Refuse ambiguous matches instead of depending on map iteration order.
 	tail := modelName
 	if i := strings.LastIndex(modelName, "/"); i >= 0 && i+1 < len(modelName) {
