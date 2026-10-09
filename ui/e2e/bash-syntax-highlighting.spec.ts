@@ -5,7 +5,13 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   page,
   request,
 }) => {
-  const command = 'value=$(printf bash-output-plain); echo "outer $(printf inner) tail"';
+  // Starts with the `:` builtin so the folded summary shows the whole command
+  // (leading cd/env/export prefixes get elided in the folded card — see
+  // server/bashformat.go) while still exercising top-level subshell and
+  // semicolon tokenization. The `:` line prints nothing, keeping the output
+  // identical.
+  const command = ': $(printf bash-output-plain); echo "outer $(printf inner) tail"';
+
   const slug = await createConversationViaAPI(request, `bash: ${command}`);
   await page.goto(`/c/${slug}`);
   await page.waitForLoadState("domcontentloaded");
@@ -52,7 +58,8 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   // back to the raw command.
   const toggle = details.locator(".bash-tool-formatted-toggle input");
   await expect(toggle).toBeChecked();
-  const formattedCommand = 'value=$(printf bash-output-plain)\necho "outer $(printf inner) tail"';
+  const formattedCommand = ': $(printf bash-output-plain)\necho "outer $(printf inner) tail"';
+
   const expandedCommand = details
     .locator(".bash-tool-code")
     .filter({ hasText: formattedCommand })
