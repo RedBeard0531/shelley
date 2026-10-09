@@ -7,13 +7,15 @@
     <div class="bash-tool-header" @click="isExpanded = !isExpanded">
       <div class="bash-tool-summary">
         <span class="bash-tool-emoji" :class="{ running: isRunning }">🛠️</span>
-        <HighlightedCode
-          v-if="command"
-          class="bash-tool-command"
-          :source="summarySource"
-          language="shellscript"
-          :title="command"
-        />
+        <template v-if="command">
+          <span v-if="prefixElided" class="bash-tool-summary-ellipsis">...</span>
+          <HighlightedCode
+            class="bash-tool-command"
+            :source="summarySource"
+            language="shellscript"
+            :title="command"
+          />
+        </template>
         <span v-else class="bash-tool-command">Output</span>
         <span v-if="summaryTruncated" class="bash-tool-summary-ellipsis">...</span>
         <span
@@ -106,6 +108,7 @@ import AnsiText from "./AnsiText.vue";
 import ToolChevron from "./ToolChevron.vue";
 import RunningToolTime from "./RunningToolTime.vue";
 import { isCancelledToolResult } from "../../utils/toolStatus";
+
 import { backgroundOutput, type BackgroundJobDisplay } from "../../../utils/backgroundOutput";
 
 interface BashDisplayData {
@@ -229,19 +232,20 @@ const outputLabel = computed(() => {
 // If you change it, foldMaxBytes in server/bashformat.go (which truncates
 // the server-sent folded form further out) must change with it.
 const SUMMARY_MAX_LEN = 300;
-// The folded view prefers the server's folded form (the whole command
-// compacted to one line); raw otherwise.
+// The folded view prefers the server's elided remainder (the command with
+// uninteresting cd/env/export prefixes stripped AST-side — see
+// server/bashformat.go), then the server's folded form, then raw.
+const elidedCommand = computed(() => stringField("elidedCommand"));
 const foldSource = computed(() => foldedCommand.value || command.value);
+const prefixElided = computed(() => !!elidedCommand.value);
+
+const baseFold = computed(() => elidedCommand.value || foldSource.value);
 const summarySource = computed(() =>
-  foldSource.value.length <= SUMMARY_MAX_LEN
-    ? foldSource.value
-    : foldSource.value.substring(0, SUMMARY_MAX_LEN),
+  baseFold.value.length <= SUMMARY_MAX_LEN
+    ? baseFold.value
+    : baseFold.value.substring(0, SUMMARY_MAX_LEN),
 );
-const summaryTruncated = computed(
-  () =>
-    command.value.length > SUMMARY_MAX_LEN ||
-    (foldedCommand.value !== "" && foldedCommand.value.length > SUMMARY_MAX_LEN),
-);
+const summaryTruncated = computed(() => baseFold.value.length > SUMMARY_MAX_LEN);
 
 // Expanded view: raw command by default when no formatted form was sent;
 // otherwise the formatted form, toggleable via the checkbox.
