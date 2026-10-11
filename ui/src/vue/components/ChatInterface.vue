@@ -739,7 +739,7 @@ const props = withDefaults(
     diskSpaceStatus?: DiskSpaceStatus | null;
     onDiskSpaceStatus?: (status: DiskSpaceStatus) => void;
     onOpenDrawer: () => void;
-    onNewConversation: () => void;
+    onNewConversation: () => Promise<boolean>;
     onSelectConversation?: (conversation: Conversation) => void;
     onArchiveConversation?: (conversationId: string) => Promise<void>;
     currentConversation?: Conversation;
@@ -3589,7 +3589,8 @@ async function sendMessage(message: string) {
     trimmedMessage.startsWith(`${SLASH_COMMANDS.NEW.command} `)
   ) {
     const prompt = trimmedMessage.slice(SLASH_COMMANDS.NEW.command.length).trim();
-    props.onNewConversation();
+    if (!(await props.onNewConversation())) throw new Error("Failed to start new conversation");
+    await nextTick();
     if (!prompt || !props.onFirstMessage) return;
     try {
       sending.value = true;

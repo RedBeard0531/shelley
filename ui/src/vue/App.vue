@@ -25,6 +25,12 @@
   </div>
 
   <template v-else>
+    <div v-if="error" class="error-banner" role="alert">
+      <div class="error-banner-content">
+        <span class="error-message">{{ error }}</span>
+        <Button label="Dismiss" text @click="error = null" />
+      </div>
+    </div>
     <div v-if="banner" class="top-banner" :title="banner">{{ banner }}</div>
     <div class="app-container">
       <ConversationDrawer
@@ -514,11 +520,12 @@ const currentConversation = computed<ConversationWithState | undefined>(() => {
   return undefined;
 });
 
-const mostRecentCwd = computed(
-  () =>
-    currentConversation.value?.cwd ||
-    (topLevelConversations.value.length > 0 ? topLevelConversations.value[0].cwd : null),
-);
+const mostRecentCwd = computed(() => {
+  const conversation = currentConversation.value?.cwd
+    ? currentConversation.value
+    : topLevelConversations.value[0];
+  return conversation?.git_worktree_root || conversation?.cwd;
+});
 
 const commandPaletteHasCwd = computed(
   () =>
@@ -675,14 +682,34 @@ async function loadConversations() {
 }
 
 // ---- conversation actions ----
-function startNewConversation() {
-  if (currentConversation.value?.cwd) {
-    localStorage.setItem("shelley_selected_cwd", currentConversation.value.cwd);
+async function startNewConversation(): Promise<boolean> {
+  error.value = null;
+  const conversation = currentConversation.value;
+  let cwd = conversation?.git_worktree_root || conversation?.cwd;
+  // Conversations opened outside the list (e.g. archived ones) have no git metadata.
+  if (
+    cwd &&
+    !conversations.value.some((c) => c.conversation_id === conversation?.conversation_id)
+  ) {
+    try {
+      const directory = await api.listDirectory(cwd);
+      if (currentConversationId.value !== conversation?.conversation_id) return false;
+      if (directory.error) throw new Error(directory.error);
+      cwd = directory.git_worktree_root || cwd;
+    } catch (err) {
+      if (currentConversationId.value !== conversation?.conversation_id) return false;
+      error.value = err instanceof Error ? err.message : "Failed to resolve working directory";
+      return false;
+    }
+  }
+  if (cwd) {
+    localStorage.setItem("shelley_selected_cwd", cwd);
   }
   currentConversationId.value = null;
   viewedConversation.value = null;
   window.history.replaceState({}, "", "/new");
   drawerOpen.value = false;
+  return true;
 }
 
 function startNewConversationWithCwd(cwd: string) {
