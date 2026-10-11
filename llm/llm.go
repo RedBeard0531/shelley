@@ -466,32 +466,6 @@ func StringContent(s string) Content {
 	return Content{Type: ContentTypeText, Text: s}
 }
 
-// ContentsAttr returns contents as a slog.Attr.
-// It is meant for logging.
-func ContentsAttr(contents []Content) slog.Attr {
-	var contentAttrs []any // slog.Attr
-	for _, content := range contents {
-		var attrs []any // slog.Attr
-		switch content.Type {
-		case ContentTypeText:
-			attrs = append(attrs, slog.String("text", content.Text))
-		case ContentTypeToolUse:
-			attrs = append(attrs, slog.String("tool_name", content.ToolName))
-			attrs = append(attrs, slog.String("tool_input", string(content.ToolInput)))
-		case ContentTypeToolResult:
-			attrs = append(attrs, slog.Any("tool_result", content.ToolResult))
-			attrs = append(attrs, slog.Bool("tool_error", content.ToolError))
-		case ContentTypeThinking:
-			attrs = append(attrs, slog.String("thinking", content.Thinking))
-		default:
-			attrs = append(attrs, slog.String("unknown_content_type", content.Type.String()))
-			attrs = append(attrs, slog.Any("text", content)) // just log it all raw, better to have too much than not enough
-		}
-		contentAttrs = append(contentAttrs, slog.Group(content.ID, attrs...))
-	}
-	return slog.Group("contents", contentAttrs...)
-}
-
 type (
 	MessageRole    int
 	ContentType    int

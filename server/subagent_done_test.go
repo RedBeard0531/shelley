@@ -1,13 +1,11 @@
 package server
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"shelley.exe.dev/db"
-	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/predictable"
 )
@@ -17,7 +15,6 @@ import (
 // getOrCreateConversationManager. It records a final assistant text
 // message into the subagent's DB as the subagent's latest response.
 type subagentDoneFixture struct {
-	t        *testing.T
 	server   *Server
 	database *db.DB
 	llmSvc   *predictable.Service
@@ -72,7 +69,6 @@ func newSubagentDoneFixture(t *testing.T, subResponse string) *subagentDoneFixtu
 	}
 
 	return &subagentDoneFixture{
-		t:           t,
 		server:      server,
 		database:    database,
 		llmSvc:      ps,
@@ -83,22 +79,6 @@ func newSubagentDoneFixture(t *testing.T, subResponse string) *subagentDoneFixtu
 		subSlug:     slug,
 		subResponse: subResponse,
 	}
-}
-
-// parentMessages returns the list of persisted messages for the parent in DB
-// order (ascending sequence id).
-func (f *subagentDoneFixture) parentMessages() []generated.Message {
-	f.t.Helper()
-	var msgs []generated.Message
-	err := f.database.Queries(context.Background(), func(q *generated.Queries) error {
-		var qerr error
-		msgs, qerr = q.ListMessages(context.Background(), f.parentID)
-		return qerr
-	})
-	if err != nil {
-		f.t.Fatalf("list parent messages: %v", err)
-	}
-	return msgs
 }
 
 // Ending a turn does not wake the parent, whether the parent delegated the

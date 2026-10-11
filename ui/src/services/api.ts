@@ -161,14 +161,6 @@ class ApiService {
     "Content-Type": "application/json",
   };
 
-  async getConversations(): Promise<ConversationWithState[]> {
-    const response = await fetch(`${this.baseUrl}/conversations`);
-    if (!response.ok) {
-      throw await responseError(response, "Failed to get conversations");
-    }
-    return response.json();
-  }
-
   async getConversationsSnapshot(): Promise<{
     conversations: ConversationWithState[];
     hash: string;
@@ -764,16 +756,6 @@ class ApiService {
     return `${this.baseUrl}/git/tour/media?${new URLSearchParams({ cwd, blob })}`;
   }
 
-  async hasGitTour(cwd: string, hash: string): Promise<boolean> {
-    const params = new URLSearchParams({ cwd, hash });
-    const response = await fetch(`${this.baseUrl}/git/tour?${params}`, { method: "HEAD" });
-    if (response.status === 404) return false;
-    if (!response.ok) {
-      throw await responseError(response, "Failed to check commit tour");
-    }
-    return true;
-  }
-
   async getGitTour(cwd: string, hash: string): Promise<GitTourResponse> {
     const params = new URLSearchParams({ cwd, hash });
     const response = await fetch(`${this.baseUrl}/git/tour?${params}`);
@@ -1020,14 +1002,6 @@ class ApiService {
     if (!response.ok) {
       throw await responseError(response, "Failed to kill background job");
     }
-  }
-
-  async getSubagents(conversationId: string): Promise<Conversation[]> {
-    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/subagents`);
-    if (!response.ok) {
-      throw await responseError(response, "Failed to get subagents");
-    }
-    return response.json();
   }
 
   // Version check APIs

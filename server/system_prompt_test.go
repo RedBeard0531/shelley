@@ -918,7 +918,7 @@ func TestRunEndOfTurnHookNoHook(t *testing.T) {
 func TestRunEndOfTurnHookReceivesJSON(t *testing.T) {
 	// Use an explicit per-test hooks dir rather than t.Setenv("HOME"):
 	// $HOME is process-wide and other tests in this package fire the
-	// end-of-turn hook in background goroutines (via RunEndOfTurnHook
+	// end-of-turn hook in background goroutines (via RunEndOfTurnHookIn
 	// at end-of-turn in predictable-model conversations). Those would
 	// race with this test's hook script and clobber dumpFile.
 	hooksDir := t.TempDir()

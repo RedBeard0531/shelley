@@ -103,7 +103,6 @@ type Loop struct {
 	messageQueue     []llm.Message
 	totalUsage       llm.Usage
 	mu               sync.Mutex
-	toolResultMu     sync.Mutex
 	logger           *slog.Logger
 	system           []llm.SystemContent
 	workingDir       string

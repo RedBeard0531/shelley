@@ -513,13 +513,6 @@ type EndOfTurnHookInput struct {
 	FinalResponse   string `json:"final_response,omitempty"`
 }
 
-// RunEndOfTurnHook fires the end-of-turn hook from the default user
-// hooks directory ($HOME/.config/shelley/hooks). See RunEndOfTurnHookIn
-// for the dir-explicit variant used by tests.
-func RunEndOfTurnHook(input EndOfTurnHookInput) error {
-	return RunEndOfTurnHookIn(defaultHooksDir(), input)
-}
-
 // RunEndOfTurnHookIn runs the end-of-turn hook from an explicit hooks
 // directory. It runs the hook with the event JSON on stdin and ignores
 // stdout. A non-nil error means the hook failed (non-zero exit, etc.);
@@ -574,12 +567,6 @@ type ChatMessageReadonly struct {
 	ReasoningLevel string      `json:"reasoning_level"`
 	Queued         bool        `json:"queued"`
 	Headers        [][2]string `json:"headers,omitempty"`
-}
-
-// RunChatMessageHook runs the chat-message hook from the default user hooks
-// directory. See RunChatMessageHookIn for the dir-explicit variant.
-func RunChatMessageHook(input ChatMessageHookInput) (string, error) {
-	return RunChatMessageHookIn(defaultHooksDir(), input)
 }
 
 // RunChatMessageHookIn runs the chat-message hook from an explicit hooks dir.

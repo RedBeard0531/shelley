@@ -20,7 +20,6 @@ import (
 type flusherRecorder struct {
 	*httptest.ResponseRecorder
 	mu      sync.Mutex
-	chunks  []string
 	flushed chan struct{}
 }
 
@@ -39,23 +38,10 @@ func (f *flusherRecorder) Write(p []byte) (int, error) {
 }
 
 func (f *flusherRecorder) Flush() {
-	f.mu.Lock()
-	body := f.Body.String()
-	f.chunks = append(f.chunks, body)
-	f.mu.Unlock()
-
 	select {
 	case f.flushed <- struct{}{}:
 	default:
 	}
-}
-
-func (f *flusherRecorder) getChunks() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	result := make([]string, len(f.chunks))
-	copy(result, f.chunks)
-	return result
 }
 
 // getString returns the current body contents in a thread-safe manner

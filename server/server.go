@@ -1760,12 +1760,6 @@ func (s *Server) Start(port string) error {
 	return s.StartWithListeners(listener, "")
 }
 
-// StartWithListener starts the HTTP server using the provided listener.
-// This is useful for systemd socket activation where the listener is created externally.
-func (s *Server) StartWithListener(listener net.Listener) error {
-	return s.StartWithListeners(listener, "")
-}
-
 // tcpHandler wraps mux in the TCP listener's full middleware (applied in
 // reverse order: last added = first executed).
 func (s *Server) tcpHandler(mux http.Handler) http.Handler {
