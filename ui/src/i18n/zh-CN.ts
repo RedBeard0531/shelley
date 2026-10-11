@@ -406,6 +406,8 @@ export const zhCN: TranslationKeys = {
   welcomeOpenSource: "开源",
   welcomeCustomize: "可以定制",
   sendMessageToStart: "发送消息以开始对话。",
+  sendOrTalkToStart: "发送消息，或点按上方的通话按钮开始语音对话。",
+  startVoiceConversation: "开始语音对话",
   noModelsTitle: "没有可用的 AI 模型",
   noModelsExeNote: "Shelley 从 exe.dev 的 llm 集成获取模型。运行以下任一命令即可修复：",
   noModelsLocalNote: "按 Ctrl+K 或 ⌘+K 添加模型。",

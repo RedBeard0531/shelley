@@ -429,3 +429,39 @@ func TestQueuedMessageFollowsModelSwitch(t *testing.T) {
 		t.Fatal("queued message not sent")
 	}
 }
+
+// A profile's voice prompt is the profile's own, not a setting: a PUT
+// without it, like the model picker's, keeps it, and conversations never
+// copy it.
+func TestProfileVoicePrompt(t *testing.T) {
+	t.Parallel()
+	e := newProfileEnv(t)
+	created := e.want(201, "POST", "/api/profiles", `{"name":"Tutor","model":"model-b","voice_prompt":"  You are Jules. Speak French.\n"}`)
+	if !strings.Contains(created, `"voice_prompt":"You are Jules. Speak French."`) {
+		t.Fatalf("created: %s", created)
+	}
+	e.want(200, "PUT", "/api/profiles/Tutor", `{"model":"model-a","thinking_level":"low"}`)
+	if got := e.profiles()["Tutor"]; got.VoicePrompt != "You are Jules. Speak French." || got.Model != "model-a" {
+		t.Fatalf("a settings-only PUT changed the voice prompt: %+v", got)
+	}
+	e.want(200, "PUT", "/api/profiles/Tutor", `{"model":"model-a","voice_prompt":"VOICE-PROMPT-SENTINEL"}`)
+	e.want(400, "PUT", "/api/profiles/Tutor", `{"model":"model-a","voice_prompt":"`+strings.Repeat("x", 4001)+`"}`)
+	if got := e.profiles()["Tutor"]; got.VoicePrompt != "VOICE-PROMPT-SENTINEL" || got.ThinkingLevel != "" {
+		t.Fatalf("replaced: %+v", got)
+	}
+
+	var conv struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.Unmarshal([]byte(e.want(201, "POST", "/api/conversations/new", `{"message":"hello","cwd":"`+t.TempDir()+`","conversation_options":{"profile":"Tutor"}}`)), &conv); err != nil {
+		t.Fatal(err)
+	}
+	e.waitTurn(conv.ConversationID, 0)
+	stored, err := e.database.GetConversationByID(t.Context(), conv.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored.ConversationOptions, "VOICE-PROMPT") || db.ParseConversationOptions(stored.ConversationOptions).Profile != "Tutor" {
+		t.Fatalf("a conversation copied the voice prompt: %s", stored.ConversationOptions)
+	}
+}

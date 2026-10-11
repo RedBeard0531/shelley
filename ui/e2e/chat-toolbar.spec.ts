@@ -69,17 +69,24 @@ for (const viewport of [
       const divider = toolbar.locator(".chat-workspace-divider");
       const vm = header.getByRole("link", { name: "vm.example", exact: true });
       const newConversation = header.getByRole("button", { name: "New Conversation", exact: true });
+      const call = header.getByTestId("live-call-header");
       const more = header.getByRole("button", { name: "More options", exact: true });
+      await expect(call).toBeEnabled();
+      // Calling is a secondary action, not another filled primary button.
+      await expect(call).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 
       await expect(toolbar.getByRole("button", { includeHidden: true })).toHaveCount(3);
       await expect(divider).toHaveCount(1);
-      await expect(divider).toBeVisible();
+      if (mobile) await expect(divider).toBeHidden();
+      else await expect(divider).toBeVisible();
       await expect(header.getByRole("link", { includeHidden: true })).toHaveCount(1);
       for (const name of ["Command menu", "Edit File…", "MCP Servers"]) {
         await expect(header.getByRole("button", { name, exact: true })).toHaveCount(0);
       }
-      for (const button of [diffs, gitGraph, terminal]) {
-        await expect(button).toHaveAttribute("title", /.+\(.+\)/);
+      if (!mobile) {
+        for (const button of [diffs, gitGraph, terminal]) {
+          await expect(button).toHaveAttribute("title", /.+\(.+\)/);
+        }
       }
       await expect(vm).toHaveAttribute("href", links[1].url);
       await expect(vm).toHaveAttribute("target", "_blank");
@@ -89,20 +96,30 @@ for (const viewport of [
 
       // Long titles truncate; controls remain ordered, non-overlapping, and tappable.
       const titleBounds = await header.locator(".header-title").boundingBox();
-      expect(titleBounds!.width).toBeGreaterThanOrEqual(32);
+      expect(titleBounds!.width).toBeGreaterThanOrEqual(mobile ? 96 : 32);
+      if (mobile) {
+        for (const button of [diffs, gitGraph, terminal, newConversation]) {
+          await expect(button).toBeHidden();
+        }
+        await expect(call).toHaveAttribute("aria-label", "Start voice conversation");
+      }
       let previousRight = 0;
-      for (const control of [diffs, gitGraph, terminal, vm, newConversation, more]) {
+      for (const control of mobile
+        ? [vm, call, more]
+        : [diffs, gitGraph, terminal, vm, call, newConversation, more]) {
         await expect(control).toBeInViewport();
         const bounds = (await control.boundingBox())!;
         expect(bounds.x).toBeGreaterThanOrEqual(previousRight);
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
         previousRight = bounds.x + bounds.width;
       }
-      const terminalBounds = (await terminal.boundingBox())!;
-      const dividerBounds = (await divider.boundingBox())!;
       const vmBounds = (await vm.boundingBox())!;
-      expect(dividerBounds.x).toBeGreaterThanOrEqual(terminalBounds.x + terminalBounds.width);
-      expect(dividerBounds.x + dividerBounds.width).toBeLessThanOrEqual(vmBounds.x);
+      if (!mobile) {
+        const terminalBounds = (await terminal.boundingBox())!;
+        const dividerBounds = (await divider.boundingBox())!;
+        expect(dividerBounds.x).toBeGreaterThanOrEqual(terminalBounds.x + terminalBounds.width);
+        expect(dividerBounds.x + dividerBounds.width).toBeLessThanOrEqual(vmBounds.x);
+      }
       for (const control of await header.locator("button:visible, a:visible").all()) {
         const bounds = (await control.boundingBox())!;
         expect(bounds.x).toBeGreaterThanOrEqual(0);
@@ -128,8 +145,13 @@ for (const viewport of [
       for (const name of ["Command menu", "Edit File…", "MCP Servers"]) {
         await expect(menu.getByRole("button", { name: new RegExp(`^${name}`) })).toBeVisible();
       }
-      for (const name of ["Diffs", "Git Graph", "Terminal", "vm.example"]) {
+      for (const name of mobile ? ["vm.example"] : ["Diffs", "Git Graph", "Terminal", "vm.example", "New Conversation"]) {
         await expect(menu.getByRole("button", { name: new RegExp(`^${name}`) })).toHaveCount(0);
+      }
+      if (mobile) {
+        for (const name of ["New Conversation", "Diffs", "Git Graph", "Terminal"]) {
+          await expect(menu.getByRole("button", { name, exact: true })).toBeVisible();
+        }
       }
       for (const name of ["Command menu", "Edit File…", "Archive Conversation"]) {
         const shortcut = menu
@@ -225,12 +247,19 @@ for (const viewport of [
       await editor.getByRole("button", { name: "Close (Esc)", exact: true }).click();
       await expect(editor).toBeHidden();
 
-      await newConversation.click();
+      if (mobile) {
+        await more.click();
+        await menu.getByRole("button", { name: "New Conversation", exact: true }).click();
+      } else {
+        await newConversation.click();
+      }
       await expect(page).toHaveURL(/\/new$/);
       await expect(page.getByTestId("message-input")).toBeVisible();
-      await expect(diffs).toBeVisible();
-      await expect(gitGraph).toBeVisible();
-      await expect(terminal).toBeVisible();
+      if (!mobile) {
+        await expect(diffs).toBeVisible();
+        await expect(gitGraph).toBeVisible();
+        await expect(terminal).toBeVisible();
+      }
       await expect(vm).toBeVisible();
     });
   });
@@ -243,7 +272,10 @@ for (const viewport of [
     await installLinkRoutes(page);
     await page.goto("/new");
     const header = page.locator(".header");
-    await expect(header.locator(".chat-workspace-actions").getByRole("button")).toHaveCount(3);
+    const workspace = header.locator(".chat-workspace-actions");
+    await expect(workspace.getByRole("button", { includeHidden: true })).toHaveCount(3);
+    await expect(workspace.getByRole("button")).toHaveCount(viewport.width < 768 ? 0 : 3);
+    await expect(header.getByTestId("live-call-header")).toBeVisible();
     await expect(header.getByRole("link", { includeHidden: true })).toHaveCount(0);
     for (const link of links) {
       await header.getByRole("button", { name: "More options", exact: true }).click();
@@ -264,7 +296,8 @@ for (const viewport of [
   });
 }
 
-test("Git Graph is a direct toolbar action", async ({ page }) => {
+test("Git Graph remains a direct desktop toolbar action", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/new");
   const graph = page.locator(".chat-workspace-actions").getByRole("button", {
     name: "Git Graph",

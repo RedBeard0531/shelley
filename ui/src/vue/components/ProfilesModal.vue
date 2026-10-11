@@ -1,7 +1,7 @@
 <!-- Profiles: named settings a conversation starts from or switches to. The
      list says what each sets and switches to one, makes one the default, or
      deletes one; the editor sets everything a profile holds: model and
-     reasoning, tools, and system prompt. Saving the settings in effect into
+     reasoning, tools, system prompt, and the voice prompt calls use. Saving the settings in effect into
      a profile happens in the model picker, where they're changed. -->
 <template>
   <Modal :is-open="isOpen" :title="title" class-name="modal-wide" @close="emit('close')">
@@ -49,6 +49,30 @@
           v-model="draft.settings.system_prompt"
           @problem="promptProblem = $event"
         />
+      </section>
+      <section class="profiles-section">
+        <label class="advanced-settings-header" for="profiles-voice">Voice prompt</label>
+        <p class="profiles-hint">
+          Who voice calls speak as, and how. Each call reads it as saved; empty for no persona.
+        </p>
+        <textarea
+          id="profiles-voice"
+          v-model="draft.voicePrompt"
+          class="profiles-voice"
+          rows="5"
+          :maxlength="VOICE_PROMPT_MAX"
+          :disabled="generating"
+        />
+        <div class="profiles-voice-actions">
+          <Button
+            size="small"
+            severity="secondary"
+            label="Generate from system prompt"
+            :loading="generating"
+            :disabled="!!promptProblem"
+            @click="generateVoice"
+          />
+        </div>
       </section>
     </div>
 
@@ -153,7 +177,10 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
-type Draft = { isNew: boolean; name: string; settings: Settings };
+type Draft = { isNew: boolean; name: string; settings: Settings; voicePrompt: string };
+
+// The server's limit, in characters.
+const VOICE_PROMPT_MAX = 4000;
 
 const { profiles, reloadProfiles } = useProfiles();
 const pendingDelete = ref<string | null>(null);
@@ -161,6 +188,7 @@ const error = ref("");
 const busy = ref(false);
 const draft = ref<Draft | null>(null);
 const promptProblem = ref<TemplateProblem | null>(null);
+const generating = ref(false);
 
 const defaultModel = serverDefaultModel();
 const labels = computed(() => prettyModelLabels(props.models));
@@ -168,7 +196,11 @@ const title = computed(() =>
   !draft.value ? "Profiles" : draft.value.isNew ? "New profile" : `Profile: ${draft.value.name}`,
 );
 const canSave = computed(
-  () => !!draft.value && !promptProblem.value && (!draft.value.isNew || !!draft.value.name.trim()),
+  () =>
+    !!draft.value &&
+    !promptProblem.value &&
+    !generating.value &&
+    (!draft.value.isNew || !!draft.value.name.trim()),
 );
 
 watch(
@@ -232,6 +264,7 @@ function edit(p: Profile | null) {
     isNew: !p,
     name: p?.name ?? "",
     settings: { ...settings, tool_overrides: { ...settings.tool_overrides } },
+    voicePrompt: p?.voice_prompt ?? "",
   };
 }
 
@@ -260,11 +293,33 @@ function setThinking(level: ThinkingLevel) {
   draft.value!.settings.thinking_level = level === "default" ? "" : level;
 }
 
+// Fills the editor with a voice prompt written from the draft's model and
+// system prompt; it's saved, or not, with the rest.
+async function generateVoice() {
+  const d = draft.value!;
+  error.value = "";
+  generating.value = true;
+  try {
+    const voicePrompt = await profilesApi.generateVoicePrompt(
+      d.settings.model,
+      d.settings.system_prompt,
+    );
+    if (draft.value === d) d.voicePrompt = voicePrompt;
+  } catch (err) {
+    if (draft.value === d) error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    generating.value = false;
+  }
+}
+
 async function save() {
   const d = draft.value!;
   const name = d.name.trim();
+  const voicePrompt = d.voicePrompt.trim();
   const saved = await run(() =>
-    d.isNew ? profilesApi.create(name, d.settings) : profilesApi.update(name, d.settings),
+    d.isNew
+      ? profilesApi.create(name, d.settings, voicePrompt)
+      : profilesApi.update(name, d.settings, voicePrompt),
   );
   if (!saved) return;
   // Unless another edit has begun meanwhile.

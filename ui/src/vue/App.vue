@@ -58,6 +58,7 @@
           :on-select-conversation="selectConversation"
           :on-archive-conversation="archiveFromChat"
           :current-conversation="currentConversation"
+          :conversations="conversations"
           :on-conversation-update="updateConversation"
           :on-message-sent="handleMessageSent"
           :on-first-message="handleFirstMessage"

@@ -73,9 +73,27 @@
           @edit-file="props.onOpenFileFinder?.()"
           @open-mcp-servers="props.onOpenMcpServersModal?.()"
           @check-version="openVersionModal"
+          @new-conversation="onNewConversationClick"
         >
           <button
-            class="btn-new"
+            type="button"
+            class="btn-icon live-call-trigger"
+            :class="{ 'is-active': voicePhase !== 'idle' }"
+            :disabled="
+              voicePhase === 'idle' &&
+              (!!currentConversation?.archived || !canSendWithModel(selectedModel, readyModelIds))
+            "
+            :aria-label="headerCallLabel"
+            :title="headerCallLabel"
+            data-testid="live-call-header"
+            @click="onHeaderCallClick"
+          >
+            <svg fill="currentColor" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path :transform="voicePhase !== 'idle' ? 'rotate(135 12 12)' : undefined" d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.61 21 3 13.39 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1.02l-2.2 2.2Z" />
+            </svg>
+          </button>
+          <button
+            class="btn-new hide-on-mobile"
             :aria-label="t('newConversation')"
             @click="onNewConversationClick"
           >
@@ -152,7 +170,9 @@
                 </ul>
                 <p v-if="modelSetupHint.footer">{{ t(modelSetupHint.footer) }}</p>
               </PvMessage>
-              <p v-else class="text-sm chat-secondary-text">{{ t("sendMessageToStart") }}</p>
+              <p v-else-if="voicePhase === 'idle'" class="text-sm chat-secondary-text">
+                {{ t(canSendWithModel(selectedModel, readyModelIds) ? "sendOrTalkToStart" : "sendMessageToStart") }}
+              </p>
             </div>
           </div>
           <!-- generations -->
@@ -366,8 +386,10 @@
          switches is handled by MessageInput's draftSeed watch. -->
     <MessageInput
       ref="messageInputRef"
-      v-show="!currentConversation?.archived"
+      v-show="!currentConversation?.archived || voicePhase !== 'idle'"
+      :composer-hidden="!!currentConversation?.archived"
       :on-send="sendMessage"
+      :voice-active="voicePhase !== 'idle'"
       :on-start-recording="prepareRecording"
       :recording-inline-available="!currentConversation?.archived"
       :on-queue="queueMessage"
@@ -402,6 +424,17 @@
       @recording-unavailable="error = t('recordingUnavailable')"
       @open-terminal="openInAppTerminal"
     >
+      <template #call>
+        <LiveVoice
+          ref="liveVoiceRef"
+          :conversation-id="conversationId"
+          :disabled="!!currentConversation?.archived"
+          :capture-conversation="captureLiveConversation"
+          :get-conversation="getLiveConversation"
+          :on-return="onSelectConversation"
+          @phase-change="voicePhase = $event"
+        />
+      </template>
       <template v-if="statusSlotInline" #status>
         <ChatStatusContent v-bind="statusContentProps" />
         <span :id="`${tocTargetId}-mobile`" class="status-navigation" />
@@ -681,6 +714,8 @@ import AgentsMdEditorModal from "./AgentsMdEditorModal.vue";
 import TerminalPanel from "./TerminalPanel.vue";
 import VersionChecker from "./VersionChecker.vue";
 import ChatOverflowMenu from "./ChatOverflowMenu.vue";
+import LiveVoice from "./LiveVoice.vue";
+import type { LiveCallDestination } from "../composables/liveCallConversation";
 import { matchChatInterfaceAction } from "../../utils/menuShortcuts";
 import ChunkHost from "./ChunkHost.vue";
 import { chunkMountKey } from "./chunkMount";
@@ -708,6 +743,7 @@ const props = withDefaults(
     onSelectConversation?: (conversation: Conversation) => void;
     onArchiveConversation?: (conversationId: string) => Promise<void>;
     currentConversation?: Conversation;
+    conversations: Conversation[];
     onConversationUpdate?: (conversation: Conversation) => void;
     onMessageSent?: (conversationId: string) => void;
     onFirstMessage?: (
@@ -803,6 +839,20 @@ const {
 
 // ---- core state ----
 const messageInputRef = ref<InstanceType<typeof MessageInput> | null>(null);
+const liveVoiceRef = ref<InstanceType<typeof LiveVoice> | null>(null);
+const voicePhase = ref<"idle" | "connecting" | "live">("idle");
+const headerCallLabel = computed(() =>
+  voicePhase.value === "idle"
+    ? t("startVoiceConversation")
+    : voicePhase.value === "connecting" ? "Cancel voice call" : "End voice call",
+);
+function startVoice() {
+  void liveVoiceRef.value?.start();
+}
+function onHeaderCallClick() {
+  if (voicePhase.value === "idle") startVoice();
+  else liveVoiceRef.value?.stop();
+}
 // Call through synchronously: screen capture must retain the user gesture.
 defineExpose({
   canRecordAudio: computed(() => messageInputRef.value?.canRecordAudio ?? false),
@@ -3017,6 +3067,33 @@ async function queueMessageTo(conversationId: string, model: string, message: st
     const index = pendingQueuedMessages.indexOf(pending);
     if (index !== -1) pendingQueuedMessages.splice(index, 1);
   }
+}
+
+function getLiveConversation(id: string): Conversation | undefined {
+  return props.conversations.find((row) => row.conversation_id === id) ??
+    (props.currentConversation?.conversation_id === id ? props.currentConversation : undefined);
+}
+
+// A call is pinned to the conversation on screen when it is tapped. On /new,
+// the draft is created only once the call can proceed, as a recording's is,
+// and belongs to this composer session even if the user navigates meanwhile.
+function captureLiveConversation(): LiveCallDestination {
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+    throw new Error(noModelErrorMessage());
+  }
+  const conversationId = props.conversationId;
+  const isDraft = !conversationId || !!props.currentConversation?.is_draft;
+  const creation = { model: selectedModel.value, cwd: selectedCwd.value || undefined };
+  const sessionVersion = draftSessionVersion;
+  const draft = { text: draftText, newSessionVersion: newDraftSessionVersion };
+  return {
+    conversationId,
+    conversation: props.currentConversation,
+    settings: isDraft ? { ...creation, conversation_options: buildConversationOptions() } : undefined,
+    prepareConversation: () => sessionVersion === draftSessionVersion
+      ? ensureDraftConversation(draftText, creation)
+      : createDraftForSession(draft, sessionVersion, creation),
+  };
 }
 
 const sendingQueuedNow = ref<string | null>(null);

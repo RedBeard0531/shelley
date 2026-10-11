@@ -322,14 +322,26 @@ another. A conversation records the profile it came from in
 `conversation_options.profile`, and keeps its settings when the profile
 changes later.
 
+A profile also has a `voice_prompt` (trimmed, up to 4000 characters; `""`
+means none): who voice calls speak as. It is not a setting: conversations
+don't copy it, and a call reads the current voice prompt of the profile its
+conversation names.
+
 - `GET /api/profiles` — all profiles, default first:
   `[{"name", "default", "model", "thinking_level", "tool_overrides",
-  "compact_nudge_tokens", "system_prompt"}]`.
+  "compact_nudge_tokens", "system_prompt", "voice_prompt"}]`.
 - `POST /api/profiles` — create one: `name` (trimmed; up to 64 bytes, no
-  `/` or control characters, not `.` or `..`) and the settings fields (unknown ones are a `400`); `409` if
-  the name is taken.
+  `/` or control characters, not `.` or `..`), the settings fields and
+  optionally `voice_prompt` (unknown fields are a `400`); `409` if the name
+  is taken.
 - `PUT /api/profiles/<name>` — replace a profile's settings; the body has
-  only the settings fields. Profiles can't be renamed.
+  only the settings fields and optionally `voice_prompt`, which keeps its
+  value when absent. Profiles can't be renamed.
+- `POST /api/profiles/voice-prompt/generate` — suggest a voice prompt:
+  `{"model", "system_prompt"}` → `{"voice_prompt"}`. `""` means the server's
+  default model or the built-in system prompt; an unknown model is a `400`.
+  A model of the same provider and account writes it from the system prompt
+  alone; nothing is saved. `502` if it fails.
 - `POST /api/profiles/<name>/default` — make it the default profile.
 - `DELETE /api/profiles/<name>` — `409` for the default profile.
 - `GET /api/system-prompt` — the built-in template and the variables a

@@ -408,6 +408,8 @@ export const upgoer5: TranslationKeys = {
   welcomeOpenSource: "free to use and change",
   welcomeCustomize: "can be made your own",
   sendMessageToStart: "Send a note to start talking.",
+  sendOrTalkToStart: "Send a note, or tap the call button above to speak.",
+  startVoiceConversation: "Start talking with your voice",
   noModelsTitle: "No brains to talk to",
   noModelsExeNote:
     "Shelley gets its thinking friends from the exe.dev llm thing. Run one of these to fix it:",

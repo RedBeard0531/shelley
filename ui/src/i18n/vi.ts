@@ -408,6 +408,8 @@ export const vi: TranslationKeys = {
   welcomeOpenSource: "mã nguồn mở",
   welcomeCustomize: "có thể tùy chỉnh",
   sendMessageToStart: "Gửi tin nhắn để bắt đầu trò chuyện.",
+  sendOrTalkToStart: "Gửi tin nhắn hoặc nhấn nút gọi ở trên để bắt đầu bằng giọng nói.",
+  startVoiceConversation: "Bắt đầu trò chuyện bằng giọng nói",
   noModelsTitle: "Không có model AI khả dụng",
   noModelsExeNote:
     "Shelley lấy các mô hình từ tích hợp llm của exe.dev. Chạy một trong các lệnh này để sửa:",

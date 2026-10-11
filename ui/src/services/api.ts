@@ -19,6 +19,8 @@ import {
   TemplateProblem,
 } from "../types";
 
+export type LiveConversationSettings = Pick<ChatRequest, "model" | "cwd" | "conversation_options">;
+
 // Extract a useful error message from a failed fetch response. Prefers the
 // response body (which may contain a server-side detail like a hook error),
 // falls back to statusText, then to the numeric status.
@@ -455,6 +457,41 @@ class ApiService {
     }
     const body = await response.text();
     return body ? (JSON.parse(body) as ChatAcceptedResponse) : {};
+  }
+
+  // Exchanges a browser WebRTC offer for a GPT-Live session. The server holds
+  // the API key; the browser then talks to OpenAI directly.
+  async createLiveSession(
+    conversationId: string,
+    sdp: string,
+    signal: AbortSignal,
+    settings?: LiveConversationSettings,
+  ): Promise<{ session: { id: string }; transport: { sdp: string } }> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/live-session`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ sdp, ...settings }),
+      signal,
+    });
+    if (!response.ok) throw await responseError(response, "Failed to start live session");
+    return response.json();
+  }
+
+  // Only a Live delegation calls this endpoint. The server submits the speech
+  // and its voice exchange through ordinary chat and returns the receipt.
+  async sendLiveMessage(
+    conversationId: string,
+    transcript: string,
+    voiceContext: string,
+    settings?: LiveConversationSettings,
+  ): Promise<{ status: "accepted" | "queued"; message: string }> {
+    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/live-message`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ transcript, voice_context: voiceContext, ...settings }),
+    });
+    if (!response.ok) throw await responseError(response, "Failed to deliver speech to Shelley");
+    return response.json();
   }
 
   async listBtwReaders(conversationId: string): Promise<BtwReaderDescriptor[]> {
@@ -1419,22 +1456,24 @@ export const profilesApi = {
   async list(): Promise<Profile[]> {
     return (await profilesFetch("/profiles", "Failed to load profiles")).json();
   },
-  async create(name: string, settings: Settings): Promise<Profile> {
+  /** voicePrompt, if given, is saved too; else a new profile has none and
+   *  an updated one keeps its own. */
+  async create(name: string, settings: Settings, voicePrompt?: string): Promise<Profile> {
     const response = await profilesFetch("/profiles", "Failed to save profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, ...settings }),
+      body: JSON.stringify({ name, ...settings, voice_prompt: voicePrompt }),
     });
     return response.json();
   },
-  async update(name: string, settings: Settings): Promise<Profile> {
+  async update(name: string, settings: Settings, voicePrompt?: string): Promise<Profile> {
     const response = await profilesFetch(
       `/profiles/${encodeURIComponent(name)}`,
       "Failed to save profile",
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
+        body: JSON.stringify({ ...settings, voice_prompt: voicePrompt }),
       },
     );
     return response.json();
@@ -1451,6 +1490,20 @@ export const profilesApi = {
     await profilesFetch(`/profiles/${encodeURIComponent(name)}`, "Failed to delete profile", {
       method: "DELETE",
     });
+  },
+  /** A voice prompt written from a profile's model and system prompt, for
+   *  the editor; nothing is saved. */
+  async generateVoicePrompt(model: string, systemPrompt: string): Promise<string> {
+    const response = await profilesFetch(
+      "/profiles/voice-prompt/generate",
+      "Failed to generate a voice prompt",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, system_prompt: systemPrompt }),
+      },
+    );
+    return ((await response.json()) as { voice_prompt: string }).voice_prompt;
   },
   async systemPrompt(): Promise<SystemPromptInfo> {
     return (await profilesFetch("/system-prompt", "Failed to load the system prompt")).json();

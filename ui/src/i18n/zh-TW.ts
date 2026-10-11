@@ -406,6 +406,8 @@ export const zhTW: TranslationKeys = {
   welcomeOpenSource: "開源",
   welcomeCustomize: "可以客製化",
   sendMessageToStart: "傳送訊息以開始對話。",
+  sendOrTalkToStart: "傳送訊息，或點按上方的通話按鈕開始語音對話。",
+  startVoiceConversation: "開始語音對話",
   noModelsTitle: "沒有可用的 AI 模型",
   noModelsExeNote: "Shelley 從 exe.dev 的 llm 整合取得模型。執行下列任一命令即可修復：",
   noModelsLocalNote: "按 Ctrl+K 或 ⌘+K 新增模型。",

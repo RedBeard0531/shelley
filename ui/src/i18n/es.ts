@@ -413,6 +413,8 @@ export const es: TranslationKeys = {
   welcomeOpenSource: "de código abierto",
   welcomeCustomize: "se puede personalizar",
   sendMessageToStart: "Envíe un mensaje para iniciar la conversación.",
+  sendOrTalkToStart: "Envía un mensaje o toca el botón de llamada arriba para empezar por voz.",
+  startVoiceConversation: "Iniciar conversación por voz",
   noModelsTitle: "No hay modelos de IA disponibles",
   noModelsExeNote:
     "Shelley obtiene sus modelos de la integración llm de exe.dev. Ejecuta uno de estos para solucionarlo:",

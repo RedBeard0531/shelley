@@ -192,6 +192,62 @@ test.describe("Settings knob", () => {
     }
   });
 
+  test("a profile's voice prompt is generated, edited and kept", async ({ page, request }) => {
+    const name = `E2E voice ${Date.now()}`;
+    const created = await request.post("/api/profiles", {
+      data: { name, model: "predictable", system_prompt: "You are Ahab, a terse pirate." },
+    });
+    expect(created.ok()).toBeTruthy();
+    const { slug } = await createConversationViaAPIWithDetails(request, "echo: voice prompt");
+    const stored = async () => {
+      const profiles: { name: string; voice_prompt: string }[] = await (
+        await request.get("/api/profiles")
+      ).json();
+      return profiles.find((p) => p.name === name)?.voice_prompt;
+    };
+    try {
+      await page.goto(`/c/${slug}`);
+      await openKnob(page);
+      await page
+        .getByTestId("model-picker-profiles")
+        .getByRole("button", { name: /^Edit/ })
+        .click();
+      const dialog = page.getByRole("dialog");
+      await dialog
+        .getByTestId("profile-row")
+        .filter({ hasText: name })
+        .getByRole("button", { name: "Edit" })
+        .click();
+      const voice = dialog.getByLabel("Voice prompt");
+      await expect(voice).toHaveValue("");
+
+      // Generating asks the server, from the profile's model and system
+      // prompt, and fills the editor; nothing is saved until Save.
+      const generated = page.waitForRequest("**/api/profiles/voice-prompt/generate");
+      await dialog.getByRole("button", { name: "Generate from system prompt" }).click();
+      expect((await generated).postDataJSON()).toEqual({
+        model: "predictable",
+        system_prompt: "You are Ahab, a terse pirate.",
+      });
+      await expect(voice).not.toHaveValue("");
+      expect(await stored()).toBe("");
+
+      await voice.fill("You are Ahab. Speak like a pirate, briefly.");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog.locator(".modal-title")).toHaveText("Profiles");
+      await expect.poll(stored).toBe("You are Ahab. Speak like a pirate, briefly.");
+
+      // Saving settings into the profile elsewhere keeps its voice prompt.
+      const kept = await request.put(`/api/profiles/${encodeURIComponent(name)}`, {
+        data: { model: "predictable", system_prompt: "You are Ahab." },
+      });
+      expect(kept.ok()).toBeTruthy();
+      expect(await stored()).toBe("You are Ahab. Speak like a pirate, briefly.");
+    } finally {
+      await request.delete(`/api/profiles/${encodeURIComponent(name)}`);
+    }
+  });
+
   test("a profile picked in the composer starts the conversation", async ({ page, request }) => {
     const name = `E2E composer ${Date.now()}`;
     const created = await request.post("/api/profiles", {

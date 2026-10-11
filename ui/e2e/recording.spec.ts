@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page, type Route } from "@pl
 import {
   createConversationViaAPIWithDetails,
   installTranscriptionAvailability,
+  startNewConversationFromHeader,
   testWorkingDirectory,
 } from "./helpers";
 
@@ -1070,7 +1071,7 @@ test.describe("media recording composer", () => {
       expect(submissions).toHaveLength(0);
       await expect(input).toHaveValue("Leave this different composer alone.");
 
-      await page.locator("button.btn-new").click();
+      await startNewConversationFromHeader(page);
       await input.fill("A newer new-conversation composer.");
       await newerDraftStarted.promise;
       await page.getByTestId("recording-retry-button").click();
@@ -1959,7 +1960,7 @@ test.describe("media recording composer", () => {
       });
       await expect(page).toHaveURL(new RegExp(`/c/${viewed.slug}$`));
 
-      await page.locator("button.btn-new").click();
+      await startNewConversationFromHeader(page);
       await expect(page).toHaveURL(/\/new$/);
       await expect(page.getByTestId("message-input")).toHaveValue("");
     } finally {
@@ -2007,7 +2008,7 @@ test.describe("media recording composer", () => {
 
     try {
       await selectConversationFromDrawer(page, viewed.conversationId);
-      await page.locator("button.btn-new").click();
+      await startNewConversationFromHeader(page);
       await expect(page).toHaveURL(/\/new$/);
       const newerInput = page.getByTestId("message-input");
       await newerInput.fill(newerText);
@@ -2023,7 +2024,7 @@ test.describe("media recording composer", () => {
       await page.getByTestId("recording-cancel-button").click();
       await expect(page.getByTestId("message-input")).toHaveValue(recordedText);
 
-      await page.locator("button.btn-new").click();
+      await startNewConversationFromHeader(page);
       await expect(page).toHaveURL(/\/new$/);
       await expect(page.getByTestId("message-input")).toHaveValue(newerText);
     } finally {

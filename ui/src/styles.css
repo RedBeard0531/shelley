@@ -546,6 +546,17 @@ body {
   flex-shrink: 0;
 }
 
+.header .live-call-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
 /* Keep all phone header controls touch-sized, without sacrificing the title. */
 @media (max-width: 767px) {
   .message-textarea:placeholder-shown {
@@ -5280,7 +5291,8 @@ svg {
     display: none;
   }
 
-  .hide-on-desktop {
+  .hide-on-desktop,
+  .overflow-menu-item.overflow-mobile-action {
     display: none !important;
   }
 
@@ -5755,6 +5767,28 @@ svg {
   background: var(--bg-base);
   color: var(--text-primary);
   font-size: var(--font-size-13);
+}
+
+.profiles-voice {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 6rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-13);
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.profiles-voice-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
 }
 
 .profiles-hint {
@@ -6820,7 +6854,9 @@ svg {
     display: none;
   }
 
-  .hide-on-mobile {
+  .hide-on-mobile,
+  .header .chat-workspace-actions button.chat-workspace-action,
+  .header .chat-workspace-divider {
     display: none;
   }
 
@@ -7674,7 +7710,8 @@ svg {
   color: var(--accent-text, var(--text-primary));
 }
 
-.commit-picker-range-btn:disabled {
+.commit-picker-range-btn:disabled,
+.header .live-call-trigger:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -14456,6 +14493,7 @@ kbd {
   color: #16a34a;
 }
 
+.header .live-call-trigger.is-active,
 .git-graph-diffstat-del {
   color: #dc2626;
 }

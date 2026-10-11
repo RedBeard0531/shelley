@@ -11,19 +11,24 @@ for (const width of [393, 1280]) {
     const panel = page.locator(".overflow-menu-panel");
     await expect(panel).toBeVisible();
     const rows = await panel.evaluate((el) =>
-      Array.from(el.children).map((child) => {
-        if (child.classList.contains("overflow-menu-divider")) return "separator";
-        if (child.classList.contains("overflow-quick-controls")) return "preferences";
-        const row = child.cloneNode(true) as HTMLElement;
-        row
-          .querySelectorAll(
-            ".overflow-menu-shortcut, .overflow-menu-cwd, .overflow-menu-language, .version-menu-dot",
-          )
-          .forEach((extra) => extra.remove());
-        return row.textContent!.trim().replace(/\s+/g, " ");
-      }),
+      Array.from(el.children)
+        .filter((child) => child.checkVisibility())
+        .map((child) => {
+          if (child.classList.contains("overflow-menu-divider")) return "separator";
+          if (child.classList.contains("overflow-quick-controls")) return "preferences";
+          const row = child.cloneNode(true) as HTMLElement;
+          row
+            .querySelectorAll(
+              ".overflow-menu-shortcut, .overflow-menu-cwd, .overflow-menu-language, .version-menu-dot",
+            )
+            .forEach((extra) => extra.remove());
+          return row.textContent!.trim().replace(/\s+/g, " ");
+        }),
     );
     expect(rows).toEqual([
+      // Phones keep New and the workspace tools here, leaving the header to
+      // Open VM, Call and More options.
+      ...(width < 768 ? ["New Conversation", "Diffs", "Git Graph", "Terminal"] : []),
       "Command menu",
       "Manage on exe.dev",
       "Documentation",
@@ -74,7 +79,7 @@ test.describe("Overflow menu (PrimeVue)", () => {
     await expect(popover).toBeVisible();
     await expect(directory).toBeVisible();
     await expect(popover.getByRole("button", { name: /^Command menu\b/ })).toBeVisible();
-    await expect(popover.getByRole("button", { name: /^Terminal\b/ })).toHaveCount(0);
+    await expect(popover.getByRole("button", { name: /^Terminal\b/ })).toBeVisible();
     await expect(directory.locator(".overflow-menu-cwd")).toHaveText(testWorkingDirectory());
     await expect(directory.locator(".overflow-menu-cwd")).toHaveAttribute(
       "title",

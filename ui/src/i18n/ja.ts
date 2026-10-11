@@ -410,6 +410,8 @@ export const ja: TranslationKeys = {
   welcomeOpenSource: "オープンソース",
   welcomeCustomize: "カスタマイズできます",
   sendMessageToStart: "メッセージを送信して会話を開始してください。",
+  sendOrTalkToStart: "メッセージを送るか、上の通話ボタンをタップして音声で始めてください。",
+  startVoiceConversation: "音声で会話を始める",
   noModelsTitle: "利用可能なAIモデルがありません",
   noModelsExeNote:
     "Shelley は exe.dev の llm 統合からモデルを取得します。次のいずれかを実行して修正してください:",

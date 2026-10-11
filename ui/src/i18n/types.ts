@@ -400,6 +400,8 @@ export interface TranslationKeys {
   welcomeOpenSource: string;
   welcomeCustomize: string;
   sendMessageToStart: string;
+  sendOrTalkToStart: string;
+  startVoiceConversation: string;
   noModelsTitle: string;
   noModelsExeNote: string;
   noModelsLocalNote: string;

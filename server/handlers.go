@@ -851,6 +851,12 @@ func (s *Server) registerConversationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/conversation/{id}/chat", func(w http.ResponseWriter, r *http.Request) {
 		s.handleChatConversation(w, r, r.PathValue("id"))
 	})
+	mux.HandleFunc("POST /api/conversation/{id}/live-session", func(w http.ResponseWriter, r *http.Request) {
+		s.handleLiveSession(w, r, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /api/conversation/{id}/live-message", func(w http.ResponseWriter, r *http.Request) {
+		s.handleLiveMessage(w, r, r.PathValue("id"))
+	})
 	mux.HandleFunc("POST /api/conversation/{id}/hooks", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRegisterConversationHook(w, r, r.PathValue("id"))
 	})
@@ -1419,7 +1425,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+		json.NewEncoder(w).Encode(map[string]string{"status": "queued", "message": req.Message})
 		return
 	}
 
@@ -1430,7 +1436,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+		json.NewEncoder(w).Encode(map[string]string{"status": "queued", "message": req.Message})
 		return
 	}
 	if errors.Is(err, errConversationModelMismatch) {
@@ -1447,7 +1453,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "accepted", "message": req.Message})
 }
 
 func (s *Server) runChatMessageHook(r *http.Request, conversationID, modelID, reasoningLevel string, queued bool, message string) (string, error) {

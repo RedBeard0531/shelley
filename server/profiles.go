@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"shelley.exe.dev/db/generated"
 )
@@ -22,12 +24,33 @@ type Profile struct {
 	// Exactly one profile is the default.
 	Default bool `json:"default"`
 	Settings
+	// VoicePrompt is how the profile's voice calls speak; "" means no
+	// persona. It belongs to the profile, not its Settings: conversations
+	// don't copy it, and a call reads the current one.
+	VoicePrompt string `json:"voice_prompt"`
+}
+
+// storedProfile is a profile's settings column: its Settings and voice prompt.
+type storedProfile struct {
+	Settings
+	VoicePrompt string `json:"voice_prompt,omitempty"`
+}
+
+const maxVoicePromptRunes = 4000
+
+// voicePromptProblem says what's wrong with a trimmed voice prompt, or "".
+func voicePromptProblem(prompt string) string {
+	if utf8.RuneCountInString(prompt) > maxVoicePromptRunes {
+		return fmt.Sprintf("voice prompt is longer than %d characters", maxVoicePromptRunes)
+	}
+	return ""
 }
 
 func (s *Server) registerProfileRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/profiles", s.handleListProfiles)
 	api.HandleFunc("POST /api/profiles", s.handleCreateProfile)
 	api.HandleFunc("PUT /api/profiles/{name}", s.handleUpdateProfile)
+	api.HandleFunc("POST /api/profiles/voice-prompt/generate", s.handleGenerateVoicePrompt)
 	api.HandleFunc("POST /api/profiles/{name}/default", s.handleSetDefaultProfile)
 	api.HandleFunc("DELETE /api/profiles/{name}", s.handleDeleteProfile)
 	api.HandleFunc("GET /api/system-prompt", s.handleGetSystemPrompt)
@@ -35,12 +58,12 @@ func (s *Server) registerProfileRoutes(api *http.ServeMux) {
 }
 
 func profileFromRow(row generated.Profile) (Profile, error) {
-	p := Profile{Name: row.Name, Default: row.IsDefault}
-	if err := json.Unmarshal([]byte(row.Settings), &p.Settings); err != nil {
-		return p, fmt.Errorf("profile %q: %w", row.Name, err)
+	var stored storedProfile
+	if err := json.Unmarshal([]byte(row.Settings), &stored); err != nil {
+		return Profile{Name: row.Name, Default: row.IsDefault}, fmt.Errorf("profile %q: %w", row.Name, err)
 	}
-	p.ToolOverrides = orEmpty(p.ToolOverrides)
-	return p, nil
+	stored.ToolOverrides = orEmpty(stored.ToolOverrides)
+	return Profile{Name: row.Name, Default: row.IsDefault, Settings: stored.Settings, VoicePrompt: stored.VoicePrompt}, nil
 }
 
 func (s *Server) getProfile(ctx context.Context, name string) (Profile, error) {
@@ -117,19 +140,21 @@ func profileNameProblem(name string) string {
 	return ""
 }
 
-func encodeSettings(st Settings) string {
-	b, err := json.Marshal(st)
+func encodeProfile(st Settings, voicePrompt string) string {
+	b, err := json.Marshal(storedProfile{Settings: st, VoicePrompt: voicePrompt})
 	if err != nil {
 		panic(err) // Settings always marshals.
 	}
 	return string(b)
 }
 
-// handleCreateProfile handles POST /api/profiles: {name, ...settings}.
+// handleCreateProfile handles POST /api/profiles: {name, ...settings,
+// voice_prompt}.
 func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 		Settings
+		VoicePrompt string `json:"voice_prompt"`
 	}
 	if !decodeStrict(w, r, &body) {
 		return
@@ -139,13 +164,18 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
+	body.VoicePrompt = strings.TrimSpace(body.VoicePrompt)
+	if msg := voicePromptProblem(body.VoicePrompt); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
+	}
 	if msg := body.Settings.validate(s.getModelList(), true); msg != "" {
 		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 	var row generated.Profile
 	err := s.db.QueriesTx(r.Context(), func(q *generated.Queries) (err error) {
-		row, err = q.CreateProfile(r.Context(), generated.CreateProfileParams{Name: body.Name, Settings: encodeSettings(body.Settings)})
+		row, err = q.CreateProfile(r.Context(), generated.CreateProfileParams{Name: body.Name, Settings: encodeProfile(body.Settings, body.VoicePrompt)})
 		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -165,12 +195,17 @@ func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdateProfile handles PUT /api/profiles/{name}: the body is the
-// profile's new settings. Its model needn't be available if it is unchanged.
+// profile's new settings, and optionally its voice prompt, which an absent
+// voice_prompt keeps. Its model needn't be available if it is unchanged.
 func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
-	var st Settings
-	if !decodeStrict(w, r, &st) {
+	var body struct {
+		Settings
+		VoicePrompt *string `json:"voice_prompt"`
+	}
+	if !decodeStrict(w, r, &body) {
 		return
 	}
+	st := body.Settings
 	name := r.PathValue("name")
 	existing, err := s.getProfile(r.Context(), name)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -181,13 +216,17 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "Failed to load profile", err)
 		return
 	}
-	if msg := st.validate(s.getModelList(), st.Model != existing.Model); msg != "" {
+	voicePrompt := existing.VoicePrompt
+	if body.VoicePrompt != nil {
+		voicePrompt = strings.TrimSpace(*body.VoicePrompt)
+	}
+	if msg := cmp.Or(voicePromptProblem(voicePrompt), st.validate(s.getModelList(), st.Model != existing.Model)); msg != "" {
 		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 	var row generated.Profile
 	err = s.db.QueriesTx(r.Context(), func(q *generated.Queries) (err error) {
-		row, err = q.UpdateProfile(r.Context(), generated.UpdateProfileParams{Name: name, Settings: encodeSettings(st)})
+		row, err = q.UpdateProfile(r.Context(), generated.UpdateProfileParams{Name: name, Settings: encodeProfile(st, voicePrompt)})
 		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {

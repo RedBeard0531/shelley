@@ -7,9 +7,10 @@ import { deflateSync } from "node:zlib";
 import { hermeticGitEnvironment } from "../scripts/git-test-env";
 
 export async function openWorkspaceTool(page: Page, name: string): Promise<void> {
-  const toolbar = page.locator(".chat-workspace-actions");
-  await expect(toolbar).toBeVisible();
-  const button = toolbar.getByRole("button", { name, exact: true });
+  // Phones keep workspace tools in the overflow menu, so the toolbar is
+  // empty there.
+  await expect(page.locator(".header")).toBeVisible();
+  const button = page.locator(".chat-workspace-actions").getByRole("button", { name, exact: true });
   if (await button.isVisible()) {
     await button.click();
     return;
@@ -18,6 +19,24 @@ export async function openWorkspaceTool(page: Page, name: string): Promise<void>
   await page
     .locator(".chat-overflow-popover")
     .getByRole("button", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) })
+    .click();
+}
+
+export async function startNewConversationFromHeader(page: Page): Promise<void> {
+  const button = page
+    .locator(".header")
+    .getByRole("button", { name: "New Conversation", exact: true });
+  if (await button.isVisible()) {
+    await button.click();
+    return;
+  }
+  await page.getByRole("button", { name: "More options", exact: true }).click();
+  await page
+    .locator(".chat-overflow-popover")
+    .getByRole("button", {
+      name: "New Conversation",
+      exact: true,
+    })
     .click();
 }
 

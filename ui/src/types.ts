@@ -160,6 +160,9 @@ export interface Settings {
 export interface Profile extends Settings {
   name: string;
   default: boolean;
+  /** How voice calls speak for this profile; "" for no persona. Not a
+   *  setting: conversations don't copy it, and calls read it as saved. */
+  voice_prompt: string;
 }
 
 /** GET /api/conversation/<id>/settings: the settings and the profile they

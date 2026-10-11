@@ -1,5 +1,6 @@
 <!--
-  Diffs, Git Graph, Terminal, and the VM link live in the header.
+  Desktop keeps workspace actions in the header; mobile keeps only the VM
+  link and moves the other actions, plus New, into this menu.
   Settings live in shared composables/services; conversation actions emit
   events for ChatInterface to wire to its existing handlers.
 -->
@@ -76,6 +77,24 @@
       @show="open = true"
       @hide="open = false"
     >
+      <button class="overflow-menu-item overflow-mobile-action" @click="onNewConversation">
+        <svg class="chat-menu-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 4v16m8-8H4" />
+        </svg>
+        {{ t("newConversation") }}
+      </button>
+      <button v-if="hasCwd" class="overflow-menu-item overflow-mobile-action" @click="onDiffs">
+        <WorkspaceActionIcon action="diffs" class="chat-menu-icon" />
+        {{ t("diffs") }}
+      </button>
+      <button v-if="hasCwd" class="overflow-menu-item overflow-mobile-action" @click="onGitGraph">
+        <WorkspaceActionIcon action="gitGraph" class="chat-menu-icon" />
+        {{ t("gitGraph") }}
+      </button>
+      <button class="overflow-menu-item overflow-mobile-action" @click="onTerminal">
+        <WorkspaceActionIcon action="terminal" class="chat-menu-icon" />
+        {{ t("terminal") }}
+      </button>
       <button class="overflow-menu-item" @click="onCommandPalette">
         <WorkspaceActionIcon action="commandPalette" class="chat-menu-icon" />
         {{ t("commandMenu") }}
@@ -350,6 +369,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (e: "new-conversation", event: MouseEvent): void;
   (e: "open-command-palette"): void;
   (e: "open-directory-picker"): void;
   (e: "open-diffs"): void;
@@ -384,6 +404,7 @@ function hide() {
 // one-liners (rather than a union-typed helper) so defineEmits' per-event
 // overloads type-check cleanly.
 const onCommandPalette = () => (emit("open-command-palette"), hide());
+const onNewConversation = (event: MouseEvent) => (emit("new-conversation", event), hide());
 const onDirectory = () => (emit("open-directory-picker"), hide());
 const onDiffs = () => (emit("open-diffs"), hide());
 const onGitGraph = () => (emit("open-git-graph"), hide());

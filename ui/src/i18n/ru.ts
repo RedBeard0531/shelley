@@ -411,6 +411,8 @@ export const ru: TranslationKeys = {
   welcomeOpenSource: "проект с открытым исходным кодом",
   welcomeCustomize: "можно настроить",
   sendMessageToStart: "Отправьте сообщение, чтобы начать диалог.",
+  sendOrTalkToStart: "Отправьте сообщение или нажмите кнопку звонка вверху, чтобы начать голосом.",
+  startVoiceConversation: "Начать голосовой разговор",
   noModelsTitle: "Нет доступных моделей ИИ",
   noModelsExeNote:
     "Shelley получает модели из интеграции llm в exe.dev. Выполните одну из этих команд, чтобы исправить:",

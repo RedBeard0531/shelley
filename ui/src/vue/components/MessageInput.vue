@@ -38,6 +38,7 @@
     <div v-if="isDraggingOver" class="drag-overlay">
       <div class="drag-overlay-content">{{ t("dropFilesHere") }}</div>
     </div>
+    <slot name="call" />
     <!-- Teleport moves the same recorder; navigation must never remount it. -->
     <Teleport to="body" :disabled="!recordingFloating">
       <div
@@ -71,7 +72,12 @@
         />
       </div>
     </Teleport>
-    <form v-if="!recordingActive || recordingFloating" class="message-input-form" @submit="handleSubmit">
+    <form
+      v-if="!recordingActive || recordingFloating"
+      v-show="!composerHidden"
+      class="message-input-form"
+      @submit="handleSubmit"
+    >
       <input
         ref="fileInputRef"
         type="file"
@@ -324,7 +330,7 @@
           </svg>
         </button>
         <RecordButton
-          v-if="mediaRecordingAvailable"
+          v-if="mediaRecordingAvailable && !voiceActive"
           :can-record-audio="canRecordAudio"
           :screen-available="screenRecordingAvailable"
           @record="beginRecording"
@@ -524,6 +530,9 @@ const props = withDefaults(
   defineProps<{
     /** Async send handler (awaited). Mirrors React's onSend prop. */
     onSend: (message: string) => Promise<void> | void;
+    voiceActive?: boolean;
+    /** Leave the persistent call slot available when browsing an archive. */
+    composerHidden?: boolean;
     /** Bind the original destination; the recorder starts while it resolves. */
     onStartRecording: (text: string) => RecordingPreparation;
     /** Archived conversations hide the composer, but not an active recording. */
@@ -573,6 +582,7 @@ const props = withDefaults(
   }>(),
   {
     recordingInlineAvailable: true,
+    voiceActive: false,
     showQueueOption: false,
     canQueue: false,
     autoQueue: false,

@@ -409,6 +409,8 @@ export const en: TranslationKeys = {
   welcomeOpenSource: "open-source",
   welcomeCustomize: "can be customized",
   sendMessageToStart: "Send a message to start the conversation.",
+  sendOrTalkToStart: "Send a message, or tap the call button above to start by voice.",
+  startVoiceConversation: "Start voice conversation",
   noModelsTitle: "No AI models available",
   noModelsExeNote:
     "Shelley gets its models from the exe.dev llm integration. Run one of these to fix it:",

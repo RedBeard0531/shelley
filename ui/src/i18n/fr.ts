@@ -414,6 +414,9 @@ export const fr: TranslationKeys = {
   welcomeOpenSource: "open source",
   welcomeCustomize: "personnalisable",
   sendMessageToStart: "Envoyez un message pour démarrer la conversation.",
+  sendOrTalkToStart:
+    "Envoyez un message ou touchez le bouton d’appel en haut pour commencer à parler.",
+  startVoiceConversation: "Démarrer une conversation vocale",
   noModelsTitle: "Aucun modèle IA disponible",
   noModelsExeNote:
     "Shelley obtient ses modèles de l'intégration llm d'exe.dev. Exécutez l'une de ces commandes pour corriger :",
