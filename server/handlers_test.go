@@ -42,7 +42,7 @@ func TestHandleVersion(t *testing.T) {
 	if body.Capabilities == nil {
 		t.Fatalf("expected capabilities field in response, got nil")
 	}
-	want := map[string]bool{"thinking-levels": false, "drafts": false, "queued-transcriptions": false}
+	want := map[string]bool{"thinking-levels": false, "drafts": false, "queued-transcriptions": false, "live-call-events": false}
 	for _, c := range *body.Capabilities {
 		if _, ok := want[c]; ok {
 			want[c] = true

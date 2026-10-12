@@ -386,6 +386,7 @@ type Server struct {
 	liveSessionURL    string
 	liveSessionKey    string
 	liveSessionClient *http.Client
+	liveCalls         liveCalls
 	// reflectionEmoji fetches the VM emoji for the favicon. Tests replace it to
 	// cover reflection-present and standalone behavior without ambient metadata.
 	reflectionEmoji           func(context.Context) string

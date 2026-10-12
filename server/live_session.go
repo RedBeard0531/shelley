@@ -116,24 +116,25 @@ func (s *Server) handleLiveSession(w http.ResponseWriter, r *http.Request, conve
 	}
 	// Model, cwd and profile are a draft's current selection; a conversation
 	// under way has its own.
+	// The call's delegations deliver them with the draft's first message.
 	var offer struct {
-		SDP                 string `json:"sdp"`
-		Model               string `json:"model"`
-		Cwd                 string `json:"cwd"`
-		ConversationOptions struct {
-			Profile string `json:"profile"`
-		} `json:"conversation_options"`
+		SDP string `json:"sdp"`
+		liveSettings
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLiveOfferBytes)).Decode(&offer); err != nil || !strings.HasPrefix(offer.SDP, "v=0") {
+	var options struct {
+		Profile string `json:"profile"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLiveOfferBytes)).Decode(&offer); err != nil || !strings.HasPrefix(offer.SDP, "v=0") ||
+		(offer.ConversationOptions != nil && json.Unmarshal(offer.ConversationOptions, &options) != nil) {
 		http.Error(w, "Invalid SDP offer", http.StatusBadRequest)
 		return
 	}
-	profile, err := s.liveProfile(r.Context(), conversation, offer.ConversationOptions.Profile)
+	profile, err := s.liveProfile(r.Context(), conversation, options.Profile)
 	if err != nil {
 		s.internalError(w, "Load voice prompt", err)
 		return
 	}
-	history, err := s.liveContext(r.Context(), conversationID)
+	history, lastSeq, err := s.liveContext(r.Context(), conversationID)
 	if err != nil {
 		s.internalError(w, "Load Live context", err)
 		return
@@ -194,5 +195,6 @@ func (s *Server) handleLiveSession(w http.ResponseWriter, r *http.Request, conve
 		http.Error(w, "Invalid Live session response", http.StatusBadGateway)
 		return
 	}
+	s.startLiveCall(r, conversationID, result.Session.ID, lastSeq, offer.liveSettings)
 	writeJSON(w, http.StatusCreated, result)
 }

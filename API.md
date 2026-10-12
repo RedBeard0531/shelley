@@ -172,6 +172,33 @@ Unless noted, results exclude **archived** conversations.
   conversation is archived or a draft (a draft's settings travel with its
   first message), for a custom `system_prompt` in a subagent, or for anything
   but the model and reasoning in a btw reader.
+- `POST /api/conversation/<id>/live-session` — start a GPT-Live voice call:
+  `{"sdp", "model"?, "cwd"?, "conversation_options"?}` (the settings only for
+  a draft) → `201 {"session":{"id"},"transport":{"type","sdp"}}`. Shelley
+  writes the voice prompt and holds the key. The session id also names
+  Shelley's side of the call (capability `live-call-events`), which decides
+  what the user's speech becomes, delivers it as `Spoken request:` chat
+  messages (promoting a draft with the call's settings), and tells Live
+  about typed messages and final replies. The client relays and follows:
+  - `POST /api/conversation/<id>/live-session/<session>/events` —
+    `{"events":[<Live data-channel event>...]}`, verbatim and in order, one
+    request at a time. Shelley reads `session.input_transcript.delta`,
+    `session.output_transcript.delta`, `session.delegation.created` and
+    `session.closed`. `204`; `400` `Invalid live events`; `404` `Live call
+    not found`.
+  - `GET /api/conversation/<id>/live-session/<session>/stream` — SSE of
+    instructions, `id` numbered; resume with `?after=<id>` or
+    `Last-Event-ID`. `{"type":"send","event"}`: send `event` to Live;
+    `{"type":"error","message"}`: show the error, `null` clears it;
+    `{"type":"activity","handing_off"}`; `{"type":"stop","message"}`: end the
+    call showing `message`. Unknown types are ignored. The call ends a
+    minute after its last stream detaches.
+  - `DELETE /api/conversation/<id>/live-session/<session>` — hang up: pending
+    speech is dropped. `204`.
+- `POST /api/conversation/<id>/live-message` — for clients without
+  `live-call-events`: deliver one delegation the client decided on,
+  `{"transcript", "voice_context"?, "model"?, "cwd"?,
+  "conversation_options"?}` → chat's receipt.
 - `GET /api/conversation/<id>/subagents` — direct child conversations. Clients
   can recurse through this endpoint when they need the complete descendant
   tree (for example, aggregate usage reporting).

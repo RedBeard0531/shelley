@@ -2,12 +2,9 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"shelley.exe.dev/db/generated"
-	"shelley.exe.dev/llm"
 )
 
 const (
@@ -31,50 +28,35 @@ type liveHistoryText struct {
 // liveContext returns only the user's typed messages and final backend
 // replies. Tool results, subagent reports, background jobs and other machine
 // notices must not enter the Live session.
-func (s *Server) liveContext(ctx context.Context, conversationID string) ([]liveHistoryItem, error) {
+func (s *Server) liveContext(ctx context.Context, conversationID string) (items []liveHistoryItem, lastSeq int64, err error) {
 	var rows []generated.Message
-	err := s.db.Queries(ctx, func(q *generated.Queries) error {
+	err = s.db.Queries(ctx, func(q *generated.Queries) error {
 		var err error
 		rows, err = q.ListMessagesTail(ctx, generated.ListMessagesTailParams{ConversationID: conversationID, Limit: liveContextTailRows})
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("load live context: %w", err)
+		return nil, 0, fmt.Errorf("load live context: %w", err)
 	}
-	var items []liveHistoryItem
 	for _, row := range rows {
-		if row.LlmData == nil || row.ExcludedFromContext || (row.Type != "user" && row.Type != "agent") {
+		lastSeq = row.SequenceID
+		if row.ExcludedFromContext {
 			continue
 		}
-		var message llm.Message
-		if err := json.Unmarshal([]byte(*row.LlmData), &message); err != nil {
-			return nil, fmt.Errorf("decode message %s: %w", row.MessageID, err)
+		user, text, _, err := liveDialogue(row)
+		if err != nil {
+			return nil, 0, err
+		}
+		if text == "" {
+			continue
 		}
 		role, contentType := "assistant", "output_text"
-		if row.Type == "user" {
+		if user {
 			role, contentType = "user", "input_text"
-			if !typedUserForLLM(message, []byte(derefString(row.UserData))) {
-				continue
-			}
-		} else if !message.EndOfTurn {
-			continue
 		}
-		var text []string
-		for _, c := range message.Content {
-			if c.Type == llm.ContentTypeText {
-				// A delegated task carries the voice exchange it came from
-				// for the backend; Live already has that speech.
-				t, _, _ := strings.Cut(c.Text, liveVoiceExchange)
-				if t = strings.TrimSpace(t); t != "" {
-					text = append(text, t)
-				}
-			}
-		}
-		if len(text) != 0 {
-			items = append(items, liveHistoryItem{Type: "message", Role: role, Content: []liveHistoryText{{Type: contentType, Text: truncateRunes(strings.Join(text, "\n\n"), liveContextItemRunes)}}})
-		}
+		items = append(items, liveHistoryItem{Type: "message", Role: role, Content: []liveHistoryText{{Type: contentType, Text: truncateRunes(text, liveContextItemRunes)}}})
 	}
-	return items[max(0, len(items)-liveContextMessages):], nil
+	return items[max(0, len(items)-liveContextMessages):], lastSeq, nil
 }
 
 func truncateRunes(s string, limit int) string {

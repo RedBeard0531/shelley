@@ -1,0 +1,396 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"testing/synctest"
+	"time"
+)
+
+type liveDelivery struct{ transcript, voiceContext string }
+
+// liveHarness is a call with a stand-in backend, on synctest's clock.
+type liveHarness struct {
+	t    *testing.T
+	call *liveCall
+
+	mu         sync.Mutex
+	deliveries []liveDelivery
+	reply      func(transcript string) (liveReceipt, error)
+	hold       chan struct{} // deliveries wait for it to close, if set
+}
+
+func newLiveHarness(t *testing.T) *liveHarness {
+	h := &liveHarness{t: t, reply: func(transcript string) (liveReceipt, error) {
+		return liveReceipt{Status: "accepted", Message: transcript}, nil
+	}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h.call = newLiveCall("call", "conv", 10, func(ctx context.Context, transcript, voiceContext string) (liveReceipt, error) {
+		h.mu.Lock()
+		h.deliveries = append(h.deliveries, liveDelivery{transcript, voiceContext})
+		hold, reply := h.hold, h.reply
+		h.mu.Unlock()
+		if hold != nil {
+			<-hold
+		}
+		return reply(transcript)
+	}, logger)
+	t.Cleanup(func() { h.call.end("test over") })
+	return h
+}
+
+// set changes how the backend answers.
+func (h *liveHarness) set(f func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	f()
+}
+
+func (h *liveHarness) event(format string, args ...any) {
+	h.t.Helper()
+	e, ok := parseLiveEvent(fmt.Appendf(nil, format, args...))
+	if !ok {
+		h.t.Fatal("not an event")
+	}
+	h.call.handle([]liveEvent{e})
+}
+
+func (h *liveHarness) say(text string, start, end float64) {
+	h.event(`{"type":"session.input_transcript.delta","delta":%q,"start_ms":%v,"end_ms":%v}`, text, start, end)
+}
+
+func (h *liveHarness) liveSays(text string, start, end float64) {
+	h.event(`{"type":"session.output_transcript.delta","delta":%q,"start_ms":%v,"end_ms":%v}`, text, start, end)
+}
+
+func (h *liveHarness) delegate(id string, offset float64) {
+	h.event(`{"type":"session.delegation.created","delegation":{"id":%q,"target":"client"},"offset_ms":%v}`, id, offset)
+}
+
+// advance moves the clock and lets the call act on it.
+func (h *liveHarness) advance(d time.Duration) {
+	time.Sleep(d)
+	synctest.Wait()
+}
+
+func (h *liveHarness) transcripts() []string {
+	synctest.Wait()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []string
+	for _, d := range h.deliveries {
+		out = append(out, d.transcript)
+	}
+	return out
+}
+
+// instructions are the call's instructions so far (see
+// describeLiveInstruction).
+func (h *liveHarness) instructions() []string {
+	synctest.Wait()
+	all, _, _ := h.call.instructions(0)
+	var out []string
+	for _, in := range all {
+		out = append(out, describeLiveInstruction(h.t, in.data))
+	}
+	return out
+}
+
+// describeLiveInstruction is "<type>: <fields>", with Live's context as
+// "thinking|commentary [delegation]: content".
+func describeLiveInstruction(t *testing.T, data []byte) string {
+	t.Helper()
+	var i struct {
+		Type       string  `json:"type"`
+		Message    *string `json:"message"`
+		HandingOff bool    `json:"handing_off"`
+		Event      struct {
+			Type         string  `json:"type"`
+			DelegationID *string `json:"delegation_id"`
+			Content      string  `json:"content"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(data, &i); err != nil {
+		t.Fatal(err)
+	}
+	switch i.Type {
+	case "send":
+		id := "-"
+		if i.Event.DelegationID != nil {
+			id = *i.Event.DelegationID
+		}
+		kind, _ := strings.CutSuffix(strings.TrimPrefix(i.Event.Type, "session."), ".append")
+		return fmt.Sprintf("%s [%s]: %s", kind, id, i.Event.Content)
+	case "activity":
+		return fmt.Sprintf("activity: %v", i.HandingOff)
+	default:
+		message := "null"
+		if i.Message != nil {
+			message = *i.Message
+		}
+		return i.Type + ": " + message
+	}
+}
+
+// context is what the call told Live.
+func (h *liveHarness) context() []string {
+	return slices.DeleteFunc(h.instructions(), func(s string) bool {
+		return !strings.HasPrefix(s, "thinking") && !strings.HasPrefix(s, "commentary")
+	})
+}
+
+func expectEqual[T any](t *testing.T, what string, got, want T) {
+	t.Helper()
+	g, _ := json.MarshalIndent(got, "", " ")
+	w, _ := json.MarshalIndent(want, "", " ")
+	if string(g) != string(w) {
+		t.Errorf("%s =\n%s\nwant\n%s", what, g, w)
+	}
+}
+
+func TestLiveCallWaitsForLateSpeechThenDelivers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.liveSays("Hi, what can I do?", 0, 900)
+		h.say("Please run", 5000, 5600)
+		h.delegate("d1", 5600.4)
+		h.advance(time.Second)
+		// The user is still talking: the quiet period starts over.
+		h.say(" the unit tests.", 6600, 7400)
+		h.advance(time.Second)
+		expectEqual(t, "transcripts", h.transcripts(), []string(nil))
+		h.advance(200 * time.Millisecond)
+		expectEqual(t, "deliveries", h.deliveries, []liveDelivery{{
+			"Please run the unit tests.", "LIVE: Hi, what can I do?\nUSER: Please run the unit tests.",
+		}})
+		expectEqual(t, "instructions", h.instructions(), []string{
+			"activity: true",
+			"error: null",
+			"thinking [d1]: The backend accepted this task: Please run the unit tests.",
+			"activity: false",
+		})
+	})
+}
+
+func TestLiveCallDeliversAtTheDeadlineWhenSpeechNeverPauses(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.say("Check", 0, 300)
+		h.delegate("d1", 300)
+		for i := 1; i <= 10; i++ {
+			h.advance(600 * time.Millisecond)
+			h.say(" more", float64(300+i*600), float64(600+i*600))
+		}
+		if got := h.transcripts(); len(got) != 1 || !strings.HasPrefix(got[0], "Check more more more more more more more more") {
+			t.Errorf("transcripts = %q", got)
+		}
+	})
+}
+
+func TestLiveCallWaitsForTranscriptThatFollowsTheDelegation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.delegate("d1", 900)
+		h.advance(2 * time.Second) // no speech yet: no quiet period runs
+		h.say("Run the tests", 0, 900)
+		h.advance(1100 * time.Millisecond)
+		expectEqual(t, "transcripts", h.transcripts(), []string(nil))
+		h.advance(100 * time.Millisecond)
+		expectEqual(t, "transcripts", h.transcripts(), []string{"Run the tests"})
+	})
+}
+
+func TestLiveCallNeverDeliversMissingOrEchoedSpeech(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		// Live created a delegation but no transcript arrived.
+		h.delegate("d1", 1000)
+		h.advance(liveDeadline)
+		// The microphone picked up Live's own reply.
+		h.liveSays("Shelley is working on that request now", 6000, 8000)
+		h.say("Shelley is working on that request", 6100, 8000)
+		h.delegate("d2", 8000)
+		h.advance(liveQuiet)
+		expectEqual(t, "transcripts", h.transcripts(), []string(nil))
+		expectEqual(t, "context", h.context(), []string{"thinking [d1]: " + liveNoRequest, "thinking [d2]: " + liveNoRequest})
+	})
+}
+
+func TestLiveCallCountsOnlyNewClientDelegations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.say("Run the tests", 0, 500)
+		h.event(`{"type":"session.delegation.created","delegation":{"id":"d1","target":"server"},"offset_ms":500}`)
+		h.event(`{"type":"session.delegation.created","delegation":{"target":"client"},"offset_ms":500}`)
+		h.delegate("d2", 500)
+		h.delegate("d2", 500) // Live may repeat an event
+		h.advance(6 * time.Second)
+		expectEqual(t, "context", h.context(), []string{"thinking [d2]: The backend accepted this task: Run the tests"})
+	})
+}
+
+func TestLiveCallReportsBadDelegations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.say("Run the tests", 0, 500)
+		h.event(`{"type":"session.delegation.created","delegation":{"id":"d1","target":"client"},"offset_ms":-1}`)
+		h.event(`{"type":"session.delegation.created","delegation":{"id":"d2","target":"client"},"offset_ms":"soon"}`)
+		// A missing offset counts from the start of the session.
+		h.event(`{"type":"session.delegation.created","delegation":{"id":"d3","target":"client"}}`)
+		h.advance(liveQuiet)
+		expectEqual(t, "instructions", h.instructions(), []string{
+			"error: " + liveInvalidOffset,
+			"error: " + liveInvalidOffset,
+			"activity: true",
+			"error: null",
+			"thinking [d3]: The backend accepted this task: Run the tests",
+			"activity: false",
+		})
+	})
+}
+
+func TestLiveCallTellsLiveWhatBecameOfADelivery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.set(func() {
+			h.reply = func(transcript string) (liveReceipt, error) {
+				return liveReceipt{Status: "queued", Message: transcript}, nil
+			}
+		})
+		h.say("Run the tests", 0, 500)
+		h.delegate("d1", 500)
+		h.advance(liveQuiet)
+		h.set(func() {
+			h.reply = func(string) (liveReceipt, error) {
+				return liveReceipt{}, errors.New("Failed to deliver speech to Shelley: conversation is archived")
+			}
+		})
+		h.say("Lint it", 3000, 3500)
+		h.delegate("d2", 3500)
+		h.advance(liveQuiet)
+		expectEqual(t, "instructions", h.instructions()[4:], []string{
+			"activity: true",
+			"error: Failed to deliver speech to Shelley: conversation is archived",
+			"thinking [d2]: " + liveDeliveryFailed,
+			"activity: false",
+		})
+		expectEqual(t, "context", h.context()[0], "thinking [d1]: This task is queued behind earlier work: Run the tests")
+	})
+}
+
+func TestLiveCallTellsLiveTheReplyToItsTaskAndOtherTypedMessages(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		row := func(seq int64, user bool, text string) liveRow { return liveRow{seq, user, text, text} }
+		// History before the call is already in Live's session.
+		h.call.observe([]liveRow{row(9, true, "old"), row(10, false, "old reply")})
+		h.say("Run the tests", 0, 500)
+		h.delegate("d1", 500)
+		h.set(func() { h.hold = make(chan struct{}) })
+		h.advance(liveQuiet)
+		// The task's message arrives while its delivery is in flight; Live
+		// must not hear it as a typed message.
+		h.call.observe([]liveRow{row(11, true, "Run the tests")})
+		h.set(func() { close(h.hold) })
+		synctest.Wait()
+		h.call.observe([]liveRow{{seq: 12, full: "working…"}, row(13, false, "All 40 tests pass.")})
+		h.call.observe([]liveRow{row(14, true, "also lint it"), row(15, false, "Lint is clean.")})
+		h.call.observe([]liveRow{row(15, false, "Lint is clean.")})
+		expectEqual(t, "context", h.context(), []string{
+			"thinking [d1]: The backend accepted this task: Run the tests",
+			"commentary [d1]: Backend reply: All 40 tests pass.",
+			"thinking [-]: New typed message to the backend: also lint it",
+			"commentary [-]: Backend reply: Lint is clean.",
+		})
+	})
+}
+
+func TestLiveCallEndsARunawayDelegationLoop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		for i := range 13 {
+			at := float64(i * 2000)
+			h.say(fmt.Sprintf("Request number %d", i), at, at+500)
+			h.delegate(fmt.Sprintf("d%d", i), at+500)
+			h.advance(2 * time.Second)
+		}
+		if n := len(h.transcripts()); n != liveMaxPerMinute {
+			t.Errorf("%d deliveries", n)
+		}
+		if got := h.instructions(); got[len(got)-1] != "stop: "+liveFeedbackLoop {
+			t.Errorf("last instruction = %q", got[len(got)-1])
+		}
+		select {
+		case <-h.call.done:
+		default:
+			t.Error("the call goes on")
+		}
+	})
+}
+
+func TestLiveCallHangUpDropsPendingAndInFlightDelegations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.say("Run the tests", 0, 500)
+		h.delegate("d1", 500)
+		h.set(func() { h.hold = make(chan struct{}) })
+		h.advance(liveQuiet)
+		h.say("and lint", 2000, 2500)
+		h.delegate("d2", 2500)
+		h.call.end("hung up")
+		h.set(func() { close(h.hold) })
+		h.advance(10 * time.Second)
+		expectEqual(t, "transcripts", h.transcripts(), []string{"Run the tests"})
+		expectEqual(t, "context", len(h.context()), 0)
+	})
+}
+
+func TestLiveCallEndsWhenLiveCloses(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.say("Run the tests", 0, 500)
+		h.delegate("d1", 500)
+		h.event(`{"type":"session.closed"}`)
+		h.advance(liveDeadline)
+		expectEqual(t, "transcripts", h.transcripts(), []string(nil))
+	})
+}
+
+// A real call: Live read out the backend's questions, the user answered
+// "New chats", then "Hello"; Live said it was handing that off and
+// delegated as it finished speaking, seconds after the user stopped. The
+// delegation must still carry the answer.
+func TestLiveCallDeliversAShortAnswerLiveAcknowledgedBeforeDelegating(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.liveSays("Should they also start from a new or draft chat, like the web allows?", 0, 4000)
+		h.liveSays(" Archived chats: should archiving the chat end the call?", 4000, 7000)
+		h.say("New chats", 9000, 9800)
+		h.say(" Hello", 12000, 12500)
+		h.liveSays("I'm here, handing those two decisions off to get built.", 13500, 17500)
+		h.delegate("d1", 17600)
+		h.advance(liveQuiet)
+		expectEqual(t, "transcripts", h.transcripts(), []string{"New chats Hello"})
+	})
+}
+
+// Choosing an option by repeating Live's words is not echo: echo is Live's
+// playback picked up while it speaks, not speech after it stopped.
+func TestLiveCallDeliversAnOptionRepeatedAfterLiveStopped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.liveSays("Should calls also start from a new or draft chat?", 0, 4000)
+		h.say("calls also start from a new or draft chat", 7000, 9000)
+		h.delegate("d1", 9100)
+		h.advance(liveQuiet)
+		expectEqual(t, "transcripts", h.transcripts(), []string{"calls also start from a new or draft chat"})
+	})
+}
