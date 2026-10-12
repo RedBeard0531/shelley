@@ -510,7 +510,7 @@ func (c *mcpCLI) auth(args []string) error {
 	case i < 0:
 		return fmt.Errorf("MCP server %q not found", pos[0])
 	case servers[i].LoginURL == "":
-		return fmt.Errorf("MCP server %q has an Authorization header, so it doesn't log in with OAuth", pos[0])
+		return fmt.Errorf("MCP server %q doesn't use Shelley's OAuth login", pos[0])
 	}
 	s := servers[i]
 	fmt.Fprintf(c.stdout, "%s: %s\n", s.Name, cmp.Or(strings.ReplaceAll(s.Auth, "_", " "), "not logged in"))

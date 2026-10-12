@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"testing"
 	"time"
 
 	"shelley.exe.dev/db/generated"
+	"shelley.exe.dev/exeenv"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/mcp"
 )
@@ -92,8 +95,9 @@ func (s *Server) registerMCPRoutes(api, mux *http.ServeMux) {
 // mcpServerJSON is a server in the API.
 type mcpServerJSON struct {
 	mcp.Server
-	Auth     string `json:"auth"`
-	LoginURL string `json:"login_url,omitempty"`
+	Auth        string `json:"auth"`
+	LoginURL    string `json:"login_url,omitempty"`
+	Integration string `json:"integration,omitempty"`
 }
 
 func (s *Server) mcpServerJSON(ctx context.Context, row generated.McpServer) (mcpServerJSON, error) {
@@ -151,10 +155,22 @@ func (s *Server) getMCPServer(ctx context.Context, name string) (mcp.Server, err
 		row, err = q.GetMCPServer(ctx, name)
 		return err
 	})
+	if !errors.Is(err, sql.ErrNoRows) {
+		if err != nil {
+			return mcp.Server{}, err
+		}
+		return mcpServerFromRow(row)
+	}
+	integrations, err := mcpIntegrations(ctx)
 	if err != nil {
 		return mcp.Server{}, err
 	}
-	return mcpServerFromRow(row)
+	for _, ig := range integrations {
+		if ig.Name == name {
+			return ig.Server, nil
+		}
+	}
+	return mcp.Server{}, sql.ErrNoRows
 }
 
 // loadMCPServer returns the server named in r's path, or writes an error.
@@ -190,7 +206,67 @@ func (s *Server) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
-	writeMCPJSON(w, out)
+	integrations, err := mcpIntegrations(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("discovering MCP integrations: %v", err), http.StatusBadGateway)
+		return
+	}
+	writeMCPJSON(w, mergeMCPIntegrations(out, integrations))
+}
+
+// mcpIntegrations returns the MCP integrations attached to this VM. They are
+// looked up each time, not stored; exe.dev's proxy adds their credentials.
+func mcpIntegrations(ctx context.Context) ([]mcpServerJSON, error) {
+	if !isExeDev() || testing.Testing() {
+		return nil, nil
+	}
+	env, err := exeenv.Current()
+	if err != nil {
+		return nil, err
+	}
+	return mcpIntegrationsIn(ctx, env, reflectionHTTPClient())
+}
+
+func mcpIntegrationsIn(ctx context.Context, env exeenv.Environment, client *http.Client) ([]mcpServerJSON, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	integrations, status, err := listAttachedIntegrations(ctx, client, env)
+	if status == http.StatusForbidden {
+		return nil, nil // reflection isn't attached
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []mcpServerJSON
+	for _, ig := range integrations {
+		if slices.Contains(ig.Attributes, "type:mcp") {
+			out = append(out, mcpServerJSON{
+				Server:      mcp.Server{Name: ig.Name, URL: env.IntegrationURL(ig.Name, ig.Team) + "/mcp", Description: ig.Comment, Headers: map[string]string{}},
+				Integration: ig.Name,
+			})
+		}
+	}
+	return out, nil
+}
+
+// mergeMCPIntegrations adds integrations to servers. A registered server an
+// integration reaches is marked as that integration's; one with the same
+// name hides it.
+func mergeMCPIntegrations(servers, integrations []mcpServerJSON) []mcpServerJSON {
+	for _, ig := range integrations {
+		covered := false
+		for i := range servers {
+			if mcp.SameLoginScope(servers[i].URL, ig.URL) {
+				servers[i].Auth, servers[i].LoginURL, servers[i].Integration = "", "", ig.Integration
+				covered = true
+			}
+			covered = covered || servers[i].Name == ig.Name
+		}
+		if !covered {
+			servers = append(servers, ig)
+		}
+	}
+	return servers
 }
 
 // decodeMCPServer reads a server from r's body.

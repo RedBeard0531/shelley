@@ -149,7 +149,7 @@ func TestMCPServers(t *testing.T) {
 	}
 
 	requireContains(t, e.fail(1, "add", "web", "https://example.com/x"), "shelley mcp: ", "web")
-	requireContains(t, e.fail(1, "auth", "web"), `MCP server "web" has an Authorization header`)
+	requireContains(t, e.fail(1, "auth", "web"), `MCP server "web" doesn't use Shelley's OAuth login`)
 	e.ok("rm", "web")
 	if errOut := e.fail(1, "rm", "web"); !strings.HasPrefix(errOut, "shelley mcp: ") {
 		t.Fatalf("rm web again: %q", errOut)

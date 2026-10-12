@@ -1401,6 +1401,7 @@ export interface McpServer {
   headers: Record<string, string>;
   auth?: "" | "logged_in" | "login_required";
   login_url?: string;
+  integration?: string;
 }
 
 // The parts of a tool's input JSON Schema that ToolDescriptionCard shows.

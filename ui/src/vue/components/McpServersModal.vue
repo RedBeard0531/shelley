@@ -9,6 +9,17 @@
     <template #title-right>
       <div class="models-header-actions">
         <Button
+          class="btn-icon"
+          text
+          severity="secondary"
+          v-tooltip.top="t('refresh')"
+          :aria-label="t('refresh')"
+          :disabled="loading"
+          @click="refresh"
+        >
+          <i class="pi pi-refresh" aria-hidden="true" />
+        </Button>
+        <Button
           as="a"
           href="/debug/mcp"
           target="_blank"
@@ -101,7 +112,7 @@
             <span class="sr-only">{{ t("columnActions") }}</span>
           </template>
           <template #body="{ data }">
-            <div v-if="pendingDelete === data.name" class="models-cell-actions">
+            <div v-if="!data.integration && pendingDelete === data.name" class="models-cell-actions">
               <Button
                 size="small"
                 severity="danger"
@@ -119,6 +130,7 @@
             <div v-else class="models-cell-actions">
               <Button size="small" text :label="t('mcpTools')" @click="toolsServer = data.name" />
               <Button
+                v-if="!data.integration"
                 class="btn-icon"
                 text
                 severity="secondary"
@@ -136,6 +148,7 @@
                 </svg>
               </Button>
               <Button
+                v-if="!data.integration"
                 class="btn-icon btn-danger"
                 text
                 severity="danger"
@@ -208,6 +221,12 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+async function refresh() {
+  notice.value = null;
+  loading.value = true;
+  await load();
 }
 
 // Runs a row action (delete, log out), then reloads the list.

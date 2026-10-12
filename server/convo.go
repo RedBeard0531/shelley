@@ -21,6 +21,7 @@ import (
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/loop"
+	"shelley.exe.dev/mcp"
 	"shelley.exe.dev/skills"
 	"shelley.exe.dev/slug"
 	"shelley.exe.dev/subpub"
@@ -1718,7 +1719,8 @@ func (cm *ConversationManager) recreateBtwReaderSystemPrompt(ctx context.Context
 	return created, nil
 }
 
-// mcpServerInfos lists the registered MCP servers for the system prompt.
+// mcpServerInfos lists the registered MCP servers and attached MCP
+// integrations for the system prompt.
 func (cm *ConversationManager) mcpServerInfos(ctx context.Context) ([]MCPServerInfo, error) {
 	var rows []generated.McpServer
 	err := cm.db.Queries(ctx, func(q *generated.Queries) (err error) {
@@ -1728,9 +1730,18 @@ func (cm *ConversationManager) mcpServerInfos(ctx context.Context) ([]MCPServerI
 	if err != nil {
 		return nil, err
 	}
-	servers := make([]MCPServerInfo, len(rows))
+	all := make([]mcpServerJSON, len(rows))
 	for i, row := range rows {
-		servers[i] = MCPServerInfo{Name: row.Name, Description: row.Description}
+		all[i].Server = mcp.Server{Name: row.Name, URL: row.Url, Description: row.Description}
+	}
+	integrations, err := mcpIntegrations(ctx)
+	if err != nil {
+		cm.logger.Warn("failed to discover MCP integrations for system prompt", "error", err)
+	}
+	all = mergeMCPIntegrations(all, integrations)
+	servers := make([]MCPServerInfo, len(all))
+	for i, srv := range all {
+		servers[i] = MCPServerInfo{Name: srv.Name, Description: srv.Description}
 	}
 	return servers, nil
 }

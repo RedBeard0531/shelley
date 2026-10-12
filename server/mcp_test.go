@@ -10,14 +10,17 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/exeenv"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/predictable"
+	"shelley.exe.dev/mcp"
 	"shelley.exe.dev/mcp/mcptest"
 )
 
@@ -129,6 +132,56 @@ func TestMCPServersAPI(t *testing.T) {
 	e.want(204, "DELETE", "/api/mcp/servers/open", "", "")
 	e.want(404, "DELETE", "/api/mcp/servers/open", "", "")
 	e.want(404, "GET", "/api/mcp/servers/open/tools", "", "")
+}
+
+func TestMCPIntegrations(t *testing.T) {
+	env, err := exeenv.New("https", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	discover := func(status int, body string) ([]mcpServerJSON, error) {
+		return mcpIntegrationsIn(t.Context(), env, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() != env.ReflectionURL()+"/integrations" {
+				t.Fatalf("unexpected reflection request: %s", req.URL)
+			}
+			return testHTTPResponse(status, body), nil
+		})})
+	}
+	integrations, err := discover(200, `{"integrations":[
+		{"name":"kagi-mcp","type":"catalog","attributes":["type:mcp"]},
+		{"name":"remote","type":"catalog","team":true,"comment":"memes","attributes":["type:mcp"]},
+		{"name":"taken","type":"catalog","attributes":["type:mcp"]},
+		{"name":"other","type":"http-proxy"}
+	]}`)
+	if err != nil || len(integrations) != 3 {
+		t.Fatalf("integrations: %+v, %v", integrations, err)
+	}
+	if ig := integrations[1]; ig.Name != "remote" || ig.URL != "https://remote.team.example.test/mcp" || ig.Description != "memes" || ig.Integration != "remote" || ig.LoginURL != "" {
+		t.Fatalf("remote: %+v", ig)
+	}
+	if got, err := discover(403, ""); got != nil || err != nil {
+		t.Fatalf("detached reflection: %+v, %v", got, err)
+	}
+	if _, err := discover(503, ""); err == nil {
+		t.Fatal("reflection outage: no error")
+	}
+
+	registered := func(name, url string) mcpServerJSON {
+		return mcpServerJSON{Server: mcp.Server{Name: name, URL: url}, Auth: "login_required", LoginURL: "/mcp/login/" + name}
+	}
+	merged := mergeMCPIntegrations([]mcpServerJSON{
+		registered("kagi", "https://kagi-mcp.int.example.test/mcp?tools=search"),
+		registered("taken", "https://taken.example.test/mcp"),
+		registered("lookalike", "https://kagi-mcp.int.example.test.evil.test/mcp"),
+	}, integrations)
+	var names []string
+	for _, s := range merged {
+		names = append(names, s.Name+":"+s.Integration+":"+s.LoginURL)
+	}
+	want := []string{"kagi:kagi-mcp:", "taken::/mcp/login/taken", "lookalike::/mcp/login/lookalike", "remote:remote:"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("merged:\n%q\nwant:\n%q", names, want)
+	}
 }
 
 func TestMCPToolsAndCalls(t *testing.T) {
