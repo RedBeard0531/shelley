@@ -1,6 +1,6 @@
 // Browser side of a GPT-Live WebRTC session: microphone up, model audio down,
-// JSON events on the "oai-events" data channel. The server only brokers the
-// SDP exchange (api.createLiveSession); media and events go straight to OpenAI.
+// JSON events on the "oai-events" data channel. The server brokers the SDP
+// exchange (api.createLiveSession); media and events go straight to OpenAI.
 import { api, type LiveConversationSettings } from "./api";
 
 export interface LiveEvent {
@@ -13,6 +13,8 @@ const CLOSE_TIMEOUT_MS = 15_000;
 
 export class LiveSession {
   private closed = false;
+  /** Live's session id, which also names Shelley's side of the call. */
+  id = "";
 
   private constructor(
     private readonly pc: RTCPeerConnection,
@@ -95,6 +97,7 @@ export class LiveSession {
             signal,
             settings?.(),
           );
+          session.id = answer.session.id;
           await pc.setRemoteDescription({ type: "answer", sdp: answer.transport.sdp });
           await started;
         })(),

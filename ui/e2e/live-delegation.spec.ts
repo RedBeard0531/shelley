@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { createConversationViaAPIWithDetails } from "./helpers";
 
 async function mockVoiceBrowser(page: Page, denyMicrophone = false, holdMicrophone = false) {
@@ -81,27 +81,24 @@ const emit = (page: Page, event: Record<string, unknown>) =>
 const notes = (page: Page) =>
   page.evaluate(() => JSON.stringify(((window as any).__mockLive as Live).sent));
 
-// Live delegates a client task after this speech; the call settles the
+// Live delegates a client task after this speech; Shelley settles the
 // transcript and submits it.
 async function speakAndDelegate(page: Page, id: string, speech: string) {
   await emit(page, { type: "session.input_transcript.delta", delta: speech, start_ms: 0, end_ms: 900 });
   await emit(page, { type: "session.delegation.created", offset_ms: 900, delegation: { id, target: "client" } });
-  await page.clock.fastForward(1_300);
 }
+
+const conversationJSON = async (request: APIRequestContext, id: string) =>
+  JSON.stringify(await (await request.get(`/api/conversation/${id}`)).json());
 
 test("a delegated question reaches the chat, and its reply reaches Live", async ({ page, request }) => {
   const { conversationId } = await createConversationViaAPIWithDetails(request, "echo: ready");
   await mockVoiceBrowser(page);
-  await page.route(`**/api/conversation/${conversationId}/live-session`, (route) => {
-    expect(route.request().postDataJSON()).not.toHaveProperty("conversation_options");
-    return route.fulfill({
-      status: 201, contentType: "application/json",
-      body: JSON.stringify({ session: { id: "live_direct" }, transport: { sdp: "v=0" } }),
-    });
-  });
-  const submitted: Array<{ transcript: string; voice_context: string }> = [];
+  const sessions: Array<Record<string, unknown>> = [];
+  const relayed: string[] = [];
   page.on("request", (req) => {
-    if (req.url().endsWith(`/api/conversation/${conversationId}/live-message`)) submitted.push(req.postDataJSON());
+    if (req.url().endsWith(`/api/conversation/${conversationId}/live-session`)) sessions.push(req.postDataJSON());
+    if (req.url().endsWith("/events")) relayed.push(...req.postDataJSON().events.map((e: { type: string }) => e.type));
   });
   await page.goto(`/c/${conversationId}`);
   const call = page.getByTestId("live-call-header");
@@ -122,17 +119,16 @@ test("a delegated question reaches the chat, and its reply reaches Live", async 
   await emit(page, { type: "session.input_transcript.delta", delta: "Hello ", start_ms: 0, end_ms: 400 });
   await emit(page, { type: "session.output_transcript.delta", delta: "Hey there!", start_ms: 500, end_ms: 900 });
   await emit(page, { type: "session.input_transcript.delta", delta: "echo: why is this so slow", start_ms: 1_200, end_ms: 1_900 });
-  await page.clock.fastForward(1_300);
-  expect(submitted).toHaveLength(0); // speech alone is not a task
+  await emit(page, { type: "session.started" }); // Shelley doesn't need it
   for (let i = 0; i < 2; i++) { // Live may repeat an event
     await emit(page, { type: "session.delegation.created", offset_ms: 1_900, delegation: { id: "captured_question", target: "client" } });
   }
-  await page.clock.fastForward(1_300);
-  await expect.poll(() => submitted.length).toBe(1);
-  expect(submitted[0]).toMatchObject({ transcript: "Hello echo: why is this so slow", voice_context: "USER: Hello\nLIVE: Hey there!\nUSER: echo: why is this so slow" });
   const message = page.getByTestId("message").filter({ hasText: "Spoken request:\nHello echo: why is this so slow" });
   await expect(message).toHaveCount(1);
-  await expect(message).toContainText("Voice exchange (for context only):");
+  await expect(message).toContainText("Voice exchange (for context only):\nUSER: Hello\nLIVE: Hey there!\nUSER: echo: why is this so slow");
+  expect(sessions).toHaveLength(1);
+  expect(sessions[0]).not.toHaveProperty("conversation_options");
+  expect(relayed).not.toContain("session.started");
   await expect.poll(() => notes(page)).toContain("The backend accepted this task: Hello echo: why is this so slow");
   await expect.poll(() => notes(page)).toContain('"delegation_id":"captured_question","content":"Backend reply: edit predictable.go');
 
@@ -141,6 +137,18 @@ test("a delegated question reaches the chat, and its reply reaches Live", async 
   await expect(call).toHaveAttribute("aria-label", "Start voice conversation");
   expect(await notes(page)).toContain("session.close");
   expect(await page.evaluate(() => (window as any).__voiceTracksStopped)).toBe(1);
+  await expect(message).toHaveCount(1);
+});
+
+test("Shelley's errors about a call show on its strip", async ({ page, request }) => {
+  const { conversationId } = await createConversationViaAPIWithDetails(request, "echo: ready");
+  await mockVoiceBrowser(page);
+  await page.goto(`/c/${conversationId}`);
+  await page.getByTestId("live-call-header").click();
+  await expect(page.getByTestId("live-bar")).toContainText("On call");
+  await emit(page, { type: "session.delegation.created", offset_ms: -1, delegation: { id: "bad", target: "client" } });
+  await expect(page.getByTestId("live-error")).toHaveText("Live returned an invalid delegation timestamp.");
+  await page.getByTestId("live-stop").click();
 });
 
 test("a call stays pinned to its original chat while browsing other chats", async ({ page, request }) => {
@@ -148,16 +156,8 @@ test("a call stays pinned to its original chat while browsing other chats", asyn
   const other = await createConversationViaAPIWithDetails(request, "echo: other chat");
   await mockVoiceBrowser(page);
   const sessions: string[] = [];
-  const tasks: string[] = [];
-  await page.route("**/api/conversation/*/live-session", (route) => {
-    sessions.push(new URL(route.request().url()).pathname.split("/").at(-2)!);
-    return route.fulfill({
-      status: 201, contentType: "application/json",
-      body: JSON.stringify({ session: { id: "live_pinned" }, transport: { sdp: "v=0" } }),
-    });
-  });
   page.on("request", (req) => {
-    if (req.url().endsWith("/live-message")) tasks.push(new URL(req.url()).pathname.split("/").at(-2)!);
+    if (req.url().endsWith("/live-session")) sessions.push(new URL(req.url()).pathname.split("/").at(-2)!);
   });
   await page.goto(`/c/${origin.slug}`);
   await page.getByTestId("live-call-header").click();
@@ -181,7 +181,8 @@ test("a call stays pinned to its original chat while browsing other chats", asyn
   await navigateWithinApp(page, "/new");
   await expect(page.getByTestId("message-input")).toBeVisible();
   await speakAndDelegate(page, "off_view_task", "echo: delegated to the original chat");
-  await expect.poll(() => tasks).toEqual([origin.conversationId]);
+  await expect.poll(() => conversationJSON(request, origin.conversationId)).toContain("delegated to the original chat");
+  expect(await conversationJSON(request, other.conversationId)).not.toContain("delegated to the original chat");
   await expect.poll(() => notes(page)).toContain('"delegation_id":"off_view_task","content":"Backend reply: edit predictable.go');
   await expect(page).toHaveURL(/\/new$/);
   expect(sessions).toEqual([origin.conversationId]);
@@ -220,22 +221,14 @@ test("a call on /new starts one blank draft with the composer's selection, where
   let drafts = 0;
   let startedId = "";
   let sessionSettings: Record<string, any> | null = null;
-  const tasks: Array<{ id: string; body: Record<string, unknown> }> = [];
   await page.route("**/api/conversations/draft", (route) => {
     drafts++;
     return route.continue();
   });
-  await page.route("**/api/conversation/*/live-session", (route) => {
-    startedId = new URL(route.request().url()).pathname.split("/").at(-2)!;
-    sessionSettings = route.request().postDataJSON();
-    return route.fulfill({
-      status: 201, contentType: "application/json",
-      body: JSON.stringify({ session: { id: "live_new" }, transport: { sdp: "v=0" } }),
-    });
-  });
   page.on("request", (req) => {
-    if (req.url().endsWith("/live-message")) {
-      tasks.push({ id: new URL(req.url()).pathname.split("/").at(-2)!, body: req.postDataJSON() });
+    if (req.url().endsWith("/live-session")) {
+      startedId = new URL(req.url()).pathname.split("/").at(-2)!;
+      sessionSettings = req.postDataJSON();
     }
   });
   const profilesLoaded = page.waitForResponse((response) => response.url().endsWith("/api/profiles") && response.ok());
@@ -251,16 +244,14 @@ test("a call on /new starts one blank draft with the composer's selection, where
   await expect(page.getByTestId("live-bar")).toContainText("On call");
   expect(startedId).not.toBe("");
   expect(startedId).not.toBe(other.conversationId);
-  expect(sessionSettings).toMatchObject({ model: "predictable", conversation_options: { profile } });
+  // The call's tasks promote the draft with them.
+  expect(sessionSettings).toMatchObject({
+    model: "predictable",
+    conversation_options: expect.objectContaining({ profile, tool_overrides: expect.any(Object) }),
+  });
   expect((await (await request.get(`/api/conversation/${startedId}`)).json()).conversation.is_draft).toBe(true);
 
   await speakAndDelegate(page, "first_task", "echo: started by voice");
-  await expect.poll(() => tasks.length).toBe(1);
-  expect(tasks[0].id).toBe(startedId);
-  expect(tasks[0].body).toMatchObject({
-    model: "predictable", transcript: "echo: started by voice",
-    conversation_options: expect.objectContaining({ profile, tool_overrides: expect.any(Object) }),
-  });
   await expect.poll(async () => (await (await request.get(`/api/conversation/${startedId}`)).json()).conversation)
     .toMatchObject({ is_draft: false, model: "predictable" });
   expect(JSON.parse((await (await request.get(`/api/conversation/${startedId}`)).json()).conversation.conversation_options).profile).toBe(profile);

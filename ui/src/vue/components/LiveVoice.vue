@@ -1,5 +1,6 @@
 <!-- GPT-Live's persistent call controls. It handles the spoken
-     conversation and brings in Shelley only when it delegates work. -->
+     conversation and brings in Shelley only when it delegates work: Shelley
+     hears Live's events and says what to tell Live. -->
 <template>
   <div
     v-if="phase !== 'idle' || error"
@@ -123,13 +124,6 @@ import { api, type LiveConversationSettings } from "../../services/api";
 import { LiveSession, type LiveEvent } from "../../services/liveSession";
 import type { Conversation } from "../../types";
 import { useLiveCallConversation, type LiveCallDestination } from "../composables/liveCallConversation";
-import {
-  delegatedSpeech,
-  formatVoiceContext,
-  liveDialogueMessage,
-  messageText,
-  type VoiceFragment,
-} from "../../utils/liveTranscript";
 import { startRecordingMeter } from "./recordingMeter";
 
 const props = defineProps<{
@@ -164,156 +158,92 @@ const formattedElapsed = computed(() => {
   return `${minutes}:${seconds}`;
 });
 
-// Live provides no transcript turn boundary: a delegation settles after a
-// quiet period, with a hard deadline for an interrupted utterance.
-const TRANSCRIPT_QUIET_MS = 1200;
-const DELEGATION_DEADLINE_MS = 5000;
-const MAX_DELEGATIONS_PER_MINUTE = 12;
-
 let session: LiveSession | null = null;
 let connecting: AbortController | null = null;
 let settings: LiveConversationSettings | undefined;
-let fragments: VoiceFragment[] = [];
-let claimed = 0; // fragments already part of a delegation
-let seen = new Set<string>(); // delegation ids; Live may repeat an event
-interface PendingDelegation {
-  offsetMs: number;
-  settle?: ReturnType<typeof setTimeout>;
-  deadline: ReturnType<typeof setTimeout>;
-}
-let pending = new Map<string, PendingDelegation>();
-// Delegations submitted to the backend: the visible message each became,
-// to recognise its row, and whether its reply has arrived.
-let submitted: { id: string; message: string; userSeq: number | null; finished: boolean }[] = [];
-let lastSeenSequence = 0;
-let sendChain: Promise<void> = Promise.resolve();
-let inflight = 0; // delegations awaiting their receipt; their rows may stream in first
-let sendTimes: number[] = [];
-let eventSeq = 0;
+let instructions: EventSource | null = null;
 let stopMeter: (() => void) | null = null;
 let timerID: ReturnType<typeof setInterval> | null = null;
 
+// What Shelley reads of Live's events; it decides what speech becomes a task.
+const RELAYED = new Set([
+  "session.input_transcript.delta",
+  "session.output_transcript.delta",
+  "session.delegation.created",
+  "session.closed",
+]);
+let outbox: LiveEvent[] = [];
+let relaying = false;
+
 function onEvent(event: LiveEvent) {
-  switch (event.type) {
-    case "session.input_transcript.delta":
-    case "session.output_transcript.delta": {
-      fragments.push({
-        speaker: event.type === "session.input_transcript.delta" ? "user" : "assistant",
-        text: String(event.delta ?? ""),
-        startMs: Number(event.start_ms ?? 0),
-        endMs: Number(event.end_ms ?? 0),
-      });
-      if (fragments.length > 1000 && pending.size === 0) {
-        fragments = fragments.slice(-500);
-        claimed = 0;
-      }
-      if (event.type === "session.input_transcript.delta") {
-        for (const [id, task] of pending) settle(id, task);
-      }
-      break;
-    }
-    case "session.delegation.created": {
-      const delegation = event.delegation as { id?: string; target?: string } | undefined;
-      const id = delegation?.id;
-      if (!id || delegation?.target !== "client" || seen.has(id)) return;
-      seen.add(id);
-      const task: PendingDelegation = { offsetMs: Number(event.offset_ms ?? 0), deadline: setTimeout(() => commit(id), DELEGATION_DEADLINE_MS) };
-      pending.set(id, task);
-      settle(id, task);
-      break;
-    }
-    case "error":
-      error.value = String((event.error as { message?: string } | undefined)?.message ?? "Live session error");
-      break;
+  if (event.type === "error") {
+    error.value = String((event.error as { message?: string } | undefined)?.message ?? "Live session error");
+  } else if (RELAYED.has(event.type)) {
+    outbox.push(event);
+    void relay();
   }
 }
 
-function settle(id: string, task: PendingDelegation) {
-  if (task.settle) clearTimeout(task.settle);
-  task.settle = setTimeout(() => commit(id), TRANSCRIPT_QUIET_MS);
-}
-
-// Commentary can be spoken; thinking keeps Live current without interrupting.
-function append(type: "session.commentary.append" | "session.thinking.append", content: string, delegationId: string | null = null) {
-  try {
-    session?.send({ type, event_id: `shelley_${++eventSeq}`, delegation_id: delegationId, content: content.slice(0, 1200) });
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  }
-}
-
-function commit(id: string) {
-  const task = pending.get(id);
-  const conversationId = origin.conversationId.value;
-  if (!task || !conversationId) return;
-  if (task.settle) clearTimeout(task.settle);
-  clearTimeout(task.deadline);
-  pending.delete(id);
-  const since = claimed;
-  const speech = delegatedSpeech(fragments.slice(since), task.offsetMs);
-  claimed = fragments.length;
-  if (!speech) {
-    append("session.thinking.append", "No user request was captured for this delegation. Do not report progress. If the user asked for something, ask them to repeat it.", id);
-    return;
-  }
-  const now = Date.now();
-  sendTimes = sendTimes.filter((at) => now - at < 60_000);
-  if (sendTimes.length >= MAX_DELEGATIONS_PER_MINUTE) {
-    stop();
-    error.value = "Voice delegation paused to prevent a feedback loop. Start voice again to continue.";
-    return;
-  }
-  sendTimes.push(now);
-  const voiceContext = formatVoiceContext(fragments, since);
+// Events reach Shelley in order: one request at a time, batching those
+// that arrive meanwhile.
+async function relay() {
   const live = session;
-  // Delegations reach the backend in order.
-  sendChain = sendChain.then(async () => {
+  const conversationId = origin.conversationId.value;
+  if (relaying || !live || !conversationId) return;
+  relaying = true;
+  try {
+    while (session === live && outbox.length) {
+      const events = outbox;
+      outbox = [];
+      await api.sendLiveEvents(conversationId, live.id, events);
+    }
+  } catch (err) {
     if (session !== live) return;
-    inflight++;
-    try {
-      const result = await api.sendLiveMessage(conversationId, speech, voiceContext, settingsForDraft());
-      if (session !== live) return;
-      error.value = null;
-      submitted.push({ id, message: result.message, userSeq: null, finished: false });
-      append("session.thinking.append", result.status === "queued"
-        ? `This task is queued behind earlier work: ${speech}`
-        : `The backend accepted this task: ${speech}`, id);
-    } catch (err) {
-      if (session !== live) return;
-      error.value = err instanceof Error ? err.message : String(err);
-      append("session.thinking.append", "The last delegation could not be sent to the backend. Tell the user briefly and ask them to repeat it. Do not report progress.", id);
-    } finally {
-      inflight--;
-    }
-    syncConversation();
-  });
-}
-
-// Keep Live informed of the backend's dialogue, replies scoped to the
-// delegation they answer. Only Live's own delegations become backend tasks.
-function syncConversation() {
-  if (!session || phase.value !== "live" || inflight > 0) return;
-  const unseen = origin.messages.value
-    .filter((m) => m.sequence_id > lastSeenSequence)
-    .sort((a, b) => a.sequence_id - b.sequence_id);
-  for (const row of unseen) {
-    lastSeenSequence = row.sequence_id;
-    const dialogue = liveDialogueMessage(row);
-    if (!dialogue) continue;
-    if (dialogue.role === "user") {
-      const task = submitted.find((d) => d.userSeq === null && d.message === messageText(row));
-      if (task) task.userSeq = row.sequence_id;
-      else append("session.thinking.append", `New typed message to the backend: ${dialogue.text}`);
-      continue;
-    }
-    const active = submitted.filter((d) => !d.finished && d.userSeq !== null && row.sequence_id > d.userSeq).at(-1);
-    append("session.commentary.append", `Backend reply: ${dialogue.text}`, active?.id);
-    for (const task of submitted) {
-      if (task.userSeq !== null && task.userSeq <= row.sequence_id) task.finished = true;
-    }
+    // Without Shelley's side of the call nothing the user asks can reach it.
+    stop();
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    if (session === live) relaying = false;
   }
 }
-watch(origin.messages, syncConversation);
+
+interface Instruction {
+  type: string;
+  event?: LiveEvent;
+  message?: string | null;
+}
+
+function follow(live: LiveSession, conversationId: string) {
+  const stream = new EventSource(api.liveCallInstructionsURL(conversationId, live.id));
+  instructions = stream;
+  stream.onmessage = (e) => {
+    if (session !== live) return;
+    const instruction = JSON.parse(e.data) as Instruction;
+    switch (instruction.type) {
+      case "send":
+        try {
+          live.send(instruction.event!);
+        } catch (err) {
+          error.value = err instanceof Error ? err.message : String(err);
+        }
+        break;
+      case "error":
+        error.value = instruction.message ?? null;
+        break;
+      case "stop":
+        stop();
+        error.value = instruction.message ?? null;
+        break;
+    }
+  };
+  // EventSource reconnects by itself (resuming after the last instruction);
+  // it gives up only when Shelley no longer has the call.
+  stream.onerror = () => {
+    if (session !== live || stream.readyState !== EventSource.CLOSED) return;
+    stop();
+    error.value = "Lost the call's connection to Shelley.";
+  };
+}
 
 async function start() {
   if (phase.value !== "idle" || props.disabled) return;
@@ -329,9 +259,7 @@ async function start() {
   settings = destination.settings;
   const abort = new AbortController();
   connecting = abort;
-  if (destination.conversationId) {
-    lastSeenSequence = origin.bind(destination.conversationId, destination.conversation);
-  }
+  if (destination.conversationId) origin.bind(destination.conversationId, destination.conversation);
   let started: LiveSession | undefined;
   try {
     started = await LiveSession.start(
@@ -341,7 +269,7 @@ async function start() {
         // ready, so a denied permission leaves no empty conversation behind.
         const id = await destination.prepareConversation();
         abort.signal.throwIfAborted();
-        lastSeenSequence = origin.bind(id);
+        origin.bind(id);
         return id;
       },
       (event) => {
@@ -356,6 +284,7 @@ async function start() {
       () => settingsForDraft(),
     );
     session = started;
+    follow(started, origin.conversationId.value!);
     phase.value = "live";
     const startedAt = performance.now();
     timerID = setInterval(() => {
@@ -370,7 +299,6 @@ async function start() {
     } catch {
       // The call still works without the level meter.
     }
-    syncConversation();
   } catch (err) {
     if (abort.signal.aborted) return; // stop() already reset the panel
     reset();
@@ -380,8 +308,8 @@ async function start() {
   }
 }
 
-// A draft's selection travels with its call and delegations until its first
-// send; a conversation under way has its own settings.
+// A draft's selection travels with its call, whose delegations promote the
+// draft with it; a conversation under way has its own settings.
 function settingsForDraft() {
   return origin.conversation.value?.is_draft !== false ? settings : undefined;
 }
@@ -393,20 +321,15 @@ function reset() {
   timerID = null;
   elapsedSeconds.value = 0;
   waveformLevels.value = Array.from({ length: METER_BARS }, () => 0.15);
+  instructions?.close();
+  instructions = null;
+  // Shelley drops what is still pending; a task already handed over stays.
+  const conversationId = origin.conversationId.value;
+  if (session && conversationId) void api.endLiveCall(conversationId, session.id);
   session = null;
   origin.release();
-  for (const task of pending.values()) {
-    if (task.settle) clearTimeout(task.settle);
-    clearTimeout(task.deadline);
-  }
-  pending = new Map();
-  seen = new Set();
-  fragments = [];
-  claimed = 0;
-  submitted = [];
-  inflight = 0;
-  lastSeenSequence = 0;
-  sendTimes = [];
+  outbox = [];
+  relaying = false;
   muted.value = false;
   phase.value = "idle";
 }

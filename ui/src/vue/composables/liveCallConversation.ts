@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue";
-import { api, type LiveConversationSettings } from "../../services/api";
+import type { LiveConversationSettings } from "../../services/api";
 import { messageStore } from "../../services/messageStore";
-import type { Conversation, Message } from "../../types";
+import type { Conversation } from "../../types";
 
 /** Captured on the call tap, before microphone permission or network awaits. */
 export interface LiveCallDestination {
@@ -14,15 +14,13 @@ export interface LiveCallDestination {
 }
 
 /** A call's own view of the conversation it started in, kept while the
- *  user browses other chats: its row, its messages and a store subscription
- *  independent of the conversation on screen. */
+ *  user browses other chats: its row and a store subscription independent
+ *  of the conversation on screen. */
 export function useLiveCallConversation(getConversation: (id: string) => Conversation | undefined) {
   const conversationId = ref<string | null>(null);
   const conversation = shallowRef<Conversation>();
-  const messages = shallowRef<Message[]>([]);
   let unsubscribe: (() => void) | undefined;
   let initialGeneration: number | undefined;
-  let refreshing = false;
 
   // The call ends with its conversation: archived, or compacted into a new
   // generation whose rows it cannot follow.
@@ -38,7 +36,6 @@ export function useLiveCallConversation(getConversation: (id: string) => Convers
     const id = conversationId.value;
     if (!id) return;
     const cached = messageStore.peek(id);
-    if (cached) messages.value = cached.messages;
     // List patches and the message stream can race; keep the newest row.
     for (const row of [getConversation(id), cached?.conversation]) {
       if (row && (!conversation.value || row.updated_at >= conversation.value.updated_at)) {
@@ -48,42 +45,13 @@ export function useLiveCallConversation(getConversation: (id: string) => Convers
     initialGeneration ??= conversation.value?.current_generation;
   }
 
-  // Reconnects mark every store record stale, including our off-screen
-  // origin. Repair it once so replies made meanwhile reach Live.
-  async function refresh() {
-    const id = conversationId.value;
-    if (!id || refreshing) return;
-    refreshing = true;
-    try {
-      await messageStore.hydrate(id);
-      if (conversationId.value !== id) return;
-      sync();
-      if (messageStore.peek(id)?.needsRefresh || !messageStore.peek(id)?.hasFullHistory) {
-        const response = await api.getConversationWithProgress(id);
-        if (conversationId.value === id) messageStore.applyFullHistory(id, response);
-      }
-    } catch (err) {
-      console.error("Failed to refresh voice conversation:", err);
-    } finally {
-      refreshing = false;
-    }
-  }
-
-  /** Follows conversation id; returns the highest message sequence seen so far. */
-  function bind(id: string, row?: Conversation): number {
+  /** Follows conversation id. */
+  function bind(id: string, row?: Conversation) {
     release();
     conversationId.value = id;
     conversation.value = row;
-    unsubscribe = messageStore.subscribe(id, () => {
-      sync();
-      if (messageStore.peek(id)?.needsRefresh) void refresh();
-    });
+    unsubscribe = messageStore.subscribe(id, sync);
     sync();
-    void refresh();
-    return Math.max(
-      messageStore.peek(id)?.maxSequenceIdKnown ?? 0,
-      ...messages.value.map((m) => m.sequence_id),
-    );
   }
 
   function release() {
@@ -91,7 +59,6 @@ export function useLiveCallConversation(getConversation: (id: string) => Convers
     unsubscribe = undefined;
     conversationId.value = null;
     conversation.value = undefined;
-    messages.value = [];
     initialGeneration = undefined;
   }
 
@@ -100,5 +67,5 @@ export function useLiveCallConversation(getConversation: (id: string) => Convers
     flush: "sync",
   });
   onBeforeUnmount(release);
-  return { conversationId, conversation, messages, invalidated, bind, release };
+  return { conversationId, conversation, invalidated, bind, release };
 }

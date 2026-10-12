@@ -477,21 +477,31 @@ class ApiService {
     return response.json();
   }
 
-  // Only a Live delegation calls this endpoint. The server submits the speech
-  // and its voice exchange through ordinary chat and returns the receipt.
-  async sendLiveMessage(
+  // Live's events for the server's side of a call, which decides what the
+  // user's speech becomes and answers on liveCallInstructionsURL.
+  async sendLiveEvents(
     conversationId: string,
-    transcript: string,
-    voiceContext: string,
-    settings?: LiveConversationSettings,
-  ): Promise<{ status: "accepted" | "queued"; message: string }> {
-    const response = await fetch(`${this.baseUrl}/conversation/${conversationId}/live-message`, {
+    sessionId: string,
+    events: unknown[],
+  ): Promise<void> {
+    const response = await fetch(this.liveCallURL(conversationId, sessionId) + "/events", {
       method: "POST",
       headers: this.postHeaders,
-      body: JSON.stringify({ transcript, voice_context: voiceContext, ...settings }),
+      body: JSON.stringify({ events }),
     });
-    if (!response.ok) throw await responseError(response, "Failed to deliver speech to Shelley");
-    return response.json();
+    if (!response.ok) throw await responseError(response, "Failed to relay the call to Shelley");
+  }
+
+  liveCallInstructionsURL(conversationId: string, sessionId: string): string {
+    return this.liveCallURL(conversationId, sessionId) + "/stream";
+  }
+
+  async endLiveCall(conversationId: string, sessionId: string): Promise<void> {
+    await fetch(this.liveCallURL(conversationId, sessionId), { method: "DELETE" });
+  }
+
+  private liveCallURL(conversationId: string, sessionId: string): string {
+    return `${this.baseUrl}/conversation/${encodeURIComponent(conversationId)}/live-session/${encodeURIComponent(sessionId)}`;
   }
 
   async listBtwReaders(conversationId: string): Promise<BtwReaderDescriptor[]> {
