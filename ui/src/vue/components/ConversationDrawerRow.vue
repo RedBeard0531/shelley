@@ -29,7 +29,12 @@
           <div v-else-if="isDraft" class="conversation-title conversation-title-draft">
             {{ ctx.draftLabels.value[conversation.conversation_id] || "draft" }}
           </div>
-          <div v-else class="conversation-title" :title="conversation.slug || undefined">
+          <div
+            v-else
+            class="conversation-title"
+            :title="conversation.slug || undefined"
+            @dblclick="ctx.handleStartRename($event, conversation)"
+          >
             <em v-if="!conversation.slug">untitled</em>
             <template v-else>
               <template

@@ -1,4 +1,4 @@
-import { clearConversationQuery } from "./helpers";
+import { clearConversationQuery, createConversationViaAPIWithDetails } from "./helpers";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ConversationWithState } from "../src/types";
 
@@ -6,6 +6,40 @@ test.use({
   viewport: { width: 1280, height: 720 },
   isMobile: false,
   hasTouch: false,
+});
+
+test("double-clicking a conversation name renames it and Escape cancels", async ({
+  page,
+  request,
+}) => {
+  const conversation = await createConversationViaAPIWithDetails(request, "rename from name");
+  await page.goto("/new");
+  const row = page.locator(`[data-conversation-id="${conversation.conversationId}"]`);
+  const title = row.locator(".conversation-title");
+  const input = row.locator(".drawer-rename-input");
+
+  // Single-click still opens the conversation; double-click also opens its editor.
+  await title.click();
+  await expect(page).toHaveURL(new RegExp(`/c/${conversation.slug}$`));
+  await expect(input).toHaveCount(0);
+  await title.dblclick();
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue(conversation.slug);
+  await input.fill("discarded-name");
+  await input.press("Escape");
+  await expect(title).toHaveText(conversation.slug);
+
+  await page.goto("/new");
+  await title.dblclick();
+  await expect(input).toBeFocused();
+  const newSlug = `renamed-${conversation.conversationId.toLowerCase()}`;
+  await input.fill(newSlug);
+  await input.press("Enter");
+  await expect(title).toHaveText(newSlug);
+  await page.reload();
+  await expect(title).toHaveText(newSlug);
+  await title.click();
+  await expect(page).toHaveURL(new RegExp(`/c/${newSlug}$`));
 });
 
 function conversation(
