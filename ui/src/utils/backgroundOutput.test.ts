@@ -8,8 +8,7 @@ const job = {
 };
 const footer =
   ` background job ${job.jobId} (PGID ${job.pgid}). Log: ${job.logPath}\n` +
-  "Completion will wake this conversation; do not poll or sleep waiting for it. " +
-  "Keep working on other things, or end your turn if nothing remains. " +
+  "Its output will arrive as a new message. " +
   `Cancel with \`kill -- -${job.pgid}\`.]`;
 
 assert.equal(backgroundOutput(`[Started as${footer}`, job), "");
@@ -23,3 +22,13 @@ assert.equal(
 );
 assert.equal(backgroundOutput(`first\n\n[Started as${footer}`, { ...job, pgid: 124 }), "");
 assert.equal(backgroundOutput("unrecognized background tool result", job), "");
+// The model's instructions may change wording without leaking into the UI.
+assert.equal(
+  backgroundOutput(
+    `out\n\n[Started as background job ${job.jobId} (PGID ${job.pgid}). Log: ${job.logPath}\nAny guidance at all. Cancel with \`kill -- -${job.pgid}\`.]`,
+    job,
+  ),
+  "out",
+);
+// Output that merely mentions the header is not mistaken for the trailer.
+assert.equal(backgroundOutput(`[Started as${footer}\ntrailing junk`, job), "");
