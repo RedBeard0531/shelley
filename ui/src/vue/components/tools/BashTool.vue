@@ -262,10 +262,4 @@ const lineCount = computed(() =>
     opacity: 0.85;
   }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .bash-tool-running-dot {
-    animation: none;
-  }
-}
 </style>

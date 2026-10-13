@@ -16934,6 +16934,15 @@ kbd {
     animation-duration: 1.5s !important;
   }
 
+  /* BashTool's running dot declares its pulse in scoped component CSS, so the
+     selector carries a data-v attribute the blanket rule above still reaches.
+     Restoring the iteration count as well keeps it looping even when the
+     restore rule is the only one matching. */
+  .bash-tool-running-dot {
+    animation-duration: 1.5s !important;
+    animation-iteration-count: infinite !important;
+  }
+
   /* PrimeIcons ships its own reduce rule that freezes .pi-spin by setting
      animation-iteration-count to 1, so restoring the duration alone would leave
      it stopped after a single turn. Nothing in our source uses .pi-spin today;
