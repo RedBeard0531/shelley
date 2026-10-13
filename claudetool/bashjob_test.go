@@ -148,10 +148,16 @@ func TestBashBackgroundsLongCommand(t *testing.T) {
 	}
 	text := out.LLMContent[0].Text
 	// The timeout can fire before the shell produces any output.
-	for _, want := range []string{job.ID, job.LogPath, "kill -- -" + strconv.Itoa(job.PID), "do not poll"} {
+	for _, want := range []string{
+		job.ID, job.LogPath, "kill -- -" + strconv.Itoa(job.PID), "never poll",
+		"work that doesn't need its output; otherwise end your turn",
+	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("result %q does not contain %q", text, want)
 		}
+	}
+	if strings.Contains(text, "Keep working on other things") {
+		t.Error("background notice encourages unplanned work")
 	}
 
 	// Synchronize with the shell instead of assuming it reached the gate

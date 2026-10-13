@@ -97,10 +97,10 @@ const (
 	bashDescription = `Executes shell commands via bash --login -c, returning combined stdout/stderr.
 Shell state (cwd, variables, aliases) does not persist; use change_dir for cwd.
 
-After 60s, commands move to the background. You may start slow commands in the
-background to begin with. Completion wakes this conversation, so never poll or
-sleep waiting for it; keep working, or end your turn. Do not use &, nohup, or
-disown.
+After 60s, commands move to the background. A background command's output
+arrives as a new message when it exits; never poll or sleep for it. While it
+runs, only do work that doesn't need its output; otherwise end your turn.
+Do not use &, nohup, or disown.
 
 For servers and watch modes, which never exit, use tmux.
 
@@ -124,7 +124,7 @@ write a file and run it; both can share one call.
     },
     "background": {
       "type": "boolean",
-      "description": "Set true to background immediately; commands background automatically after 60s"
+      "description": "Start in the background immediately instead of after 60s"
     }
   }
 }
@@ -379,7 +379,7 @@ func (b *BashTool) background(ctx context.Context, job BackgroundJob, exited <-c
 		out.WriteString(tail + "\n")
 	}
 	fmt.Fprintf(&out, "[%s background job %s (PGID %d). Log: %s\n", how, job.ID, job.PID, job.LogPath)
-	fmt.Fprintf(&out, "Completion will wake this conversation; do not poll or sleep waiting for it. Keep working on other things, or end your turn if nothing remains. Cancel with `kill -- -%d`.]", job.PID)
+	fmt.Fprintf(&out, "Its output will arrive as a new message; never poll or sleep for it. Continue only with work that doesn't need its output; otherwise end your turn. Cancel with `kill -- -%d`.]", job.PID)
 	return bashResult{out: out.String(), job: &job}, nil
 }
 
