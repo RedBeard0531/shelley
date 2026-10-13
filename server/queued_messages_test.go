@@ -507,3 +507,43 @@ func TestSettingsChangeKeepsQueue(t *testing.T) {
 		}
 	})
 }
+
+// Messages queued during a turn reach the model together in the next
+// request, not one per request.
+func TestQueuedMessagesDrainIntoOneRequest(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, testQueuedMessagesDrainIntoOneRequest)
+}
+
+func testQueuedMessagesDrainIntoOneRequest(t *testing.T) {
+	server, database, llmSvc := newTestServer(t)
+	defer stopActiveConversationLoops(server)
+
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	convID := conversation.ConversationID
+	sendChat(t, server, convID, "delay: 2", false)
+	synctest.Wait()
+	for _, msg := range []string{"echo: first queued", "echo: second queued"} {
+		sendChat(t, server, convID, msg, true)
+	}
+	synctest.Wait()
+
+	for deadline := time.Now().Add(8 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		for _, req := range llmSvc.GetRecentRequests() {
+			var text strings.Builder
+			for _, msg := range req.Messages {
+				text.WriteString(messageText(msg))
+			}
+			if strings.Contains(text.String(), "first queued") {
+				if !strings.Contains(text.String(), "second queued") {
+					t.Fatal("the model saw the first queued message without the second")
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("queued messages never reached the model")
+}

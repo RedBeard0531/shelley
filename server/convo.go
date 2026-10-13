@@ -1617,7 +1617,10 @@ func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued
 		cm.mu.Unlock()
 	}
 
-	fed := false
+	// Hand the loop every recorded message at once, so its next request
+	// includes them all rather than starting on the first.
+	var messages []llm.Message
+	defer func() { loopInstance.QueueMessages(messages...) }()
 	for _, qm := range queued {
 		user, message, err := cm.recordQueued(ctx, qm)
 		if errors.Is(err, db.ErrQueuedMessageNotFound) {
@@ -1625,17 +1628,16 @@ func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued
 			continue
 		}
 		if err != nil {
-			return fed, err
+			return len(messages) > 0, err
 		}
 		if qm.Kind == db.QueuedMessageKindTranscription {
 			s.generateSlugAsync(cm.conversationID, messageText(user), qm.Model)
 		}
 		// notifySubscribers (fired by the record) already carried the cleaned
 		// array, so the ghost clears live.
-		loopInstance.QueueMessages(message)
-		fed = true
+		messages = append(messages, message)
 	}
-	return fed, nil
+	return len(messages) > 0, nil
 }
 
 const maxConsecutiveWarnings = 3
