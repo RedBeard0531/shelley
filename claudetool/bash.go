@@ -96,8 +96,9 @@ const (
 	bashName        = "bash"
 	bashDescription = `Executes shell commands via bash --login -c, returning combined stdout/stderr.
 Shell state (cwd, variables, aliases) does not persist.
-Call change_dir before inspecting, testing, or editing in another directory.
-Wait for success, then run commands directly. Omit redundant cd.
+Commands already start in the working directory; omit redundant cd.
+For 'cd dir && ...' or 'cd dir; ...', call change_dir first,
+then run the remaining command directly.
 
 After 60s, commands move to the background. A background command's output
 arrives as a new message when it exits; never poll or sleep for it. While it
