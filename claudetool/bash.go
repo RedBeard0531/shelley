@@ -94,8 +94,11 @@ func isNoTrailerSet() bool {
 
 const (
 	bashName        = "bash"
-	bashDescription = `Executes shell commands via bash --login -c, returning combined stdout/stderr.
-Shell state (cwd, variables, aliases) does not persist.
+	bashDescription = "Executes shell commands via bash --login -c, returning combined stdout/stderr.\n" +
+		"For commands like `cd app && make`, call change_dir with path `app`, wait for its tool result, " +
+		"then bash `make` without cd. Apply this before initial inspections and tests too, including README recipes. " +
+		"Skip change_dir if already there.\n\n" +
+		`Shell state (cwd, variables, aliases) does not persist.
 Commands already start in the working directory; omit redundant cd.
 For 'cd dir && ...' or 'cd dir; ...', call change_dir first,
 then run the remaining command directly.
