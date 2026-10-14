@@ -362,7 +362,7 @@ func (s *Server) handleDebugChannelSend(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "chat has no conversation; write from the phone first", http.StatusNotFound)
 		return
 	}
-	id, err := s.sendChannelMessage(r.Context(), conv.ConversationID, req.Text, "")
+	id, err := s.sendChannelMessage(r.Context(), conv.ConversationID, req.Text, "", nil)
 	var rf *channelSendError
 	if errors.As(err, &rf) {
 		writeDebugGatewayError(w, rf.Status, rf.Code, rf.Message)

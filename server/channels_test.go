@@ -509,10 +509,10 @@ func TestDebugChannelRoundTrip(t *testing.T) {
 	}
 
 	send := func(text string) error {
-		_, err := server.sendChannelMessage(t.Context(), conv.ConversationID, text, "")
+		_, err := server.sendChannelMessage(t.Context(), conv.ConversationID, text, "", nil)
 		return err
 	}
-	id, err := server.sendChannelMessage(t.Context(), conv.ConversationID, "hi back", "")
+	id, err := server.sendChannelMessage(t.Context(), conv.ConversationID, "hi back", "", nil)
 	if err != nil || !strings.HasPrefix(id, "debug-out-") || !strings.HasSuffix(id, "-2") {
 		t.Fatalf("send = %q, %v", id, err)
 	}
@@ -702,7 +702,7 @@ func TestSendChannelMessageNeedsBoundConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := server.sendChannelMessage(t.Context(), conv.ConversationID, "hi", ""); err == nil || !strings.Contains(err.Error(), "not bound") {
+	if _, err := server.sendChannelMessage(t.Context(), conv.ConversationID, "hi", "", nil); err == nil || !strings.Contains(err.Error(), "not bound") {
 		t.Fatalf("send from unbound conversation: %v", err)
 	}
 }
@@ -924,14 +924,11 @@ func TestChannelConversationRepliesWithMessageUser(t *testing.T) {
 		t.Fatalf("reaction reply_to target: status %d, want 400", w.Code)
 	}
 
-	// The chat takes no attachments, and says so before sending anything.
-	file := filepath.Join(t.TempDir(), "notes.txt")
-	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// A missing attachment must not send even the caption.
+	file := filepath.Join(t.TempDir(), "missing.png")
 	before := len(events())
 	call(claudetool.MessageUserInput{Text: "see attached", Attachments: []string{file}})
-	if r := lastResult(); !r.ToolError || !strings.Contains(r.ToolResult[0].Text, "attachments") {
+	if r := lastResult(); !r.ToolError || !strings.Contains(r.ToolResult[0].Text, "attachment") {
 		t.Fatalf("attachment result = %+v", r)
 	}
 
@@ -991,11 +988,11 @@ func TestChannelChatSaysWhetherDeliveryFailed(t *testing.T) {
 	}
 
 	refuse := chat("refuse")
-	if err := refuse.Send(t.Context(), "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "refused") || !strings.Contains(err.Error(), "line_paused") {
+	if err := refuse.Send(t.Context(), "hi", nil, claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "refused") || !strings.Contains(err.Error(), "line_paused") {
 		t.Fatalf("refused send: %v", err)
 	}
 	for name, want := range map[string]string{"upstream": "may have been delivered", "internal": "may have been delivered", "upstream-refused": "refused"} {
-		if err := chat(name).Send(t.Context(), "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), want) {
+		if err := chat(name).Send(t.Context(), "hi", nil, claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: %v, want %q", name, err, want)
 		}
 	}
@@ -1007,7 +1004,7 @@ func TestChannelChatSaysWhetherDeliveryFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (channelChat{s: server, conversationID: unbound.ConversationID}).Send(t.Context(), "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "nothing was sent") {
+	if err := (channelChat{s: server, conversationID: unbound.ConversationID}).Send(t.Context(), "hi", nil, claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "nothing was sent") {
 		t.Fatalf("send from unbound conversation: %v", err)
 	}
 
@@ -1016,7 +1013,7 @@ func TestChannelChatSaysWhetherDeliveryFailed(t *testing.T) {
 		<-got
 		cancel()
 	}()
-	if err := chat("hang").Send(ctx, "hi", claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "may have been delivered") {
+	if err := chat("hang").Send(ctx, "hi", nil, claudetool.UserMessage{}); err == nil || !strings.Contains(err.Error(), "may have been delivered") {
 		t.Fatalf("cancelled send: %v", err)
 	}
 }

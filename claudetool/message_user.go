@@ -46,9 +46,9 @@ type UserMessageFinder interface {
 // by the server package. Errors say whether the chat refused or delivery
 // is unknown.
 type UserChat interface {
-	// Send delivers a text message, optionally replying to target's external
-	// message. Chats take no attachments yet.
-	Send(ctx context.Context, text string, target UserMessage) error
+	// Send delivers text and local attachments as one message, optionally
+	// replying to target's external message.
+	Send(ctx context.Context, text string, attachments []MessageUserAttachment, target UserMessage) error
 	// React delivers a reaction to target, the user's message.
 	React(ctx context.Context, target UserMessage, emoji string) error
 }
@@ -99,7 +99,7 @@ Set end_turn when you are done and waiting for the user; then call this tool alo
 
 // messageUserChatDescription replaces messageUserDescription's attachment
 // line when the user reads in a UserChat.
-const messageUserChatDescription = `The user is texting you from their phone (iMessage, RCS, or SMS) and sees nothing you write outside this tool: always answer with it. Keep messages short and send few: after 5 messages without a reply, the chat takes no more until the user writes. Attachments are not supported.`
+const messageUserChatDescription = `The user is texting you from their phone (iMessage, RCS, or SMS) and sees nothing you write outside this tool: always answer with it. Keep messages short and send few: after 5 messages without a reply, the chat takes no more until the user writes. Attach local images or files by path; they are uploaded and sent with your text as one message.`
 
 const messageUserSchema = `{
   "type": "object",
@@ -158,9 +158,6 @@ func runMessageUser(ctx context.Context, finder UserMessageFinder, chat UserChat
 			return llm.ErrorfToolOut("reaction must be a single emoji, got %q", in.Reaction)
 		}
 	}
-	if chat != nil && len(in.Attachments) > 0 {
-		return llm.ErrorfToolOut("the user's chat takes no attachments; nothing was sent")
-	}
 
 	var display MessageUserDisplay
 	for _, p := range in.Attachments {
@@ -206,14 +203,15 @@ func runMessageUser(ctx context.Context, finder UserMessageFinder, chat UserChat
 		failed := func(format string, err error) llm.ToolOut {
 			return llm.ToolOut{Error: fmt.Errorf(format, err), Display: MessageUserDisplay{ChatFailed: true}}
 		}
-		if in.Text != "" {
-			if err := chat.Send(ctx, in.Text, target); err != nil {
+		hasMessage := in.Text != "" || len(display.Attachments) != 0
+		if hasMessage {
+			if err := chat.Send(ctx, in.Text, display.Attachments, target); err != nil {
 				return failed("sending to the user's chat failed: %w", err)
 			}
 		}
 		if in.Reaction != "" {
 			err := chat.React(ctx, target, in.Reaction)
-			if err != nil && in.Text == "" {
+			if err != nil && !hasMessage {
 				return failed("reacting in the user's chat failed: %w", err)
 			}
 			if err != nil {

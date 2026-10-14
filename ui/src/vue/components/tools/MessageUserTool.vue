@@ -9,7 +9,7 @@
     data-testid="tool-call-running"
     data-tool-name="message_user"
   >
-    Sending…
+    {{ input.attachments?.length ? "Sending attachments…" : "Sending…" }}
   </div>
 
   <div

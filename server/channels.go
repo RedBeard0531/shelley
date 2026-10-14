@@ -440,11 +440,14 @@ func (e *channelSendError) Error() string {
 
 // sendChannelMessage sends text to the external chat that conversationID is
 // bound to, and returns the channel's id for the sent message.
-func (s *Server) sendChannelMessage(ctx context.Context, conversationID, text, replyTo string) (string, error) {
+func (s *Server) sendChannelMessage(ctx context.Context, conversationID, text, replyTo string, attachmentIDs []string) (string, error) {
 	var sent struct {
 		MessageID string `json:"message_id"`
 	}
-	body := map[string]string{"text": text}
+	body := map[string]any{"text": text}
+	if len(attachmentIDs) != 0 {
+		body["attachment_ids"] = attachmentIDs
+	}
 	if replyTo != "" {
 		body["reply_to"] = replyTo
 	}
@@ -454,8 +457,8 @@ func (s *Server) sendChannelMessage(ctx context.Context, conversationID, text, r
 
 // callChannel POSTs body to path at the endpoint of the external chat that
 // conversationID is bound to, and decodes the answer into out. A failure
-// the endpoint may have acted on anyway wraps errChannelMaybeDelivered;
-// otherwise a refusal is a *channelSendError.
+// the endpoint may have delivered anyway wraps errChannelMaybeDelivered;
+// upload creation never delivers a message. A refusal is a *channelSendError.
 func (s *Server) callChannel(ctx context.Context, conversationID, path string, body, out any) error {
 	conv, err := s.db.GetConversationByID(ctx, conversationID)
 	if err != nil {
@@ -473,14 +476,20 @@ func (s *Server) callChannel(ctx context.Context, conversationID, path string, b
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	maybeDelivered := func(err error) error {
+		if path == "/attachments" {
+			return err
+		}
+		return fmt.Errorf("%w: %w", errChannelMaybeDelivered, err)
+	}
 	resp, err := s.channelClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errChannelMaybeDelivered, err)
+		return maybeDelivered(err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		return fmt.Errorf("%w: %w", errChannelMaybeDelivered, err)
+		return maybeDelivered(err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		var refusal struct {
@@ -492,12 +501,12 @@ func (s *Server) callChannel(ctx context.Context, conversationID, path string, b
 		}
 		err := &channelSendError{Status: resp.StatusCode, Code: refusal.Error, Message: refusal.Message}
 		if !err.refused() {
-			return fmt.Errorf("%w: %w", errChannelMaybeDelivered, err)
+			return maybeDelivered(err)
 		}
 		return err
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
-		return fmt.Errorf("%w: decode %s response: %w", errChannelMaybeDelivered, path, err)
+		return maybeDelivered(fmt.Errorf("decode %s response: %w", path, err))
 	}
 	return nil
 }
@@ -527,8 +536,16 @@ type channelChat struct {
 	conversationID string
 }
 
-func (c channelChat) Send(ctx context.Context, text string, target claudetool.UserMessage) error {
-	_, err := c.s.sendChannelMessage(ctx, c.conversationID, text, target.ExternalID)
+func (c channelChat) Send(ctx context.Context, text string, attachments []claudetool.MessageUserAttachment, target claudetool.UserMessage) error {
+	var ids []string
+	for _, attachment := range attachments {
+		id, err := c.uploadAttachment(ctx, attachment)
+		if err != nil {
+			return fmt.Errorf("uploading %s failed: %w; nothing was sent", attachment.Name, err)
+		}
+		ids = append(ids, id)
+	}
+	_, err := c.s.sendChannelMessage(ctx, c.conversationID, text, target.ExternalID, ids)
 	return chatDeliveryError(err)
 }
 

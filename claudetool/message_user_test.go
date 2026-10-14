@@ -45,13 +45,47 @@ func TestMessageUserReactionWithoutReplyToRefused(t *testing.T) {
 type fakeChat struct {
 	sent              []string
 	sendErr, reactErr error
+	attachments       []MessageUserAttachment
 }
 
-func (c *fakeChat) Send(_ context.Context, text string, target UserMessage) error {
+func TestMessageUserSendsChatAttachments(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "photo.png"), []byte("image bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	finder := oneMessage{UserMessage{ID: "m1", SequenceID: 17, ExternalID: "ext-1"}}
+	for _, text := range []string{"here it is", ""} {
+		t.Run(text, func(t *testing.T) {
+			chat := &fakeChat{reactErr: errors.New("reaction refused")}
+			out := runMessageUser(t.Context(), finder, chat, dir, MessageUserInput{
+				Text: text, Attachments: []string{"photo.png", "photo.png"},
+				ReplyTo: 17, Reaction: "👍", EndTurn: true,
+			})
+			if out.Error != nil || !out.EndTurn {
+				t.Fatalf("send image: %+v", out)
+			}
+			if want := []string{"send " + text + " reply-to ext-1"}; !slices.Equal(chat.sent, want) {
+				t.Fatalf("sent %q, want %q", chat.sent, want)
+			}
+			if len(chat.attachments) != 1 || chat.attachments[0].Path != filepath.Join(dir, "photo.png") {
+				t.Fatalf("attachments = %+v", chat.attachments)
+			}
+			if d := out.Display.(MessageUserDisplay); len(d.Attachments) != 1 || d.TargetMessageID != "m1" {
+				t.Fatalf("display = %+v", d)
+			}
+			if !strings.Contains(out.LLMContent[0].Text, "reaction refused") {
+				t.Fatalf("reaction failure after sending image was lost: %+v", out)
+			}
+		})
+	}
+}
+
+func (c *fakeChat) Send(_ context.Context, text string, attachments []MessageUserAttachment, target UserMessage) error {
 	if c.sendErr != nil {
 		return c.sendErr
 	}
 	c.sent = append(c.sent, "send "+text+" reply-to "+target.ExternalID)
+	c.attachments = append(c.attachments, attachments...)
 	return nil
 }
 
@@ -153,10 +187,7 @@ func TestMessageUserSendsToChat(t *testing.T) {
 
 	// Mistakes in the call reach no chat, and are not the chat's failures.
 	chat = &fakeChat{}
-	file := filepath.Join(t.TempDir(), "a.txt")
-	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	file := filepath.Join(t.TempDir(), "missing.png")
 	for _, in := range []MessageUserInput{
 		{Text: "hi", ReplyTo: 999},
 		{Text: "see attached", Attachments: []string{file}},
@@ -176,7 +207,7 @@ func TestMessageUserSendsToChat(t *testing.T) {
 	if !tool.Sequential {
 		t.Fatal("message_user is not sequential, so the chat could get messages out of order")
 	}
-	if !strings.Contains(tool.Description, "phone") || strings.Contains(tool.Description, "Attach files") {
+	if !strings.Contains(tool.Description, "phone") || !strings.Contains(tool.Description, "Attach local") {
 		t.Fatalf("description for a chat: %s", tool.Description)
 	}
 	if MessageUserTool(finder, nil, NewMutableWorkingDir(t.TempDir())).Description != messageUserDescription {
