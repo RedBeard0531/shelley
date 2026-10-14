@@ -378,8 +378,18 @@ func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 	if err := manager.QueueMessage(t.Context(), server, "predictable", llm.UserStringMessage("from the UI")); err != nil {
 		t.Fatal(err)
 	}
-	deliver(channelEvent{Type: "message", ID: "m3", ChatID: "chat-1", Text: "third"})
-	deliver(channelEvent{Type: "message", ID: "m3", ChatID: "chat-1", Text: "third"})
+	media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "queued image")
+	}))
+	t.Cleanup(media.Close)
+	photo := channelEvent{
+		Type: "message", ID: "m3", ChatID: "chat-1", Text: "third",
+		Attachments: []channelAttachment{{URL: media.URL + "/queued.png"}},
+	}
+	deliver(photo)
+	// Queued retries must also deduplicate before fetching provider media.
+	media.Close()
+	deliver(photo)
 	queued, err := database.GetQueuedMessages(t.Context(), conv.ConversationID)
 	if err != nil {
 		t.Fatal(err)
@@ -387,6 +397,19 @@ func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 	if len(queued) != 3 || queued[0].ExternalMessageID != "m2" || !queued[0].Inject ||
 		queued[1].Inject || queued[2].ExternalMessageID != "m3" || !queued[2].Inject {
 		t.Fatalf("queue = %+v, want injectable m2, the UI message, and injectable m3", queued)
+	}
+	var queuedPhoto llm.Message
+	if err := json.Unmarshal(queued[2].Llm, &queuedPhoto); err != nil {
+		t.Fatal(err)
+	}
+	photoText := messageText(queuedPhoto)
+	if !strings.HasPrefix(photoText, "third\n\n[") || !strings.HasSuffix(photoText, "]") {
+		t.Fatalf("queued attachment lost: %q", photoText)
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(photoText, "third\n\n["), "]")
+	t.Cleanup(func() { os.Remove(path) })
+	if content, err := os.ReadFile(path); err != nil || string(content) != "queued image" {
+		t.Fatalf("queued image = %q, %v", content, err)
 	}
 
 	gate.release("first")
@@ -407,7 +430,7 @@ func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 	})
 
 	got := strings.Join(channelUserMessages(t, database, conv.ConversationID), "\n")
-	if want := "m1: first\nm2: second\n: from the UI\nm3: third\nm4: fourth"; got != want {
+	if want := "m1: first\nm2: second\n: from the UI\nm3: " + photoText + "\nm4: fourth"; got != want {
 		t.Fatalf("user messages:\n%s\nwant:\n%s", got, want)
 	}
 	var sawQueued, sawUI bool
@@ -417,7 +440,7 @@ func TestChannelMessageDeliversToChatConversation(t *testing.T) {
 				continue
 			}
 			sawQueued = sawQueued || strings.HasPrefix(messageText(msg), "<external_message sequence_id=\"") &&
-				strings.HasSuffix(messageText(msg), "\nthird\n</external_message>")
+				strings.HasSuffix(messageText(msg), "\n"+photoText+"\n</external_message>")
 			sawUI = sawUI || strings.HasPrefix(messageText(msg), "<user_message sequence_id=\"") &&
 				strings.HasSuffix(messageText(msg), "\nfrom the UI\n</user_message>")
 		}

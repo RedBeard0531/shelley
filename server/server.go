@@ -369,7 +369,7 @@ type Server struct {
 	// channelChatLocks serializes deliveries per chat; see
 	// lockChannelChat. Guarded by mu.
 	channelChatLocks map[string]*channelChatLock
-	// channelClient sends replies to channel endpoints.
+	// channelClient sends replies and downloads inbound channel attachments.
 	channelClient *http.Client
 	// channelDebug is the in-memory chat service behind /debug/channels.
 	channelDebug      channelDebug

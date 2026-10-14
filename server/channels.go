@@ -43,7 +43,7 @@ const messagesIntegration = "messages"
 
 // channelEvent is one inbound event on an external chat: the JSON exed posts
 // to POST /api/channels/messages (exe.dev's messages/wire.Event). Only what
-// Shelley uses is decoded; reactions and attachments are not delivered yet.
+// Shelley uses is decoded; reactions are not delivered yet.
 type channelEvent struct {
 	// Type is "message" or "reaction".
 	Type string `json:"type"`
@@ -51,8 +51,9 @@ type channelEvent struct {
 	ID     string `json:"id"`
 	ChatID string `json:"chat_id"`
 	// Sender is the handle (phone number or email) that sent the message.
-	Sender string `json:"sender"`
-	Text   string `json:"text"`
+	Sender      string              `json:"sender"`
+	Text        string              `json:"text"`
+	Attachments []channelAttachment `json:"attachments"`
 	// Web marks a web chat: one shown on a web page that reads the
 	// conversation's stream (GET /api/channels/messages/{chat}/stream)
 	// instead of taking replies. Its conversation has no endpoint, so
@@ -138,7 +139,7 @@ func (s *Server) receiveChannelEvent(ctx context.Context, endpoint string, ev ch
 	if ev.ChatID == "" {
 		return errInvalidChannelEvent
 	}
-	if ev.Type != "message" || ev.OptOut || strings.TrimSpace(ev.Text) == "" {
+	if ev.Type != "message" || ev.OptOut || (strings.TrimSpace(ev.Text) == "" && len(ev.Attachments) == 0) {
 		return nil
 	}
 
@@ -180,6 +181,12 @@ func (s *Server) receiveChannelEvent(ctx context.Context, endpoint string, ev ch
 	service, err := s.llmManager.GetService(modelID)
 	if err != nil {
 		return fmt.Errorf("model %s: %w", modelID, err)
+	}
+	// Fetch signed provider URLs only after deduplication, while holding the
+	// chat lock. Retries must not re-fetch URLs that may have expired.
+	ev.Text, err = s.channelMessageText(ctx, ev)
+	if err != nil {
+		return err
 	}
 	ctx = contextWithExternalMessageID(ctx, ev.ID)
 	// A busy turn takes channel messages at its next model request, after
