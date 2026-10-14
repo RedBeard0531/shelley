@@ -7140,7 +7140,12 @@ svg {
 
   .message-controls-status-slot .status-readout-cwd-leaf {
     display: inline;
-    min-width: 0;
+    /* The leaf is the row's pressure valve: under squeeze it clips from the
+       right ("cwd" -> "cw" -> ...). Floor its box at 2px so it never flexes
+       away entirely — with min-width 0, a tight row (320px pane, TOC present,
+       2-sig-fig token counts) collapses it to a zero-width box. */
+    flex-shrink: 0;
+    min-width: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
