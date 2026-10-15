@@ -26,12 +26,12 @@
             @select-combination="setModel"
             @thinking-change="setThinking"
           />
-          <span v-if="!draft.settings.model" class="profiles-hint">The server's default</span>
+          <span v-if="!draft.settings.model" class="profiles-hint">Server default</span>
           <Button
             v-else-if="defaultModel"
             size="small"
             text
-            label="Use the server's default"
+            label="Use server default"
             @click="setModel('')"
           />
         </div>
@@ -56,9 +56,8 @@
           step="1"
         />
         <p class="profiles-hint">
-          0 disables it. After this many quiet minutes following a turn, the agent compacts its own
-          context once with compact_in_place, which must be on. Conversations copy this setting when
-          created or switched to this profile; saving here does not change existing chats.
+          Compact once after this many idle minutes; 0 disables. Needs compact_in_place. Applies to
+          new conversations and ones that switch to this profile.
         </p>
       </section>
       <section class="profiles-section">
@@ -66,9 +65,7 @@
           >Idle compaction prompt</label
         >
         <p class="profiles-hint">
-          What the idle nudge asks the agent to keep when it compacts. Empty adds nothing to the
-          nudge's instructions to compact, which the compact_in_place tool's own guidance then
-          shapes.
+          What to keep when idle compaction runs. Empty uses compact_in_place's own guidance.
         </p>
         <textarea
           id="profiles-idle-prompt"
@@ -90,12 +87,9 @@
           step="1"
         />
         <p class="profiles-hint">
-          0 disables it. After a successful turn, keep the provider's prompt cache warm this long
-          (or until idle compaction or the next turn) so a follow-up reads it instead of rewriting
-          it. Shelley re-sends the context without generating a reply only when the cache would
-          otherwise expire, shortly before it does: every 4 minutes for Claude's 5-minute cache,
-          every 24 for the 30-minute cache of GPT-5.6 and later. Each refresh is billed as cached
-          input. Other models, and Claude with fixed thinking budgets, are not warmed.
+          Refresh the prompt cache for this long after a turn so follow-ups stay cheap; 0 disables.
+          Each refresh is billed as cached input. Claude (not fixed thinking budgets) and GPT-5.6+
+          only.
         </p>
       </section>
       <section class="profiles-section">
@@ -107,9 +101,7 @@
       </section>
       <section class="profiles-section">
         <label class="advanced-settings-header" for="profiles-voice">Voice prompt</label>
-        <p class="profiles-hint">
-          Who voice calls speak as, and how. Each call reads it as saved; empty for no persona.
-        </p>
+        <p class="profiles-hint">Persona for voice calls. Leave empty for none.</p>
         <textarea
           id="profiles-voice"
           v-model="draft.voicePrompt"
@@ -149,8 +141,8 @@
           <div class="profiles-item-summary">{{ summarize(p) }}</div>
           <template v-if="pending?.name === p.name">
             <p v-if="pending.action === 'restore'" class="profiles-hint">
-              Replace this profile's settings and voice prompt with the built-in defaults?
-              Existing conversations keep their settings.
+              Reset settings and voice prompt to built-in defaults? Existing conversations are
+              unaffected.
             </p>
             <div class="profiles-item-actions profiles-item-confirm">
               <Button
@@ -206,7 +198,7 @@
           </div>
         </li>
       </ul>
-      <p v-if="locked" class="profiles-hint">Switching waits for the agent to finish.</p>
+      <p v-if="locked" class="profiles-hint">Switch once the agent finishes.</p>
       <Button size="small" severity="secondary" label="New profile" @click="edit(null)" />
     </template>
 

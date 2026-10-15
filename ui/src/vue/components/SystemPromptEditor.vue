@@ -24,10 +24,10 @@
       <template v-if="custom">
         A Go
         <a href="https://pkg.go.dev/text/template" target="_blank" rel="noopener">template</a>,
-        rendered when a conversation starts with this profile or switches to it.
+        rendered when a conversation starts or switches to this profile.
       </template>
       <template v-else>
-        Shelley's own prompt, which improves with Shelley. Choose Custom to start from a copy.
+        Shelley's prompt; updates with Shelley. Custom starts from a copy.
       </template>
     </p>
     <template v-if="custom">
