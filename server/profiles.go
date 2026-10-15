@@ -22,7 +22,9 @@ type Profile struct {
 	Name string `json:"name"`
 	// Default marks the profile new conversations use when they name none.
 	// Exactly one profile is the default.
-	Default bool `json:"default"`
+	Default    bool `json:"default"`
+	Builtin    bool `json:"builtin"`
+	UserEdited bool `json:"user_edited"`
 	Settings
 	// VoicePrompt is how the profile's voice calls speak; "" means no
 	// persona. It belongs to the profile, not its Settings: conversations
@@ -52,18 +54,22 @@ func (s *Server) registerProfileRoutes(api *http.ServeMux) {
 	api.HandleFunc("PUT /api/profiles/{name}", s.handleUpdateProfile)
 	api.HandleFunc("POST /api/profiles/voice-prompt/generate", s.handleGenerateVoicePrompt)
 	api.HandleFunc("POST /api/profiles/{name}/default", s.handleSetDefaultProfile)
+	api.HandleFunc("POST /api/profiles/{name}/restore", s.handleRestoreProfile)
 	api.HandleFunc("DELETE /api/profiles/{name}", s.handleDeleteProfile)
 	api.HandleFunc("GET /api/system-prompt", s.handleGetSystemPrompt)
 	api.HandleFunc("POST /api/system-prompt/check", s.handleCheckSystemPrompt)
 }
 
 func profileFromRow(row generated.Profile) (Profile, error) {
+	p := Profile{Name: row.Name, Default: row.IsDefault, Builtin: row.Builtin, UserEdited: row.UserEdited}
 	var stored storedProfile
 	if err := json.Unmarshal([]byte(row.Settings), &stored); err != nil {
-		return Profile{Name: row.Name, Default: row.IsDefault}, fmt.Errorf("profile %q: %w", row.Name, err)
+		return p, fmt.Errorf("profile %q: %w", row.Name, err)
 	}
 	stored.ToolOverrides = orEmpty(stored.ToolOverrides)
-	return Profile{Name: row.Name, Default: row.IsDefault, Settings: stored.Settings, VoicePrompt: stored.VoicePrompt}, nil
+	p.Settings = stored.Settings
+	p.VoicePrompt = stored.VoicePrompt
+	return p, nil
 }
 
 func (s *Server) getProfile(ctx context.Context, name string) (Profile, error) {
@@ -224,6 +230,10 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
+	if existing.Settings.equal(st) && existing.VoicePrompt == voicePrompt {
+		writeJSON(w, http.StatusOK, existing)
+		return
+	}
 	var row generated.Profile
 	err = s.db.QueriesTx(r.Context(), func(q *generated.Queries) (err error) {
 		row, err = q.UpdateProfile(r.Context(), generated.UpdateProfileParams{Name: name, Settings: encodeProfile(st, voicePrompt)})
@@ -243,6 +253,40 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// handleRestoreProfile replaces a built-in's settings with its shipped
+// defaults without changing its default selection or existing conversations.
+func (s *Server) handleRestoreProfile(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	existing, err := s.getProfile(r.Context(), name)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, fmt.Sprintf("profile %q not found", name), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		s.internalError(w, "Failed to load profile", err)
+		return
+	}
+	if !existing.Builtin {
+		http.Error(w, "custom profiles have no defaults to restore", http.StatusBadRequest)
+		return
+	}
+	row, err := s.db.RestoreBuiltinProfile(r.Context(), name)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, fmt.Sprintf("profile %q not found", name), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		s.internalError(w, "Failed to restore profile", err)
+		return
+	}
+	restored, err := profileFromRow(*row)
+	if err != nil {
+		s.internalError(w, "Failed to restore profile", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, restored)
 }
 
 // handleSetDefaultProfile handles POST /api/profiles/{name}/default: the

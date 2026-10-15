@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createConversationViaAPIWithDetails } from "./helpers";
+import type { Profile } from "../src/types";
 
 test.use({ viewport: { width: 1280, height: 800 }, isMobile: false, hasTouch: false });
 
@@ -7,6 +8,9 @@ test.use({ viewport: { width: 1280, height: 800 }, isMobile: false, hasTouch: fa
 // tools (its Edit…) and profiles (pills, its Edit…), all of which a live
 // conversation can change, each change marked in the transcript.
 test.describe("Settings knob", () => {
+  // The restore regression temporarily customizes the shared built-in Default.
+  test.describe.configure({ mode: "default" });
+
   async function openKnob(page: Page) {
     await page.locator(".model-picker-inline .p-select-label").click();
     await expect(page.locator(".model-picker-panel")).toBeVisible();
@@ -16,6 +20,99 @@ test.describe("Settings knob", () => {
     await panel.getByTestId("model-picker-tools").getByRole("button", { name: /^Edit/ }).click();
     await expect(panel).toBeHidden();
   }
+
+  test("restores a built-in profile only after confirmation, without changing a live conversation", async ({
+    page,
+    request,
+  }) => {
+    const name = `E2E restore ${Date.now()}`;
+    const list = async (): Promise<Profile[]> => (await request.get("/api/profiles")).json();
+    const before = await list();
+    const builtin = before.find((p) => p.name === "Default")!;
+    expect(builtin).toMatchObject({ builtin: true, user_edited: false });
+    const defaultName = before.find((p) => p.default)!.name;
+    try {
+      expect((await request.post("/api/profiles", { data: { name } })).ok()).toBeTruthy();
+      const customized = await request.put("/api/profiles/Default", {
+        data: {
+          model: "predictable",
+          tool_overrides: { browser: "off", compact_in_place: "off", message_user: "off" },
+          compact_nudge_tokens: 42000,
+          system_prompt: "Keep these conversation settings.",
+          voice_prompt: "Speak as a pirate.",
+        },
+      });
+      expect(customized.ok()).toBeTruthy();
+      const edited = await customized.json();
+      expect(edited.user_edited).toBe(true);
+      const { conversationId, slug } = await createConversationViaAPIWithDetails(
+        request,
+        "echo: restore profile",
+      );
+      expect(
+        (
+          await request.post(`/api/conversation/${conversationId}/settings`, {
+            data: { profile: "Default" },
+          })
+        ).ok(),
+      ).toBeTruthy();
+      const settingsURL = `/api/conversation/${conversationId}/settings`;
+      const conversationSettings = await (await request.get(settingsURL)).json();
+
+      await page.goto(`/c/${slug}`);
+      async function openProfiles() {
+        await openKnob(page);
+        await page
+          .getByTestId("model-picker-profiles")
+          .getByRole("button", { name: /^Edit/ })
+          .click();
+      }
+      await openProfiles();
+      const dialog = page.getByRole("dialog");
+      const row = dialog.getByTestId("profile-row").filter({
+        has: page.locator(".profiles-item-name", { hasText: /^Default$/ }),
+      });
+      const restore = row.getByRole("button", { name: "Restore defaults", exact: true });
+      const confirm = row.getByRole("button", { name: "Restore “Default”", exact: true });
+      await expect(
+        dialog.getByTestId("profile-row").filter({ hasText: name }).getByRole("button", {
+          name: "Restore defaults",
+        }),
+      ).toHaveCount(0);
+
+      await expect(restore).toBeEnabled();
+      await restore.click();
+      await expect(row).toContainText("voice prompt");
+      expect((await list()).find((p) => p.name === "Default")).toEqual(edited);
+      await row.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(confirm).toHaveCount(0);
+      await restore.click();
+      await dialog.getByRole("button", { name: "Close modal" }).click();
+      await openProfiles();
+      await expect(confirm).toHaveCount(0);
+      await restore.click();
+      const restored = page.waitForResponse(
+        (r) => r.url().endsWith("/api/profiles/Default/restore") && r.request().method() === "POST",
+      );
+      await confirm.click();
+      expect((await restored).ok()).toBeTruthy();
+      await expect(restore).toBeDisabled();
+      const after = await list();
+      expect(after.find((p) => p.name === "Default")).toEqual(builtin);
+      expect(after.find((p) => p.default)!.name).toBe(defaultName);
+      expect(await (await request.get(settingsURL)).json()).toEqual(conversationSettings);
+
+      // Shared picker state reloads, but using the restored settings stays opt-in.
+      await dialog.getByRole("button", { name: "Close modal" }).click();
+      await openKnob(page);
+      await expect(page.getByTestId("model-picker-profile-changed")).toContainText(
+        "Differs from Default",
+      );
+    } finally {
+      expect((await request.post("/api/profiles/Default/restore")).ok()).toBeTruthy();
+      expect((await request.delete(`/api/profiles/${encodeURIComponent(name)}`)).ok()).toBeTruthy();
+    }
+  });
 
   test("Tools' Edit… changes a live conversation's tools", async ({ page, request }) => {
     const { conversationId, slug } = await createConversationViaAPIWithDetails(

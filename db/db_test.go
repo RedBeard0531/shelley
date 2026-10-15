@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,70 @@ func TestDB_Migrate_TracksByName(t *testing.T) {
 	if gotColumn != 1 {
 		t.Fatalf("conversation_options column was not re-added; row keyed by number prevented re-run")
 	}
+}
+
+// Default predates managed profiles: the upgrade marks it built-in and keeps
+// any customization, which also stops shipped updates for it.
+func TestDB_Migrate_MarksDefaultBuiltin(t *testing.T) {
+	for _, settings := range []string{`{}`, `{"model":"custom-default","system_prompt":"Keep my instructions"}`} {
+		t.Run(settings, func(t *testing.T) {
+			db := setupDBMigratedThrough(t, 44)
+			defer db.Close()
+			ctx := t.Context()
+			// Raw SQL: the current generated queries include columns not yet
+			// present in this pre-upgrade fixture.
+			if err := db.Pool().Tx(ctx, func(ctx context.Context, tx *Tx) error {
+				_, err := tx.Exec("UPDATE profiles SET settings = ? WHERE name = 'Default'", settings)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			after := listMigrationProfiles(t, db)
+			if len(after) != 1 {
+				t.Fatalf("upgrade changed profiles: %+v", after)
+			}
+			if p := after[0]; p.Name != "Default" || p.Settings != settings || !p.IsDefault || !p.Builtin || p.UserEdited != (settings != `{}`) {
+				t.Fatalf("upgrade marked Default wrong: %+v", p)
+			}
+		})
+	}
+}
+
+func TestDB_Migrate_KeepsEditedBuiltin(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := t.Context()
+	if err := db.QueriesTx(ctx, func(q *generated.Queries) error {
+		_, err := q.UpdateProfile(ctx, generated.UpdateProfileParams{
+			Name: "Default", Settings: `{"model":"custom-default","system_prompt":"My edited instructions"}`,
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := listMigrationProfiles(t, db)
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := listMigrationProfiles(t, db); !slices.Equal(before, after) {
+		t.Fatalf("Migrate reset an edited built-in:\nbefore: %+v\nafter: %+v", before, after)
+	}
+}
+
+func listMigrationProfiles(t *testing.T, db *DB) []generated.Profile {
+	t.Helper()
+	var profiles []generated.Profile
+	if err := db.Queries(t.Context(), func(q *generated.Queries) error {
+		var err error
+		profiles, err = q.ListProfiles(t.Context())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return profiles
 }
 
 func TestDB_WithTx(t *testing.T) {

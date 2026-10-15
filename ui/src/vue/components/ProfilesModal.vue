@@ -138,28 +138,38 @@
         <li v-for="p in profiles" :key="p.name" class="profiles-item" data-testid="profile-row">
           <div class="profiles-item-head">
             <span class="profiles-item-name">{{ p.name }}</span>
+            <span v-if="p.builtin" class="profiles-badge">
+              {{ p.user_edited ? "customized built-in" : "built-in" }}
+            </span>
             <span v-if="p.default" class="profiles-badge">default</span>
             <span v-if="p.name === current" class="profiles-badge profiles-badge-current">
               in use
             </span>
           </div>
           <div class="profiles-item-summary">{{ summarize(p) }}</div>
-          <div v-if="pendingDelete === p.name" class="profiles-item-actions profiles-item-confirm">
-            <Button
-              size="small"
-              severity="danger"
-              :label="`Delete “${p.name}”`"
-              :disabled="busy"
-              @click="remove(p.name)"
-            />
-            <Button
-              size="small"
-              text
-              severity="secondary"
-              label="Cancel"
-              @click="pendingDelete = null"
-            />
-          </div>
+          <template v-if="pending?.name === p.name">
+            <p v-if="pending.action === 'restore'" class="profiles-hint">
+              Replace this profile's settings and voice prompt with the built-in defaults?
+              Existing conversations keep their settings.
+            </p>
+            <div class="profiles-item-actions profiles-item-confirm">
+              <Button
+                size="small"
+                severity="danger"
+                :label="`${pending.action === 'restore' ? 'Restore' : 'Delete'} “${p.name}”`"
+                :disabled="busy"
+                @click="pending.action === 'restore' ? restore(p.name) : remove(p.name)"
+              />
+              <Button
+                size="small"
+                text
+                severity="secondary"
+                label="Cancel"
+                :disabled="busy"
+                @click="pending = null"
+              />
+            </div>
+          </template>
           <div v-else class="profiles-item-actions">
             <Button
               v-if="p.name !== current || modified"
@@ -170,6 +180,14 @@
               @click="run(async () => onUse(p.name))"
             />
             <Button size="small" text label="Edit" @click="edit(p)" />
+            <Button
+              v-if="p.builtin"
+              size="small"
+              text
+              label="Restore defaults"
+              :disabled="busy || !p.user_edited"
+              @click="pending = { name: p.name, action: 'restore' }"
+            />
             <Button
               v-if="!p.default"
               size="small"
@@ -183,7 +201,7 @@
               text
               severity="secondary"
               label="Delete"
-              @click="pendingDelete = p.name"
+              @click="pending = { name: p.name, action: 'delete' }"
             />
           </div>
         </li>
@@ -238,7 +256,7 @@ type Draft = { isNew: boolean; name: string; settings: Settings; voicePrompt: st
 const VOICE_PROMPT_MAX = 4000;
 
 const { profiles, reloadProfiles } = useProfiles();
-const pendingDelete = ref<string | null>(null);
+const pending = ref<{ name: string; action: "delete" | "restore" } | null>(null);
 const error = ref("");
 const busy = ref(false);
 const draft = ref<Draft | null>(null);
@@ -267,14 +285,16 @@ const canSave = computed(
 watch(
   () => props.isOpen,
   (open) => {
+    pending.value = null;
     if (!open) return;
     error.value = "";
     draft.value = null;
-    pendingDelete.value = null;
+
     reloadProfiles().catch((err) => (error.value = String(err)));
   },
   { immediate: true },
 );
+watch(profiles, () => (pending.value = null));
 watch(draft, () => (error.value = ""), { deep: true });
 
 function summarize(s: Settings): string {
@@ -300,7 +320,10 @@ function summarize(s: Settings): string {
 // Runs a change to the profiles, then shows the result.
 async function remove(name: string) {
   await run(() => profilesApi.remove(name));
-  pendingDelete.value = null;
+}
+
+async function restore(name: string) {
+  if (await run(() => profilesApi.restore(name))) props.onSaved(name);
 }
 
 async function run(action: () => Promise<unknown>): Promise<boolean> {
@@ -320,6 +343,7 @@ async function run(action: () => Promise<unknown>): Promise<boolean> {
 
 // Edits p, or a new profile starting from the default one's settings.
 function edit(p: Profile | null) {
+  pending.value = null;
   const from = p ?? profiles.value.find((candidate) => candidate.default);
   const settings = from ? settingsOf(from) : settingsOf(emptySettings());
   promptProblem.value = null;

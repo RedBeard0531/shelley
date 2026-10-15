@@ -349,13 +349,22 @@ another. A conversation records the profile it came from in
 `conversation_options.profile`, and keeps its settings when the profile
 changes later.
 
+Shelley pre-installs `Default`, the coding profile, initially selected. It
+uses the server's default model. Profiles can be edited; a non-default
+profile can be deleted. Built-in profiles have `builtin: true` and start with
+`user_edited: false`; Shelley refreshes them on startup until an actual user
+edit sets `user_edited: true`. Unchanged saves and default selection do not
+count as edits. Restore defaults resets their settings and clears that flag.
+Deleted profiles and pre-existing custom profiles with the same name stay
+untouched. Existing conversations keep their copied settings.
+
 A profile also has a `voice_prompt` (trimmed, up to 4000 characters; `""`
 means none): who voice calls speak as. It is not a setting: conversations
 don't copy it, and a call reads the current voice prompt of the profile its
 conversation names.
 
 - `GET /api/profiles` — all profiles, default first:
-  `[{"name", "default", "model", "thinking_level", "tool_overrides",
+  `[{"name", "default", "builtin", "user_edited", "model", "thinking_level", "tool_overrides",
   "compact_nudge_tokens", "system_prompt", "voice_prompt"}]`.
 - `POST /api/profiles` — create one: `name` (trimmed; up to 64 bytes, no
   `/` or control characters, not `.` or `..`), the settings fields and
@@ -370,6 +379,10 @@ conversation names.
   A model of the same provider and account writes it from the system prompt
   alone; nothing is saved. `502` if it fails.
 - `POST /api/profiles/<name>/default` — make it the default profile.
+- `POST /api/profiles/<name>/restore` — restore a built-in's current shipped
+  settings and voice prompt, re-enabling automatic updates. Returns the
+  profile; `400` for a custom profile, `404` if missing. Default selection
+  and existing conversations are unchanged.
 - `DELETE /api/profiles/<name>` — `409` for the default profile.
 - `GET /api/system-prompt` — the built-in template and the variables a
   template can use: `{"template", "variables": [{"name", "description"}]}`.

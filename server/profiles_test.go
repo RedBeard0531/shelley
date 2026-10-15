@@ -187,6 +187,126 @@ func TestProfilesCRUD(t *testing.T) {
 	}
 }
 
+// Saving without changes must not opt a built-in out of shipped updates;
+// rejected edits must not do so either. Each editable field does opt out.
+func TestBuiltinProfileEdits(t *testing.T) {
+	t.Parallel()
+	for _, field := range []string{"model", "tools", "prompt", "voice", "reasoning", "compact"} {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			e := newProfileEnv(t)
+			initial := e.profiles()["Default"]
+			if !initial.Builtin || initial.UserEdited {
+				t.Fatalf("initial Default: %+v", initial)
+			}
+			save := func(st Settings, voice string) Profile {
+				t.Helper()
+				body, err := json.Marshal(storedProfile{Settings: st, VoicePrompt: voice})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var p Profile
+				if err := json.Unmarshal([]byte(e.want(200, "PUT", "/api/profiles/Default", string(body))), &p); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			}
+			if p := save(initial.Settings, initial.VoicePrompt); p.UserEdited || !p.Builtin {
+				t.Fatalf("no-op save opted out: %+v", p)
+			}
+			for _, body := range []string{
+				`{"model":"missing-model"}`,
+				`{"tool_overrides":{"bash":"maybe"}}`,
+				`{"system_prompt":"{{.Nope}}"}`,
+				`{"voice_prompt":"` + strings.Repeat("x", 4001) + `"}`,
+			} {
+				e.want(400, "PUT", "/api/profiles/Default", body)
+			}
+			if p := e.profiles()["Default"]; p.UserEdited || !p.Settings.equal(initial.Settings) || p.VoicePrompt != initial.VoicePrompt {
+				t.Fatalf("failed validation changed profile: %+v", p)
+			}
+			edited := initial.Settings
+			voice := initial.VoicePrompt
+			switch field {
+			case "model":
+				edited.Model = "model-b"
+			case "tools":
+				edited.ToolOverrides = map[string]string{"bash": "off"}
+			case "prompt":
+				edited.SystemPrompt = "A custom prompt."
+			case "voice":
+				voice = "A custom voice."
+			case "reasoning":
+				edited.ThinkingLevel = "low"
+			case "compact":
+				edited.CompactNudgeTokens = 12000
+			}
+			if p := save(edited, voice); !p.Builtin || !p.UserEdited || !p.Settings.equal(edited) || p.VoicePrompt != voice {
+				t.Fatalf("edit not persisted: %+v", p)
+			}
+			if p := e.profiles()["Default"]; !p.UserEdited {
+				t.Fatalf("list lost edit status: %+v", p)
+			}
+		})
+	}
+}
+
+// Restore affects the profile, not conversations that already copied its
+// settings, and must preserve the user's default-profile selection.
+func TestRestoreBuiltinProfile(t *testing.T) {
+	t.Parallel()
+	e := newProfileEnv(t)
+	initial := e.profiles()["Default"]
+	e.want(200, "PUT", "/api/profiles/Default", `{"model":"model-b","thinking_level":"low","compact_nudge_tokens":12000,"tool_overrides":{"bash":"off"},"system_prompt":"Custom chat prompt.","voice_prompt":"Custom voice prompt."}`)
+	var created struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.Unmarshal([]byte(e.want(201, "POST", "/api/conversations/new", `{"message":"hello","cwd":"`+t.TempDir()+`"}`)), &created); err != nil {
+		t.Fatal(err)
+	}
+	e.waitTurn(created.ConversationID, 0)
+	before, err := e.database.GetConversationByID(t.Context(), created.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts := db.ParseConversationOptions(before.ConversationOptions); opts.Profile != "Default" || opts.SystemPrompt != "Custom chat prompt." || opts.ToolOverrides["bash"] != "off" || *before.Model != "model-b" {
+		t.Fatalf("conversation didn't copy edited profile: %+v", before)
+	}
+	var restored Profile
+	if err := json.Unmarshal([]byte(e.want(200, "POST", "/api/profiles/Default/restore", "")), &restored); err != nil {
+		t.Fatal(err)
+	}
+	if !restored.Builtin || restored.UserEdited || !restored.Default || !restored.Settings.equal(initial.Settings) || restored.VoicePrompt != initial.VoicePrompt {
+		t.Fatalf("restore didn't recover shipped defaults: %+v", restored)
+	}
+	if p := e.profiles()["Default"]; !p.Builtin || p.UserEdited || !p.Default || !p.Settings.equal(initial.Settings) || p.VoicePrompt != initial.VoicePrompt {
+		t.Fatalf("restored profile wasn't persisted: %+v", p)
+	}
+	after, err := e.database.GetConversationByID(t.Context(), created.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ConversationOptions != before.ConversationOptions || *after.Model != *before.Model {
+		t.Fatalf("restore changed existing chat: before %+v, after %+v", before, after)
+	}
+	// Restoring an already-current profile is safe too.
+	e.want(200, "POST", "/api/profiles/Default/restore", "")
+	e.want(201, "POST", "/api/profiles", `{"name":"Custom","model":"model-b","voice_prompt":"Keep me."}`)
+	custom := e.profiles()["Custom"]
+	if custom.Builtin {
+		t.Fatalf("custom profile reported built-in: %+v", custom)
+	}
+	e.want(400, "POST", "/api/profiles/Custom/restore", "")
+	if p := e.profiles()["Custom"]; !p.Settings.equal(custom.Settings) || p.VoicePrompt != custom.VoicePrompt || p.UserEdited != custom.UserEdited {
+		t.Fatalf("rejected restore changed custom profile: %+v", p)
+	}
+	e.want(404, "POST", "/api/profiles/Missing/restore", "")
+	// Deleted built-ins aren't resurrected by restore.
+	e.want(200, "POST", "/api/profiles/Custom/default", "")
+	e.want(204, "DELETE", "/api/profiles/Default", "")
+	e.want(404, "POST", "/api/profiles/Default/restore", "")
+}
+
 // A conversation starts from a profile, and can switch to another mid-way:
 // the next turn uses the new model, tools, and system prompt, and a marker
 // says what changed.

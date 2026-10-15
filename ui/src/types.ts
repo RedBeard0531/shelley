@@ -166,6 +166,10 @@ export interface Settings {
 export interface Profile extends Settings {
   name: string;
   default: boolean;
+  /** Built-in profiles can be restored to the current shipped defaults. */
+  builtin: boolean;
+  /** Saved by the user rather than following shipped defaults. */
+  user_edited: boolean;
   /** How voice calls speak for this profile; "" for no persona. Not a
    *  setting: conversations don't copy it, and calls read it as saved. */
   voice_prompt: string;

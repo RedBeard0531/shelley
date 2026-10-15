@@ -116,7 +116,9 @@ type NotificationChannel struct {
 }
 
 type Profile struct {
-	Name      string `json:"name"`
-	IsDefault bool   `json:"is_default"`
-	Settings  string `json:"settings"`
+	Name       string `json:"name"`
+	IsDefault  bool   `json:"is_default"`
+	Settings   string `json:"settings"`
+	Builtin    bool   `json:"builtin"`
+	UserEdited bool   `json:"user_edited"`
 }

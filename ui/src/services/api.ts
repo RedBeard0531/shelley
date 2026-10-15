@@ -1498,6 +1498,14 @@ export const profilesApi = {
     );
     return response.json();
   },
+  async restore(name: string): Promise<Profile> {
+    const response = await profilesFetch(
+      `/profiles/${encodeURIComponent(name)}/restore`,
+      "Failed to restore profile defaults",
+      { method: "POST" },
+    );
+    return response.json();
+  },
   async remove(name: string): Promise<void> {
     await profilesFetch(`/profiles/${encodeURIComponent(name)}`, "Failed to delete profile", {
       method: "DELETE",

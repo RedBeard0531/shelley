@@ -200,7 +200,7 @@ func (db *DB) Migrate(ctx context.Context) error {
 		}
 	}
 
-	return nil
+	return db.updateBuiltinProfiles(ctx)
 }
 
 // runMigration executes a single migration file within a transaction,

@@ -18,11 +18,27 @@ func (q *Queries) ClearDefaultProfile(ctx context.Context) error {
 	return err
 }
 
+const createBuiltinProfile = `-- name: CreateBuiltinProfile :exec
+INSERT INTO profiles (name, settings, builtin, user_edited)
+VALUES (?, ?, TRUE, FALSE)
+ON CONFLICT (name) DO NOTHING
+`
+
+type CreateBuiltinProfileParams struct {
+	Name     string `json:"name"`
+	Settings string `json:"settings"`
+}
+
+func (q *Queries) CreateBuiltinProfile(ctx context.Context, arg CreateBuiltinProfileParams) error {
+	_, err := q.db.ExecContext(ctx, createBuiltinProfile, arg.Name, arg.Settings)
+	return err
+}
+
 const createProfile = `-- name: CreateProfile :one
 INSERT INTO profiles (name, settings)
 VALUES (?, ?)
 ON CONFLICT (name) DO NOTHING
-RETURNING name, is_default, settings
+RETURNING name, is_default, settings, builtin, user_edited
 `
 
 type CreateProfileParams struct {
@@ -33,7 +49,13 @@ type CreateProfileParams struct {
 func (q *Queries) CreateProfile(ctx context.Context, arg CreateProfileParams) (Profile, error) {
 	row := q.db.QueryRowContext(ctx, createProfile, arg.Name, arg.Settings)
 	var i Profile
-	err := row.Scan(&i.Name, &i.IsDefault, &i.Settings)
+	err := row.Scan(
+		&i.Name,
+		&i.IsDefault,
+		&i.Settings,
+		&i.Builtin,
+		&i.UserEdited,
+	)
 	return i, err
 }
 
@@ -49,30 +71,52 @@ func (q *Queries) DeleteProfile(ctx context.Context, name string) (int64, error)
 	return result.RowsAffected()
 }
 
+const getBuiltinProfile = `-- name: GetBuiltinProfile :one
+SELECT name FROM builtin_profiles WHERE name = ?
+`
+
+func (q *Queries) GetBuiltinProfile(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getBuiltinProfile, name)
+	err := row.Scan(&name)
+	return name, err
+}
+
 const getDefaultProfile = `-- name: GetDefaultProfile :one
-SELECT name, is_default, settings FROM profiles WHERE is_default
+SELECT name, is_default, settings, builtin, user_edited FROM profiles WHERE is_default
 `
 
 func (q *Queries) GetDefaultProfile(ctx context.Context) (Profile, error) {
 	row := q.db.QueryRowContext(ctx, getDefaultProfile)
 	var i Profile
-	err := row.Scan(&i.Name, &i.IsDefault, &i.Settings)
+	err := row.Scan(
+		&i.Name,
+		&i.IsDefault,
+		&i.Settings,
+		&i.Builtin,
+		&i.UserEdited,
+	)
 	return i, err
 }
 
 const getProfile = `-- name: GetProfile :one
-SELECT name, is_default, settings FROM profiles WHERE name = ?
+SELECT name, is_default, settings, builtin, user_edited FROM profiles WHERE name = ?
 `
 
 func (q *Queries) GetProfile(ctx context.Context, name string) (Profile, error) {
 	row := q.db.QueryRowContext(ctx, getProfile, name)
 	var i Profile
-	err := row.Scan(&i.Name, &i.IsDefault, &i.Settings)
+	err := row.Scan(
+		&i.Name,
+		&i.IsDefault,
+		&i.Settings,
+		&i.Builtin,
+		&i.UserEdited,
+	)
 	return i, err
 }
 
 const listProfiles = `-- name: ListProfiles :many
-SELECT name, is_default, settings FROM profiles ORDER BY is_default DESC, name
+SELECT name, is_default, settings, builtin, user_edited FROM profiles ORDER BY is_default DESC, name
 `
 
 func (q *Queries) ListProfiles(ctx context.Context) ([]Profile, error) {
@@ -84,7 +128,13 @@ func (q *Queries) ListProfiles(ctx context.Context) ([]Profile, error) {
 	items := []Profile{}
 	for rows.Next() {
 		var i Profile
-		if err := rows.Scan(&i.Name, &i.IsDefault, &i.Settings); err != nil {
+		if err := rows.Scan(
+			&i.Name,
+			&i.IsDefault,
+			&i.Settings,
+			&i.Builtin,
+			&i.UserEdited,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -96,6 +146,39 @@ func (q *Queries) ListProfiles(ctx context.Context) ([]Profile, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const registerBuiltinProfile = `-- name: RegisterBuiltinProfile :exec
+INSERT INTO builtin_profiles (name) VALUES (?) ON CONFLICT (name) DO NOTHING
+`
+
+func (q *Queries) RegisterBuiltinProfile(ctx context.Context, name string) error {
+	_, err := q.db.ExecContext(ctx, registerBuiltinProfile, name)
+	return err
+}
+
+const restoreBuiltinProfile = `-- name: RestoreBuiltinProfile :one
+UPDATE profiles SET settings = ?, user_edited = FALSE
+WHERE name = ? AND builtin
+RETURNING name, is_default, settings, builtin, user_edited
+`
+
+type RestoreBuiltinProfileParams struct {
+	Settings string `json:"settings"`
+	Name     string `json:"name"`
+}
+
+func (q *Queries) RestoreBuiltinProfile(ctx context.Context, arg RestoreBuiltinProfileParams) (Profile, error) {
+	row := q.db.QueryRowContext(ctx, restoreBuiltinProfile, arg.Settings, arg.Name)
+	var i Profile
+	err := row.Scan(
+		&i.Name,
+		&i.IsDefault,
+		&i.Settings,
+		&i.Builtin,
+		&i.UserEdited,
+	)
+	return i, err
 }
 
 const setDefaultProfile = `-- name: SetDefaultProfile :execrows
@@ -110,11 +193,26 @@ func (q *Queries) SetDefaultProfile(ctx context.Context, name string) (int64, er
 	return result.RowsAffected()
 }
 
+const updateBuiltinProfile = `-- name: UpdateBuiltinProfile :exec
+UPDATE profiles SET settings = ?1
+WHERE name = ?2 AND builtin AND NOT user_edited AND settings != ?1
+`
+
+type UpdateBuiltinProfileParams struct {
+	Settings string `json:"settings"`
+	Name     string `json:"name"`
+}
+
+func (q *Queries) UpdateBuiltinProfile(ctx context.Context, arg UpdateBuiltinProfileParams) error {
+	_, err := q.db.ExecContext(ctx, updateBuiltinProfile, arg.Settings, arg.Name)
+	return err
+}
+
 const updateProfile = `-- name: UpdateProfile :one
 UPDATE profiles
-SET settings = ?
+SET settings = ?, user_edited = TRUE
 WHERE name = ?
-RETURNING name, is_default, settings
+RETURNING name, is_default, settings, builtin, user_edited
 `
 
 type UpdateProfileParams struct {
@@ -125,6 +223,12 @@ type UpdateProfileParams struct {
 func (q *Queries) UpdateProfile(ctx context.Context, arg UpdateProfileParams) (Profile, error) {
 	row := q.db.QueryRowContext(ctx, updateProfile, arg.Settings, arg.Name)
 	var i Profile
-	err := row.Scan(&i.Name, &i.IsDefault, &i.Settings)
+	err := row.Scan(
+		&i.Name,
+		&i.IsDefault,
+		&i.Settings,
+		&i.Builtin,
+		&i.UserEdited,
+	)
 	return i, err
 }
