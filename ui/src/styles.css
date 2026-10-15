@@ -5738,10 +5738,12 @@ svg {
 
 /* System prompt template editor (SystemPromptEditor.vue): a highlighted <pre>
    under a transparent textarea, stacked in one grid cell so they wrap and
-   grow alike; the box around them scrolls. */
+   grow alike; the box around them scrolls and can be dragged taller. */
 .prompt-editor-scroll {
-  max-height: 50vh;
+  height: 20rem;
+  min-height: 6rem;
   overflow-y: auto;
+  resize: vertical;
   border: 1px solid var(--border);
   border-radius: 0.25rem;
   background: var(--bg-base);
@@ -5754,6 +5756,7 @@ svg {
 
 .prompt-editor-stack {
   display: grid;
+  min-height: 100%;
   --tpl-muted: var(--text-tertiary);
   --tpl-keyword: var(--primary);
   --tpl-field: var(--blue-text);
@@ -5764,7 +5767,6 @@ svg {
   grid-area: 1 / 1;
   box-sizing: border-box;
   width: 100%;
-  min-height: 12rem;
   margin: 0;
   padding: 0.5rem 0.75rem;
   border: 0;
@@ -5858,7 +5860,9 @@ svg {
   margin: 0.5rem 0 0;
 }
 
-.profiles-vars dd {
+.profiles-vars dd,
+.profiles-row-text label,
+.profiles-row-text .profiles-hint {
   margin: 0;
 }
 
@@ -17283,4 +17287,40 @@ kbd {
     padding-right: 0.25rem;
     padding-left: 0.25rem;
   }
+}
+
+.profiles-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.profiles-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  font-size: var(--font-size-13);
+}
+
+.profiles-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-12);
+}
+
+.profiles-num input {
+  width: 4.5rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: var(--font-size-13);
+  text-align: right;
 }

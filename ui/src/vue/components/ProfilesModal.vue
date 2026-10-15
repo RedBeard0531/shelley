@@ -44,52 +44,59 @@
         />
       </section>
       <section class="profiles-section">
-        <label class="advanced-settings-header" for="profiles-idle"
-          >Idle compaction (minutes)</label
-        >
-        <input
-          id="profiles-idle"
-          v-model.number="draft.settings.idle_compaction_minutes"
-          type="number"
-          min="0"
-          max="153722867"
-          step="1"
-        />
-        <p class="profiles-hint">
-          Compact once after this many idle minutes; 0 disables. Needs compact_in_place. Applies to
-          new conversations and ones that switch to this profile.
-        </p>
-      </section>
-      <section class="profiles-section">
-        <label class="advanced-settings-header" for="profiles-idle-prompt"
-          >Idle compaction prompt</label
-        >
-        <p class="profiles-hint">
-          What to keep when idle compaction runs. Empty uses compact_in_place's own guidance.
-        </p>
+        <h3 class="advanced-settings-header profiles-section-title">Idle behavior</h3>
+        <div class="profiles-row">
+          <div class="profiles-row-text">
+            <label for="profiles-idle">Compact when idle</label>
+            <span class="profiles-hint">Once, after this long idle. Needs compact_in_place.</span>
+          </div>
+          <span class="profiles-num">
+            <input
+              id="profiles-idle"
+              v-model.number="draft.settings.idle_compaction_minutes"
+              type="number"
+              min="0"
+              max="153722867"
+              step="1"
+              placeholder="0"
+            />
+            <span>min</span>
+          </span>
+        </div>
         <textarea
+          v-if="
+            (draft.settings.idle_compaction_minutes ?? 0) > 0 ||
+            draft.settings.idle_compaction_prompt
+          "
           id="profiles-idle-prompt"
           v-model="draft.settings.idle_compaction_prompt"
           class="profiles-voice"
-          rows="6"
+          rows="5"
+          aria-label="Idle compaction prompt"
+          placeholder="What to keep when compacting (optional; defaults to compact_in_place's guidance)"
         />
-      </section>
-      <section class="profiles-section">
-        <label class="advanced-settings-header" for="profiles-keep-warm"
-          >Keep prompt cache warm (minutes)</label
-        >
-        <input
-          id="profiles-keep-warm"
-          v-model.number="draft.settings.cache_keep_warm_minutes"
-          type="number"
-          min="0"
-          max="153722867"
-          step="1"
-        />
+        <div class="profiles-row">
+          <div class="profiles-row-text">
+            <label for="profiles-keep-warm">Keep prompt cache warm</label>
+            <span class="profiles-hint"
+              >After each turn; refreshes billed as cached input. Claude and GPT-5.6+.</span
+            >
+          </div>
+          <span class="profiles-num">
+            <input
+              id="profiles-keep-warm"
+              v-model.number="draft.settings.cache_keep_warm_minutes"
+              type="number"
+              min="0"
+              max="153722867"
+              step="1"
+              placeholder="0"
+            />
+            <span>min</span>
+          </span>
+        </div>
         <p class="profiles-hint">
-          Refresh the prompt cache for this long after a turn so follow-ups stay cheap; 0 disables.
-          Each refresh is billed as cached input. Claude (not fixed thinking budgets) and GPT-5.6+
-          only.
+          0 disables. Applies to new conversations and ones that switch here.
         </p>
       </section>
       <section class="profiles-section">
