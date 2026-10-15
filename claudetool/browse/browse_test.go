@@ -635,6 +635,13 @@ func TestBrowserIdleShutdownAndRestart(t *testing.T) {
 		t.Error("Expected different browser context after idle shutdown")
 	}
 
+	// The restarted browser must outlive the navigate below; with the 100ms
+	// timeout a slow runner shuts it down mid-navigation.
+	tools.mux.Lock()
+	tools.idleTimeout = time.Minute
+	tools.resetIdleTimerLocked()
+	tools.mux.Unlock()
+
 	// Verify the new browser actually works via combined tool
 	tool := tools.CombinedTool()
 	toolOut := tool.Run(ctx, []byte(`{"action": "navigate", "url": "about:blank"}`))
