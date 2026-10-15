@@ -784,6 +784,21 @@ func TestReasoningServiceMapping(t *testing.T) {
 	}
 }
 
+// Reasoning effort is part of the cache key, so a warm must map it as Do does.
+func TestReasoningServiceWarmsWithMappedLevel(t *testing.T) {
+	inner := predictable.NewService()
+	svc := WrapReasoningConfig(inner, "", "unknown", "yes", `{"minimal":"low"}`)
+	if llm.CacheTTL(svc) != inner.CacheTTL() {
+		t.Fatalf("CacheTTL = %v, want %v", llm.CacheTTL(svc), inner.CacheTTL())
+	}
+	if _, err := llm.WarmCache(t.Context(), svc, &llm.Request{ThinkingLevel: llm.ThinkingLevelMinimal}); err != nil {
+		t.Fatal(err)
+	}
+	if warms := inner.WarmRequests(); len(warms) != 1 || warms[0].ThinkingLevel != llm.ThinkingLevelLow {
+		t.Fatalf("warms = %+v, want one at low", warms)
+	}
+}
+
 func TestReasoningServiceDelegatesLevelsWithoutMap(t *testing.T) {
 	inner := &advertisedReasoningService{levels: []llm.ThinkingLevel{llm.ThinkingLevelOff, llm.ThinkingLevelHigh, llm.ThinkingLevelMax}}
 	svc := WrapReasoningConfig(inner, "", "unknown", "yes", "")

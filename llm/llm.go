@@ -4,6 +4,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,36 @@ type Service interface {
 	MaxImageBytes() int
 	// SupportsImages reports whether the service accepts image inputs.
 	SupportsImages() bool
+}
+
+// CacheWarmer refreshes a provider prompt cache by replaying a previously
+// successful request without generating output. Implementations must not
+// execute or return tool calls.
+type CacheWarmer interface {
+	// CacheTTL is how long a cached prefix lives after its last write or read.
+	CacheTTL() time.Duration
+	WarmCache(context.Context, *Request) (Usage, error)
+}
+
+// CacheTTL returns s's prompt-cache lifetime, or 0 if s cannot warm its cache.
+func CacheTTL(s Service) time.Duration {
+	if w, ok := s.(CacheWarmer); ok {
+		return w.CacheTTL()
+	}
+	return 0
+}
+
+// ErrCacheWarmUnsupported reports that a service cannot warm req's cache
+// without generating output or changing the cached prefix.
+var ErrCacheWarmUnsupported = errors.New("prompt cache warming unsupported")
+
+// WarmCache warms req's cache through s, or returns ErrCacheWarmUnsupported.
+func WarmCache(ctx context.Context, s Service, req *Request) (Usage, error) {
+	w, ok := s.(CacheWarmer)
+	if !ok {
+		return Usage{}, ErrCacheWarmUnsupported
+	}
+	return w.WarmCache(ctx, req)
 }
 
 // ReasoningSupporter reports whether a service accepts reasoning controls and

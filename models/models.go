@@ -593,6 +593,24 @@ func (l *loggingService) Do(ctx context.Context, request *llm.Request) (*llm.Res
 	return response, err
 }
 
+func (l *loggingService) CacheTTL() time.Duration { return llm.CacheTTL(l.service) }
+
+func (l *loggingService) WarmCache(ctx context.Context, request *llm.Request) (llm.Usage, error) {
+	ctx = llmhttp.WithModelID(ctx, l.modelID)
+	ctx = llmhttp.WithProvider(ctx, string(l.provider))
+	usage, err := llm.WarmCache(ctx, l.service, request)
+	if err != nil {
+		return usage, err
+	}
+	if usage.Model == "" {
+		usage.Model = l.modelID
+	}
+	l.logger.Info("LLM prompt cache warmed", "model", l.modelID, "input_tokens", usage.InputTokens,
+		"cache_read_input_tokens", usage.CacheReadInputTokens,
+		"cache_creation_input_tokens", usage.CacheCreationInputTokens, "cost_usd", usage.CostUSD)
+	return usage, nil
+}
+
 func (l *loggingService) Provider() string       { return l.service.Provider() }
 func (l *loggingService) MaxImageDimension() int { return l.service.MaxImageDimension() }
 func (l *loggingService) MaxImageBytes() int     { return l.service.MaxImageBytes() }
@@ -883,6 +901,25 @@ func (s *reasoningService) DefaultReasoningLevel() string {
 }
 
 func (s *reasoningService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	mapped, err := s.mapRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	return s.Service.Do(ctx, mapped)
+}
+
+func (s *reasoningService) CacheTTL() time.Duration { return llm.CacheTTL(s.Service) }
+
+// WarmCache maps req as Do does: reasoning effort is part of the cache key.
+func (s *reasoningService) WarmCache(ctx context.Context, req *llm.Request) (llm.Usage, error) {
+	mapped, err := s.mapRequest(req)
+	if err != nil {
+		return llm.Usage{}, err
+	}
+	return llm.WarmCache(ctx, s.Service, mapped)
+}
+
+func (s *reasoningService) mapRequest(req *llm.Request) (*llm.Request, error) {
 	copyReq := *req
 	if !s.supported {
 		copyReq.ThinkingLevel = llm.ThinkingLevelOff
@@ -899,7 +936,7 @@ func (s *reasoningService) Do(ctx context.Context, req *llm.Request) (*llm.Respo
 		copyReq.ThinkingLevel = mapped.level
 		copyReq.ReasoningEffort = mapped.effort
 	}
-	return s.Service.Do(ctx, &copyReq)
+	return &copyReq, nil
 }
 
 func wrapReasoningService(service llm.Service, model *generated.Model) llm.Service {

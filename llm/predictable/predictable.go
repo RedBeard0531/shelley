@@ -78,7 +78,26 @@ type Service struct {
 	mu sync.Mutex
 	// Recent requests for testing inspection
 	recentRequests []*llm.Request
+	warmRequests   []*llm.Request
 	responseDelay  time.Duration
+}
+
+// CacheTTL matches Anthropic's default cache lifetime.
+func (s *Service) CacheTTL() time.Duration { return 5 * time.Minute }
+
+// WarmCache records req and reports it as fully read from cache.
+func (s *Service) WarmCache(ctx context.Context, req *llm.Request) (llm.Usage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.warmRequests = append(s.warmRequests, req)
+	return llm.Usage{CacheReadInputTokens: 1024, CostUSD: 0.0001}, nil
+}
+
+// WarmRequests returns the requests WarmCache received.
+func (s *Service) WarmRequests() []*llm.Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*llm.Request(nil), s.warmRequests...)
 }
 
 // NewService creates a new predictable LLM service
