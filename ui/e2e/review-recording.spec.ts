@@ -340,7 +340,7 @@ test.describe("Narrated review recording", () => {
     });
   });
 
-  test("a building tour's worker opens beside the recording", async ({ page, request }) => {
+  test("a building tour opens in place beside the recording", async ({ page, request }) => {
     await withTempDir("shelley-review-rec-", async (dir) => {
       const repo = tourRepo(dir);
       writeFileSync(join(repo, "src", "next.ts"), "export const next = 1;\n");
@@ -358,15 +358,18 @@ test.describe("Narrated review recording", () => {
       await page.setViewportSize({ width: 1500, height: 900 });
       await page.goto(`/c/${slug}?diff=${hash}&cwd=${encodeURIComponent(repo)}`);
       const overlay = page.locator(".diff-viewer-overlay");
-      const building = overlay.getByRole("link", { name: "Building tour" });
+      const building = overlay
+        .locator(".diff-viewer-view-switcher")
+        .getByRole("button", { name: "Building tour" });
       await expect(building).toBeVisible({ timeout: 30_000 });
       await overlay.getByTestId("review-record-start").click();
       await expect(overlay.getByTestId("review-record-stop")).toBeVisible();
 
-      const popup = page.waitForEvent("popup");
+      // The build opens in the viewer's own Tour tab: no worker conversation,
+      // no navigation away, and the recording keeps running.
       await building.click();
-      await expect(await popup).toHaveURL(/\/c\/tour-worker$/);
-      await expect(page).toHaveURL(new RegExp(`/c/${slug}$`));
+      await expect(overlay.getByTestId("tour-build-progress")).toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`/c/${slug}`));
       await expect(overlay.getByTestId("review-record-stop")).toBeVisible();
     });
   });
