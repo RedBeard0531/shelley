@@ -169,3 +169,35 @@ func builtinSettings(t *testing.T, original string, edits map[string]any) string
 	}
 	return string(encoded)
 }
+
+// Assistant is installed opt-in, with its idle policy and guidance.
+func TestBuiltinAssistant(t *testing.T) {
+	db := setupTestDB(t)
+	assistant := builtinProfile(t, db, "Assistant")
+	if !assistant.Builtin || assistant.UserEdited || assistant.IsDefault {
+		t.Fatalf("Assistant: %+v", assistant)
+	}
+	opts := ParseConversationOptions(assistant.Settings)
+	if opts.IdleCompactionPrompt != assistantIdlePrompt || opts.IdleCompactionMinutes != 8 || opts.CacheKeepWarmMinutes != 8 {
+		t.Fatalf("Assistant idle policy: %+v", opts)
+	}
+}
+
+// A user's own Assistant from before it shipped is kept, not adopted.
+func TestBuiltinAssistantKeepsUserProfile(t *testing.T) {
+	db := setupDBMigratedThrough(t, 45)
+	t.Cleanup(func() { db.Close() })
+	mine := `{"model":"custom-assistant","system_prompt":"Keep my instructions"}`
+	if err := db.QueriesTx(t.Context(), func(q *generated.Queries) error {
+		_, err := q.CreateProfile(t.Context(), generated.CreateProfileParams{Name: "Assistant", Settings: mine})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := builtinProfile(t, db, "Assistant"); got.Settings != mine || got.Builtin {
+		t.Fatalf("user's Assistant changed: %+v", got)
+	}
+}

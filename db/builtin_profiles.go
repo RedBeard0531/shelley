@@ -3,13 +3,44 @@ package db
 import (
 	"context"
 	"database/sql"
+	_ "embed"
+	"encoding/json"
 	"errors"
 
 	"shelley.exe.dev/db/generated"
 )
 
+//go:embed assistant_system_prompt.txt
+var assistantSystemPrompt string
+
+//go:embed assistant_idle_prompt.txt
+var assistantIdlePrompt string
+
 // builtinProfiles is the single source of shipped profile settings.
-var builtinProfiles = map[string]string{"Default": "{}"}
+var builtinProfiles = map[string]string{"Default": "{}", "Assistant": assistantProfile()}
+
+// assistantProfile is a text-message-first personal assistant.
+func assistantProfile() string {
+	settings, err := json.Marshal(map[string]any{
+		"system_prompt":        assistantSystemPrompt,
+		"compact_nudge_tokens": 130_000,
+		// Quiet chats are compacted in place, keeping what matters about
+		// the user; a warm cache keeps a quick follow-up cheap until then.
+		"idle_compaction_minutes": 8,
+		"idle_compaction_prompt":  assistantIdlePrompt,
+		"cache_keep_warm_minutes": 8,
+		"tool_overrides": map[string]string{
+			"message_user":     "on",
+			"compact_in_place": "on",
+			"llm_one_shot":     "off",
+			"output_iframe":    "off",
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(settings)
+}
 
 func (db *DB) updateBuiltinProfiles(ctx context.Context) error {
 	return db.syncBuiltinProfiles(ctx, builtinProfiles)

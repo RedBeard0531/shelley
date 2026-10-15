@@ -377,10 +377,10 @@ func (s *Server) recoverChannelQueues(ctx context.Context) {
 }
 
 // channelConversation returns the conversation of the external chat chatID,
-// creating it on the chat's first message with the default model,
-// message_user, and systemPrompt if set. It creates none
-// if the model is unavailable or systemPrompt isn't a valid template, so
-// failing deliveries leave no empty conversations.
+// creating it on the chat's first message from Assistant if it exists, or
+// the server's defaults otherwise. message_user is always on; systemPrompt,
+// if set, overrides the profile's. Invalid settings create no conversation,
+// so failing deliveries leave no empty conversations.
 func (s *Server) channelConversation(ctx context.Context, endpoint, chatID, systemPrompt string) (*generated.Conversation, error) {
 	var conv generated.Conversation
 	err := s.db.Queries(ctx, func(q *generated.Queries) (err error) {
@@ -390,19 +390,26 @@ func (s *Server) channelConversation(ctx context.Context, endpoint, chatID, syst
 	if !errors.Is(err, sql.ErrNoRows) {
 		return &conv, err
 	}
-	modelID := s.effectiveDefaultModel(s.getModelList())
-	if _, err := s.llmManager.GetService(modelID); err != nil {
-		return nil, fmt.Errorf("model %s: %w", modelID, err)
+	var settings ConversationSettings
+	profile, err := s.getProfile(ctx, "Assistant")
+	if err == nil {
+		settings = ConversationSettings{Profile: profile.Name, Settings: profile.Settings}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
 	}
-	if err := validateSystemPromptTemplate(systemPrompt); err != nil {
-		return nil, fmt.Errorf("system_prompt: %w", err)
+	var change SettingsChange
+	if systemPrompt != "" {
+		change.SystemPrompt = &systemPrompt
+	}
+	settings, err = s.resolveSettings(ctx, settings, change, s.getModelList())
+	if err != nil {
+		return nil, err
 	}
 	// The agent answers the chat with message_user.
-	opts := db.ConversationOptions{
-		ToolOverrides: map[string]string{claudetool.MessageUserName: "on"},
-		SystemPrompt:  systemPrompt,
-	}
-	return s.db.CreateChannelConversation(ctx, chatID, endpoint, modelID, opts)
+	settings.ToolOverrides[claudetool.MessageUserName] = "on"
+	var opts db.ConversationOptions
+	settings.applyTo(&opts)
+	return s.db.CreateChannelConversation(ctx, chatID, endpoint, settings.Model, opts)
 }
 
 // channelMessageDelivered reports whether the channel message id is already

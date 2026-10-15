@@ -173,9 +173,6 @@ func TestDB_Migrate_MarksDefaultBuiltin(t *testing.T) {
 				t.Fatal(err)
 			}
 			after := listMigrationProfiles(t, db)
-			if len(after) != 1 {
-				t.Fatalf("upgrade changed profiles: %+v", after)
-			}
 			if p := after[0]; p.Name != "Default" || p.Settings != settings || !p.IsDefault || !p.Builtin || p.UserEdited != (settings != `{}`) {
 				t.Fatalf("upgrade marked Default wrong: %+v", p)
 			}

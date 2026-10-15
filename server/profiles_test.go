@@ -109,7 +109,7 @@ func systemText(req *llm.Request) string {
 func TestProfilesCRUD(t *testing.T) {
 	t.Parallel()
 	e := newProfileEnv(t)
-	if p := e.profiles(); len(p) != 1 || !p["Default"].Default || p["Default"].Model != "" || p["Default"].SystemPrompt != "" {
+	if p := e.profiles(); len(p) != 2 || !p["Default"].Default || p["Default"].Model != "" || p["Default"].SystemPrompt != "" {
 		t.Fatalf("initial profiles: %+v", p)
 	}
 	e.want(201, "POST", "/api/profiles", `{"name":" Fast ","model":"model-b","thinking_level":"low","tool_overrides":{"bash":"off"}}`)
@@ -142,7 +142,7 @@ func TestProfilesCRUD(t *testing.T) {
 	e.want(404, "PUT", "/api/profiles/Nope", `{}`)
 	e.want(404, "DELETE", "/api/profiles/Nope", "")
 	e.want(204, "DELETE", "/api/profiles/Default", "")
-	if p := e.profiles(); len(p) != 2 {
+	if p := e.profiles(); len(p) != 3 {
 		t.Fatalf("after delete: %+v", p)
 	}
 	// Names are path segments.
@@ -184,6 +184,47 @@ func TestProfilesCRUD(t *testing.T) {
 	}
 	if err := validateSystemPromptTemplate(sp.Template); err != nil {
 		t.Fatalf("the built-in template fails validation: %v", err)
+	}
+}
+
+// The pre-installed Assistant is opt-in and uses the server's configured
+// model. Its template must render in a real turn, not just the profile editor.
+func TestPreinstalledAssistant(t *testing.T) {
+	t.Parallel()
+	e := newProfileEnv(t)
+	assistant, ok := e.profiles()["Assistant"]
+	if !ok || assistant.Default || assistant.Model != "" {
+		t.Fatalf("Assistant: present %v, profile %+v", ok, assistant)
+	}
+	if err := validateSystemPromptTemplate(assistant.SystemPrompt); err != nil {
+		t.Fatalf("Assistant template: %v", err)
+	}
+	var created struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	cwd := t.TempDir()
+	body := e.want(201, "POST", "/api/conversations/new", `{"message":"hello","cwd":"`+cwd+`","conversation_options":{"profile":"Assistant"}}`)
+	if err := json.Unmarshal([]byte(body), &created); err != nil {
+		t.Fatal(err)
+	}
+	e.waitTurn(created.ConversationID, 0)
+	var settings ConversationSettings
+	if err := json.Unmarshal([]byte(e.want(200, "GET", "/api/conversation/"+created.ConversationID+"/settings", "")), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.Profile != "Assistant" || settings.Model != "model-a" {
+		t.Fatalf("Assistant conversation: %+v", settings)
+	}
+	req := e.lastTurnRequest()
+	if !hasTool(req, claudetool.MessageUserName) || !hasTool(req, "compact_in_place") || hasTool(req, "llm_one_shot") {
+		t.Fatalf("Assistant didn't get its messaging tools")
+	}
+	if hasTool(req, "output_iframe") {
+		t.Fatal("text-first Assistant must not offer output_iframe")
+	}
+	prompt := systemText(req)
+	if !strings.Contains(prompt, cwd) || !strings.Contains(prompt, "life and work") {
+		t.Fatalf("Assistant prompt didn't render: %q", prompt)
 	}
 }
 

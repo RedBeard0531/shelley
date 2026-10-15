@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -179,6 +180,118 @@ func channelUserMessages(t *testing.T, database *db.DB, conversationID string) [
 		out = append(out, id+": "+msg.Content[0].Text)
 	}
 	return out
+}
+
+// Channels use the named Assistant, not the user's default. Its settings
+// become a snapshot, except message_user must stay on to answer the chat.
+func TestChannelMessageAssistantProfile(t *testing.T) {
+	for _, web := range []bool{false, true} {
+		for _, tc := range []struct {
+			name      string
+			assistant bool
+			prompt    string
+		}{
+			{name: "Assistant", assistant: true},
+			{name: "Assistant/event override", assistant: true, prompt: "Event override in {{.WorkingDirectory}}."},
+			{name: "deleted Assistant"},
+			{name: "deleted Assistant/event override", prompt: "Event override in {{.WorkingDirectory}}."},
+		} {
+			t.Run(fmt.Sprintf("web=%t/%s", web, tc.name), func(t *testing.T) {
+				t.Parallel()
+				e := newProfileEnv(t)
+				t.Cleanup(func() { stopActiveConversationLoops(e.srv) })
+				e.want(201, "POST", "/api/profiles", `{"name":"Other","model":"model-b","thinking_level":"low","tool_overrides":{"message_user":"off","bash":"off"},"compact_nudge_tokens":54321,"system_prompt":"Unrelated default profile."}`)
+				e.want(200, "POST", "/api/profiles/Other/default", "")
+				if tc.assistant {
+					e.want(200, "PUT", "/api/profiles/Assistant", `{"model":"model-b","thinking_level":"high","tool_overrides":{"message_user":"off","bash":"off","compact_in_place":"on"},"compact_nudge_tokens":12345,"system_prompt":"Channel assistant in {{.WorkingDirectory}}."}`)
+				} else {
+					e.want(204, "DELETE", "/api/profiles/Assistant", "")
+				}
+
+				want := ConversationSettings{Settings: Settings{
+					Model: "model-a", ToolOverrides: map[string]string{"message_user": "on"},
+				}}
+				promptText := "Shelley"
+				thinking := llm.ThinkingLevelDefault
+				if tc.assistant {
+					want = ConversationSettings{Profile: "Assistant", Settings: Settings{
+						Model: "model-b", ThinkingLevel: "high",
+						ToolOverrides:      map[string]string{"message_user": "on", "bash": "off", "compact_in_place": "on"},
+						CompactNudgeTokens: 12345,
+						SystemPrompt:       "Channel assistant in {{.WorkingDirectory}}.",
+					}}
+					promptText, thinking = "Channel assistant in ", llm.ThinkingLevelHigh
+				}
+				if tc.prompt != "" {
+					want.SystemPrompt, promptText = tc.prompt, "Event override in "
+				}
+				send := func(id, prompt string) {
+					t.Helper()
+					body, err := json.Marshal(channelEvent{
+						Type: "message", ID: id, ChatID: "profile-chat", Web: web,
+						Text: "hello", SystemPrompt: prompt,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					e.want(204, "POST", "/api/channels/messages", string(body))
+				}
+				send("first", tc.prompt)
+				conv, err := conversationByExternalID(t, e.database, "profile-chat")
+				if err != nil {
+					t.Fatal(err)
+				}
+				checkSettings := func() {
+					t.Helper()
+					stored, err := e.database.GetConversationByID(t.Context(), conv.ConversationID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got := conversationSettings(*stored); !reflect.DeepEqual(got, want) {
+						t.Errorf("persisted settings = %+v, want %+v", got, want)
+					}
+				}
+				checkRequest := func(before int) {
+					t.Helper()
+					e.waitTurn(conv.ConversationID, before)
+					req := e.lastTurnRequest()
+					if !hasTool(req, claudetool.MessageUserName) {
+						t.Error("channel request must offer message_user even when the profile disables it")
+					}
+					if tc.assistant && (hasTool(req, "bash") || !hasTool(req, "compact_in_place")) {
+						t.Error("channel request did not inherit Assistant's tools")
+					}
+					if req.ThinkingLevel != thinking {
+						t.Errorf("request thinking = %v, want %v", req.ThinkingLevel, thinking)
+					}
+					if got := systemText(req); !strings.Contains(got, promptText) || strings.Contains(got, "{{.WorkingDirectory}}") {
+						t.Errorf("request prompt starts %.100q, want rendered %q", got, promptText)
+					}
+				}
+				checkSettings()
+				checkRequest(0)
+				if !tc.assistant {
+					return
+				}
+				// Neither editing nor deleting the source profile (nor a later
+				// event's prompt) may change an existing chat's snapshot.
+				for _, mutation := range []struct {
+					method string
+					status int
+					body   string
+				}{
+					{"PUT", 200, `{"model":"model-a","thinking_level":"low","tool_overrides":{"bash":"on"},"compact_nudge_tokens":67890,"system_prompt":"Edited Assistant."}`},
+					{"DELETE", 204, ""},
+				} {
+					e.want(mutation.status, mutation.method, "/api/profiles/Assistant", mutation.body)
+					before := len(listMessages(t, e.database, conv.ConversationID))
+					send(mutation.method, "Later event prompt must be ignored.")
+					checkSettings()
+					checkRequest(before)
+				}
+			})
+		}
+	}
 }
 
 func TestChannelMessageExternalIDOnlyInLLM(t *testing.T) {

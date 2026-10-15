@@ -21,6 +21,40 @@ test.describe("Settings knob", () => {
     await expect(panel).toBeHidden();
   }
 
+  test("the pre-installed Assistant starts a text chat with auto compaction", async ({ page }) => {
+    await page.goto("/new");
+    await page.locator(".model-picker.p-select").click();
+    const profiles = page.getByTestId("model-picker-profiles");
+    await expect(profiles.getByRole("radio", { name: "Default", exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await profiles.getByRole("radio", { name: "Assistant", exact: true }).click();
+    await editTools(page);
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog
+        .getByRole("radiogroup", { name: "Auto compaction", exact: true })
+        .getByRole("radio", { name: "On", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
+    await expect(dialog.getByTestId("auto-compaction").getByRole("combobox")).toHaveValue("130000");
+    await expect(
+      dialog
+        .getByRole("radiogroup", { name: "message_user", exact: true })
+        .getByRole("radio", { name: "On", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
+    await dialog.getByRole("button", { name: "Close modal" }).click();
+
+    await page
+      .getByTestId("message-input")
+      .fill('message_user: {"text":"Hey! What can I help with?","end_turn":true}');
+    await page.getByTestId("send-button").click();
+    await expect(page.getByTestId("message-user-text")).toHaveText("Hey! What can I help with?");
+    await expect(
+      page.locator(".messages-container").getByText("edit predictable.go", { exact: false }),
+    ).toHaveCount(0);
+  });
+
   test("restores a built-in profile only after confirmation, without changing a live conversation", async ({
     page,
     request,

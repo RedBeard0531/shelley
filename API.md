@@ -349,14 +349,24 @@ another. A conversation records the profile it came from in
 `conversation_options.profile`, and keeps its settings when the profile
 changes later.
 
-Shelley pre-installs `Default`, the coding profile, initially selected. It
-uses the server's default model. Profiles can be edited; a non-default
+Shelley pre-installs `Default` (the coding profile, initially selected) and
+`Assistant` (an opt-in, text-message-first personal assistant for life and
+work). Assistant enables `message_user` and `compact_in_place` with a
+130k-token compaction nudge, disables `llm_one_shot` and `output_iframe`,
+replies in plain text through `message_user`, compacts in place after 8 idle
+minutes and keeps the prompt cache warm until then. Both profiles use the
+server's default model. Profiles can be edited; a non-default
 profile can be deleted. Built-in profiles have `builtin: true` and start with
 `user_edited: false`; Shelley refreshes them on startup until an actual user
 edit sets `user_edited: true`. Unchanged saves and default selection do not
 count as edits. Restore defaults resets their settings and clears that flag.
 Deleted profiles and pre-existing custom profiles with the same name stay
 untouched. Existing conversations keep their copied settings.
+
+New messaging webhook and web chats start from `Assistant` when it exists;
+otherwise they use the server's default model and built-in prompt. They
+always enable `message_user`. A first message's explicit `system_prompt`
+overrides the profile's prompt, and existing chats keep their settings.
 
 A profile also has a `voice_prompt` (trimmed, up to 4000 characters; `""`
 means none): who voice calls speak as. It is not a setting: conversations
