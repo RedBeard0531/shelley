@@ -507,7 +507,7 @@ func (cm *ConversationManager) ApplySettings(ctx context.Context, models []Model
 func (cm *ConversationManager) recordSettingsChange(ctx context.Context, prompt *generated.Message, marker *ModelChangeUserData) error {
 	// Publish in sequence order: the prompt was stored before the marker.
 	if prompt != nil {
-		if err := cm.publishCreated(ctx, prompt); err != nil {
+		if err := cm.publishCreated(ctx, *prompt); err != nil {
 			return err
 		}
 	}

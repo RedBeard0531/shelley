@@ -1369,11 +1369,12 @@ func (cm *ConversationManager) takeInjectable(ctx context.Context, generation ui
 		}); err != nil {
 			return inj, fmt.Errorf("reload compacted history: %w", err)
 		}
-		history, _, err := cm.partitionMessages(rows)
+		// The system prompt may have been refreshed with it.
+		history, system, err := cm.partitionMessages(rows)
 		if err != nil {
 			return inj, fmt.Errorf("rebuild compacted history: %w", err)
 		}
-		inj.History = history
+		inj.History, inj.System = history, system
 	}
 	queued, err := cm.db.GetQueuedMessages(ctx, cm.conversationID)
 	if err != nil {
@@ -1818,16 +1819,7 @@ func (cm *ConversationManager) storeSystemPrompt(ctx context.Context, prompt ren
 		cm.logger.Info("Skipping empty system prompt generation")
 		return nil, nil
 	}
-	created, err := cm.db.CreateMessage(ctx, db.CreateMessageParams{
-		ConversationID: cm.conversationID,
-		Type:           db.MessageTypeSystem,
-		LLMData: llm.Message{
-			Role:    llm.MessageRoleUser,
-			Content: []llm.Content{{Type: llm.ContentTypeText, Text: prompt.text}},
-		},
-		UsageData:   llm.Usage{},
-		DisplayData: prompt.display,
-	})
+	created, err := cm.db.CreateMessage(ctx, cm.systemPromptParams(prompt))
 	if err != nil {
 		return nil, fmt.Errorf("failed to store system prompt: %w", err)
 	}
@@ -1839,6 +1831,19 @@ func (cm *ConversationManager) storeSystemPrompt(ctx context.Context, prompt ren
 
 	cm.logger.Info("Stored system prompt", "length", len(prompt.text))
 	return created, nil
+}
+
+func (cm *ConversationManager) systemPromptParams(prompt renderedSystemPrompt) db.CreateMessageParams {
+	return db.CreateMessageParams{
+		ConversationID: cm.conversationID,
+		Type:           db.MessageTypeSystem,
+		LLMData: llm.Message{
+			Role:    llm.MessageRoleUser,
+			Content: []llm.Content{{Type: llm.ContentTypeText, Text: prompt.text}},
+		},
+		UsageData:   llm.Usage{},
+		DisplayData: prompt.display,
+	}
 }
 
 // systemPromptDisplayData builds the tool and skill metadata shown alongside a

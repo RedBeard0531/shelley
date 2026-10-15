@@ -201,8 +201,9 @@ func trimToolResult(m llm.Message, toolUseID, replacement string) (llm.Message, 
 
 var errCompactWhileWorking = errors.New("cannot compact while the agent is working")
 
-// loadContextItems returns the LLM's current view of the conversation.
-func (cm *ConversationManager) loadContextItems(ctx context.Context) ([]contextItem, error) {
+// loadContext returns the LLM's current view of the conversation and its
+// system prompt.
+func (cm *ConversationManager) loadContext(ctx context.Context) ([]contextItem, []llm.SystemContent, error) {
 	var rows []generated.Message
 	err := cm.db.Queries(ctx, func(q *generated.Queries) error {
 		var err error
@@ -210,21 +211,37 @@ func (cm *ConversationManager) loadContextItems(ctx context.Context) ([]contextI
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	items, _, err := cm.contextItems(rows)
-	return items, err
+	return cm.contextItems(rows)
 }
 
-// createInPlaceCompaction appends c as an in-place compaction record. The
-// caller validates c and publishes the row (publishCreated).
-func (cm *ConversationManager) createInPlaceCompaction(ctx context.Context, c db.InPlaceCompaction) (*generated.Message, error) {
-	created, err := cm.db.CreateMessage(ctx, db.CreateMessageParams{
+// createInPlaceCompaction appends c as an in-place compaction record and, if
+// the conversation has a system prompt (system) that would now render
+// differently, a fresh one in the same transaction: compaction rewrites the
+// cached context anyway, so that is when the prompt catches up with AGENTS.md,
+// skills and the like. The caller validates c and publishes the rows
+// (publishCreated).
+func (cm *ConversationManager) createInPlaceCompaction(ctx context.Context, c db.InPlaceCompaction, system []llm.SystemContent) ([]generated.Message, error) {
+	params := []db.CreateMessageParams{{
 		ConversationID: cm.conversationID,
 		Type:           db.MessageTypeInPlaceCompaction,
 		UserData:       c,
 		BumpTimestamp:  true,
-	})
+	}}
+	if len(system) > 0 {
+		cm.mu.Lock()
+		opts := cm.conversationOptions
+		cm.mu.Unlock()
+		prompt, err := cm.renderSystemPrompt(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("render system prompt: %w", err)
+		}
+		if prompt.text != "" && !(len(system) == 1 && system[0].Text == prompt.text) {
+			params = append(params, cm.systemPromptParams(prompt))
+		}
+	}
+	created, err := cm.db.CreateMessages(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -232,8 +249,8 @@ func (cm *ConversationManager) createInPlaceCompaction(ctx context.Context, c db
 	return created, nil
 }
 
-// publishCreated sends a row this manager created to stream subscribers.
-func (cm *ConversationManager) publishCreated(ctx context.Context, created *generated.Message) error {
+// publishCreated sends rows this manager created to stream subscribers.
+func (cm *ConversationManager) publishCreated(ctx context.Context, created ...generated.Message) error {
 	var conversation generated.Conversation
 	if err := cm.db.Queries(ctx, func(q *generated.Queries) error {
 		var qerr error
@@ -242,8 +259,8 @@ func (cm *ConversationManager) publishCreated(ctx context.Context, created *gene
 	}); err != nil {
 		return err
 	}
-	cm.publishStream(created.SequenceID, StreamResponse{
-		Messages:     toAPIMessages([]generated.Message{*created}),
+	cm.publishStream(created[len(created)-1].SequenceID, StreamResponse{
+		Messages:     toAPIMessages(created),
 		Conversation: &conversation,
 	})
 	return nil
@@ -253,25 +270,25 @@ func (cm *ConversationManager) publishCreated(ctx context.Context, created *gene
 // as an in-place compaction record, and drops the loop so the next turn
 // rebuilds its history from the DB. It refuses while a turn is running.
 func (cm *ConversationManager) RecordInPlaceCompaction(ctx context.Context, c db.InPlaceCompaction) error {
-	var created *generated.Message
+	var created []generated.Message
 	err := cm.resetLoopAfter(true, func() error {
 		if cm.IsAgentWorking() {
 			return errCompactWhileWorking
 		}
-		items, err := cm.loadContextItems(ctx)
+		items, system, err := cm.loadContext(ctx)
 		if err != nil {
 			return err
 		}
 		if _, err := applyInPlaceCompaction(items, c, cm.conversationID, 0); err != nil {
 			return err
 		}
-		created, err = cm.createInPlaceCompaction(ctx, c)
+		created, err = cm.createInPlaceCompaction(ctx, c, system)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	return cm.publishCreated(ctx, created)
+	return cm.publishCreated(ctx, created...)
 }
 
 const compactDebugUsage = "usage: /compact-debug | /compact-debug squish <from>-<to> <summary> | /compact-debug trim <id>"
@@ -313,7 +330,7 @@ func (s *Server) handleCompactDebugCommand(ctx context.Context, w http.ResponseW
 		c.Squishes = []db.CompactionSquish{sq}
 	case fields[1] == "trim" && len(fields) == 3:
 		var items []contextItem
-		if items, err = manager.loadContextItems(ctx); err != nil {
+		if items, _, err = manager.loadContext(ctx); err != nil {
 			s.internalError(w, "Failed to list context", err, "conversationID", manager.conversationID)
 			return true
 		}

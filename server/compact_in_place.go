@@ -53,7 +53,7 @@ func (c inPlaceCompactor) Index(ctx context.Context) (string, error) {
 
 // contextIndex renders the index of the current context.
 func (cm *ConversationManager) contextIndex(ctx context.Context) (string, error) {
-	items, err := cm.loadContextItems(ctx)
+	items, _, err := cm.loadContext(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +78,7 @@ func (cm *ConversationManager) compactMidTurn(ctx context.Context, generation ui
 		cm.loopLifecycleMu.Unlock()
 		return "", fmt.Errorf("the conversation is being stopped or rewritten; not compacted")
 	}
-	items, err := cm.loadContextItems(ctx)
+	items, system, err := cm.loadContext(ctx)
 	var c db.InPlaceCompaction
 	if err == nil {
 		c, err = buildCompaction(items, cm.keepRecentTokens, in)
@@ -93,9 +93,9 @@ func (cm *ConversationManager) compactMidTurn(ctx context.Context, generation ui
 		c.HiddenSequenceIDs, c.HiddenToolUseIDs = compactionEvidence(after)
 		after, err = applyInPlaceCompaction(items, c, cm.conversationID, 0)
 	}
-	var created *generated.Message
+	var created []generated.Message
 	if err == nil {
-		created, err = cm.createInPlaceCompaction(context.WithoutCancel(ctx), c)
+		created, err = cm.createInPlaceCompaction(context.WithoutCancel(ctx), c, system)
 	}
 	if err == nil {
 		cm.mu.Lock()
@@ -106,7 +106,7 @@ func (cm *ConversationManager) compactMidTurn(ctx context.Context, generation ui
 	if err != nil {
 		return "", err
 	}
-	if err := cm.publishCreated(ctx, created); err != nil {
+	if err := cm.publishCreated(ctx, created...); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Compacted: %d collapsed, %d trimmed; history ~%d -> ~%d tokens.",
@@ -829,7 +829,7 @@ func (cm *ConversationManager) recordContextNudge(ctx context.Context, size stri
 	if err != nil {
 		return message, fmt.Errorf("record context nudge: %w", err)
 	}
-	return message, cm.publishCreated(ctx, created)
+	return message, cm.publishCreated(ctx, *created)
 }
 
 // lastContextWindowSize returns the context size reported by the newest of

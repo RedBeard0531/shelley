@@ -60,6 +60,10 @@ type RunConfig struct {
 	// MaxIterations bounds model requests in one run. Zero means unlimited.
 	MaxIterations int
 	Pending       PendingMessages
+	// CurrentSystem, if set, returns the system prompt for each model
+	// request, after Pending; it replaces System. It lets a turn pick up a
+	// system prompt refreshed mid-turn.
+	CurrentSystem func() []llm.SystemContent
 	Hooks         Hooks
 	Logger        *slog.Logger
 }
@@ -120,7 +124,11 @@ func (l *RunConfig) run(ctx context.Context) error {
 
 		requestMessages := cloneMessages(messages)
 		tools := l.Tools
-		system := append([]llm.SystemContent(nil), l.System...)
+		system := l.System
+		if l.CurrentSystem != nil {
+			system = l.CurrentSystem()
+		}
+		system = append([]llm.SystemContent(nil), system...)
 
 		// Enable prompt caching: set cache flag on last tool and last user message content
 		// See https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching

@@ -122,8 +122,9 @@ func TestInjectMessagesMidTurn(t *testing.T) {
 	}
 }
 
-// TestInjectHistoryReplacesHistory verifies that an Injection's History
-// replaces both the in-flight turn's messages and the loop's history.
+// TestInjectHistoryReplacesHistory verifies that an Injection's History and
+// System replace the in-flight turn's messages and system prompt, and the
+// loop's, for later turns.
 func TestInjectHistoryReplacesHistory(t *testing.T) {
 	echoTool := &llm.Tool{
 		Name:        "echo",
@@ -147,15 +148,17 @@ func TestInjectHistoryReplacesHistory(t *testing.T) {
 		{Role: llm.MessageRoleUser, Content: llm.TextContent("tail")},
 	}
 	var calls atomic.Int64
+	fresh := []llm.SystemContent{{Type: "text", Text: "fresh"}}
 	loop := NewLoop(Config{
-		LLM:   service,
-		Tools: []*llm.Tool{echoTool},
+		LLM:    service,
+		Tools:  []*llm.Tool{echoTool},
+		System: []llm.SystemContent{{Type: "text", Text: "stale"}},
 		RecordMessage: func(context.Context, llm.Message, llm.Usage, []llm.PurposedUsage) error {
 			return nil
 		},
 		InjectMessages: func(ctx context.Context) (Injection, error) {
 			if calls.Add(1) == 2 {
-				return Injection{History: replacement, Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("injected")}}}, nil
+				return Injection{History: replacement, System: fresh, Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: llm.TextContent("injected")}}}, nil
 			}
 			return Injection{}, nil
 		},
@@ -178,5 +181,20 @@ func TestInjectHistoryReplacesHistory(t *testing.T) {
 	}
 	if got := texts(loop.GetHistory()); got != "compacted,tail,injected,done" {
 		t.Fatalf("history = %s", got)
+	}
+	if got := service.reqs[0].System[0].Text; got != "stale" {
+		t.Fatalf("first request system = %s", got)
+	}
+	if got := service.reqs[1].System[0].Text; got != "fresh" {
+		t.Fatalf("second request system = %s", got)
+	}
+	service.mu.Unlock()
+	loop.QueueUserMessage(llm.Message{Role: llm.MessageRoleUser, Content: llm.TextContent("again")})
+	if err := loop.ProcessOneTurn(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	if got := service.reqs[len(service.reqs)-1].System[0].Text; got != "fresh" {
+		t.Fatalf("next turn system = %s", got)
 	}
 }

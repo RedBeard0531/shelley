@@ -195,7 +195,7 @@ func (cm *ConversationManager) recordIdleNudge(ctx context.Context) (llm.Message
 	if err != nil {
 		return message, fmt.Errorf("record idle nudge: %w", err)
 	}
-	return message, cm.publishCreated(ctx, created)
+	return message, cm.publishCreated(ctx, *created)
 }
 
 // idleNudgeText is the text of an idle nudge: the mechanics, then the
@@ -256,7 +256,7 @@ func (s *Server) claimIdleCompaction(ctx context.Context, cm *ConversationManage
 		return false, nil
 	}
 	// Everything in the recent part is kept as is: nothing to compact.
-	items, err := cm.loadContextItems(ctx)
+	items, _, err := cm.loadContext(ctx)
 	if err != nil {
 		return false, err
 	}

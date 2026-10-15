@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -1059,5 +1060,90 @@ func TestEnableCompactInPlaceRefusesWhileWorking(t *testing.T) {
 	}
 	if opts := c.options(); opts.ToolOverrides[claudetool.CompactInPlaceName] != "" || c.toolEnabledMarkers() != 0 {
 		t.Fatalf("enabled while the agent was working: %+v", opts)
+	}
+}
+
+// TestCompactionRefreshesSystemPrompt: the system prompt stays as rendered
+// while the cache lives, and compaction, which rewrites the cached context
+// anyway, brings it up to date.
+func TestCompactionRefreshesSystemPrompt(t *testing.T) {
+	t.Parallel()
+	c := newCompactTestConversation(t, db.ConversationOptions{ToolOverrides: map[string]string{claudetool.CompactInPlaceName: "on"}})
+	dir := t.TempDir()
+	if err := c.database.UpdateConversationCwd(t.Context(), c.id, dir); err != nil {
+		t.Fatal(err)
+	}
+	c.turn("hello")
+	c.turn("bash: echo FIRST_OUTPUT")
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("FRESH_GUIDANCE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	system := func() string {
+		t.Helper()
+		req := c.ps.GetLastRequest()
+		if len(req.System) != 1 {
+			t.Fatalf("system = %+v", req.System)
+		}
+		return req.System[0].Text
+	}
+	systemRows := func() int {
+		n := 0
+		for _, m := range listMessages(t, c.database, c.id) {
+			if m.Type == string(db.MessageTypeSystem) {
+				n++
+			}
+		}
+		return n
+	}
+	c.turn("echo: BEFORE")
+	if strings.Contains(system(), "FRESH_GUIDANCE") || systemRows() != 1 {
+		t.Fatalf("system prompt changed before compaction (%d rows):\n%s", systemRows(), system())
+	}
+
+	compact := func(seq int64) {
+		t.Helper()
+		in, _ := json.Marshal(claudetool.CompactInPlaceInput{Action: "compact", Collapse: []claudetool.CompactCollapse{
+			{From: claudetool.IndexID(fmt.Sprint(seq)), To: claudetool.IndexID(fmt.Sprint(seq)), Note: "N"},
+		}})
+		c.turn("compact_in_place: " + string(in))
+		if out, isErr := c.lastToolOutput(); isErr {
+			t.Fatalf("compact: %s", out)
+		}
+	}
+	// The request after the compaction, in the same turn, has the fresh prompt.
+	compact(c.seqWith("Well, hi there!"))
+	if !strings.Contains(system(), "FRESH_GUIDANCE") || systemRows() != 2 {
+		t.Fatalf("system prompt not refreshed by compaction (%d rows):\n%s", systemRows(), system())
+	}
+	// So do later turns, and a loop rebuilt from the database.
+	c.turn("echo: AFTER")
+	if !strings.Contains(system(), "FRESH_GUIDANCE") {
+		t.Fatal("later turn lost the fresh system prompt")
+	}
+	manager, err := c.srv.getOrCreateConversationManager(t.Context(), c.id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.ResetLoop()
+	c.turn("echo: REBUILT")
+	if !strings.Contains(system(), "FRESH_GUIDANCE") {
+		t.Fatal("rebuilt loop lost the fresh system prompt")
+	}
+	// An unchanged prompt is not stored again.
+	compact(c.seqWith("FIRST_OUTPUT"))
+	if n := systemRows(); n != 2 {
+		t.Fatalf("unchanged system prompt stored again: %d rows", n)
+	}
+	// Compacting between turns refreshes it too.
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("NEWER_GUIDANCE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterSeq := c.seqWith("echo: AFTER")
+	if w := postChat(t, c.srv, c.id, fmt.Sprintf("/compact-debug squish %d-%d N", afterSeq, afterSeq)); w.Code != http.StatusAccepted {
+		t.Fatalf("compact-debug: %d %s", w.Code, w.Body.String())
+	}
+	c.turn("echo: LAST")
+	if !strings.Contains(system(), "NEWER_GUIDANCE") || systemRows() != 3 {
+		t.Fatalf("compaction between turns did not refresh the system prompt (%d rows):\n%s", systemRows(), system())
 	}
 }

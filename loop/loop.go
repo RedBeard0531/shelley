@@ -90,6 +90,8 @@ type Injection struct {
 	// History, if non-nil, replaces the whole conversation history (already
 	// persisted, and not including Messages) before Messages are appended.
 	History []llm.Message
+	// System, if non-nil, replaces the system prompt.
+	System []llm.SystemContent
 	// Messages are appended to history.
 	Messages []llm.Message
 }
@@ -354,7 +356,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		ModelID:        l.modelID,
 		Messages:       history,
 		Tools:          l.tools,
-		System:         l.system,
+		CurrentSystem:  l.currentSystem,
 		ThinkingLevel:  thinkingLevel,
 		WorkingDir:     l.workingDir,
 		PromptCacheKey: l.promptCacheKey,
@@ -367,6 +369,12 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 	}
 	l.checkGitStateChange(ctx)
 	return nil
+}
+
+func (l *Loop) currentSystem() []llm.SystemContent {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.system
 }
 
 func (l *Loop) pending(ctx context.Context, messages []llm.Message) ([]llm.Message, error) {
@@ -383,12 +391,15 @@ func (l *Loop) pending(ctx context.Context, messages []llm.Message) ([]llm.Messa
 	if err != nil {
 		return nil, err
 	}
+	l.mu.Lock()
 	if inj.History != nil {
-		l.mu.Lock()
 		l.history = cloneMessages(inj.History)
-		l.mu.Unlock()
 		messages = cloneMessages(inj.History)
 	}
+	if inj.System != nil {
+		l.system = inj.System
+	}
+	l.mu.Unlock()
 	l.appendContext(inj.Messages...)
 	return append(messages, inj.Messages...), nil
 }
