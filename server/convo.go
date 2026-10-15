@@ -197,6 +197,9 @@ type ConversationManager struct {
 	// onTurnStartRejected restarts queue draining after a failed turn-start
 	// write rolls the manager back to idle.
 	onTurnStartRejected func()
+	// followProfile is Server.followProfile for this conversation; see
+	// takeProfileEdits.
+	followProfile func(ctx context.Context) (llm.Service, string, error)
 	// recordDrainedQueued records a queued item's messages and removes the item
 	// from the queue in one transaction.
 	recordDrainedQueued func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) (int64, error)
@@ -633,6 +636,11 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 		return false, "", fmt.Errorf("llm service is required")
 	}
 	cm.cancelIdleCompaction()
+	if svc, id, err := cm.takeProfileEdits(ctx); err != nil {
+		return false, "", err
+	} else if svc != nil {
+		service, modelID = svc, id
+	}
 
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
@@ -1553,9 +1561,24 @@ func (cm *ConversationManager) finishPendingDrainPass(done chan struct{}) bool {
 	return false
 }
 
+// takeProfileEdits brings the conversation up to its profile's settings, if
+// it hasn't edited them, before a turn starts: a message or the queue's. It
+// returns the service and model it followed to, or nil. It must precede the
+// lifecycle lock, which applying settings takes.
+func (cm *ConversationManager) takeProfileEdits(ctx context.Context) (llm.Service, string, error) {
+	if cm.followProfile == nil {
+		return nil, "", nil
+	}
+	return cm.followProfile(ctx)
+}
+
 // drainPendingMessagesOwned performs one drain pass. The caller owns draining.
 func (cm *ConversationManager) drainPendingMessagesOwned(s *Server) {
 	ctx := context.Background()
+	// feedQueued reads the model the conversation follows to.
+	if _, _, err := cm.takeProfileEdits(ctx); err != nil {
+		cm.logger.Error("Failed to follow profile", "error", err)
+	}
 
 	// Feeding a message is a lifecycle publication: cancellation/reset must not
 	// clear or replace the target loop between the DB insert and QueueMessages.

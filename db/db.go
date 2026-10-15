@@ -325,6 +325,10 @@ type ConversationOptions struct {
 	// Profile names the profile the settings were last taken from. It is a
 	// label: the settings themselves are stored here and in the model column.
 	Profile string `json:"profile,omitempty"`
+	// SettingsEdited reports that the settings were changed after being
+	// taken from Profile. Until then, copy-on-write, the conversation takes
+	// the profile's edits at its next turn.
+	SettingsEdited bool `json:"settings_edited,omitempty"`
 	// SystemPrompt is the text/template the system prompt is rendered from,
 	// set by a profile, the user, or a channel's first message. Empty means
 	// the built-in one.

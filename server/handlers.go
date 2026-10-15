@@ -3945,6 +3945,9 @@ func (s *Server) applyForkPointModelState(ctx context.Context, sourceID, forkID 
 			if haveReasoning {
 				o.ThinkingLevel = reasoningAtFork
 			}
+			// The fork point's settings may not be the profile's, and
+			// following it would lose them.
+			o.SettingsEdited = o.Profile != ""
 			return true
 		})
 		if err != nil {

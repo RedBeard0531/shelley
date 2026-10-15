@@ -154,6 +154,8 @@ func (cm *ConversationManager) EnableCompactInPlace(ctx context.Context) error {
 			o.ToolOverrides = maps.Clone(orEmpty(o.ToolOverrides))
 			o.ToolOverrides[claudetool.CompactInPlaceName] = "on"
 			o.DisableCompactNudges = true
+			// Its own change: the profile's edits mustn't undo it.
+			o.SettingsEdited = o.Profile != ""
 			return true
 		})
 		if err != nil {

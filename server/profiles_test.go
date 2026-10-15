@@ -665,3 +665,91 @@ func TestProfileIdlePolicyIsCopiedAndCanBeDisabled(t *testing.T) {
 	read(e.want(200, "POST", path, `{"idle_compaction_minutes":0,"idle_compaction_prompt":"","cache_keep_warm_minutes":0}`), [2]int{}, "")
 	read(e.want(200, "GET", path, ""), [2]int{}, "")
 }
+
+// Copy-on-write: a conversation takes its profile's edits at its next turn
+// until it edits its own settings, even back to the profile's; switching to
+// the profile clears that. A deleted profile leaves them as they are.
+func TestConversationFollowsProfile(t *testing.T) {
+	t.Parallel()
+	e := newProfileEnv(t)
+	e.want(201, "POST", "/api/profiles", `{"name":"P","model":"model-a","system_prompt":"Version one."}`)
+	start := func() string {
+		t.Helper()
+		var created struct {
+			ConversationID string `json:"conversation_id"`
+		}
+		body := e.want(201, "POST", "/api/conversations/new", `{"message":"hello","conversation_options":{"profile":"P"}}`)
+		if err := json.Unmarshal([]byte(body), &created); err != nil {
+			t.Fatal(err)
+		}
+		e.waitTurn(created.ConversationID, 0)
+		return created.ConversationID
+	}
+	turn := func(id string) *llm.Request {
+		t.Helper()
+		n := len(listMessages(t, e.database, id))
+		e.want(202, "POST", "/api/conversation/"+id+"/chat", `{"message":"echo: again"}`)
+		e.waitTurn(id, n)
+		return e.lastTurnRequest()
+	}
+	edit := func(prompt string) {
+		t.Helper()
+		e.want(200, "PUT", "/api/profiles/P", `{"model":"model-b","tool_overrides":{"bash":"off"},"system_prompt":"`+prompt+`"}`)
+	}
+	shared, own, button := start(), start(), start()
+	e.want(200, "POST", "/api/conversation/"+own+"/settings", `{"tool_overrides":{"browser":"off"}}`)
+	// The Compact in Place button's change is the conversation's own too.
+	if w := postEnableCompactInPlace(t, e.srv, button); w.Code != 200 {
+		t.Fatalf("enable compact_in_place: %d %s", w.Code, w.Body)
+	}
+
+	edit("Version two.")
+	req := turn(shared)
+	conv, err := e.database.GetConversationByID(t.Context(), shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(systemText(req)); got != "Version two." || hasTool(req, "bash") || *conv.Model != "model-b" {
+		t.Fatalf("shared conversation didn't follow: system %q, bash %v, model %s", got, hasTool(req, "bash"), *conv.Model)
+	}
+	marker := lastModelChange(listMessages(t, e.database, shared))
+	if marker == nil || !strings.Contains(*marker.UserData, "system prompt changed") {
+		t.Fatal("following recorded no marker")
+	}
+	if got := strings.TrimSpace(systemText(turn(own))); got != "Version one." {
+		t.Fatalf("changed conversation followed: %q", got)
+	}
+	if req := turn(button); !hasTool(req, claudetool.CompactInPlaceName) {
+		t.Fatal("following undid the Compact in Place button")
+	}
+
+	// Reverting follows again; a change that changes nothing doesn't count.
+	e.want(200, "POST", "/api/conversation/"+own+"/settings", `{"profile":"P"}`)
+	e.want(200, "POST", "/api/conversation/"+own+"/settings", `{"tool_overrides":{"bash":"off"}}`)
+	edit("Version three.")
+	if got := strings.TrimSpace(systemText(turn(own))); got != "Version three." {
+		t.Fatalf("reverted conversation didn't follow: %q", got)
+	}
+	// Changing a setting and changing it back is still an edit.
+	e.want(200, "POST", "/api/conversation/"+own+"/settings", `{"tool_overrides":{}}`)
+	e.want(200, "POST", "/api/conversation/"+own+"/settings", `{"tool_overrides":{"bash":"off"}}`)
+	edit("Version four.")
+	if got := strings.TrimSpace(systemText(turn(own))); got != "Version three." {
+		t.Fatalf("edited conversation followed: %q", got)
+	}
+
+	// A fork restoring settings from before a later change keeps them.
+	msgs := listMessages(t, e.database, own)
+	cutoff := msgs[len(msgs)-1].SequenceID
+	e.want(200, "POST", "/api/conversation/"+own+"/settings", `{"thinking_level":"high"}`)
+	fork := forkAt(t, e.srv, own, cutoff)
+	edit("Version five.")
+	if got := strings.TrimSpace(systemText(turn(fork))); got != "Version three." {
+		t.Fatalf("fork of an edited conversation followed: %q", got)
+	}
+
+	e.want(204, "DELETE", "/api/profiles/P", "")
+	if got := strings.TrimSpace(systemText(turn(shared))); got != "Version two." {
+		t.Fatalf("deleting the profile changed the conversation: %q", got)
+	}
+}

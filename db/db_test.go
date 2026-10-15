@@ -863,3 +863,34 @@ func TestBackgroundJobsExitedMigration(t *testing.T) {
 		t.Fatalf("running jobs = %+v, want only pending", running)
 	}
 }
+
+// Conversations from before copy-on-write keep their settings.
+func TestDB_Migrate_MarksExistingConversationsEdited(t *testing.T) {
+	db := setupDBMigratedThrough(t, 45)
+	defer db.Close()
+	ctx := t.Context()
+	withProfile, err := db.CreateConversation(ctx, nil, true, nil, nil, ConversationOptions{Profile: "Default", ThinkingLevel: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := db.CreateConversation(ctx, nil, true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id     string
+		edited bool
+	}{{withProfile.ConversationID, true}, {without.ConversationID, false}} {
+		conv, err := db.GetConversationByID(ctx, tc.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := ParseConversationOptions(conv.ConversationOptions)
+		if opts.SettingsEdited != tc.edited || (tc.edited && opts.ThinkingLevel != "high") {
+			t.Fatalf("migrated options %s: %+v", conv.ConversationOptions, opts)
+		}
+	}
+}

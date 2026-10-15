@@ -1034,6 +1034,9 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		manager := NewConversationManager(conversationID, s.db, s.logger, config, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
 		manager.role = role
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
+		manager.followProfile = func(ctx context.Context) (llm.Service, string, error) {
+			return s.followProfile(ctx, manager)
+		}
 		manager.recordDrainedQueued = func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) (int64, error) {
 			return s.recordDrainedQueuedMessages(ctx, conversationID, qm, messages)
 		}

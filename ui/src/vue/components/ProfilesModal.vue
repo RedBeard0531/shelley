@@ -141,8 +141,8 @@
           <div class="profiles-item-summary">{{ summarize(p) }}</div>
           <template v-if="pending?.name === p.name">
             <p v-if="pending.action === 'restore'" class="profiles-hint">
-              Reset settings and voice prompt to built-in defaults? Existing conversations are
-              unaffected.
+              Reset settings and voice prompt to built-in defaults? Conversations that haven't
+              changed their own settings take them at their next turn.
             </p>
             <div class="profiles-item-actions profiles-item-confirm">
               <Button

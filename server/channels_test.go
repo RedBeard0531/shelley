@@ -182,8 +182,9 @@ func channelUserMessages(t *testing.T, database *db.DB, conversationID string) [
 	return out
 }
 
-// Channels use the named Assistant, not the user's default. Its settings
-// become a snapshot, except message_user must stay on to answer the chat.
+// Channels use the named Assistant, not the user's default, except that
+// message_user must stay on to answer the chat. A chat that shares
+// Assistant's settings takes its edits; one with its own prompt keeps them.
 func TestChannelMessageAssistantProfile(t *testing.T) {
 	for _, web := range []bool{false, true} {
 		for _, tc := range []struct {
@@ -214,7 +215,7 @@ func TestChannelMessageAssistantProfile(t *testing.T) {
 				promptText := "Shelley"
 				thinking := llm.ThinkingLevelDefault
 				if tc.assistant {
-					want = ConversationSettings{Profile: "Assistant", Settings: Settings{
+					want = ConversationSettings{Profile: "Assistant", Edited: tc.prompt != "", Settings: Settings{
 						Model: "model-b", ThinkingLevel: "high",
 						ToolOverrides:      map[string]string{"message_user": "on", "bash": "off", "compact_in_place": "on"},
 						CompactNudgeTokens: 12345,
@@ -225,6 +226,8 @@ func TestChannelMessageAssistantProfile(t *testing.T) {
 				if tc.prompt != "" {
 					want.SystemPrompt, promptText = tc.prompt, "Event override in "
 				}
+				tools := []string{"compact_in_place"}
+				notTools := []string{"bash"}
 				send := func(id, prompt string) {
 					t.Helper()
 					body, err := json.Marshal(channelEvent{
@@ -258,8 +261,15 @@ func TestChannelMessageAssistantProfile(t *testing.T) {
 					if !hasTool(req, claudetool.MessageUserName) {
 						t.Error("channel request must offer message_user even when the profile disables it")
 					}
-					if tc.assistant && (hasTool(req, "bash") || !hasTool(req, "compact_in_place")) {
-						t.Error("channel request did not inherit Assistant's tools")
+					for _, name := range tools {
+						if tc.assistant && !hasTool(req, name) {
+							t.Errorf("channel request lacks Assistant's %s", name)
+						}
+					}
+					for _, name := range notTools {
+						if tc.assistant && hasTool(req, name) {
+							t.Errorf("channel request has %s, which Assistant turns off", name)
+						}
 					}
 					if req.ThinkingLevel != thinking {
 						t.Errorf("request thinking = %v, want %v", req.ThinkingLevel, thinking)
@@ -273,8 +283,9 @@ func TestChannelMessageAssistantProfile(t *testing.T) {
 				if !tc.assistant {
 					return
 				}
-				// Neither editing nor deleting the source profile (nor a later
-				// event's prompt) may change an existing chat's snapshot.
+				// A later event's prompt never changes an existing chat, nor
+				// does deleting the profile. Editing it changes only a chat
+				// that shares its settings.
 				for _, mutation := range []struct {
 					method string
 					status int
@@ -284,6 +295,15 @@ func TestChannelMessageAssistantProfile(t *testing.T) {
 					{"DELETE", 204, ""},
 				} {
 					e.want(mutation.status, mutation.method, "/api/profiles/Assistant", mutation.body)
+					if mutation.method == "PUT" && !want.Edited {
+						want.Settings = Settings{
+							Model: "model-a", ThinkingLevel: "low",
+							ToolOverrides:      map[string]string{"message_user": "on", "bash": "on"},
+							CompactNudgeTokens: 67890, SystemPrompt: "Edited Assistant.",
+						}
+						promptText, thinking = "Edited Assistant.", llm.ThinkingLevelLow
+						tools, notTools = []string{"bash"}, nil
+					}
 					before := len(listMessages(t, e.database, conv.ConversationID))
 					send(mutation.method, "Later event prompt must be ignored.")
 					checkSettings()

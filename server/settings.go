@@ -13,12 +13,14 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
+	"shelley.exe.dev/llm"
 )
 
 // Settings are the user-adjustable configuration of a conversation: its
 // model, reasoning, tools, and system prompt. A profile is a named Settings. A
 // conversation keeps its own copy, in its model column and options (see
-// conversationSettings), so editing a profile never changes a conversation.
+// conversationSettings). Copy-on-write: until the conversation edits its
+// copy, it takes the profile's edits at its next turn (see followProfile).
 type Settings struct {
 	// Model is a model id; "" in a profile means the server's default model.
 	Model string `json:"model"`
@@ -48,6 +50,9 @@ type Settings struct {
 // or the profile edited.
 type ConversationSettings struct {
 	Profile string `json:"profile"`
+	// Edited reports that Settings differ from Profile's (see
+	// db.ConversationOptions.SettingsEdited).
+	Edited bool `json:"-"`
 	Settings
 }
 
@@ -55,6 +60,7 @@ func conversationSettings(conv generated.Conversation) ConversationSettings {
 	opts := db.ParseConversationOptions(conv.ConversationOptions)
 	return ConversationSettings{
 		Profile: opts.Profile,
+		Edited:  opts.SettingsEdited,
 		Settings: Settings{
 			Model:                 derefString(conv.Model),
 			ThinkingLevel:         opts.ThinkingLevel,
@@ -87,6 +93,7 @@ func (st Settings) equal(o Settings) bool {
 // applyTo stores cs, except the model, in opts.
 func (cs ConversationSettings) applyTo(opts *db.ConversationOptions) {
 	opts.Profile = cs.Profile
+	opts.SettingsEdited = cs.Edited
 	opts.ThinkingLevel = cs.ThinkingLevel
 	opts.ToolOverrides = cs.ToolOverrides
 	opts.CompactNudgeTokens = cs.CompactNudgeTokens
@@ -228,7 +235,9 @@ var errSettingsUnavailable = errors.New("this conversation's settings can't be c
 // resolveSettings returns cur changed by change (see SettingsChange), checked.
 // A model of "" means the server's default. A reasoning level carried over to
 // a model that lacks it rounds to one the model has. Problems the client can
-// fix are invalidSettings errors.
+// fix are invalidSettings errors. The result is Edited if it differs from
+// its profile's settings: cur's, or the change's profile's, filled in the
+// same way.
 func (s *Server) resolveSettings(ctx context.Context, cur ConversationSettings, change SettingsChange, modelList []ModelInfo) (ConversationSettings, error) {
 	base := cur
 	if change.Profile != nil {
@@ -290,6 +299,7 @@ func (s *Server) resolveSettings(ctx context.Context, cur ConversationSettings, 
 		}
 		return cur, invalidSettings(msg)
 	}
+	next.Edited = next.Profile != "" && (base.Edited || !next.equal(base.Settings))
 	return next, nil
 }
 
@@ -304,6 +314,49 @@ func (s *Server) newConversationSettings(ctx context.Context, change SettingsCha
 		change.Profile = &p.Name
 	}
 	return s.resolveSettings(ctx, ConversationSettings{}, change, modelList)
+}
+
+// followProfile brings a conversation that hasn't edited its profile's
+// settings up to the profile's current ones before its next turn starts. A
+// channel chat keeps message_user, which it answers with. It does nothing
+// while a turn runs, and keeps the settings if the profile was deleted or
+// can't be used. It returns the service and model it followed to, or nil if
+// it did nothing.
+func (s *Server) followProfile(ctx context.Context, cm *ConversationManager) (llm.Service, string, error) {
+	conv, err := s.db.GetConversationByID(ctx, cm.conversationID)
+	if err != nil {
+		return nil, "", err
+	}
+	modelList := s.getModelList()
+	var next ConversationSettings
+	_, err = cm.ApplySettings(ctx, modelList, func(cur ConversationSettings) (ConversationSettings, error) {
+		if cur.Edited || cur.Profile == "" || cm.role != roleTopLevel || cm.IsAgentWorking() {
+			return cur, nil
+		}
+		to, err := s.resolveSettings(ctx, cur, SettingsChange{Profile: &cur.Profile}, modelList)
+		var invalid invalidSettings
+		if errors.As(err, &invalid) {
+			s.logger.Warn("Conversation keeps settings it can't take from its profile", "conversationID", cm.conversationID, "profile", cur.Profile, "error", err)
+			return cur, nil
+		}
+		if err != nil {
+			return cur, err
+		}
+		if conv.ExternalConversationID != nil {
+			to.ToolOverrides[claudetool.MessageUserName] = "on"
+		}
+		next = to
+		return to, nil
+	})
+	switch {
+	case errors.Is(err, errAgentWorking):
+		// A turn started meanwhile; the next one follows.
+		return nil, "", nil
+	case err != nil || next.Model == "":
+		return nil, "", err
+	}
+	svc, err := s.llmManager.GetService(next.Model)
+	return svc, next.Model, err
 }
 
 // changeSettings applies change to the conversation (see ApplySettings) and
@@ -400,7 +453,7 @@ func (cm *ConversationManager) ApplySettings(ctx context.Context, models []Model
 		return from, err
 	}
 	to.ToolOverrides = orEmpty(to.ToolOverrides)
-	if to.Profile == from.Profile && to.equal(from.Settings) {
+	if to.Profile == from.Profile && to.Edited == from.Edited && to.equal(from.Settings) {
 		return from, nil
 	}
 	switch {
