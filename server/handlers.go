@@ -3099,6 +3099,13 @@ func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Reques
 		s.internalError(w, "Failed to archive conversation", err, "conversationID", conversationID)
 		return
 	}
+	// An archived conversation is left alone: no compaction or cache warms.
+	s.mu.Lock()
+	manager := s.activeConversations[conversationID]
+	s.mu.Unlock()
+	if manager != nil {
+		manager.cancelIdleCompaction()
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
