@@ -230,7 +230,7 @@ var errSettingsUnavailable = errors.New("this conversation's settings can't be c
 // a model that lacks it rounds to one the model has. Problems the client can
 // fix are invalidSettings errors.
 func (s *Server) resolveSettings(ctx context.Context, cur ConversationSettings, change SettingsChange, modelList []ModelInfo) (ConversationSettings, error) {
-	next := cur
+	base := cur
 	if change.Profile != nil {
 		p, err := s.getProfile(ctx, *change.Profile)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -239,8 +239,14 @@ func (s *Server) resolveSettings(ctx context.Context, cur ConversationSettings, 
 		if err != nil {
 			return cur, err
 		}
-		next = ConversationSettings{Profile: p.Name, Settings: p.Settings}
+		base = ConversationSettings{Profile: p.Name, Settings: p.Settings}
 	}
+	if base.Model == "" {
+		base.Model = s.effectiveDefaultModel(modelList)
+	}
+	base.ThinkingLevel, _ = roundModelReasoningLevel(findModelInfo(base.Model, modelList), base.ThinkingLevel)
+	base.ToolOverrides = orEmpty(base.ToolOverrides)
+	next := base
 	if change.Model != nil {
 		next.Model = *change.Model
 	}
@@ -253,9 +259,8 @@ func (s *Server) resolveSettings(ctx context.Context, cur ConversationSettings, 
 		next.ThinkingLevel, _ = roundModelReasoningLevel(findModelInfo(next.Model, modelList), next.ThinkingLevel)
 	}
 	if change.ToolOverrides != nil {
-		next.ToolOverrides = change.ToolOverrides
+		next.ToolOverrides = orEmpty(change.ToolOverrides)
 	}
-	next.ToolOverrides = orEmpty(next.ToolOverrides)
 	if change.CompactNudgeTokens != nil {
 		next.CompactNudgeTokens = *change.CompactNudgeTokens
 	}
