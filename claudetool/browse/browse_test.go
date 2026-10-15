@@ -837,33 +837,6 @@ func TestReadImageToolNoServicePassesThrough(t *testing.T) {
 	}
 }
 
-// TestIsPort80 tests the isPort80 function
-func TestIsPort80(t *testing.T) {
-	tests := []struct {
-		url      string
-		expected bool
-		name     string
-	}{
-		{"http://example.com:80", true, "http with explicit port 80"},
-		{"http://example.com", true, "http without explicit port"},
-		{"https://example.com:80", true, "https with explicit port 80"},
-		{"http://example.com:8080", false, "http with different port"},
-		{"https://example.com", false, "https without explicit port"},
-		{"https://example.com:443", false, "https with standard port"},
-		{"invalid-url", false, "invalid URL"},
-		{"ftp://example.com:80", true, "ftp with port 80"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isPort80(tt.url)
-			if result != tt.expected {
-				t.Errorf("isPort80(%q) = %v, want %v", tt.url, result, tt.expected)
-			}
-		})
-	}
-}
-
 // TestResizeRunErrorPaths tests error paths in resize action
 func TestResizeRunErrorPaths(t *testing.T) {
 	ctx := t.Context()

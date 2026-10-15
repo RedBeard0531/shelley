@@ -374,21 +374,7 @@ type navigateInput struct {
 	Timeout string `json:"timeout,omitempty"`
 }
 
-// isPort80 reports whether urlStr definitely uses port 80.
-func isPort80(urlStr string) bool {
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return false
-	}
-	port := parsedURL.Port()
-	return port == "80" || (port == "" && parsedURL.Scheme == "http")
-}
-
 func (b *BrowseTools) navigateRun(ctx context.Context, input navigateInput) llm.ToolOut {
-	if isPort80(input.URL) {
-		return llm.ErrorToolOut(fmt.Errorf("port 80 is not the port you're looking for--port 80 is the main sketch server"))
-	}
-
 	browserCtx, err := b.GetBrowserContext()
 	if err != nil {
 		return llm.ErrorToolOut(err)
