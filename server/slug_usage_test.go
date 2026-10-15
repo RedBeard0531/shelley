@@ -200,7 +200,7 @@ func TestRetryWorksWithTrailingSlugMarker(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool { return !svr.IsAgentWorking(convID) })
 
 	// Force the hazardous ordering deterministically: marker last.
-	if _, err := database.CreateSlugMessage(ctx, convID, []llm.PurposedUsage{
+	if _, err := database.CreateUsageMessage(ctx, convID, []llm.PurposedUsage{
 		{Purpose: "slug", Usage: llm.Usage{InputTokens: 20, Model: "predictable-v1"}},
 	}); err != nil {
 		t.Fatal(err)

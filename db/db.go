@@ -307,6 +307,16 @@ type ConversationOptions struct {
 	// the size of its context while the compact_in_place tool is enabled.
 	// Zero means the default (250k).
 	CompactNudgeTokens int `json:"compact_nudge_tokens,omitempty"`
+	// IdleCompactionMinutes is the quiet period after a successful turn before
+	// one compaction attempt. Zero disables it; profiles copy it to conversations.
+	IdleCompactionMinutes int `json:"idle_compaction_minutes,omitempty"`
+	// IdleCompactionPrompt is what the idle nudge asks the agent to keep
+	// when compacting; profiles copy it to conversations.
+	IdleCompactionPrompt string `json:"idle_compaction_prompt,omitempty"`
+	// CacheKeepWarmMinutes keeps the provider prompt cache warm for this long
+	// after a successful turn, refreshing it only where it would expire. Zero
+	// disables it.
+	CacheKeepWarmMinutes int `json:"cache_keep_warm_minutes,omitempty"`
 	// DisableCompactNudges keeps the agent from being told its context size
 	// even though compact_in_place is enabled. Set when the user enables the
 	// tool mid-conversation (the Compact in Place button): they asked for a
@@ -1684,9 +1694,9 @@ const (
 	// the /model command, or otherwise changed what its loop is built with (a
 	// tool enabled mid-conversation). User-visible only, never sent to the LLM.
 	MessageTypeModelChange MessageType = "modelchange"
-	// MessageTypeSlug records the LLM call that generated the conversation's
-	// slug. Rendered as nothing and never sent to the LLM: it exists only to
-	// carry that call's usage, so the cost shows up in the conversation's
+	// MessageTypeSlug records LLM calls made outside a turn (first, the call
+	// that generated the conversation's slug; see CreateUsageMessage). Rendered
+	// as nothing and never sent to the LLM: it exists only to carry their usage, so the cost shows up in the conversation's
 	// accounting via the same path as every other message's usage.
 	//
 	// It is an appended message rather than a mutable column because of the
@@ -1958,10 +1968,11 @@ func (db *DB) CreateMessages(ctx context.Context, paramsList []CreateMessagePara
 	return out, nil
 }
 
-// CreateSlugMessage appends a slug marker carrying the usage of the LLM call
-// that generated the conversation's slug. The message has no content and
-// renders as nothing; it exists so the cost is accounted for through the same
-// path as every other message's usage, without mutating an existing row.
+// CreateUsageMessage appends a marker carrying the usage of LLM calls made
+// outside a turn: slug generation and prompt-cache refreshes. The message has
+// no content and renders as nothing; it exists so the cost is accounted for
+// through the same path as every other message's usage, without mutating an
+// existing row. Its type is MessageTypeSlug, which every reader already skips.
 //
 // Excluded from context so it never reaches the LLM even if a future context
 // builder forgets to filter the type. llm_data stays NULL, which is a second
@@ -1971,13 +1982,13 @@ func (db *DB) CreateMessages(ctx context.Context, paramsList []CreateMessagePara
 //
 // Returns (nil, nil) when there is nothing to record; callers use that to decide
 // whether there is a marker to publish.
-func (db *DB) CreateSlugMessage(ctx context.Context, conversationID string, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
+func (db *DB) CreateUsageMessage(ctx context.Context, conversationID string, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
 	if len(otherUsage) == 0 {
 		return nil, nil
 	}
 	otherUsageJSON, err := marshalJSON(otherUsage)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal slug usage: %w", err)
+		return nil, fmt.Errorf("failed to marshal usage: %w", err)
 	}
 	var message generated.Message
 	err = db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {

@@ -4130,6 +4130,12 @@ func validateConversationOptions(opts db.ConversationOptions) string {
 			return fmt.Sprintf("Invalid end_of_turn_hooks url %q: %v", hook.URL, err)
 		}
 	}
+	if opts.IdleCompactionMinutes < 0 || opts.IdleCompactionMinutes > maxIdleCompactionMinutes {
+		return fmt.Sprintf("idle_compaction_minutes must be between 0 and %d", maxIdleCompactionMinutes)
+	}
+	if opts.CacheKeepWarmMinutes < 0 || opts.CacheKeepWarmMinutes > maxIdleCompactionMinutes {
+		return fmt.Sprintf("cache_keep_warm_minutes must be between 0 and %d", maxIdleCompactionMinutes)
+	}
 	if opts.CompactNudgeTokens < 0 {
 		return "compact_nudge_tokens must not be negative"
 	}

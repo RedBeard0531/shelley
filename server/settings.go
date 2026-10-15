@@ -30,6 +30,14 @@ type Settings struct {
 	// CompactNudgeTokens is where the agent is first told its context size
 	// while compact_in_place is on; 0 means the default.
 	CompactNudgeTokens int `json:"compact_nudge_tokens"`
+	// IdleCompactionMinutes is a one-shot idle delay; zero disables it.
+	IdleCompactionMinutes int `json:"idle_compaction_minutes"`
+	// IdleCompactionPrompt is what the idle nudge asks the agent to keep
+	// when compacting; "" adds nothing to the nudge's mechanics.
+	IdleCompactionPrompt string `json:"idle_compaction_prompt"`
+	// CacheKeepWarmMinutes keeps the prompt cache warm after a successful
+	// turn; zero disables it.
+	CacheKeepWarmMinutes int `json:"cache_keep_warm_minutes"`
 	// SystemPrompt is the text/template of the system prompt; "" means the
 	// built-in one.
 	SystemPrompt string `json:"system_prompt"`
@@ -48,11 +56,14 @@ func conversationSettings(conv generated.Conversation) ConversationSettings {
 	return ConversationSettings{
 		Profile: opts.Profile,
 		Settings: Settings{
-			Model:              derefString(conv.Model),
-			ThinkingLevel:      opts.ThinkingLevel,
-			ToolOverrides:      orEmpty(opts.ToolOverrides),
-			CompactNudgeTokens: opts.CompactNudgeTokens,
-			SystemPrompt:       opts.SystemPrompt,
+			Model:                 derefString(conv.Model),
+			ThinkingLevel:         opts.ThinkingLevel,
+			ToolOverrides:         orEmpty(opts.ToolOverrides),
+			CompactNudgeTokens:    opts.CompactNudgeTokens,
+			IdleCompactionMinutes: opts.IdleCompactionMinutes,
+			IdleCompactionPrompt:  opts.IdleCompactionPrompt,
+			CacheKeepWarmMinutes:  opts.CacheKeepWarmMinutes,
+			SystemPrompt:          opts.SystemPrompt,
 		},
 	}
 }
@@ -68,6 +79,8 @@ func orEmpty(m map[string]string) map[string]string {
 func (st Settings) equal(o Settings) bool {
 	return st.Model == o.Model && st.ThinkingLevel == o.ThinkingLevel &&
 		maps.Equal(st.ToolOverrides, o.ToolOverrides) &&
+		st.IdleCompactionMinutes == o.IdleCompactionMinutes && st.IdleCompactionPrompt == o.IdleCompactionPrompt &&
+		st.CacheKeepWarmMinutes == o.CacheKeepWarmMinutes &&
 		st.CompactNudgeTokens == o.CompactNudgeTokens && st.SystemPrompt == o.SystemPrompt
 }
 
@@ -77,6 +90,9 @@ func (cs ConversationSettings) applyTo(opts *db.ConversationOptions) {
 	opts.ThinkingLevel = cs.ThinkingLevel
 	opts.ToolOverrides = cs.ToolOverrides
 	opts.CompactNudgeTokens = cs.CompactNudgeTokens
+	opts.IdleCompactionMinutes = cs.IdleCompactionMinutes
+	opts.IdleCompactionPrompt = cs.IdleCompactionPrompt
+	opts.CacheKeepWarmMinutes = cs.CacheKeepWarmMinutes
 	opts.SystemPrompt = cs.SystemPrompt
 }
 
@@ -87,12 +103,17 @@ func (st Settings) validate(modelList []ModelInfo, requireReady bool) string {
 		return unsupportedModelMessage(st.Model, modelList)
 	}
 	if msg := validateConversationOptions(db.ConversationOptions{
-		ThinkingLevel:      st.ThinkingLevel,
-		ToolOverrides:      st.ToolOverrides,
-		CompactNudgeTokens: st.CompactNudgeTokens,
-		SystemPrompt:       st.SystemPrompt,
+		ThinkingLevel:         st.ThinkingLevel,
+		ToolOverrides:         st.ToolOverrides,
+		CompactNudgeTokens:    st.CompactNudgeTokens,
+		IdleCompactionMinutes: st.IdleCompactionMinutes,
+		CacheKeepWarmMinutes:  st.CacheKeepWarmMinutes,
+		SystemPrompt:          st.SystemPrompt,
 	}); msg != "" {
 		return msg
+	}
+	if st.IdleCompactionMinutes > 0 && !claudetool.IsToolEnabled(claudetool.CompactInPlaceName, st.ToolOverrides, false) {
+		return "idle compaction needs the compact_in_place tool"
 	}
 	return validateModelReasoningLevel(findModelInfo(st.Model, modelList), st.ThinkingLevel)
 }
@@ -103,12 +124,15 @@ func (st Settings) validate(modelList []ModelInfo, requireReady bool) string {
 // first replaces all settings with the named profile's; the other fields then
 // override those.
 type SettingsChange struct {
-	Profile            *string           `json:"profile"`
-	Model              *string           `json:"model"`
-	ThinkingLevel      *string           `json:"thinking_level"`
-	ToolOverrides      map[string]string `json:"tool_overrides"` // nil keeps; {} clears
-	CompactNudgeTokens *int              `json:"compact_nudge_tokens"`
-	SystemPrompt       *string           `json:"system_prompt"`
+	Profile               *string           `json:"profile"`
+	Model                 *string           `json:"model"`
+	ThinkingLevel         *string           `json:"thinking_level"`
+	ToolOverrides         map[string]string `json:"tool_overrides"` // nil keeps; {} clears
+	CompactNudgeTokens    *int              `json:"compact_nudge_tokens"`
+	IdleCompactionMinutes *int              `json:"idle_compaction_minutes"`
+	IdleCompactionPrompt  *string           `json:"idle_compaction_prompt"`
+	CacheKeepWarmMinutes  *int              `json:"cache_keep_warm_minutes"`
+	SystemPrompt          *string           `json:"system_prompt"`
 }
 
 // overlay returns c with the fields present in o replacing its own.
@@ -127,6 +151,15 @@ func (c SettingsChange) overlay(o SettingsChange) SettingsChange {
 	}
 	if o.CompactNudgeTokens != nil {
 		c.CompactNudgeTokens = o.CompactNudgeTokens
+	}
+	if o.IdleCompactionMinutes != nil {
+		c.IdleCompactionMinutes = o.IdleCompactionMinutes
+	}
+	if o.IdleCompactionPrompt != nil {
+		c.IdleCompactionPrompt = o.IdleCompactionPrompt
+	}
+	if o.CacheKeepWarmMinutes != nil {
+		c.CacheKeepWarmMinutes = o.CacheKeepWarmMinutes
 	}
 	if o.SystemPrompt != nil {
 		c.SystemPrompt = o.SystemPrompt
@@ -150,6 +183,15 @@ func storedSettingsChange(model string, opts db.ConversationOptions) SettingsCha
 	c.ToolOverrides = opts.ToolOverrides
 	if opts.CompactNudgeTokens != 0 {
 		c.CompactNudgeTokens = &opts.CompactNudgeTokens
+	}
+	if opts.IdleCompactionMinutes != 0 {
+		c.IdleCompactionMinutes = &opts.IdleCompactionMinutes
+	}
+	if opts.IdleCompactionPrompt != "" {
+		c.IdleCompactionPrompt = &opts.IdleCompactionPrompt
+	}
+	if opts.CacheKeepWarmMinutes != 0 {
+		c.CacheKeepWarmMinutes = &opts.CacheKeepWarmMinutes
 	}
 	if opts.SystemPrompt != "" {
 		c.SystemPrompt = &opts.SystemPrompt
@@ -216,6 +258,15 @@ func (s *Server) resolveSettings(ctx context.Context, cur ConversationSettings, 
 	next.ToolOverrides = orEmpty(next.ToolOverrides)
 	if change.CompactNudgeTokens != nil {
 		next.CompactNudgeTokens = *change.CompactNudgeTokens
+	}
+	if change.IdleCompactionMinutes != nil {
+		next.IdleCompactionMinutes = *change.IdleCompactionMinutes
+	}
+	if change.IdleCompactionPrompt != nil {
+		next.IdleCompactionPrompt = *change.IdleCompactionPrompt
+	}
+	if change.CacheKeepWarmMinutes != nil {
+		next.CacheKeepWarmMinutes = *change.CacheKeepWarmMinutes
 	}
 	if change.SystemPrompt != nil {
 		next.SystemPrompt = *change.SystemPrompt
@@ -351,7 +402,8 @@ func (cm *ConversationManager) ApplySettings(ctx context.Context, models []Model
 	case to.SystemPrompt != from.SystemPrompt && cm.role != roleTopLevel:
 		return from, fmt.Errorf("%w: only top-level conversations have custom system prompts", errSettingsUnavailable)
 	case cm.role == roleBtwReader && (to.Profile != from.Profile || !maps.Equal(to.ToolOverrides, from.ToolOverrides) ||
-		to.CompactNudgeTokens != from.CompactNudgeTokens):
+		to.CompactNudgeTokens != from.CompactNudgeTokens || to.IdleCompactionMinutes != from.IdleCompactionMinutes ||
+		to.IdleCompactionPrompt != from.IdleCompactionPrompt || to.CacheKeepWarmMinutes != from.CacheKeepWarmMinutes):
 		// Its loop has a fixed toolset and prompt; see ensureLoop.
 		return from, fmt.Errorf("%w: a /btw conversation can only change its model and reasoning", errSettingsUnavailable)
 	}
@@ -524,6 +576,23 @@ func settingsMarker(opts db.ConversationOptions, from, to ConversationSettings, 
 	if compacting && compactNudgeTokens(from.CompactNudgeTokens) != compactNudgeTokens(to.CompactNudgeTokens) {
 		m.CompactNudgeTokens = compactNudgeTokens(to.CompactNudgeTokens)
 		parts = append(parts, fmt.Sprintf("compaction nudge set to %dk tokens", m.CompactNudgeTokens/1000))
+	}
+	if from.IdleCompactionMinutes != to.IdleCompactionMinutes {
+		if to.IdleCompactionMinutes == 0 {
+			parts = append(parts, "idle compaction disabled")
+		} else {
+			parts = append(parts, fmt.Sprintf("idle compaction after %d minutes", to.IdleCompactionMinutes))
+		}
+	}
+	if from.IdleCompactionPrompt != to.IdleCompactionPrompt {
+		parts = append(parts, "idle compaction prompt changed")
+	}
+	if from.CacheKeepWarmMinutes != to.CacheKeepWarmMinutes {
+		if to.CacheKeepWarmMinutes == 0 {
+			parts = append(parts, "cache warming disabled")
+		} else {
+			parts = append(parts, fmt.Sprintf("cache kept warm for %d minutes", to.CacheKeepWarmMinutes))
+		}
 	}
 	if from.SystemPrompt != to.SystemPrompt {
 		m.SystemPromptChanged = true

@@ -43,10 +43,27 @@ export interface SettingsKnob {
  *  them. A model that is the server's default stays unset when it was unset
  *  in base, so the profile keeps following the default. */
 export function settingsOf(s: Settings, base?: Settings): Settings {
-  const { thinking_level, tool_overrides, compact_nudge_tokens, system_prompt } = s;
+  const {
+    thinking_level,
+    tool_overrides,
+    compact_nudge_tokens,
+    idle_compaction_minutes,
+    idle_compaction_prompt,
+    cache_keep_warm_minutes,
+    system_prompt,
+  } = s;
   let model = s.model;
   if (base && !base.model && model === serverDefaultModel()) model = "";
-  return { model, thinking_level, tool_overrides, compact_nudge_tokens, system_prompt };
+  return {
+    model,
+    thinking_level,
+    tool_overrides,
+    compact_nudge_tokens,
+    idle_compaction_minutes,
+    idle_compaction_prompt,
+    cache_keep_warm_minutes,
+    system_prompt,
+  };
 }
 
 export function sameOverrides(
@@ -63,6 +80,9 @@ export type SettingsDifference =
   | { kind: "reasoning"; from: string; to: string }
   | { kind: "tool"; name: string; on: boolean }
   | { kind: "nudge"; from: number; to: number }
+  | { kind: "idleCompaction"; from: number; to: number }
+  | { kind: "idleCompactionPrompt" }
+  | { kind: "keepWarm"; from: number; to: number }
   | { kind: "systemPrompt" };
 
 /** How settings `to` work differently from `from`, which is not how they're
@@ -104,6 +124,23 @@ export function settingsDifferences(
   }
   if (on(to, COMPACT_IN_PLACE_TOOL) && nudge(from) !== nudge(to)) {
     out.push({ kind: "nudge", from: nudge(from), to: nudge(to) });
+  }
+  if (from.idle_compaction_minutes !== to.idle_compaction_minutes) {
+    out.push({
+      kind: "idleCompaction",
+      from: from.idle_compaction_minutes,
+      to: to.idle_compaction_minutes,
+    });
+  }
+  if (from.idle_compaction_prompt !== to.idle_compaction_prompt) {
+    out.push({ kind: "idleCompactionPrompt" });
+  }
+  if (from.cache_keep_warm_minutes !== to.cache_keep_warm_minutes) {
+    out.push({
+      kind: "keepWarm",
+      from: from.cache_keep_warm_minutes,
+      to: to.cache_keep_warm_minutes,
+    });
   }
   if (from.system_prompt !== to.system_prompt) out.push({ kind: "systemPrompt" });
   return out;

@@ -1207,6 +1207,13 @@ func (s *Server) insertMessages(ctx context.Context, conversationID string, para
 	if mgr != nil {
 		if slices.ContainsFunc(params, func(p db.CreateMessageParams) bool { return p.MarkAgentDone }) {
 			mgr.syncAgentWorking(false)
+			// Only an actual successful turn arms the idle timer. Compaction
+			// carries old end-of-turn rows through this same insertion path.
+			if slices.ContainsFunc(params, func(p db.CreateMessageParams) bool {
+				return p.MarkAgentDone && p.Type == db.MessageTypeAgent
+			}) {
+				mgr.scheduleIdleWork(s)
+			}
 		}
 		mgr.Touch()
 	}

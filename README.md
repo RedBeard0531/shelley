@@ -57,6 +57,14 @@ The data model is that Conversations have Messages, which might be from the
 user, the model, the tools, or the harness. All of that is stored in the
 database, and we use a SSE endpoint to keep the UI updated. 
 
+A profile's `idle_compaction_minutes` makes its top-level conversations compact
+once idle that long after a turn: an idle nudge starts a turn in which the agent
+compacts its own context with `compact_in_place`, which the profile must enable.
+The nudge's mechanics are global; `idle_compaction_prompt` adds the profile's
+guidance on what to keep.
+New input cancels the pending timer. `cache_keep_warm_minutes` keeps the
+provider prompt cache warm while the conversation is idle.
+
 # History
 
 Shelley is partially based on our previous coding agent effort, [Sketch](https://github.com/boldsoftware/sketch). 

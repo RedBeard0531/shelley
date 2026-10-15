@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,6 +180,11 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 			return nil, fmt.Errorf("decode external message: %w", err)
 		}
 		inputText = strings.TrimSpace(external.Text)
+	}
+
+	if id, ok := idleNudgeFirstRow(req); ok {
+		input, _ := json.Marshal(map[string]any{"action": "compact", "collapse": []map[string]string{{"from": id, "to": id, "note": "IDLE NOTE"}}})
+		return s.makeToolResponse("compact_in_place", input, inputTokens), nil
 	}
 
 	// If the message is purely a tool result (no text), acknowledge it and end turn.
@@ -1273,3 +1279,25 @@ const wideTablesMarkdown = `Here are some wide tables to test rendering:
 | NPS Score | 42 | 45 | 48 | 52 | +23.8% | 📈 |
 
 That's a variety of table widths for testing!`
+
+// idleIndexRow matches the first row of a compact_in_place index.
+var idleIndexRow = regexp.MustCompile("(?m)^id {2,}role.*\n(\\S+) ")
+
+// idleNudgeFirstRow returns the first row id of the compact_in_place index in
+// an idle compaction nudge ending req, which predictable answers by
+// collapsing that row.
+func idleNudgeFirstRow(req *llm.Request) (string, bool) {
+	if len(req.Messages) == 0 {
+		return "", false
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != llm.MessageRoleUser || len(last.Content) != 2 ||
+		!strings.HasPrefix(last.Content[0].Text, "[The conversation has been idle") {
+		return "", false
+	}
+	m := idleIndexRow.FindStringSubmatch(last.Content[1].Text)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}

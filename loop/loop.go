@@ -71,6 +71,9 @@ type Config struct {
 	// before the assistant message is recorded. Use this to flush any
 	// buffered stream deltas so they reach the UI before the full message.
 	OnStreamDone func()
+	// OnSuccessfulRequest receives each request the provider completed
+	// successfully, exactly as sent, so its prefix can be replayed.
+	OnSuccessfulRequest func(*llm.Request)
 	// InjectMessages, if set, is called between LLM rounds (immediately
 	// before each request is built, including the first of a turn). Its
 	// Injection is applied to history and included in that request. Used to
@@ -112,6 +115,7 @@ type Loop struct {
 	onToolProgress   llm.ToolProgressFunc
 	onStreamDelta    func(llm.StreamDelta)
 	onStreamDone     func()
+	onSuccess        func(*llm.Request)
 	injectMessages   func(ctx context.Context) (Injection, error)
 	thinkingLevel    llm.ThinkingLevel
 	promptCacheKey   string
@@ -150,6 +154,7 @@ func NewLoop(config Config) *Loop {
 		onToolProgress:   config.OnToolProgress,
 		onStreamDelta:    config.OnStreamDelta,
 		onStreamDone:     config.OnStreamDone,
+		onSuccess:        config.OnSuccessfulRequest,
 		injectMessages:   config.InjectMessages,
 		thinkingLevel:    config.ThinkingLevel,
 		promptCacheKey:   config.PromptCacheKey,
@@ -404,7 +409,8 @@ func (l *Loop) appendContext(messages ...llm.Message) {
 
 func (l *Loop) hooks() Hooks {
 	h := Hooks{
-		OnStreamDone: l.onStreamDone,
+		OnStreamDone:        l.onStreamDone,
+		OnSuccessfulRequest: l.onSuccess,
 		OnResponse: func(ctx context.Context, r Response) error {
 			l.mu.Lock()
 			l.totalUsage.Add(r.Usage)

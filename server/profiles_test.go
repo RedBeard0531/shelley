@@ -228,7 +228,7 @@ func TestConversationSwitchesProfiles(t *testing.T) {
 	if settings.Profile != "Default" || settings.Model != "model-b" || settings.SystemPrompt != "" || settings.ToolOverrides == nil {
 		t.Fatalf("settings after switching: %+v", settings)
 	}
-	if got := e.want(200, "GET", "/api/conversation/"+id+"/settings", ""); strings.TrimSpace(got) != `{"profile":"Default","model":"model-b","thinking_level":"","tool_overrides":{},"compact_nudge_tokens":0,"system_prompt":""}` {
+	if got := e.want(200, "GET", "/api/conversation/"+id+"/settings", ""); strings.TrimSpace(got) != `{"profile":"Default","model":"model-b","thinking_level":"","tool_overrides":{},"compact_nudge_tokens":0,"idle_compaction_minutes":0,"idle_compaction_prompt":"","cache_keep_warm_minutes":0,"system_prompt":""}` {
 		t.Fatalf("GET settings: %s", got)
 	}
 	marker := lastModelChange(listMessages(t, e.database, id))
@@ -464,4 +464,43 @@ func TestProfileVoicePrompt(t *testing.T) {
 	if strings.Contains(stored.ConversationOptions, "VOICE-PROMPT") || db.ParseConversationOptions(stored.ConversationOptions).Profile != "Tutor" {
 		t.Fatalf("a conversation copied the voice prompt: %s", stored.ConversationOptions)
 	}
+}
+
+func TestProfileIdlePolicyIsCopiedAndCanBeDisabled(t *testing.T) {
+	e := newProfileEnv(t)
+	for _, invalid := range []string{
+		`{"name":"Invalid","idle_compaction_minutes":-1}`,
+		fmt.Sprintf(`{"name":"Overflow","idle_compaction_minutes":%d}`, maxIdleCompactionMinutes+1),
+		`{"name":"Cold","cache_keep_warm_minutes":-1}`,
+		fmt.Sprintf(`{"name":"Endless","cache_keep_warm_minutes":%d}`, maxIdleCompactionMinutes+1),
+		`{"name":"Toolless","idle_compaction_minutes":7}`,
+	} {
+		e.want(400, "POST", "/api/profiles", invalid)
+	}
+	e.want(201, "POST", "/api/profiles", `{"name":"Quiet","idle_compaction_minutes":7,"idle_compaction_prompt":"Keep plans.","cache_keep_warm_minutes":3,"tool_overrides":{"compact_in_place":"on"}}`)
+	var created struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.Unmarshal([]byte(e.want(201, "POST", "/api/conversations/new",
+		`{"message":"hello","conversation_options":{"profile":"Quiet"}}`)), &created); err != nil {
+		t.Fatal(err)
+	}
+	e.waitTurn(created.ConversationID, 0)
+	e.want(200, "PUT", "/api/profiles/Quiet", `{"idle_compaction_minutes":11,"idle_compaction_prompt":"Keep dates.","cache_keep_warm_minutes":5,"tool_overrides":{"compact_in_place":"on"}}`)
+	path := "/api/conversation/" + created.ConversationID + "/settings"
+	read := func(body string, want [2]int, prompt string) {
+		t.Helper()
+		var got ConversationSettings
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatal(err)
+		}
+		if g := [2]int{got.IdleCompactionMinutes, got.CacheKeepWarmMinutes}; g != want || got.IdleCompactionPrompt != prompt {
+			t.Fatalf("idle compaction, keep warm = %v %q, want %v %q", g, got.IdleCompactionPrompt, want, prompt)
+		}
+	}
+	read(e.want(200, "GET", path, ""), [2]int{7, 3}, "Keep plans.")
+	read(e.want(200, "POST", path, `{"profile":"Quiet"}`), [2]int{11, 5}, "Keep dates.")
+	e.want(400, "POST", path, `{"tool_overrides":{"compact_in_place":"off"}}`)
+	read(e.want(200, "POST", path, `{"idle_compaction_minutes":0,"idle_compaction_prompt":"","cache_keep_warm_minutes":0}`), [2]int{}, "")
+	read(e.want(200, "GET", path, ""), [2]int{}, "")
 }

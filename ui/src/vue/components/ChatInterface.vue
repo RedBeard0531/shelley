@@ -1700,6 +1700,9 @@ const composerSettings = computed<Settings>(() => ({
   // The picker can't leave it unset; 0 is what a profile stores for that.
   compact_nudge_tokens:
     compactNudgeTokens.value === DEFAULT_COMPACT_NUDGE_TOKENS ? 0 : compactNudgeTokens.value,
+  idle_compaction_minutes: composerProfile.value?.idle_compaction_minutes || 0,
+  idle_compaction_prompt: composerProfile.value?.idle_compaction_prompt || "",
+  cache_keep_warm_minutes: composerProfile.value?.cache_keep_warm_minutes || 0,
   system_prompt: composerProfile.value?.system_prompt || "",
 }));
 const settingsInEffect = computed<{ profile: string; settings: Settings }>(() => {
@@ -1713,6 +1716,9 @@ const settingsInEffect = computed<{ profile: string; settings: Settings }>(() =>
         thinking_level: opts.thinking_level || "",
         tool_overrides: opts.tool_overrides || {},
         compact_nudge_tokens: opts.compact_nudge_tokens || 0,
+        idle_compaction_minutes: opts.idle_compaction_minutes || 0,
+        idle_compaction_prompt: opts.idle_compaction_prompt || "",
+        cache_keep_warm_minutes: opts.cache_keep_warm_minutes || 0,
         system_prompt: opts.system_prompt || "",
       },
     };
@@ -3189,12 +3195,22 @@ const visibleQueuedGhosts = useVisibleQueuedMessages(() => queuedGhosts.value);
 // options, so the selection only reaches the server on the promoting chat
 // request.
 function buildConversationOptions(): ChatRequest["conversation_options"] {
-  const { thinking_level, tool_overrides, compact_nudge_tokens } = composerSettings.value;
+  const {
+    thinking_level,
+    tool_overrides,
+    compact_nudge_tokens,
+    idle_compaction_minutes,
+    idle_compaction_prompt,
+    cache_keep_warm_minutes,
+  } = composerSettings.value;
   return {
     profile: composerProfile.value?.name,
     thinking_level,
     tool_overrides: { ...tool_overrides },
     compact_nudge_tokens,
+    idle_compaction_minutes,
+    idle_compaction_prompt,
+    cache_keep_warm_minutes,
   };
 }
 

@@ -152,6 +152,12 @@ export interface Settings {
   tool_overrides: Record<string, "on" | "off">;
   /** 0 means the default. */
   compact_nudge_tokens: number;
+  /** Quiet minutes after a successful turn; 0 disables idle compaction. */
+  idle_compaction_minutes: number;
+  /** What the idle nudge asks the agent to keep; "" adds nothing. */
+  idle_compaction_prompt: string;
+  /** Minutes to keep the prompt cache warm after a successful turn; 0 disables it. */
+  cache_keep_warm_minutes: number;
   /** A Go text/template; "" means the built-in one. */
   system_prompt: string;
 }

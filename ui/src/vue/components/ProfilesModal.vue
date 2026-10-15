@@ -44,6 +44,61 @@
         />
       </section>
       <section class="profiles-section">
+        <label class="advanced-settings-header" for="profiles-idle"
+          >Idle compaction (minutes)</label
+        >
+        <input
+          id="profiles-idle"
+          v-model.number="draft.settings.idle_compaction_minutes"
+          type="number"
+          min="0"
+          max="153722867"
+          step="1"
+        />
+        <p class="profiles-hint">
+          0 disables it. After this many quiet minutes following a turn, the agent compacts its own
+          context once with compact_in_place, which must be on. Conversations copy this setting when
+          created or switched to this profile; saving here does not change existing chats.
+        </p>
+      </section>
+      <section class="profiles-section">
+        <label class="advanced-settings-header" for="profiles-idle-prompt"
+          >Idle compaction prompt</label
+        >
+        <p class="profiles-hint">
+          What the idle nudge asks the agent to keep when it compacts. Empty adds nothing to the
+          nudge's instructions to compact, which the compact_in_place tool's own guidance then
+          shapes.
+        </p>
+        <textarea
+          id="profiles-idle-prompt"
+          v-model="draft.settings.idle_compaction_prompt"
+          class="profiles-voice"
+          rows="6"
+        />
+      </section>
+      <section class="profiles-section">
+        <label class="advanced-settings-header" for="profiles-keep-warm"
+          >Keep prompt cache warm (minutes)</label
+        >
+        <input
+          id="profiles-keep-warm"
+          v-model.number="draft.settings.cache_keep_warm_minutes"
+          type="number"
+          min="0"
+          max="153722867"
+          step="1"
+        />
+        <p class="profiles-hint">
+          0 disables it. After a successful turn, keep the provider's prompt cache warm this long
+          (or until idle compaction or the next turn) so a follow-up reads it instead of rewriting
+          it. Shelley re-sends the context without generating a reply only when the cache would
+          otherwise expire, shortly before it does: every 4 minutes for Claude's 5-minute cache,
+          every 24 for the 30-minute cache of GPT-5.6 and later. Each refresh is billed as cached
+          input. Other models, and Claude with fixed thinking budgets, are not warmed.
+        </p>
+      </section>
+      <section class="profiles-section">
         <h3 class="advanced-settings-header profiles-section-title">System prompt</h3>
         <SystemPromptEditor
           v-model="draft.settings.system_prompt"
@@ -200,6 +255,12 @@ const canSave = computed(
     !!draft.value &&
     !promptProblem.value &&
     !generating.value &&
+    Number.isInteger(draft.value.settings.idle_compaction_minutes) &&
+    draft.value.settings.idle_compaction_minutes >= 0 &&
+    draft.value.settings.idle_compaction_minutes <= 153722867 &&
+    Number.isInteger(draft.value.settings.cache_keep_warm_minutes) &&
+    draft.value.settings.cache_keep_warm_minutes >= 0 &&
+    draft.value.settings.cache_keep_warm_minutes <= 153722867 &&
     (!draft.value.isNew || !!draft.value.name.trim()),
 );
 
@@ -230,6 +291,8 @@ function summarize(s: Settings): string {
     const nudge = s.compact_nudge_tokens || DEFAULT_COMPACT_NUDGE_TOKENS;
     parts.push(`compaction nudge ${nudge / 1000}k`);
   }
+  if (s.idle_compaction_minutes) parts.push(`idle compaction ${s.idle_compaction_minutes} min`);
+  if (s.cache_keep_warm_minutes) parts.push(`keep cache warm ${s.cache_keep_warm_minutes} min`);
   parts.push(s.system_prompt ? "custom system prompt" : "built-in system prompt");
   return parts.join(" · ");
 }
@@ -274,6 +337,9 @@ function emptySettings(): Settings {
     thinking_level: "",
     tool_overrides: {},
     compact_nudge_tokens: 0,
+    idle_compaction_minutes: 0,
+    idle_compaction_prompt: "",
+    cache_keep_warm_minutes: 0,
     system_prompt: "",
   };
 }

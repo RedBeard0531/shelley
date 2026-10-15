@@ -136,6 +136,20 @@ type ConversationManager struct {
 	// This is explicitly managed and broadcast to subscribers when it changes.
 	agentWorking bool
 
+	// idleCompactionVersion invalidates callbacks even when Stop loses a race
+	// with the timer. Both fields are guarded by mu.
+	idleCompactionTimer   *time.Timer
+	idleCompactionVersion uint64
+	// idleCompacting marks the running turn as an idle compaction, whose end
+	// does not re-arm idle work. Any activity clears it. Guarded by mu.
+	idleCompacting bool
+	// cacheWarmTimer replays cacheWarmRequest, the last successful provider
+	// request, through cacheWarmService. All are guarded by mu and share
+	// idleCompactionVersion.
+	cacheWarmTimer   *time.Timer
+	cacheWarmRequest *llm.Request
+	cacheWarmService llm.Service
+
 	// distilling is true while a distillation goroutine is inserting content
 	// into this conversation. When true, queued messages should NOT be drained
 	// immediately — they must wait until distillation finishes.
@@ -373,6 +387,9 @@ func (cm *ConversationManager) syncAgentWorking(working bool) {
 
 func (cm *ConversationManager) setAgentWorking(working, persist bool) {
 	cm.mu.Lock()
+	if working {
+		cm.cancelIdleCompactionLocked()
+	}
 	if cm.agentWorking == working {
 		cm.mu.Unlock()
 		return
@@ -453,6 +470,7 @@ func (cm *ConversationManager) BeginDistillingSetup() bool {
 	if cm.distilling {
 		return false
 	}
+	cm.cancelIdleCompactionLocked()
 	cm.distilling = true
 	if cm.distillSetupDone == nil {
 		cm.distillSetupDone = make(chan struct{})
@@ -614,6 +632,7 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 	if service == nil {
 		return false, "", fmt.Errorf("llm service is required")
 	}
+	cm.cancelIdleCompaction()
 
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
@@ -1143,6 +1162,7 @@ func (cm *ConversationManager) HasQueuedMessages(ctx context.Context) (bool, err
 // queued message, and only its ready transition (see drainQueueIfIdle) makes
 // it deliverable.
 func (cm *ConversationManager) QueueTranscription(ctx context.Context, s *Server, qm db.QueuedMessage) (db.QueuedMessage, error) {
+	cm.cancelIdleCompaction()
 	cm.waitDistillingSetup()
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
@@ -1234,6 +1254,7 @@ func (cm *ConversationManager) InjectMessage(ctx context.Context, s *Server, mod
 }
 
 func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, modelID string, message llm.Message, midTurn bool) error {
+	cm.cancelIdleCompaction()
 	cm.waitDistillingSetup()
 
 	cm.loopLifecycleMu.Lock()
@@ -2320,6 +2341,16 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		},
 		OnStreamDelta: sf.Push,
 		OnStreamDone:  sf.Flush,
+		OnSuccessfulRequest: func(req *llm.Request) {
+			if !cm.isCurrentLoopGeneration(generation) {
+				return
+			}
+			warm := *req
+			warm.OnStream, warm.OnRetry = nil, nil
+			cm.mu.Lock()
+			cm.cacheWarmRequest, cm.cacheWarmService = &warm, service
+			cm.mu.Unlock()
+		},
 		InjectMessages: func(ctx context.Context) (loop.Injection, error) {
 			return cm.takeInjectable(ctx, generation, nudger)
 		},
@@ -2429,6 +2460,7 @@ func (cm *ConversationManager) resetLoop(markUnhydrated bool) {
 // loopLifecycleMu so no turn can start while it runs. If mutate fails, the
 // loop is left alone and the error returned.
 func (cm *ConversationManager) resetLoopAfter(markUnhydrated bool, mutate func() error) error {
+	cm.cancelIdleCompaction()
 	cm.loopLifecycleMu.Lock()
 	cm.waitForLoopTeardownLocked()
 	if err := mutate(); err != nil {
@@ -2485,6 +2517,7 @@ func (cm *ConversationManager) SendQueuedNow(ctx context.Context, s *Server, que
 // The loop records the complete tool-result batch, including partial output from
 // cancelled tools, before this method writes the end-of-turn marker.
 func (cm *ConversationManager) cancelConversation(ctx context.Context, clearQueued bool, sendQueuedID string) error {
+	cm.cancelIdleCompaction()
 	cm.loopLifecycleMu.Lock()
 	cm.waitForLoopTeardownLocked()
 	if sendQueuedID != "" {

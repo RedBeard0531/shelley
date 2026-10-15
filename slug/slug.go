@@ -56,7 +56,7 @@ func GenerateSlug(ctx context.Context, llmProvider LLMServiceProvider, database 
 	// the usage is accounted for through the ordinary message-usage path.
 	var marker *generated.Message
 	if entries := otherUsage.Take(); len(entries) > 0 {
-		marker, err = database.CreateSlugMessage(ctx, conversationID, entries)
+		marker, err = database.CreateUsageMessage(ctx, conversationID, entries)
 		if err != nil {
 			logger.Error("Failed to record slug usage", "conversationID", conversationID, "error", err)
 		}

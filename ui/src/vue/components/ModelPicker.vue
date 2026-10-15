@@ -737,6 +737,8 @@ async function cancelSaveAsNew() {
 }
 
 // What differs, in words: "Claude Opus 5.5 → GLM 5.3, browser off".
+const minutes = (n: number) => (n ? `${n} min` : "off");
+
 function describe(changes: SettingsDifference[]): string {
   const level = (l: string) => l || t("effortAuto");
   const swap = (key: Parameters<typeof t>[0], from: string, to: string) =>
@@ -755,6 +757,12 @@ function describe(changes: SettingsDifference[]): string {
           );
         case "nudge":
           return swap("changeNudge", `${c.from / 1000}k`, `${c.to / 1000}k`);
+        case "idleCompaction":
+          return `Idle compaction: ${minutes(c.from)} → ${minutes(c.to)}`;
+        case "idleCompactionPrompt":
+          return "Idle compaction prompt changed";
+        case "keepWarm":
+          return `Keep cache warm: ${minutes(c.from)} → ${minutes(c.to)}`;
         case "systemPrompt":
           return t("changeSystemPrompt");
       }

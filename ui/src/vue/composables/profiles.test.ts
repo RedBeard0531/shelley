@@ -34,6 +34,9 @@ const base: Settings = {
   thinking_level: "",
   tool_overrides: {},
   compact_nudge_tokens: 0,
+  idle_compaction_minutes: 0,
+  idle_compaction_prompt: "",
+  cache_keep_warm_minutes: 0,
   system_prompt: "",
 };
 const diff = (from: Partial<Settings>, to: Partial<Settings>) =>
@@ -108,5 +111,28 @@ run("reasoning means nothing to a model without it", () => {
     diff({ model: "big", thinking_level: "high" }, { model: "plain" }),
     [{ kind: "model", from: "big", to: "plain" }],
     "to a model without it",
+  );
+});
+
+run("idle compaction remains visible when the context tool is off", () => {
+  assertEqual(
+    diff({}, { idle_compaction_minutes: 7 }),
+    [{ kind: "idleCompaction", from: 0, to: 7 }],
+    "enabling idle compaction",
+  );
+  assertEqual(
+    diff({ idle_compaction_minutes: 7 }, {}),
+    [{ kind: "idleCompaction", from: 7, to: 0 }],
+    "disabling idle compaction",
+  );
+  assertEqual(
+    diff({}, { cache_keep_warm_minutes: 8 }),
+    [{ kind: "keepWarm", from: 0, to: 8 }],
+    "enabling cache warming",
+  );
+  assertEqual(
+    diff({}, { idle_compaction_prompt: "Keep dates." }),
+    [{ kind: "idleCompactionPrompt" }],
+    "changing the idle compaction prompt",
   );
 });
