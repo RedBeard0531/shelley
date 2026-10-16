@@ -3,12 +3,14 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -583,5 +585,74 @@ func TestIsPermissionError(t *testing.T) {
 				t.Errorf("isPermissionError(%v) = %v, want %v", tt.err, result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestDoUpgradeFallsBackToSudo upgrades a binary in a root-owned directory,
+// like /usr/local/bin, and checks that the sudo fallback keeps its owner and
+// mode using only commands and flags macOS has too.
+func TestDoUpgradeFallsBackToSudo(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write the directory, so nothing falls back to sudo")
+	}
+	if !isSudoAvailable() {
+		t.Skip("needs passwordless sudo")
+	}
+	dir := filepath.Join(t.TempDir(), "bin")
+	exe := filepath.Join(dir, "shelley")
+	old := filepath.Join(t.TempDir(), "old")
+	if err := os.WriteFile(old, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { exec.Command("sudo", "rm", "-rf", dir).Run() })
+	for _, args := range [][]string{{"mkdir", dir}, {"cp", old, exe}, {"chown", "1:1", exe}, {"chmod", "745", exe}} {
+		if out, err := exec.Command("sudo", args...).CombinedOutput(); err != nil {
+			t.Fatalf("sudo %v: %v: %s", args, err, out)
+		}
+	}
+
+	newBinary := []byte("new")
+	asset := fmt.Sprintf("shelley_%s_%s", runtime.GOOS, runtime.GOARCH)
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	mux.HandleFunc("GET /release.json", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ReleaseInfo{
+			TagName:      "v0.2.0",
+			DownloadURLs: map[string]string{runtime.GOOS + "_" + runtime.GOARCH: srv.URL + "/" + asset},
+			ChecksumsURL: srv.URL + "/checksums.txt",
+		})
+	})
+	mux.HandleFunc("GET /checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%x  %s\n", sha256.Sum256(newBinary), asset)
+	})
+	mux.HandleFunc("GET /"+asset, func(w http.ResponseWriter, r *http.Request) { w.Write(newBinary) })
+
+	t.Setenv("SHELLEY_VERSION_OVERRIDE", "v0.1.0")
+	oldURL, oldExe, oldErr := staticMetadataURL, startupExecutable, startupExecutableErr
+	staticMetadataURL, startupExecutable, startupExecutableErr = srv.URL, exe, nil
+	t.Cleanup(func() { staticMetadataURL, startupExecutable, startupExecutableErr = oldURL, oldExe, oldErr })
+
+	if err := (&VersionChecker{}).DoUpgrade(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := os.ReadFile(exe); err != nil || string(got) != "new" {
+		t.Fatalf("contents = %q, %v; want %q", got, err, "new")
+	}
+	fi, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := fi.Sys().(*syscall.Stat_t)
+	if st.Uid != 1 || st.Gid != 1 || fi.Mode().Perm() != 0o745 {
+		t.Errorf("owner %d:%d mode %o; want 1:1 745", st.Uid, st.Gid, fi.Mode().Perm())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("left behind %v; want only shelley", entries)
 	}
 }

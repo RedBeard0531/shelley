@@ -1113,9 +1113,25 @@ class ApiService {
     });
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || response.statusText);
+      throw new ApiError(text || response.statusText, response.status);
     }
     return response.json();
+  }
+
+  async getVersion(): Promise<{ tag?: string }> {
+    // A hard deadline, kept through the body. AbortSignal.timeout() isn't
+    // available in every browser we support.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 5000);
+    try {
+      const response = await fetch("/version", { signal: ctl.signal });
+      if (!response.ok) {
+        throw await responseError(response, "Failed to get version");
+      }
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async upgradeHeadlessShell(): Promise<{ status: string; message: string; version: string }> {

@@ -3453,11 +3453,11 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 			f.Flush()
 		}
 
-		// Exit after a short delay to allow response to be sent
+		// Restart after a short delay to allow the response to be sent
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			s.logger.Info("Exiting Shelley after upgrade")
-			os.Exit(0)
+			s.logger.Info("Restarting Shelley after upgrade")
+			s.restartAfterUpgrade()
 		}()
 	} else {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Upgrade complete. Restart to apply."})

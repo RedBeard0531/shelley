@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fynelabs/selfupdate"
@@ -102,11 +103,10 @@ type StaticCommitInfo struct {
 	Subject string `json:"subject"`
 }
 
-const (
-	// staticMetadataURL is the base URL for version metadata on GitHub Pages.
-	// This avoids GitHub API rate limits.
-	staticMetadataURL = "https://boldsoftware.github.io/shelley"
-)
+// staticMetadataURL is the base URL for version metadata on GitHub Pages.
+// This avoids GitHub API rate limits. It is a var so builds can point it
+// elsewhere with -ldflags -X.
+var staticMetadataURL = "https://boldsoftware.github.io/shelley"
 
 // NewVersionChecker creates a new version checker.
 func NewVersionChecker() *VersionChecker {
@@ -170,7 +170,7 @@ func customCommits(dir string) []CommitInfo {
 // before any release-metadata fetch.
 func baseVersionInfo() *VersionInfo {
 	currentInfo := version.GetInfo()
-	execPath, _ := os.Executable()
+	execPath, _ := upgradeTarget()
 	info := &VersionInfo{
 		CurrentVersion:      currentInfo.Version,
 		CurrentTag:          currentInfo.Tag,
@@ -606,6 +606,11 @@ func (vc *VersionChecker) DoUpgrade(ctx context.Context) error {
 		return fmt.Errorf("no release info available")
 	}
 
+	target, err := upgradeTarget()
+	if err != nil {
+		return fmt.Errorf("failed to find executable: %w", err)
+	}
+
 	// Find and download checksums.txt
 	expectedChecksum, err := vc.fetchExpectedChecksum(ctx, info.ReleaseInfo)
 	if err != nil {
@@ -638,7 +643,7 @@ func (vc *VersionChecker) DoUpgrade(ctx context.Context) error {
 	}
 
 	// Apply the update
-	err = selfupdate.Apply(bytes.NewReader(binaryData), selfupdate.Options{})
+	err = selfupdate.Apply(bytes.NewReader(binaryData), selfupdate.Options{TargetPath: target})
 	if err == nil {
 		return nil
 	}
@@ -653,7 +658,7 @@ func (vc *VersionChecker) DoUpgrade(ctx context.Context) error {
 	}
 
 	// Fall back to sudo-based upgrade
-	return vc.doSudoUpgrade(binaryData)
+	return vc.doSudoUpgrade(target, binaryData)
 }
 
 // isPermissionError checks if the error is related to file permissions.
@@ -661,12 +666,16 @@ func isPermissionError(err error) bool {
 	return errors.Is(err, fs.ErrPermission) || errors.Is(err, os.ErrPermission)
 }
 
-// doSudoUpgrade performs the upgrade using sudo when the binary isn't writable.
-func (vc *VersionChecker) doSudoUpgrade(binaryData []byte) error {
-	// Get the path to the current executable
-	exePath, err := os.Executable()
+// doSudoUpgrade replaces exePath with binaryData using sudo, for when the
+// binary isn't writable. It sticks to commands and flags that macOS has too.
+func (vc *VersionChecker) doSudoUpgrade(exePath string, binaryData []byte) error {
+	fi, err := os.Stat(exePath)
 	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
+		return fmt.Errorf("failed to stat executable: %w", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("failed to read owner of %s", exePath)
 	}
 
 	// Write the new binary to a temp file
@@ -702,13 +711,13 @@ func (vc *VersionChecker) doSudoUpgrade(binaryData []byte) error {
 	}
 
 	// Copy ownership and permissions from original
-	cmd = exec.Command("sudo", "chown", "--reference="+exePath, newPath)
+	cmd = exec.Command("sudo", "chown", fmt.Sprintf("%d:%d", st.Uid, st.Gid), newPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		exec.Command("sudo", "rm", "-f", newPath).Run()
 		return fmt.Errorf("failed to set ownership: %w: %s", err, output)
 	}
 
-	cmd = exec.Command("sudo", "chmod", "--reference="+exePath, newPath)
+	cmd = exec.Command("sudo", "chmod", fmt.Sprintf("%o", fi.Mode().Perm()), newPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		exec.Command("sudo", "rm", "-f", newPath).Run()
 		return fmt.Errorf("failed to set permissions: %w: %s", err, output)

@@ -408,6 +408,12 @@ type Server struct {
 	// with the primary Shelley. Set by `serve --banner`.
 	Banner string
 
+	// SocketActivated records that the listener came from systemd socket
+	// activation. After an upgrade, such a server exits and lets systemd
+	// start the new binary; any other replaces itself in place. Set by
+	// `serve -systemd-activation`.
+	SocketActivated bool
+
 	// hooksDir is the directory searched for user hook scripts
 	// (end-of-turn, new-conversation). Defaults to
 	// $HOME/.config/shelley/hooks; tests override it to a per-test
@@ -2109,9 +2115,8 @@ func (s *Server) performUpgradeAndRestart(ctx context.Context, versionInfo *Vers
 
 	s.logger.Info("Auto-upgrade complete, restarting")
 
-	// Exit to trigger restart (systemd will restart us)
 	time.Sleep(100 * time.Millisecond)
-	os.Exit(0)
+	s.restartAfterUpgrade()
 }
 
 // listenSocket listens on the Unix socket at socketPath, made absolute, or

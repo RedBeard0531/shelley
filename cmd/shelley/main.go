@@ -184,6 +184,9 @@ func runServe(global GlobalConfig, args []string) {
 	fs.Parse(args)
 
 	logger := setupLogging(global.Debug)
+	if err := server.ReapInheritedChildren(); err != nil {
+		logger.Error("Failed to reap processes left by the previous binary", "error", err)
+	}
 
 	dbLock, err := lockServerDatabase(global.DBPath)
 	if err != nil {
@@ -228,6 +231,7 @@ func runServe(global GlobalConfig, args []string) {
 	svr.SetModelRefresher(llmConfig.RefreshBuiltModels)
 	svr.SetModelProviderManager(providerManager)
 	svr.Banner = *banner
+	svr.SocketActivated = *systemdActivation
 
 	// Load notification channels from DB.
 	svr.ReloadNotificationChannels()

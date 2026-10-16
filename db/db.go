@@ -2780,6 +2780,14 @@ func (db *DB) SetSetting(ctx context.Context, key, value string) error {
 	})
 }
 
+// DeleteSetting removes the setting for key, if any.
+func (db *DB) DeleteSetting(ctx context.Context, key string) error {
+	return db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		_, err := generated.New(tx.Conn()).DeleteSetting(ctx, key)
+		return err
+	})
+}
+
 // InitSetting returns the value stored for key, first storing value if the
 // key is unset. Concurrent callers all see the same winning value.
 func (db *DB) InitSetting(ctx context.Context, key, value string) (string, error) {
