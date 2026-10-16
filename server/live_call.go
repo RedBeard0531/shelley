@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -39,8 +40,15 @@ type liveReceipt struct {
 	Status string `json:"status"` // "accepted" or "queued"
 }
 
-// liveDeliverFunc hands speech and its voice exchange to the backend.
-type liveDeliverFunc func(ctx context.Context, heading, transcript, voiceContext, deliveryID string) (liveReceipt, error)
+// liveDeliverFunc hands speech and its voice exchange to the backend, with
+// the call's saved transcript through delta through.
+type liveDeliverFunc func(ctx context.Context, heading, transcript, voiceContext, deliveryID string, through int) (liveReceipt, error)
+
+// liveSaveFunc appends transcript deltas to the call's saved transcript.
+type liveSaveFunc func(ctx context.Context, fragments []liveFragment) error
+
+// liveSaveDelay batches transcript deltas into one write.
+const liveSaveDelay = time.Second
 
 // liveEvent is the part of a Live data-channel event a call reads.
 type liveEvent struct {
@@ -108,7 +116,9 @@ type liveInstruction struct {
 
 type liveCall struct {
 	id, conversationID string
+	call               int64 // its number in the conversation
 	deliver            liveDeliverFunc
+	save               liveSaveFunc
 	newDeliveryID      func() string
 	logger             *slog.Logger
 
@@ -133,6 +143,9 @@ type liveCall struct {
 	latest      int64
 	unseen      map[int64]liveRow
 	eventSeq    int
+	unsaved     []liveFragment // deltas not yet handed to save
+	saveTimer   *time.Timer
+	saveMu      sync.Mutex // orders saves
 
 	out    []liveInstruction
 	nextID int64
@@ -154,9 +167,9 @@ type liveRow struct {
 
 // newLiveCall starts a call whose Live session already holds the
 // conversation up to sequence initialSeq.
-func newLiveCall(id, conversationID string, initialSeq int64, deliver liveDeliverFunc, logger *slog.Logger) *liveCall {
+func newLiveCall(id, conversationID string, initialSeq int64, deliver liveDeliverFunc, save liveSaveFunc, logger *slog.Logger) *liveCall {
 	c := &liveCall{
-		id: id, conversationID: conversationID, deliver: deliver,
+		id: id, conversationID: conversationID, deliver: deliver, save: save,
 		logger: logger.With("liveCall", id, "conversationID", conversationID),
 		active: true, done: make(chan struct{}), seen: map[string]bool{}, pending: map[string]*livePending{},
 		kick: make(chan struct{}, 1), lastSeen: initialSeq, latest: initialSeq, unseen: map[int64]liveRow{},
@@ -182,6 +195,10 @@ func (c *liveCall) handle(events []liveEvent) {
 			c.transcriptN++
 			f := liveFragment{n: c.transcriptN, user: user, text: e.delta, startMs: e.startMs, endMs: e.endMs}
 			c.fragments = append(c.fragments, f)
+			c.unsaved = append(c.unsaved, f)
+			if c.saveTimer == nil {
+				c.saveTimer = time.AfterFunc(liveSaveDelay, func() { c.saveTranscript() })
+			}
 			c.acceptTail(f)
 			if len(c.fragments) > liveFragmentsMax && len(c.pending) == 0 {
 				drop := len(c.fragments) - liveFragmentsKept
@@ -329,7 +346,7 @@ func (c *liveCall) commit(id string) {
 		return
 	}
 	c.sendTimes = append(c.sendTimes, now)
-	voiceContext := liveVoiceContext(c.fragments, since)
+	voiceContext := liveVoiceContext(c.call, c.fragments, since)
 	c.logger.Info("Live delegation committed", "delegation", id, "chars", len(speech))
 	t := &liveTail{id: id, deliveryID: c.newDeliveryID(), startMs: start, offsetMs: p.offsetMs, through: c.transcriptN}
 	c.tails = append(c.tails, t)
@@ -407,8 +424,12 @@ func (c *liveCall) deliverTask(t *liveTail, heading, speech, voiceContext string
 	c.activity()
 	c.mu.Unlock()
 
-	// A delivery outlives a hang-up, as a sent chat message would.
-	receipt, err := c.deliver(context.Background(), heading, speech, voiceContext, deliveryID)
+	// The request points into the saved transcript, so save it first.
+	receipt, err := liveReceipt{}, c.saveTranscript()
+	if err == nil {
+		// A delivery outlives a hang-up, as a sent chat message would.
+		receipt, err = c.deliver(context.Background(), heading, speech, voiceContext, deliveryID, through)
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -604,6 +625,7 @@ func (c *liveCall) attach() (superseded <-chan struct{}, detach func()) {
 // extensions of successful deliveries drain even after the stream closes.
 func (c *liveCall) end(reason string) {
 	c.locked(func() { c.endLocked(reason) })
+	c.saveTranscript()
 }
 
 func (c *liveCall) endLocked(reason string) {
@@ -642,4 +664,34 @@ func (c *liveCall) endLocked(reason string) {
 	c.active = false
 	c.order = nil
 	close(c.done)
+	go c.saveTranscript() // end saves before returning
+}
+
+// saveTranscript saves the deltas received so far. A failed save keeps
+// them for the next.
+func (c *liveCall) saveTranscript() error {
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
+	c.mu.Lock()
+	batch := c.unsaved
+	c.unsaved = nil
+	if c.saveTimer != nil {
+		c.saveTimer.Stop()
+		c.saveTimer = nil
+	}
+	c.mu.Unlock()
+	if len(batch) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := c.save(ctx, batch)
+	if err != nil {
+		c.logger.Error("Live call cannot save its transcript", "error", err)
+		c.mu.Lock()
+		c.unsaved = append(batch, c.unsaved...)
+		c.mu.Unlock()
+		return fmt.Errorf("Failed to save the call transcript: %w", err)
+	}
+	return nil
 }

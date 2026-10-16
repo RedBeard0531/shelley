@@ -50,6 +50,7 @@ func (e *liveMessageEnv) do(method, path, body string) (int, string) {
 // liveCallClient is a client's side of a call: the instructions it got.
 type liveCallClient struct {
 	e            *liveMessageEnv
+	id, session  string
 	path         string // /api/conversation/<id>/live-session/<session>
 	instructions chan string
 	ended        chan struct{} // closes when the latest stream ends
@@ -66,7 +67,8 @@ func (e *liveMessageEnv) startCall(conversationID, settings string) *liveCallCli
 		e.t.Fatalf("live-session: %d %s", code, body)
 	}
 	c := &liveCallClient{
-		e: e, path: "/api/conversation/" + conversationID + "/live-session/" + session.Session.ID,
+		e: e, id: conversationID, session: session.Session.ID,
+		path:         "/api/conversation/" + conversationID + "/live-session/" + session.Session.ID,
 		instructions: make(chan string, 100),
 	}
 	c.attach("")
@@ -164,11 +166,13 @@ func TestLiveCallOverHTTP(t *testing.T) {
 	)
 	call.events(`{"type":"session.input_transcript.delta","delta":" tests.","start_ms":1500,"end_ms":1900}`)
 	call.expect("activity: true")
-	const message = "Spoken request:\nRun the tests." + liveVoiceExchange + "LIVE: Hi!\nUSER: Run the tests."
+	// The request points into the call's transcript, saved by now.
+	message := "Spoken request:\nRun the tests." + exchange(1, 3, "LIVE: Hi!\nUSER: Run the tests.") + liveTranscriptReference(1)
 	turn := e.held.waitCall(t, message)
 	call.expect("error: null", "handoff 3:", "thinking [d1]: The backend accepted this task: Run the tests.", "activity: false")
 	e.finish(id, turn)
 	call.expect("commentary [d1]: Backend reply: ")
+	call.events(`{"type":"session.output_transcript.delta","delta":"Got it.","start_ms":2000,"end_ms":2400}`)
 
 	// What the user types reaches Live, as does its reply.
 	if code, body := e.post("/api/conversation/"+id+"/chat", `{"message":"also lint it"}`); code != http.StatusAccepted {
@@ -187,8 +191,19 @@ func TestLiveCallOverHTTP(t *testing.T) {
 		t.Errorf("hang up: %d", code)
 	}
 	<-call.ended
+	// The whole call stays readable.
+	if _, got := e.do("GET", "/api/conversation/"+id+"/call/1/transcript", ""); got != "1 Live: Hi!\n3 User: Run the tests.\n4 Live: Got it." {
+		t.Errorf("transcript = %q", got)
+	}
 	if code, body := e.post(call.path+"/events", `{"events":[{"type":"session.started"}]}`); code != http.StatusNotFound {
 		t.Errorf("events after hang-up: %d %s", code, body)
+	}
+	// Deleting the conversation deletes its calls' transcripts.
+	if code, body := e.post("/api/conversation/"+id+"/delete", ""); code != http.StatusOK {
+		t.Fatalf("delete: %d %s", code, body)
+	}
+	if code, got := e.do("GET", "/api/conversation/"+id+"/call/1/transcript", ""); code != http.StatusOK || got != "" {
+		t.Errorf("transcript after delete = %d %q", code, got)
 	}
 }
 
@@ -213,7 +228,7 @@ func TestLiveCallStartsADraft(t *testing.T) {
 		`{"type":"session.input_transcript.delta","delta":"inspect the project","start_ms":0,"end_ms":900}`,
 		`{"type":"session.delegation.created","delegation":{"id":"d1","target":"client"},"offset_ms":900}`,
 	)
-	turn := e.held.waitCall(t, "Spoken request:\ninspect the project"+liveVoiceExchange+"USER: inspect the project")
+	turn := e.held.waitCall(t, "Spoken request:\ninspect the project"+exchange(1, 1, "USER: inspect the project")+liveTranscriptReference(1))
 	if !strings.Contains(systemText(turn.request), "Be a helpful personal assistant.") {
 		t.Error("main backend lost the profile's system prompt")
 	}
@@ -248,7 +263,7 @@ func TestLiveCallSendsCompleteFreshExchange(t *testing.T) {
 		fmt.Sprintf(`{"type":"session.output_transcript.delta","delta":%q,"start_ms":600,"end_ms":7000}`, response),
 		`{"type":"session.delegation.created","delegation":{"id":"d1","target":"client"},"offset_ms":7000}`,
 	)
-	message := "Spoken request:\nRun tests" + liveVoiceExchange + "USER: Run tests\nLIVE: " + response
+	message := "Spoken request:\nRun tests" + exchange(1, 2, "USER: Run tests\nLIVE: "+response) + liveTranscriptReference(1)
 	turn := e.held.waitCall(t, message)
 	e.finish(conv.ConversationID, turn)
 	call.expect("activity: true", "error: null", "handoff 2:", "thinking [d1]: The backend accepted this task", "activity: false", "commentary [d1]: Backend reply: ")
@@ -272,7 +287,7 @@ func TestLiveTranscriptLateCaptionStaysForNextHandoff(t *testing.T) {
 		`{"type":"session.output_transcript.delta","delta":"I'll make sure the live chat","start_ms":600,"end_ms":2000}`,
 		`{"type":"session.delegation.created","delegation":{"id":"d1","target":"client"},"offset_ms":2000}`,
 	)
-	const message = "Spoken request:\nCap the panel" + liveVoiceExchange + "USER: Cap the panel\nLIVE: I'll make sure the live chat"
+	message := "Spoken request:\nCap the panel" + exchange(1, 2, "USER: Cap the panel\nLIVE: I'll make sure the live chat") + liveTranscriptReference(1)
 	turn := e.held.waitCall(t, message)
 	call.expect("activity: true", "error: null", "handoff 2:", "thinking [d1]: The backend accepted this task", "activity: false")
 
@@ -296,7 +311,7 @@ func TestLiveTranscriptLateCaptionStaysForNextHandoff(t *testing.T) {
 
 	e.finish(conv.ConversationID, turn)
 	call.events(`{"type":"session.delegation.created","delegation":{"id":"d2","target":"client"},"offset_ms":4500}`)
-	nextMessage := "Spoken request:\nRun tests" + liveVoiceExchange + "USER: Cap the panel\nLIVE: I'll make sure the live chat\nLIVE: panel doesn't get too tall.\nUSER: Run tests"
+	nextMessage := "Spoken request:\nRun tests" + exchange(1, 4, "USER: Cap the panel\nLIVE: I'll make sure the live chat\nLIVE: panel doesn't get too tall.\nUSER: Run tests") + liveTranscriptReference(1)
 	next := e.held.waitCall(t, nextMessage)
 	e.finish(conv.ConversationID, next)
 	if code, body := e.do("DELETE", call.path, ""); code != http.StatusNoContent {

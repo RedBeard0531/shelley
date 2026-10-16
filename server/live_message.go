@@ -14,8 +14,13 @@ import (
 const maxLiveRequestBytes = 128 << 10
 
 // liveVoiceExchange separates the spoken request from the voice exchange it
-// came from in the visible message (see liveChat and liveDialogue).
-const liveVoiceExchange = "\n\nVoice exchange (for context only):\n"
+// came from in the visible message (see liveVoiceContext and liveDialogue);
+// liveVoiceExchangeUnnumbered does for exchanges the client sent, which
+// have no call.
+const (
+	liveVoiceExchange           = "\n\nCall #"
+	liveVoiceExchangeUnnumbered = "\n\nVoice exchange (for context only):\n"
+)
 
 // liveSettings are a draft's composer selection, which its first message
 // promotes it with; chat ignores them once the conversation is under way.
@@ -30,13 +35,11 @@ type liveSettings struct {
 // conversation and a draft's first send is as from the composer. The
 // recorder holds chat's response: its receipt, the status and the message
 // as submitted.
-func (s *Server) liveChat(r *http.Request, conversationID, heading, transcript, voiceContext string, settings liveSettings, deliveryID string) *httptest.ResponseRecorder {
+func (s *Server) liveChat(r *http.Request, conversationID, heading, transcript, voiceContext, reference string, settings liveSettings, deliveryID string) *httptest.ResponseRecorder {
 	// The speech and its verbatim exchange stay visible to both the user and
 	// the backend. The prefix makes even a spoken slash command ordinary text.
 	message := heading + "\n" + transcript
-	if strings.TrimSpace(voiceContext) != "" {
-		message += liveVoiceExchange + voiceContext
-	}
+	message += voiceContext + reference
 	body, err := json.Marshal(struct {
 		Message string `json:"message"`
 		liveSettings
@@ -70,7 +73,11 @@ func (s *Server) handleLiveMessage(w http.ResponseWriter, r *http.Request, conve
 		http.Error(w, "transcript is required", http.StatusBadRequest)
 		return
 	}
-	recorder := s.liveChat(r, conversationID, "Spoken request:", req.Transcript, req.VoiceContext, req.liveSettings, uuid.NewString())
+	voiceContext := ""
+	if strings.TrimSpace(req.VoiceContext) != "" {
+		voiceContext = liveVoiceExchangeUnnumbered + req.VoiceContext
+	}
+	recorder := s.liveChat(r, conversationID, "Spoken request:", req.Transcript, voiceContext, "", req.liveSettings, uuid.NewString())
 	for k, v := range recorder.Header() {
 		w.Header()[k] = v
 	}

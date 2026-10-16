@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -120,55 +121,56 @@ func TestLiveVoiceContext(t *testing.T) {
 		{
 			"verbatim turns labelled by speaker, newest last",
 			[]liveFragment{userSaid("there's a typo. ", 0, 500), userSaid(" in README", 500, 900), liveSaid("Which file?", 1000, 1500), userSaid("yes, that one", 2000, 2500)},
-			4, "USER: there's a typo.  in README\nLIVE: Which file?\nUSER: yes, that one",
+			4, exchange(1, 4, "USER: there's a typo.  in README\nLIVE: Which file?\nUSER: yes, that one"),
 		},
 		{
 			"one line per turn, not per fragment",
 			[]liveFragment{userSaid("Hello", 100, 400), userSaid(" there", 400, 700), liveSaid("Hi!", 900, 1200), userSaid("Check", 5000, 5300), userSaid(" README", 5300, 5700)},
-			5, "USER: Hello there\nLIVE: Hi!\nUSER: Check README",
+			5, exchange(1, 5, "USER: Hello there\nLIVE: Hi!\nUSER: Check README"),
 		},
-		{"the last six turns", sentences, 8, strings.Join(want, "\n")},
+		{"the last six turns", sentences, 8, exchange(3, 8, strings.Join(want, "\n"))},
 		{
 			"file names stay whole",
 			[]liveFragment{userSaid("Wait.  I meant README.md, not readme.txt.", 0, 1000), liveSaid("Got it!", 1200, 1400)},
-			2, "USER: Wait.  I meant README.md, not readme.txt.\nLIVE: Got it!",
+			2, exchange(1, 2, "USER: Wait.  I meant README.md, not readme.txt.\nLIVE: Got it!"),
 		},
 		{
 			// A request Live acknowledged without delegating reaches the
 			// next delegation; already delegated speech is left out.
 			"everything since the previous delegation",
 			append([]liveFragment{userSaid("Earlier task.", -2000, -1000)}, missed...),
-			1, "USER: Keep the message button on the left.\nLIVE: Sure, I'll keep that.\nUSER: Okay.\nLIVE: Anything else?\nUSER: Hmm.\nLIVE: Take your time.\nUSER: Can you delegate that?",
+			1, exchange(2, 8, "USER: Keep the message button on the left.\nLIVE: Sure, I'll keep that.\nUSER: Okay.\nLIVE: Anything else?\nUSER: Hmm.\nLIVE: Take your time.\nUSER: Can you delegate that?"),
 		},
-		{"at least the recent turns when nothing is new", missed[5:], 2, "LIVE: Take your time.\nUSER: Can you delegate that?"},
-		{"a delegation splits a turn", []liveFragment{userSaid("Run tests.", 0, 500), userSaid("Lint it.", 600, 900)}, 1, "USER: Run tests.\nUSER: Lint it."},
+		{"at least the recent turns when nothing is new", missed[5:], 2, exchange(1, 2, "LIVE: Take your time.\nUSER: Can you delegate that?")},
+		{"a delegation splits a turn", []liveFragment{userSaid("Run tests.", 0, 500), userSaid("Lint it.", 600, 900)}, 1, exchange(1, 2, "USER: Run tests.\nUSER: Lint it.")},
 		{
 			"a long fresh response stays whole",
 			[]liveFragment{userSaid("Run tests.", 0, 500), liveSaid(strings.Repeat("界", 6000), 600, 7000)},
-			0, "USER: Run tests.\nLIVE: " + strings.Repeat("界", 6000),
+			0, exchange(1, 2, "USER: Run tests.\nLIVE: "+strings.Repeat("界", 6000)),
 		},
 		{
 			"older context gives way to a long fresh exchange",
 			[]liveFragment{liveSaid(strings.Repeat("old ", 2000), 0, 1000), userSaid("Run tests.", 2000, 2500), liveSaid(strings.Repeat("界", 6000), 2600, 7000)},
-			1, "USER: Run tests.\nLIVE: " + strings.Repeat("界", 6000),
+			1, exchange(2, 3, "USER: Run tests.\nLIVE: "+strings.Repeat("界", 6000)),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := liveVoiceContext(tt.speech, tt.since); got != tt.want {
+			if got := liveVoiceContext(1, numbered(tt.speech...), tt.since); got != tt.want {
 				t.Errorf("context =\n%s\nwant\n%s", got, tt.want)
 			}
 		})
 	}
-	long := liveVoiceContext([]liveFragment{userSaid(strings.Repeat("a", 6000), 0, 1)}, 1)
-	if len(long) != liveContextChars || !strings.HasSuffix(long, "aaa") {
+	long := liveVoiceContext(1, numbered(userSaid(strings.Repeat("a", 6000), 0, 1)), 1)
+	if _, long, _ = strings.Cut(long, ":\n"); len(long) != liveContextChars || !strings.HasSuffix(long, "aaa") {
 		t.Errorf("context is not bounded to its last %d chars: %d", liveContextChars, len(long))
 	}
-	mixed := liveVoiceContext([]liveFragment{
+	mixed := liveVoiceContext(1, numbered(
 		liveSaid(strings.Repeat("old ", 2000), 0, 1000),
 		userSaid("Run tests.", 2000, 2500),
 		liveSaid("I'll run them.", 2600, 3000),
-	}, 1)
-	if len(mixed) != liveContextChars || !strings.HasSuffix(mixed, "\nUSER: Run tests.\nLIVE: I'll run them.") {
+	), 1)
+	head, mixed, _ := strings.Cut(mixed, ":\n")
+	if len(mixed) != liveContextChars || !strings.HasSuffix(mixed, "\nUSER: Run tests.\nLIVE: I'll run them.") || head != liveVoiceExchange+"1 Voice Exchange [Captions 1-3] (for context only)" {
 		t.Error("older context must stay bounded without trimming the fresh exchange")
 	}
 }
@@ -238,7 +240,7 @@ func dialogueRow(typ, text string, final bool, userData string) generated.Messag
 func TestLiveDialogue(t *testing.T) {
 	toolResult, _ := json.Marshal(llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeToolResult, ToolUseID: "tool", ToolResult: []llm.Content{llm.StringContent("TOOL OUTPUT")}}}})
 	toolRaw := string(toolResult)
-	spoken := dialogueRow("user", "Spoken request:\nlint it"+liveVoiceExchange+"USER: lint it\nLIVE: Sure.", false, "")
+	spoken := dialogueRow("user", "Spoken request:\nlint it"+exchange(1, 2, "USER: lint it\nLIVE: Sure."), false, "")
 	rows := []generated.Message{
 		dialogueRow("user", "Please fix the tests", false, ""),
 		dialogueRow("user", "carried request", false, `{"compaction_carried":"true"}`),
@@ -277,4 +279,18 @@ func TestLiveDialogue(t *testing.T) {
 	if _, _, _, err := liveDialogue(generated.Message{Type: "agent", LlmData: &bad}); err == nil {
 		t.Error("undecodable message is not an error")
 	}
+}
+
+// numbered numbers fragments as a call would, from 1.
+func numbered(fragments ...liveFragment) []liveFragment {
+	out := slices.Clone(fragments)
+	for i := range out {
+		out[i].n = i + 1
+	}
+	return out
+}
+
+// exchange is the voice context covering deltas from through to.
+func exchange(from, to int, lines string) string {
+	return fmt.Sprintf("%s1 Voice Exchange [Captions %d-%d] (for context only):\n%s", liveVoiceExchange, from, to, lines)
 }

@@ -51,6 +51,17 @@ type Conversation struct {
 	ExternalEndpoint       *string   `json:"external_endpoint"`
 }
 
+type LiveCallTranscript struct {
+	ConversationID string    `json:"conversation_id"`
+	Call           int64     `json:"call"`
+	N              int64     `json:"n"`
+	User           bool      `json:"user"`
+	Text           string    `json:"text"`
+	StartMs        float64   `json:"start_ms"`
+	EndMs          float64   `json:"end_ms"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 type McpOauth struct {
 	ServerName string    `json:"server_name"`
 	Client     string    `json:"client"`

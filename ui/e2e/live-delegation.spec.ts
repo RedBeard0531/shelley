@@ -125,7 +125,7 @@ test("a delegated question reaches the chat, and its reply reaches Live", async 
   }
   const message = page.getByTestId("message").filter({ hasText: "Spoken request:\nHello echo: why is this so slow" });
   await expect(message).toHaveCount(1);
-  await expect(message).toContainText("Voice exchange (for context only):\nUSER: Hello\nLIVE: Hey there!\nUSER: echo: why is this so slow");
+  await expect(message).toContainText("Call #1 Voice Exchange [Captions 1-3] (for context only):\nUSER: Hello\nLIVE: Hey there!\nUSER: echo: why is this so slow");
   expect(sessions).toHaveLength(1);
   expect(sessions[0]).not.toHaveProperty("conversation_options");
   expect(relayed).not.toContain("session.started");

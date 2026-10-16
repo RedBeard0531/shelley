@@ -195,6 +195,9 @@ func (s *Server) handleLiveSession(w http.ResponseWriter, r *http.Request, conve
 		http.Error(w, "Invalid Live session response", http.StatusBadGateway)
 		return
 	}
-	s.startLiveCall(r, conversationID, result.Session.ID, lastSeq, offer.liveSettings)
+	if err := s.startLiveCall(r, conversationID, result.Session.ID, lastSeq, offer.liveSettings); err != nil {
+		s.internalError(w, "Failed to start the call", err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, result)
 }

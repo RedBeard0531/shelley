@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,9 +56,18 @@ func (l *liveCalls) get(conversationID, sessionID string) *liveCall {
 // startLiveCall begins delegation for a Live session that holds the
 // conversation up to initialSeq. Its tasks go through chat as r's user,
 // with a draft's settings until the draft is promoted.
-func (s *Server) startLiveCall(r *http.Request, conversationID, sessionID string, initialSeq int64, settings liveSettings) {
+func (s *Server) startLiveCall(r *http.Request, conversationID, sessionID string, initialSeq int64, settings liveSettings) error {
+	var call int64
+	err := s.db.QueriesTx(r.Context(), func(q *generated.Queries) error {
+		var err error
+		call, err = q.CreateLiveCall(r.Context(), conversationID)
+		return err
+	})
+	if err != nil {
+		return err
+	}
 	header := r.Header.Clone()
-	deliver := func(ctx context.Context, heading, transcript, voiceContext, deliveryID string) (liveReceipt, error) {
+	deliver := func(ctx context.Context, heading, transcript, voiceContext, deliveryID string, through int) (liveReceipt, error) {
 		conversation, err := s.db.GetConversationByID(ctx, conversationID)
 		if err != nil {
 			return liveReceipt{}, fmt.Errorf("Failed to deliver speech to Shelley: %w", err)
@@ -70,7 +80,8 @@ func (s *Server) startLiveCall(r *http.Request, conversationID, sessionID string
 			return liveReceipt{}, err
 		}
 		req.Header = header.Clone()
-		recorder := s.liveChat(req, conversationID, heading, transcript, voiceContext, settings, deliveryID)
+		reference := liveTranscriptReference(call)
+		recorder := s.liveChat(req, conversationID, heading, transcript, voiceContext, reference, settings, deliveryID)
 		var receipt liveReceipt
 		if recorder.Code != http.StatusAccepted || json.Unmarshal(recorder.Body.Bytes(), &receipt) != nil {
 			detail := strings.TrimSpace(recorder.Body.String())
@@ -81,9 +92,25 @@ func (s *Server) startLiveCall(r *http.Request, conversationID, sessionID string
 		}
 		return receipt, nil
 	}
-	c := newLiveCall(sessionID, conversationID, initialSeq, deliver, s.logger)
+	save := func(ctx context.Context, fragments []liveFragment) error {
+		return s.db.QueriesTx(ctx, func(q *generated.Queries) error {
+			for _, f := range fragments {
+				err := q.AppendLiveCallTranscript(ctx, generated.AppendLiveCallTranscriptParams{
+					ConversationID: conversationID, Call: call, N: int64(f.n), User: f.user,
+					Text: f.text, StartMs: f.startMs, EndMs: f.endMs,
+				})
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	c := newLiveCall(sessionID, conversationID, initialSeq, deliver, save, s.logger)
+	c.call = call
 	s.liveCalls.add(c)
 	go s.watchLiveCall(c, initialSeq)
+	return nil
 }
 
 // watchLiveCall feeds the call the conversation's rows after seq as they
@@ -241,4 +268,57 @@ func (s *Server) handleLiveHangUp(w http.ResponseWriter, r *http.Request) {
 		c.end("hung up")
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// liveTranscriptMarker starts the pointer a delegated request carries to its
+// call's saved transcript, numbered as its voice exchange.
+const liveTranscriptMarker = "\n\nFull transcript: "
+
+func liveTranscriptReference(call int64) string {
+	return fmt.Sprintf("%s`shelley client call-transcript %d`", liveTranscriptMarker, call)
+}
+
+// handleLiveTranscript serves a call's saved transcript as plain text, one
+// line per run of a speaker's captions (transcript deltas), numbered by the
+// run's last caption.
+func (s *Server) handleLiveTranscript(w http.ResponseWriter, r *http.Request) {
+	call, err := strconv.ParseInt(r.PathValue("call"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid call", http.StatusBadRequest)
+		return
+	}
+	var rows []generated.LiveCallTranscript
+	err = s.db.Queries(r.Context(), func(q *generated.Queries) error {
+		var err error
+		rows, err = q.ListLiveCallTranscript(r.Context(), generated.ListLiveCallTranscriptParams{
+			ConversationID: r.PathValue("id"), Call: call,
+		})
+		return err
+	})
+	if err != nil {
+		s.internalError(w, "Failed to read the call transcript", err)
+		return
+	}
+	var b strings.Builder
+	for i, row := range rows {
+		if i > 0 && rows[i-1].User == row.User {
+			continue
+		}
+		var text strings.Builder
+		last := row
+		for _, run := range rows[i:] {
+			if run.User != row.User {
+				break
+			}
+			text.WriteString(run.Text)
+			last = run
+		}
+		speaker := "Live"
+		if row.User {
+			speaker = "User"
+		}
+		fmt.Fprintf(&b, "%d %s: %s\n", last.N, speaker, strings.Join(strings.Fields(text.String()), " "))
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	io.WriteString(w, b.String())
 }

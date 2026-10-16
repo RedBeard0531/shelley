@@ -105,7 +105,7 @@ func TestLiveMessageDeliversSpeech(t *testing.T) {
 		t.Fatal(err)
 	}
 	call, message := e.delegate(conv.ConversationID, `{"transcript":"  Why is this so slow still\n","voice_context":"USER: Hello\nLIVE: Hey there!"}`)
-	if message != "Spoken request:\nWhy is this so slow still"+liveVoiceExchange+"USER: Hello\nLIVE: Hey there!" {
+	if message != "Spoken request:\nWhy is this so slow still"+liveVoiceExchangeUnnumbered+"USER: Hello\nLIVE: Hey there!" {
 		t.Fatalf("message = %q", message)
 	}
 	if raw, _ := json.Marshal(call.request.Messages); !strings.Contains(string(raw), "The typo is in live_message.go.") {

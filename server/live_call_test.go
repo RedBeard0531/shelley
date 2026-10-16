@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-type liveDelivery struct{ transcript, voiceContext, deliveryID string }
+type liveDelivery struct{ Transcript, VoiceContext, DeliveryID string }
 
 // liveHarness is a call with a stand-in backend, on synctest's clock.
 type liveHarness struct {
@@ -28,6 +28,11 @@ type liveHarness struct {
 	headings   []string
 	hold       chan struct{} // deliveries wait for it to close, if set
 	deliveryN  int
+	saved      []liveFragment
+	saveErr    error
+	// unsavedAt is, per delivery, its through and the deltas through it
+	// not saved by then.
+	unsavedAt [][2]int
 }
 
 func newLiveHarness(t *testing.T) *liveHarness {
@@ -35,8 +40,15 @@ func newLiveHarness(t *testing.T) *liveHarness {
 		return liveReceipt{Status: "accepted"}, nil
 	}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h.call = newLiveCall("call", "conv", 10, func(ctx context.Context, heading, transcript, voiceContext, deliveryID string) (liveReceipt, error) {
+	h.call = newLiveCall("call", "conv", 10, func(ctx context.Context, heading, transcript, voiceContext, deliveryID string, through int) (liveReceipt, error) {
 		h.mu.Lock()
+		unsaved := through
+		for _, f := range h.saved {
+			if f.n <= through {
+				unsaved--
+			}
+		}
+		h.unsavedAt = append(h.unsavedAt, [2]int{through, unsaved})
 		h.deliveries = append(h.deliveries, liveDelivery{transcript, voiceContext, deliveryID})
 		h.headings = append(h.headings, heading)
 		hold, reply := h.hold, h.reply
@@ -45,13 +57,28 @@ func newLiveHarness(t *testing.T) *liveHarness {
 			<-hold
 		}
 		return reply(transcript)
+	}, func(ctx context.Context, fragments []liveFragment) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.saveErr != nil {
+			return h.saveErr
+		}
+		h.saved = append(h.saved, fragments...)
+		return nil
 	}, logger)
 	h.call.newDeliveryID = func() string {
 		h.deliveryN++
 		return fmt.Sprintf("delivery-%d", h.deliveryN)
 	}
+	h.call.call = 1
 	t.Cleanup(func() { h.call.end("test over") })
 	return h
+}
+
+func (h *liveHarness) savedCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.saved)
 }
 
 // set changes how the backend answers.
@@ -94,7 +121,7 @@ func (h *liveHarness) transcripts() []string {
 	defer h.mu.Unlock()
 	var out []string
 	for _, d := range h.deliveries {
-		out = append(out, d.transcript)
+		out = append(out, d.Transcript)
 	}
 	return out
 }
@@ -180,7 +207,7 @@ func TestLiveCallWaitsForLateSpeechThenDelivers(t *testing.T) {
 		expectEqual(t, "transcripts", h.transcripts(), []string(nil))
 		h.advance(200 * time.Millisecond)
 		expectEqual(t, "deliveries", h.deliveries, []liveDelivery{{
-			"Please run the unit tests.", "LIVE: Hi, what can I do?\nUSER: Please run the unit tests.", "delivery-1",
+			"Please run the unit tests.", exchange(1, 3, "LIVE: Hi, what can I do?\nUSER: Please run the unit tests."), "delivery-1",
 		}})
 		expectEqual(t, "instructions", h.instructions(), []string{
 			"activity: true",
@@ -206,7 +233,7 @@ func TestLiveCallOutputDeltasExtendTheQuietPeriod(t *testing.T) {
 		expectEqual(t, "still settling", h.transcripts(), []string(nil))
 		h.advance(time.Nanosecond)
 		expectEqual(t, "deliveries", h.deliveries, []liveDelivery{{
-			"Run the tests", "USER: Run the tests\nLIVE: I'll hand that off.", "delivery-1",
+			"Run the tests", exchange(1, 3, "USER: Run the tests\nLIVE: I'll hand that off."), "delivery-1",
 		}})
 		expectEqual(t, "instructions", h.instructions(), []string{
 			"activity: true",
@@ -245,8 +272,8 @@ func TestLiveCallHandoffUsesSettledSnapshot(t *testing.T) {
 				h.say("Also lint it", 4000, 4500)
 				h.set(func() { close(h.hold) })
 				synctest.Wait()
-				if strings.Contains(h.deliveries[0].voiceContext, "finished.") || strings.Contains(h.deliveries[0].voiceContext, "Also lint it") {
-					t.Errorf("late fragments entered earlier snapshot: %q", h.deliveries[0].voiceContext)
+				if strings.Contains(h.deliveries[0].VoiceContext, "finished.") || strings.Contains(h.deliveries[0].VoiceContext, "Also lint it") {
+					t.Errorf("late fragments entered earlier snapshot: %q", h.deliveries[0].VoiceContext)
 				}
 				accepted := "The backend accepted this task: "
 				if status == "queued" {
@@ -263,8 +290,8 @@ func TestLiveCallHandoffUsesSettledSnapshot(t *testing.T) {
 				h.delegate("d2", 4500)
 				h.advance(liveQuiet)
 				expectEqual(t, "transcripts", h.transcripts(), []string{"Run the tests", "Also lint it"})
-				if !strings.Contains(h.deliveries[1].voiceContext, "LIVE: finished.\nUSER: Also lint it") {
-					t.Errorf("later exchange lost: %q", h.deliveries[1].voiceContext)
+				if !strings.Contains(h.deliveries[1].VoiceContext, "LIVE: finished.\nUSER: Also lint it") {
+					t.Errorf("later exchange lost: %q", h.deliveries[1].VoiceContext)
 				}
 				expectEqual(t, "next receipt", h.instructions()[5:], []string{
 					"activity: true",
@@ -354,7 +381,7 @@ func TestLiveCallWaitsForLiveResponseToSettlePastDeadline(t *testing.T) {
 		expectEqual(t, "still settling", h.transcripts(), []string(nil))
 		h.advance(time.Nanosecond)
 		expectEqual(t, "complete exchange", h.deliveries, []liveDelivery{{
-			"Run the tests", "USER: Run the tests\nLIVE: " + response.String(), "delivery-1",
+			"Run the tests", exchange(1, 8, "USER: Run the tests\nLIVE: "+response.String()), "delivery-1",
 		}})
 	})
 }
@@ -598,4 +625,46 @@ func TestLiveCallOldResponseDoesNotDisablePendingCapture(t *testing.T) {
 			})
 		})
 	}
+}
+
+// The transcript is saved in batches as the call goes on, and through a
+// delegation's speech before the request pointing into it is delivered.
+func TestLiveCallSavesTranscript(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.liveSays("Hi, what can I do?", 0, 900)
+		h.say("Please run", 5000, 5600)
+		h.advance(liveSaveDelay - time.Millisecond)
+		expectEqual(t, "saved before the delay", h.savedCount(), 0)
+		h.advance(time.Millisecond)
+		expectEqual(t, "saved after the delay", h.savedCount(), 2)
+
+		h.delegate("d1", 5600.4)
+		h.say(" the unit tests.", 5600, 6400)
+		h.advance(liveQuiet)
+		expectEqual(t, "through, unsaved at delivery", h.unsavedAt, [][2]int{{3, 0}})
+
+		h.liveSays("On it.", 7000, 7400)
+		h.call.end("hung up")
+		expectEqual(t, "saved at hang-up", h.savedCount(), 4)
+	})
+}
+
+// A request is not delivered pointing at a transcript that failed to save;
+// the deltas are kept for the next save.
+func TestLiveCallTranscriptSaveFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newLiveHarness(t)
+		h.set(func() { h.saveErr = errors.New("disk full") })
+		h.say("Run the tests.", 0, 800)
+		h.delegate("d1", 800)
+		h.advance(liveQuiet)
+		expectEqual(t, "transcripts", h.transcripts(), []string(nil))
+		if got := h.instructions(); !slices.Contains(got, "error: Failed to save the call transcript: disk full") {
+			t.Fatalf("instructions = %q", got)
+		}
+		h.set(func() { h.saveErr = nil })
+		h.call.end("hung up")
+		expectEqual(t, "saved after recovery", h.savedCount(), 1)
+	})
 }

@@ -77,7 +77,7 @@ func TestLiveSession(t *testing.T) {
 		{db.MessageTypeUser, llm.StringContent("fix the bug"), nil, false},
 		{db.MessageTypeUser, llm.Content{Type: llm.ContentTypeToolResult, ToolUseID: "t", ToolResult: []llm.Content{llm.StringContent("TOOL SECRET OUTPUT")}}, nil, false},
 		{db.MessageTypeUser, llm.StringContent("subagent secret"), map[string]string{"sender_conversation_id": "child"}, false},
-		{db.MessageTypeUser, llm.StringContent("Spoken request:\nlint it" + liveVoiceExchange + "LIVE: Sure."), nil, false},
+		{db.MessageTypeUser, llm.StringContent("Spoken request:\nlint it" + liveVoiceExchangeUnnumbered + "LIVE: Sure."), nil, false},
 		{db.MessageTypeUser, llm.StringContent("Spoken request:\nqueued lint"), liveDeliveryUserData{DeliveryID: "delivery"}, false},
 		{db.MessageTypeAgent, llm.StringContent("internal progress"), nil, false},
 		{db.MessageTypeAgent, llm.StringContent("fixed it"), nil, true},

@@ -104,22 +104,25 @@ func liveTurnEnd(userEnd float64, all []liveFragment) float64 {
 
 // liveVoiceContext is the exchange since the previous delegation (fragments
 // from index since on), and at least the last few turns, labelled by
-// speaker with fragments kept verbatim. Covering everything since the
+// speaker with fragments kept verbatim, under a heading with the captions
+// (transcript deltas, as numbered in the saved transcript) it covers. Covering everything since the
 // previous delegation carries a request Live acknowledged without
 // delegating into the next delegation.
-func liveVoiceContext(all []liveFragment, since int) string {
+func liveVoiceContext(call int64, all []liveFragment, since int) string {
 	type turn struct {
 		user bool
 		text string
 		last int
+		from int // the turn's deltas, as numbered in the saved transcript
+		to   int
 	}
 	var turns []turn
 	for i, f := range all {
 		if n := len(turns); n > 0 && turns[n-1].user == f.user && i != since {
 			turns[n-1].text += f.text
-			turns[n-1].last = i
+			turns[n-1].last, turns[n-1].to = i, f.n
 		} else {
-			turns = append(turns, turn{f.user, f.text, i})
+			turns = append(turns, turn{f.user, f.text, i, f.n, f.n})
 		}
 	}
 	fresh := len(turns)
@@ -143,7 +146,11 @@ func liveVoiceContext(all []liveFragment, since int) string {
 	if r := []rune(context); len(r) > limit {
 		context = string(r[len(r)-limit:])
 	}
-	return context
+	if context == "" {
+		return ""
+	}
+	kept := turns[len(turns)-1-strings.Count(context, "\n"):]
+	return fmt.Sprintf("%s%d Voice Exchange [Captions %d-%d] (for context only):\n%s", liveVoiceExchange, call, kept[0].from, kept[len(kept)-1].to, context)
 }
 
 var liveWord = regexp.MustCompile(`[\p{L}\p{N}]+`)
@@ -252,5 +259,7 @@ func liveDialogue(row generated.Message) (user bool, text, full string, err erro
 	// The exchange stays visible in chat and in the backend's request, but
 	// replaying it to Live would attribute Live's own speech to the user.
 	task, _, _ := strings.Cut(full, liveVoiceExchange)
+	task, _, _ = strings.Cut(task, liveVoiceExchangeUnnumbered)
+	task, _, _ = strings.Cut(task, liveTranscriptMarker)
 	return true, strings.TrimSpace(task), full, nil
 }

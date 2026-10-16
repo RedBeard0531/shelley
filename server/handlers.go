@@ -860,6 +860,7 @@ func (s *Server) registerConversationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/conversation/{id}/live-session/{session}/stream", s.handleLiveStream)
 	mux.HandleFunc("POST /api/conversation/{id}/live-session/{session}/events", s.handleLiveEvents)
 	mux.HandleFunc("DELETE /api/conversation/{id}/live-session/{session}", s.handleLiveHangUp)
+	mux.HandleFunc("GET /api/conversation/{id}/call/{call}/transcript", s.handleLiveTranscript)
 	mux.HandleFunc("POST /api/conversation/{id}/hooks", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRegisterConversationHook(w, r, r.PathValue("id"))
 	})

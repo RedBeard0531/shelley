@@ -105,7 +105,7 @@ func (c *liveCall) flushContinuation(t *liveTail) {
 		c.taken[n] = true
 	}
 	through := ordinals[len(ordinals)-1]
-	voiceContext := liveVoiceContext(fragments, 0)
+	voiceContext := liveVoiceContext(c.call, fragments, 0)
 	deliveryID := c.newDeliveryID()
 	c.enqueue(liveJob{keepAfterEnd: true, run: func() {
 		c.deliverTask(t, "Spoken request (continued):", speech, voiceContext, through, ordinals, deliveryID, true)

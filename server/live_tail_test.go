@@ -22,11 +22,11 @@ func TestLiveTranscriptKeepsLateLiveForNextHandoff(t *testing.T) {
 		h.advance(liveQuiet)
 		expectEqual(t, "tasks", h.transcripts(), []string{"Cap the panel", "Run tests"})
 		expectEqual(t, "ordinary handoffs", h.headings, []string{"Spoken request:", "Spoken request:"})
-		if strings.Contains(h.deliveries[0].voiceContext, "panel doesn't get too tall") {
-			t.Fatalf("late Live text rewrote first handoff: %q", h.deliveries[0].voiceContext)
+		if strings.Contains(h.deliveries[0].VoiceContext, "panel doesn't get too tall") {
+			t.Fatalf("late Live text rewrote first handoff: %q", h.deliveries[0].VoiceContext)
 		}
-		if !strings.Contains(h.deliveries[1].voiceContext, "LIVE: panel doesn't get too tall.\nUSER: Run tests") {
-			t.Fatalf("late Live text missing from next handoff: %q", h.deliveries[1].voiceContext)
+		if !strings.Contains(h.deliveries[1].VoiceContext, "LIVE: panel doesn't get too tall.\nUSER: Run tests") {
+			t.Fatalf("late Live text missing from next handoff: %q", h.deliveries[1].VoiceContext)
 		}
 	})
 }
@@ -99,7 +99,7 @@ func TestLiveTranscriptContinuationConsumesOnlySparseUserOrdinals(t *testing.T) 
 		expectEqual(t, "sparse continuation", handoffs[1].Fragments, []int{3, 5})
 		expectEqual(t, "continuation through", handoffs[1].Through, 5)
 		expectEqual(t, "stable distinct delivery IDs", []string{handoffs[0].DeliveryID, handoffs[1].DeliveryID}, []string{"delivery-1", "delivery-2"})
-		if strings.Contains(h.deliveries[1].voiceContext, "Run lint") {
+		if strings.Contains(h.deliveries[1].VoiceContext, "Run lint") {
 			t.Fatal("following utterance entered continuation context")
 		}
 		h.delegate("d2", 5500)
