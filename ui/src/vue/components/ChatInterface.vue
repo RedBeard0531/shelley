@@ -4877,6 +4877,10 @@ watch(
       const wasCatchingUp = catchingUp;
       catchingUp = false;
       const pending = pendingScroll;
+      // A saved reading position waits for the history: against an empty
+      // list it would clamp to the top, which reads as the bottom, and
+      // following the bottom would then carry it away as the history lands.
+      if (pending != null && messages.value.length === 0) return;
       if (pending !== undefined) {
         pendingScroll = undefined;
         if (pending != null) {
