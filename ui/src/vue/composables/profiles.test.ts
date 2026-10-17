@@ -4,7 +4,7 @@ import type { Settings } from "../../types";
 import { DEFAULT_COMPACT_NUDGE_TOKENS } from "../components/autoCompaction";
 
 (globalThis as { window?: unknown }).window = { __SHELLEY_INIT__: { default_model: "big" } };
-const { settingsDifferences } = await import("./profiles");
+const { settingsDifferences, toolOn, withTool } = await import("./profiles");
 
 function assertEqual(actual: unknown, expected: unknown, message: string): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -27,7 +27,8 @@ const models = [
 const tools = [
   { name: "bash", default_on: true },
   { name: "browser", default_on: true },
-  { name: "compact_in_place", default_on: false },
+  { name: "compact_in_place", default_on: true },
+  { name: "message_user", default_on: false },
 ];
 const base: Settings = {
   model: "",
@@ -49,12 +50,12 @@ run("defaults spelled out are no difference", () => {
       {
         model: "big",
         thinking_level: "medium",
-        tool_overrides: { bash: "on" },
-        compact_nudge_tokens: 999,
+        tool_overrides: { bash: "on", compact_in_place: "on" },
+        compact_nudge_tokens: DEFAULT_COMPACT_NUDGE_TOKENS,
       },
     ),
     [],
-    "unset model, reasoning, tool, and nudge (compaction off)",
+    "unset model, reasoning, tools, and nudge",
   );
 });
 
@@ -65,7 +66,7 @@ run("each difference is named, from the effective values", () => {
       {
         model: "small",
         tool_overrides: { browser: "off", compact_in_place: "on" },
-        compact_nudge_tokens: 200_000,
+        compact_nudge_tokens: 250_000,
         system_prompt: "Hi.",
       },
     ),
@@ -73,7 +74,7 @@ run("each difference is named, from the effective values", () => {
       { kind: "model", from: "big", to: "small" },
       { kind: "reasoning", from: "medium", to: "low" },
       { kind: "tool", name: "browser", on: false },
-      { kind: "nudge", from: DEFAULT_COMPACT_NUDGE_TOKENS, to: 200_000 },
+      { kind: "nudge", from: DEFAULT_COMPACT_NUDGE_TOKENS, to: 250_000 },
       { kind: "systemPrompt" },
     ],
     "model, the reasoning it brings, a tool, the nudge, the prompt",
@@ -81,19 +82,26 @@ run("each difference is named, from the effective values", () => {
 });
 
 run("the nudge counts only with compaction on", () => {
+  const off = { tool_overrides: { compact_in_place: "off" as const } };
   assertEqual(
-    diff({}, { tool_overrides: { compact_in_place: "on" }, compact_nudge_tokens: 200_000 }),
+    diff({}, { compact_nudge_tokens: 250_000 }),
+    [{ kind: "nudge", from: DEFAULT_COMPACT_NUDGE_TOKENS, to: 250_000 }],
+    "a nudge, compaction on by default",
+  );
+  assertEqual(
+    diff(off, { compact_nudge_tokens: 250_000 }),
     [
       { kind: "tool", name: "compact_in_place", on: true },
-      { kind: "nudge", from: DEFAULT_COMPACT_NUDGE_TOKENS, to: 200_000 },
+      { kind: "nudge", from: DEFAULT_COMPACT_NUDGE_TOKENS, to: 250_000 },
     ],
     "turning compaction on, with a nudge",
   );
   assertEqual(
-    diff({ tool_overrides: { compact_in_place: "on" }, compact_nudge_tokens: 200_000 }, {}),
+    diff({ compact_nudge_tokens: 250_000 }, { ...off, compact_nudge_tokens: 250_000 }),
     [{ kind: "tool", name: "compact_in_place", on: false }],
     "turning compaction off",
   );
+  assertEqual(diff(off, { ...off, compact_nudge_tokens: 999 }), [], "a nudge, compaction off");
 });
 
 run("reasoning means nothing to a model without it", () => {
@@ -134,5 +142,33 @@ run("idle compaction remains visible when the context tool is off", () => {
     diff({}, { idle_compaction_prompt: "Keep dates." }),
     [{ kind: "idleCompactionPrompt" }],
     "changing the idle compaction prompt",
+  );
+});
+
+run("a tool is on by its override, else by default, as on the server", () => {
+  assertEqual(toolOn({}, "bash", tools), true, "default on");
+  assertEqual(toolOn({}, "message_user", tools), false, "default off");
+  assertEqual(toolOn({ bash: "off" }, "bash", tools), false, "turned off");
+  assertEqual(toolOn({ message_user: "on" }, "message_user", tools), true, "turned on");
+  assertEqual(toolOn({}, "bash", []), false, "not yet listed");
+  assertEqual(toolOn({}, "compact_in_place", []), true, "auto compaction, not yet listed");
+  assertEqual(toolOn({}, "bash", tools, true), false, "all disabled");
+  assertEqual(toolOn({ bash: "on" }, "bash", tools, true), true, "all disabled, but this");
+});
+
+run("turning a tool to its default drops the override", () => {
+  assertEqual(withTool({ bash: "off" }, "bash", true, tools), {}, "back on");
+  assertEqual(withTool({}, "bash", false, tools), { bash: "off" }, "off");
+  assertEqual(withTool({ message_user: "on" }, "message_user", false, tools), {}, "back off");
+  assertEqual(
+    withTool({ bash: "off" }, "message_user", true, tools),
+    { bash: "off", message_user: "on" },
+    "others kept",
+  );
+  assertEqual(withTool({}, "bash", true, tools, true), { bash: "on" }, "all disabled");
+  assertEqual(
+    withTool({ bash: "on" }, "bash", true, tools),
+    { bash: "on" },
+    "already on, spelled out",
   );
 });

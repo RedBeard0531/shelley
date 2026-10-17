@@ -175,14 +175,36 @@ func hasTool(req *llm.Request, name string) bool {
 	return false
 }
 
-func TestCompactInPlaceToolIsOptIn(t *testing.T) {
+// Auto compaction is on by default, and can be turned off.
+func TestCompactInPlaceToolIsOnByDefault(t *testing.T) {
 	t.Parallel()
 	c := newCompactTestConversation(t, db.ConversationOptions{})
 	c.turn("hello")
-	if hasTool(c.ps.GetLastRequest(), claudetool.CompactInPlaceName) || c.systemCardHasTool(claudetool.CompactInPlaceName) {
-		t.Fatal("compact_in_place offered without being enabled")
+	if !hasTool(c.agentRequest(), claudetool.CompactInPlaceName) || !c.systemCardHasTool(claudetool.CompactInPlaceName) {
+		t.Fatal("compact_in_place not offered by default")
+	}
+	c = newCompactTestConversation(t, compactInPlaceOff)
+	c.turn("hello")
+	if hasTool(c.agentRequest(), claudetool.CompactInPlaceName) || c.systemCardHasTool(claudetool.CompactInPlaceName) {
+		t.Fatal("compact_in_place offered though turned off")
 	}
 }
+
+// agentRequest returns the newest request the agent made, which, unlike the
+// slug's after the first turn, offers tools.
+func (c *compactTestConversation) agentRequest() *llm.Request {
+	c.t.Helper()
+	reqs := c.ps.GetRecentRequests()
+	for i := len(reqs) - 1; i >= 0; i-- {
+		if len(reqs[i].Tools) > 0 {
+			return reqs[i]
+		}
+	}
+	c.t.Fatal("no agent request")
+	return nil
+}
+
+var compactInPlaceOff = db.ConversationOptions{ToolOverrides: map[string]string{claudetool.CompactInPlaceName: "off"}}
 
 // TestCompactInPlaceEndToEnd drives the tool through a conversation: the
 // index lists the view, invalid requests come back as tool errors, and a valid
@@ -458,7 +480,7 @@ func TestContextNudger(t *testing.T) {
 	row := func(kind db.MessageType, data string) generated.Message {
 		return generated.Message{Type: string(kind), UserData: &data}
 	}
-	changed := row(db.MessageTypeModelChange, `{"compact_nudge_tokens":250000}`)
+	changed := row(db.MessageTypeModelChange, `{"compact_nudge_tokens":200000}`)
 	nudged := row(db.MessageTypeUser, `{"context_nudge":true}`)
 	unrelated := row(db.MessageTypeModelChange, `{"to":"model-b"}`)
 	for _, tc := range []struct {
@@ -503,8 +525,8 @@ func TestContextNudger(t *testing.T) {
 		{302_000, "Context is 300k."},
 		{320_000, ""},
 		{90_000, ""}, // compacted: re-arms
-		{249_000, ""},
-		{253_000, "Context is 250k."},
+		{199_000, ""},
+		{203_000, "Context is 200k."},
 		{410_000, "Context is 410k."},
 	} {
 		observe(step.tokens)
@@ -972,15 +994,15 @@ func (c *compactTestConversation) options() db.ConversationOptions {
 // compaction, not for an agent that watches its context.
 func TestEnableCompactInPlaceMidConversation(t *testing.T) {
 	t.Parallel()
-	c := newCompactTestConversation(t, db.ConversationOptions{})
+	c := newCompactTestConversation(t, compactInPlaceOff)
 	c.turn("hello")
 	c.turn("bash: echo OUTPUT")
-	if hasTool(c.ps.GetLastRequest(), claudetool.CompactInPlaceName) {
+	if hasTool(c.agentRequest(), claudetool.CompactInPlaceName) {
 		t.Fatal("compact_in_place offered before being enabled")
 	}
 	// Were nudges on, the next turns would cross the first threshold.
 	size := lastContextWindowSize(listMessages(t, c.database, c.id))
-	if err := c.database.UpdateConversationOptions(t.Context(), c.id, db.ConversationOptions{CompactNudgeTokens: int(size) + 100}); err != nil {
+	if err := c.database.UpdateConversationOptions(t.Context(), c.id, db.ConversationOptions{ToolOverrides: compactInPlaceOff.ToolOverrides, CompactNudgeTokens: int(size) + 100}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1044,7 +1066,7 @@ func TestEnableCompactInPlaceMidConversation(t *testing.T) {
 // from under it, so it waits for the turn to end.
 func TestEnableCompactInPlaceRefusesWhileWorking(t *testing.T) {
 	t.Parallel()
-	c := newCompactTestConversation(t, db.ConversationOptions{})
+	c := newCompactTestConversation(t, compactInPlaceOff)
 	c.turn("hello")
 	if w := postChat(t, c.srv, c.id, "bash: sleep 5"); w.Code != http.StatusAccepted {
 		t.Fatalf("chat: got %d: %s", w.Code, w.Body.String())
@@ -1058,7 +1080,7 @@ func TestEnableCompactInPlaceRefusesWhileWorking(t *testing.T) {
 	if w := postEnableCompactInPlace(t, c.srv, c.id); w.Code != http.StatusConflict {
 		t.Fatalf("expected 409 while the agent works, got %d: %s", w.Code, w.Body.String())
 	}
-	if opts := c.options(); opts.ToolOverrides[claudetool.CompactInPlaceName] != "" || c.toolEnabledMarkers() != 0 {
+	if opts := c.options(); opts.ToolOverrides[claudetool.CompactInPlaceName] != "off" || c.toolEnabledMarkers() != 0 {
 		t.Fatalf("enabled while the agent was working: %+v", opts)
 	}
 }

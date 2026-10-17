@@ -59,7 +59,8 @@ database, and we use a SSE endpoint to keep the UI updated.
 
 A profile's `idle_compaction_minutes` makes its top-level conversations compact
 once idle that long after a turn: an idle nudge starts a turn in which the agent
-compacts its own context with `compact_in_place`, which the profile must enable.
+compacts its own context with `compact_in_place`, which must be on (as it is by
+default).
 The nudge's mechanics are global; `idle_compaction_prompt` adds the profile's
 guidance on what to keep.
 New input cancels the pending timer. `cache_keep_warm_minutes` keeps the

@@ -3,14 +3,17 @@ import { createConversationViaAPIWithDetails } from "./helpers";
 
 test.use({ viewport: { width: 1280, height: 800 }, isMobile: false, hasTouch: false });
 
-// Compact in Place is offered even in a conversation started without the
-// compact_in_place tool: the button enables it (without the context nudges),
-// marks that in the log, and then asks the agent to compact.
+// Compact in Place is offered even in a conversation started with the
+// compact_in_place tool off: the button enables it (without the context
+// nudges), marks that in the log, and then asks the agent to compact.
+const toolOff = { conversationOptions: { tool_overrides: { compact_in_place: "off" } } };
+
 test.describe("Compact in Place without the tool", () => {
   test("enables the tool, then asks the agent", async ({ page, request }) => {
     const { conversationId, slug } = await createConversationViaAPIWithDetails(
       request,
       "echo: compact in place later",
+      toolOff,
     );
     await page.goto(`/c/${slug}`);
     await page.locator(".context-usage-label").click();
@@ -33,6 +36,7 @@ test.describe("Compact in Place without the tool", () => {
     const { conversationId, slug } = await createConversationViaAPIWithDetails(
       request,
       "echo: busy",
+      toolOff,
     );
     const chat = await request.post(`/api/conversation/${conversationId}/chat`, {
       data: { message: "bash: sleep 30", model: "predictable" },
@@ -48,4 +52,19 @@ test.describe("Compact in Place without the tool", () => {
     await request.post(`/api/conversation/${conversationId}/cancel`);
     await expect(button).toBeEnabled();
   });
+});
+
+// With the tool on, as it is by default, the button just asks the agent.
+test("Compact in Place with the tool asks the agent", async ({ page, request }) => {
+  const { slug } = await createConversationViaAPIWithDetails(request, "echo: compact now");
+  const enabled: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("enable-compact-in-place")) enabled.push(r.url());
+  });
+  await page.goto(`/c/${slug}`);
+  await page.locator(".context-usage-label").click();
+  await page.getByTestId("compact-in-place-button").click();
+  await expect(page.getByText("Compact your context in place.")).toBeVisible();
+  expect(enabled).toEqual([]);
+  await expect(page.getByTestId("message-modelchange")).toHaveCount(0);
 });

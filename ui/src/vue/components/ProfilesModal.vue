@@ -225,9 +225,9 @@ import ModelPicker from "./ModelPicker.vue";
 import SystemPromptEditor from "./SystemPromptEditor.vue";
 import ToolSettings from "./ToolSettings.vue";
 import { profilesApi } from "../../services/api";
-import { settingsOf, useProfiles } from "../composables/profiles";
+import { settingsOf, toolOn, useProfiles } from "../composables/profiles";
 import { prettyModelLabels } from "../../utils/modelNames";
-import { COMPACT_IN_PLACE_TOOL, DEFAULT_COMPACT_NUDGE_TOKENS } from "./autoCompaction";
+import { COMPACT_IN_PLACE_TOOL } from "./autoCompaction";
 import { serverDefaultModel } from "./selectedModel";
 import { normalizeThinkingLevelForModel, type ThinkingLevel } from "./thinkingLevel";
 import type { Model, Profile, Settings, TemplateProblem } from "../../types";
@@ -306,9 +306,8 @@ function summarize(s: Settings): string {
   if (level) parts.push(`${level} reasoning`);
   const tools = Object.entries(s.tool_overrides);
   if (tools.length) parts.push(tools.map(([name, v]) => `${name} ${v}`).join(", "));
-  if (s.tool_overrides[COMPACT_IN_PLACE_TOOL] === "on") {
-    const nudge = s.compact_nudge_tokens || DEFAULT_COMPACT_NUDGE_TOKENS;
-    parts.push(`compaction nudge ${nudge / 1000}k`);
+  if (s.compact_nudge_tokens && toolOn(s.tool_overrides, COMPACT_IN_PLACE_TOOL, props.tools)) {
+    parts.push(`compaction nudge ${s.compact_nudge_tokens / 1000}k`);
   }
   if (s.idle_compaction_minutes) parts.push(`idle compaction ${s.idle_compaction_minutes} min`);
   if (s.cache_keep_warm_minutes) parts.push(`keep cache warm ${s.cache_keep_warm_minutes} min`);

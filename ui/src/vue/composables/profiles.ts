@@ -26,8 +26,14 @@ export interface SettingsKnob {
   /** How the settings work differently from that profile's; none if they
    *  don't, or if there's no such profile. */
   changes: SettingsDifference[];
-  /** The tools turned on or off against their defaults. */
+  /** The tools turned on or off against their defaults, but for auto
+   *  compaction. */
   toolChanges: SettingsDifference[];
+  /** Whether auto compaction is on; the context size it first nudges the
+   *  agent at; and whether idle compaction, which needs it, keeps it on. */
+  autoCompaction: { on: boolean; nudge: number; needed: boolean };
+  setAutoCompaction: (on: boolean) => void;
+  setCompactNudge: (tokens: number) => void;
   /** Switches to the named profile's settings; to the profile they came
    *  from, it reverts them. */
   selectProfile: (name: string) => Promise<void>;
@@ -74,6 +80,40 @@ export function sameOverrides(
   return ea.length === Object.keys(b).length && ea.every(([k, v]) => b[k] === v);
 }
 
+type ToolDefaults = { name: string; default_on: boolean }[];
+
+/** Whether a tool is on: as overridden, else as it is by default, which
+ *  disable_all_tools makes off, as on the server (IsToolEnabled in
+ *  claudetool/registry.go). Until the tools are listed, only auto compaction
+ *  is on by default. */
+export function toolOn(
+  overrides: Record<string, string>,
+  name: string,
+  tools: ToolDefaults,
+  disableAll = false,
+): boolean {
+  const o = overrides[name];
+  if (o) return o === "on";
+  const listed = tools.find((t) => t.name === name);
+  return !disableAll && (listed ? listed.default_on : name === COMPACT_IN_PLACE_TOOL);
+}
+
+/** The overrides with a tool turned on or off, with no override when that's
+ *  its default; as they were if it already is, however spelled. */
+export function withTool(
+  overrides: Settings["tool_overrides"],
+  name: string,
+  on: boolean,
+  tools: ToolDefaults,
+  disableAll = false,
+): Settings["tool_overrides"] {
+  if (toolOn(overrides, name, tools, disableAll) === on) return overrides;
+  const next = { ...overrides };
+  delete next[name];
+  if (toolOn(next, name, tools, disableAll) !== on) next[name] = on ? "on" : "off";
+  return next;
+}
+
 /** One way settings work differently from others. */
 export type SettingsDifference =
   | { kind: "model"; from: string; to: string }
@@ -95,7 +135,7 @@ export function settingsDifferences(
   from: Settings,
   to: Settings,
   models: Pick<Model, "id" | "supports_reasoning" | "default_reasoning_level">[],
-  tools: { name: string; default_on: boolean }[],
+  tools: ToolDefaults,
 ): SettingsDifference[] {
   const model = (s: Settings) => s.model || serverDefaultModel();
   // null for a model without reasoning, or one not in the catalog; "" for the
@@ -104,10 +144,7 @@ export function settingsDifferences(
     const m = models.find((candidate) => candidate.id === model(s));
     return m?.supports_reasoning ? s.thinking_level || m.default_reasoning_level || "" : null;
   };
-  const on = (s: Settings, tool: string) =>
-    s.tool_overrides[tool]
-      ? s.tool_overrides[tool] === "on"
-      : !!tools.find((t) => t.name === tool)?.default_on;
+  const on = (s: Settings, tool: string) => toolOn(s.tool_overrides, tool, tools);
   // With auto compaction off, a stored nudge is idle: the default stands.
   const nudge = (s: Settings) =>
     (on(s, COMPACT_IN_PLACE_TOOL) && s.compact_nudge_tokens) || DEFAULT_COMPACT_NUDGE_TOKENS;

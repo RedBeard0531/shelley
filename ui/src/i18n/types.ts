@@ -193,9 +193,11 @@ export interface TranslationKeys {
   autoCompaction: string;
   /** The name inside a sentence, as in "auto compaction on". */
   autoCompactionName: string;
+  autoCompactionNeeded: string;
   changeToolOn: string;
   changeToolOff: string;
   changeNudge: string;
+  compactNudgeAt: string;
   changeSystemPrompt: string;
   effortAuto: string;
   modelSwitchBusy: string;

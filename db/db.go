@@ -305,7 +305,7 @@ type ConversationOptions struct {
 	DisableNotifications bool `json:"disable_notifications,omitempty"`
 	// CompactNudgeTokens is the context size at which the agent is first told
 	// the size of its context while the compact_in_place tool is enabled.
-	// Zero means the default (250k).
+	// Zero means the default (200k).
 	CompactNudgeTokens int `json:"compact_nudge_tokens,omitempty"`
 	// IdleCompactionMinutes is the quiet period after a successful turn before
 	// one compaction attempt. Zero disables it; profiles copy it to conversations.

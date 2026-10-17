@@ -5969,7 +5969,8 @@ svg {
   color: white;
 }
 
-.tool-override-choice:disabled {
+.tool-override-choice:disabled,
+.p-select-overlay.model-picker-panel .model-picker-effort-pill:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -16569,9 +16570,9 @@ kbd {
   transform: rotate(180deg);
 }
 
-/* Sections: Reasoning effort, Tools, and Profile below the list, under
-   headings like Model's above it and Recent's in it, which in turn are like
-   the profile editor's. */
+/* Sections: Reasoning effort, Auto compaction, Tools, and Profile below the
+   list, under headings like Model's above it and Recent's in it, which in
+   turn are like the profile editor's. */
 .p-select-overlay.model-picker-panel .model-picker-section {
   padding: 0.5rem 0.75rem;
   border-top: 1px solid var(--border);
@@ -16602,7 +16603,8 @@ kbd {
   font-size: var(--font-size-12);
   overflow-wrap: anywhere;
 }
-.p-select-overlay.model-picker-panel :is(.model-picker-effort-pills, .model-picker-profile-pills) {
+.p-select-overlay.model-picker-panel
+  :is(.model-picker-effort-pills, .model-picker-compaction-pills, .model-picker-profile-pills) {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
@@ -16631,6 +16633,34 @@ kbd {
   color: var(--blue-text);
   border-color: var(--blue-text);
   background: color-mix(in srgb, var(--blue-text) 10%, transparent);
+}
+
+.p-select-overlay.model-picker-panel .model-picker-section-note {
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.p-select-overlay.model-picker-panel .model-picker-compaction {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+}
+.p-select-overlay.model-picker-panel .model-picker-nudge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: var(--font-size-11);
+  white-space: nowrap;
+}
+.p-select-overlay.model-picker-panel .model-picker-nudge select {
+  padding: 0.0625rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: var(--font-size-11);
 }
 
 /* Text actions: Manage…, Edit…, and the profile's Update/Save as new…/

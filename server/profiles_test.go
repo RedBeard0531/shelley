@@ -491,6 +491,29 @@ func TestNewConversationOverridesProfile(t *testing.T) {
 	}
 }
 
+// A nudge spelled out at the default is the default: a conversation started
+// with the UI's 0 from a profile that stores it keeps following the profile.
+func TestDefaultNudgeSpelledOutIsTheProfiles(t *testing.T) {
+	t.Parallel()
+	e := newProfileEnv(t)
+	e.want(201, "POST", "/api/profiles", fmt.Sprintf(`{"name":"Spelled","model":"model-b","compact_nudge_tokens":%d}`, defaultCompactNudgeTokens))
+	var created struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	body := e.want(201, "POST", "/api/conversations/new", `{"message":"hello","cwd":"`+t.TempDir()+`","conversation_options":{"profile":"Spelled","compact_nudge_tokens":0}}`)
+	if err := json.Unmarshal([]byte(body), &created); err != nil {
+		t.Fatal(err)
+	}
+	e.waitTurn(created.ConversationID, 0)
+	conv, err := e.database.GetConversationByID(t.Context(), created.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if db.ParseConversationOptions(conv.ConversationOptions).SettingsEdited {
+		t.Fatal("the default nudge, spelled differently, edited the profile's settings")
+	}
+}
+
 // A draft saved without a model starts on its profile's when sent without
 // one too.
 func TestDraftWithoutModelTakesProfiles(t *testing.T) {
@@ -634,7 +657,7 @@ func TestProfileIdlePolicyIsCopiedAndCanBeDisabled(t *testing.T) {
 		fmt.Sprintf(`{"name":"Overflow","idle_compaction_minutes":%d}`, maxIdleCompactionMinutes+1),
 		`{"name":"Cold","cache_keep_warm_minutes":-1}`,
 		fmt.Sprintf(`{"name":"Endless","cache_keep_warm_minutes":%d}`, maxIdleCompactionMinutes+1),
-		`{"name":"Toolless","idle_compaction_minutes":7}`,
+		`{"name":"Toolless","idle_compaction_minutes":7,"tool_overrides":{"compact_in_place":"off"}}`,
 	} {
 		e.want(400, "POST", "/api/profiles", invalid)
 	}

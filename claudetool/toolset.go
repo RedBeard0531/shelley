@@ -71,8 +71,8 @@ type ToolSetConfig struct {
 	// ParentMessenger, if set, provides the message_parent tool. The server
 	// sets it only for delegated subagents.
 	ParentMessenger ParentMessenger
-	// InPlaceCompactor, if set, provides the compact_in_place tool (off
-	// unless enabled by ToolOverrides).
+	// InPlaceCompactor, if set, provides the compact_in_place tool (on
+	// unless ToolOverrides turns it off).
 	InPlaceCompactor InPlaceCompactor
 	// UserMessageFinder, if set, provides the message_user tool (off unless
 	// enabled by ToolOverrides). The server sets it only for top-level

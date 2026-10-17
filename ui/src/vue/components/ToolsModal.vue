@@ -3,7 +3,12 @@
      marker, however many rows were clicked. -->
 <template>
   <Modal :is-open="isOpen" title="Tools" class-name="modal-wide" @close="emit('close')">
-    <ToolSettings v-model:overrides="overrides" v-model:nudge="nudge" :tools="tools" />
+    <ToolSettings
+      v-model:overrides="overrides"
+      v-model:nudge="nudge"
+      :tools="tools"
+      :disable-all="disableAllTools"
+    />
     <template #footer>
       <span class="settings-modal-error" role="alert">{{
         error || (locked ? "Applying waits for the agent to finish." : "")
@@ -28,6 +33,8 @@ const props = defineProps<{
   isOpen: boolean;
   tools: { name: string; summary: string; default_on: boolean }[];
   toolOverrides: Overrides;
+  /** Whether the conversation started with -no-tools. */
+  disableAllTools: boolean;
   /** 0 means the default. */
   compactNudgeTokens: number;
   applyLabel: string;

@@ -3,7 +3,7 @@
      trigger reads "Claude Opus 4.8 · medium" and opens a single popover of
      sections with like headings: Model (with Manage… and refresh), search,
      recent combinations, the model list, and Reasoning effort; as the
-     settings knob, Tools and Profile too.
+     settings knob, Auto compaction, Tools and Profile too.
 
      Every choice in the panel (a model, a pill, a profile action) keeps it
      open, so one visit can adjust several settings; it closes on a click
@@ -210,6 +210,55 @@
           </div>
         </section>
         <template v-if="knob">
+          <section class="model-picker-section" data-testid="model-picker-auto-compaction">
+            <div class="model-picker-section-head">
+              <span :id="compactionLabelId">{{ t("autoCompaction") }}</span>
+              <span
+                v-if="knob.autoCompaction.needed"
+                :id="compactionNoteId"
+                class="model-picker-section-note"
+                >{{ t("autoCompactionNeeded") }}</span
+              >
+            </div>
+            <div class="model-picker-compaction">
+              <div
+                class="model-picker-compaction-pills"
+                role="radiogroup"
+                :aria-labelledby="compactionLabelId"
+              >
+                <button
+                  v-for="on in [true, false]"
+                  :key="String(on)"
+                  type="button"
+                  role="radio"
+                  :aria-checked="knob.autoCompaction.on === on"
+                  :class="`model-picker-effort-pill${knob.autoCompaction.on === on ? ' active' : ''}`"
+                  :disabled="!on && knob.autoCompaction.needed"
+                  :aria-describedby="
+                    !on && knob.autoCompaction.needed ? compactionNoteId : undefined
+                  "
+                  @click="setAutoCompaction(on)"
+                >
+                  {{ t(on ? "on" : "off") }}
+                </button>
+              </div>
+              <label v-if="knob.autoCompaction.on" class="model-picker-nudge">
+                {{ t("compactNudgeAt") }}
+                <select
+                  :value="knob.autoCompaction.nudge"
+                  @change="setCompactNudge(Number(($event.target as HTMLSelectElement).value))"
+                >
+                  <option
+                    v-for="n in compactNudgeChoices(knob.autoCompaction.nudge)"
+                    :key="n"
+                    :value="n"
+                  >
+                    {{ n / 1000 }}k
+                  </option>
+                </select>
+              </label>
+            </div>
+          </section>
           <section class="model-picker-section" data-testid="model-picker-tools">
             <div class="model-picker-section-head">
               <span>{{ t("toolsLabel") }}</span>
@@ -341,7 +390,7 @@ import type { Model } from "../../types";
 import { ConversationsListKey } from "../composables/subagentLive";
 import { recentModelCombinations, type RecentThinkingLevel } from "./recentModelCombinations";
 import type { SettingsDifference, SettingsKnob } from "../composables/profiles";
-import { COMPACT_IN_PLACE_TOOL } from "./autoCompaction";
+import { COMPACT_IN_PLACE_TOOL, compactNudgeChoices } from "./autoCompaction";
 
 type PickerModel = Model & { label: string };
 type PickerOption = PickerModel & {
@@ -432,6 +481,8 @@ mobileMq.addEventListener("change", onMobileChange);
 onBeforeUnmount(() => mobileMq.removeEventListener("change", onMobileChange));
 const effortLabelId = `model-picker-effort-label-${Math.random().toString(36).slice(2, 8)}`;
 const profileLabelId = `${effortLabelId}-profile`;
+const compactionLabelId = `${effortLabelId}-compaction`;
+const compactionNoteId = `${compactionLabelId}-note`;
 const conversations = inject(ConversationsListKey);
 if (!conversations) throw new Error("ModelPicker requires ConversationsListKey");
 
@@ -672,6 +723,16 @@ function selectEffort(level: ThinkingLevel) {
   // default, changes nothing.
   if (props.disabled || level === effectiveEffort.value) return;
   emit("thinkingChange", level);
+}
+
+// Unlike the effort pills, the choice shown goes out too: until an earlier
+// change comes back, it's not the one in effect, and picking it again undoes
+// that change. The knob drops a choice already in effect.
+function setAutoCompaction(on: boolean) {
+  if (!props.disabled) props.knob?.setAutoCompaction(on);
+}
+function setCompactNudge(tokens: number) {
+  if (!props.disabled) props.knob?.setCompactNudge(tokens);
 }
 
 function toggleMore() {

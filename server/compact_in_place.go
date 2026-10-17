@@ -31,7 +31,7 @@ import (
 const (
 	// defaultCompactNudgeTokens is where the first context nudge fires when
 	// ConversationOptions.CompactNudgeTokens is unset.
-	defaultCompactNudgeTokens = 250_000
+	defaultCompactNudgeTokens = 200_000
 	// compactNudgeStep is the distance between later nudges.
 	compactNudgeStep = 50_000
 	// maxCollapseTokens bounds the history one collapse may cover, so that a

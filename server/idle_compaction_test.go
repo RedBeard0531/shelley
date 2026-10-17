@@ -295,6 +295,28 @@ func TestIdleCompactionRequiresEnabledPolicyAndTopLevel(t *testing.T) {
 	}
 }
 
+// TestIdleCompactionNeedsTheTool: a conversation with compact_in_place off,
+// here by -no-tools, arms no idle compaction, whatever its profile says.
+func TestIdleCompactionNeedsTheTool(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := NewTestHarness(t)
+		defer stopActiveConversationLoops(h.server)
+		h.convOpts = &db.ConversationOptions{DisableNotifications: true, DisableAllTools: true, IdleCompactionMinutes: 3}
+		h.NewConversation("echo: keep the garden plan", "")
+		synctest.Wait()
+		cm, err := h.server.getOrCreateConversationManager(t.Context(), h.convID, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cm.mu.Lock()
+		armed := cm.idleCompactionTimer != nil
+		cm.mu.Unlock()
+		if armed {
+			t.Fatal("idle compaction armed without compact_in_place")
+		}
+	})
+}
+
 // TestIdleCompactionUserWritesDuringIdleTurn: a message arriving during the
 // idle turn reaches the model in it, and that exchange arms the next idle
 // cycle.

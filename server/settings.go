@@ -82,12 +82,14 @@ func orEmpty(m map[string]string) map[string]string {
 	return m
 }
 
+// equal reports whether st and o are the same settings. The default nudge is
+// the same however spelled: the UI sends it as 0.
 func (st Settings) equal(o Settings) bool {
 	return st.Model == o.Model && st.ThinkingLevel == o.ThinkingLevel &&
 		maps.Equal(st.ToolOverrides, o.ToolOverrides) &&
 		st.IdleCompactionMinutes == o.IdleCompactionMinutes && st.IdleCompactionPrompt == o.IdleCompactionPrompt &&
 		st.CacheKeepWarmMinutes == o.CacheKeepWarmMinutes &&
-		st.CompactNudgeTokens == o.CompactNudgeTokens && st.SystemPrompt == o.SystemPrompt
+		compactNudgeTokens(st.CompactNudgeTokens) == compactNudgeTokens(o.CompactNudgeTokens) && st.SystemPrompt == o.SystemPrompt
 }
 
 // applyTo stores cs, except the model, in opts.

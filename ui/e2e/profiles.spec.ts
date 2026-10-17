@@ -174,6 +174,213 @@ test.describe("Settings knob", () => {
     });
   });
 
+  test("auto compaction, on by default, is switched from the picker", async ({ page, request }) => {
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(
+      request,
+      "echo: compaction later",
+    );
+    const options = async () =>
+      JSON.parse(
+        (await (await request.get(`/api/conversation/${conversationId}`)).json()).conversation
+          .conversation_options,
+      );
+    await page.goto(`/c/${slug}`);
+    await openKnob(page);
+    const panel = page.locator(".model-picker-panel");
+    const section = panel.getByTestId("model-picker-auto-compaction");
+    const radio = (name: string) =>
+      section
+        .getByRole("radiogroup", { name: "Auto compaction", exact: true })
+        .getByRole("radio", { name, exact: true });
+    const nudge = section.getByRole("combobox");
+    const markers = page.getByTestId("message-modelchange");
+    const tools = panel.getByTestId("model-picker-tools").locator(".model-picker-section-text");
+    await expect(radio("On")).toHaveAttribute("aria-checked", "true");
+    await expect(nudge).toHaveValue("200000");
+
+    // The panel stays open through each change; Tools leaves auto compaction
+    // to its own section.
+    await nudge.selectOption("250000");
+    await expect(markers).toHaveCount(1);
+    await expect(nudge).toHaveValue("250000");
+    await expect(tools).toHaveText("All at their defaults");
+    expect((await options()).compact_nudge_tokens).toBe(250000);
+
+    await radio("Off").click();
+    await expect(markers.last()).toHaveAttribute(
+      "aria-label",
+      "Tools turned off: compact_in_place.",
+    );
+    await expect(radio("Off")).toHaveAttribute("aria-checked", "true");
+    await expect(nudge).toBeHidden();
+    await expect(tools).toHaveText("All at their defaults");
+    expect((await options()).tool_overrides).toEqual({ compact_in_place: "off" });
+
+    await radio("On").click();
+    await expect(markers).toHaveCount(3);
+    await expect(radio("On")).toHaveAttribute("aria-checked", "true");
+    expect((await options()).tool_overrides ?? {}).toEqual({});
+  });
+
+  test("a quick second pick of auto compaction undoes the first", async ({ page, request }) => {
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(
+      request,
+      "echo: change my mind",
+    );
+    const options = async () =>
+      JSON.parse(
+        (await (await request.get(`/api/conversation/${conversationId}`)).json()).conversation
+          .conversation_options,
+      );
+    await page.goto(`/c/${slug}`);
+    await openKnob(page);
+    const section = page.getByTestId("model-picker-auto-compaction");
+    const radio = (name: string) =>
+      section
+        .getByRole("radiogroup", { name: "Auto compaction", exact: true })
+        .getByRole("radio", { name, exact: true });
+    const nudge = section.getByRole("combobox");
+
+    // The first pick's change is held on its way, as by a slow network; the
+    // second must still come last.
+    const pick = async (first: () => Promise<void>, second: () => Promise<void>) => {
+      let release = () => {};
+      const held = new Promise<void>((r) => (release = r));
+      let posts = 0;
+      await page.route(`**/api/conversation/${conversationId}/settings`, async (route) => {
+        if (route.request().method() === "POST" && posts++ === 0) await held;
+        await route.continue();
+      });
+      await first();
+      await second();
+      release();
+      await expect.poll(() => posts).toBe(2);
+      await page.unrouteAll({ behavior: "wait" });
+    };
+
+    await pick(
+      () => nudge.selectOption("250000"),
+      () => nudge.selectOption("200000"),
+    );
+    await expect.poll(async () => (await options()).compact_nudge_tokens ?? 0).toBe(0);
+    await expect(nudge).toHaveValue("200000");
+
+    await pick(
+      () => radio("Off").click(),
+      () => radio("On").click(),
+    );
+    await expect.poll(async () => (await options()).tool_overrides ?? {}).toEqual({});
+    await expect(radio("On")).toHaveAttribute("aria-checked", "true");
+
+    // The choice in effect changes nothing.
+    const next = page.waitForRequest(
+      (r) => r.method() === "POST" && r.url().endsWith(`/conversation/${conversationId}/settings`),
+    );
+    await radio("On").click();
+    await nudge.selectOption("300000");
+    expect((await next).postDataJSON()).toEqual({ compact_nudge_tokens: 300000 });
+  });
+
+  test("auto compaction in a -no-tools conversation is off until turned on", async ({
+    page,
+    request,
+  }) => {
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(
+      request,
+      "echo: no tools",
+      { conversationOptions: { disable_all_tools: true } },
+    );
+    await page.goto(`/c/${slug}`);
+    await openKnob(page);
+    const section = page.getByTestId("model-picker-auto-compaction");
+    await expect(
+      section
+        .getByRole("radiogroup", { name: "Auto compaction", exact: true })
+        .getByRole("radio", { name: "Off", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
+
+    await editTools(page);
+    const dialog = page.getByRole("dialog");
+    const row = dialog.getByTestId("auto-compaction");
+    await expect(row.getByRole("radio", { name: "Off" })).toHaveAttribute("aria-checked", "true");
+    await expect(
+      dialog
+        .getByRole("radiogroup", { name: "browser", exact: true })
+        .getByRole("radio", { name: "Default (off)" }),
+    ).toHaveAttribute("aria-checked", "true");
+    await row.getByRole("radio", { name: "On" }).click();
+    await dialog.getByRole("button", { name: "Apply to this conversation" }).click();
+    await expect(dialog).toBeHidden();
+    const body = await (await request.get(`/api/conversation/${conversationId}`)).json();
+    expect(JSON.parse(body.conversation.conversation_options).tool_overrides).toEqual({
+      compact_in_place: "on",
+    });
+  });
+
+  // What a browser kept when 250k was the default: the old default gives way
+  // to the new one; another pick, from a profile or the picker, stays.
+  for (const [kept, shown] of [
+    ["250000", "200000"],
+    ["130000", "130000"],
+  ]) {
+    test(`the composer's nudge kept as ${kept} shows ${shown}`, async ({ page }) => {
+      await page.addInitScript((kept) => {
+        if (localStorage.getItem("shelley.profileApplied")) return;
+        localStorage.setItem("shelley.profileApplied", "Default");
+        localStorage.setItem("shelley.compactNudgeTokens", kept);
+      }, kept);
+      await page.goto("/new");
+      await page.locator(".model-picker.p-select").click();
+      const nudge = page.getByTestId("model-picker-auto-compaction").getByRole("combobox");
+      await expect(nudge).toHaveValue(shown);
+      await page.reload();
+      await page.locator(".model-picker.p-select").click();
+      await expect(nudge).toHaveValue(shown);
+    });
+  }
+
+  test("auto compaction turned off in the composer starts the conversation without it", async ({
+    page,
+    request,
+  }) => {
+    await page.goto("/new");
+    await page.locator(".model-picker.p-select").click();
+    const section = page.getByTestId("model-picker-auto-compaction");
+    const radio = (name: string) =>
+      section
+        .getByRole("radiogroup", { name: "Auto compaction", exact: true })
+        .getByRole("radio", { name, exact: true });
+    const profiles = page.getByTestId("model-picker-profiles");
+
+    // Assistant's idle compaction needs it.
+    await profiles.getByRole("radio", { name: "Assistant", exact: true }).click();
+    await expect(radio("On")).toHaveAttribute("aria-checked", "true");
+    await expect(radio("Off")).toBeDisabled();
+    await expect(section).toContainText("idle compaction needs it");
+
+    await profiles.getByRole("radio", { name: "Default", exact: true }).click();
+    await expect(radio("Off")).toBeEnabled();
+    await radio("Off").click();
+    await expect(radio("Off")).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+    await page.getByTestId("message-input").fill("echo: no compaction");
+    const sent = page.waitForResponse(
+      (r) =>
+        r.request().method() === "POST" &&
+        /\/api\/conversation(s\/new|\/[^/]+\/chat)$/.test(new URL(r.url()).pathname),
+    );
+    await page.getByTestId("send-button").click();
+    const response = await sent;
+    const id =
+      new URL(response.url()).pathname.match(/\/conversation\/([^/]+)\/chat$/)?.[1] ??
+      (await response.json()).conversation_id;
+    const settings = await (await request.get(`/api/conversation/${id}/settings`)).json();
+    expect(settings).toMatchObject({
+      profile: "Default",
+      tool_overrides: { compact_in_place: "off" },
+    });
+  });
+
   test("saves changed settings as a profile, edits it, and switches", async ({ page, request }) => {
     const name = `E2E ${Date.now()}`;
     const { conversationId, slug } = await createConversationViaAPIWithDetails(

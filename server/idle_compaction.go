@@ -42,10 +42,13 @@ func (cm *ConversationManager) cancelIdleCompaction() {
 	cm.cancelIdleCompactionLocked()
 }
 
-// The copied profile policy applies only to top-level conversations. Children
-// never schedule their own background compaction.
+// The copied profile policy applies only to top-level conversations with
+// compact_in_place, which -no-tools can turn off. Children never schedule
+// their own background compaction.
 func (cm *ConversationManager) idleCompactionEnabledLocked() bool {
-	return cm.role == roleTopLevel && cm.conversationOptions.IdleCompactionMinutes > 0
+	opts := cm.conversationOptions
+	return cm.role == roleTopLevel && opts.IdleCompactionMinutes > 0 &&
+		claudetool.IsToolEnabled(claudetool.CompactInPlaceName, opts.ToolOverrides, opts.DisableAllTools)
 }
 
 func (cm *ConversationManager) idleWorkBlockedLocked() bool {

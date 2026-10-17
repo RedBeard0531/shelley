@@ -31,7 +31,7 @@ func assistantProfile() string {
 		"cache_keep_warm_minutes": 8,
 		"tool_overrides": map[string]string{
 			"message_user":     "on",
-			"compact_in_place": "on",
+			"compact_in_place": "on", // idle compaction needs it, whatever the default
 			"llm_one_shot":     "off",
 			"output_iframe":    "off",
 		},

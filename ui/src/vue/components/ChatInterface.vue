@@ -475,6 +475,7 @@
       :is-open="showToolsModal"
       :tools="availableTools"
       :tool-overrides="settingsInEffect.settings.tool_overrides"
+      :disable-all-tools="conversationNoTools"
       :compact-nudge-tokens="settingsInEffect.settings.compact_nudge_tokens"
       :apply-label="conversationLive ? 'Apply to this conversation' : 'Apply'"
       :on-apply="applyTools"
@@ -597,6 +598,7 @@ import {
   type Profile,
   type Settings,
   type SettingsChange,
+  type ConversationSettings,
   isDistillStatusMessage,
   distillStatus,
   parseQueuedMessages,
@@ -637,7 +639,9 @@ import {
   settingsDifferences,
   reloadProfiles,
   settingsOf,
+  toolOn,
   useProfiles,
+  withTool,
   type SettingsKnob,
 } from "../composables/profiles";
 import { useDraftAutosave } from "../composables/draftAutosave";
@@ -830,7 +834,9 @@ provide(
 const { markdownMode } = useMarkdownMode();
 // The open conversation's options: its settings (as of the last change) and
 // the profile they came from.
-const conversationOptions = computed<Partial<Settings> & { profile?: string }>(() => {
+const conversationOptions = computed<
+  Partial<Settings> & { profile?: string; disable_all_tools?: boolean }
+>(() => {
   try {
     return JSON.parse(props.currentConversation?.conversation_options || "{}") ?? {};
   } catch {
@@ -1084,9 +1090,33 @@ async function updateConversationSettings(change: SettingsChange) {
   if (!id) return;
   await api.updateConversationSettings(id, change);
 }
-function changeConversationSettings(change: SettingsChange) {
-  updateConversationSettings(change).catch((err) => {
-    error.value = err instanceof Error ? err.message : "Failed to change settings";
+// The picker's changes go to the server one at a time, in the order made. A
+// change can be worked out when its turn comes, from the settings the one
+// before left, which the picker may not show yet; null changes nothing.
+type QueuedChange = SettingsChange | ((s: Settings) => SettingsChange | null);
+let settingsQueue = Promise.resolve<{ id: string; settings: ConversationSettings } | null>(null);
+let settingsQueued = 0;
+function changeConversationSettings(change: QueuedChange) {
+  const id = props.conversationId;
+  if (!id) return;
+  settingsQueued++;
+  settingsQueue = settingsQueue.then(async (prior) => {
+    let left = prior?.id === id ? prior : null;
+    try {
+      // A change made just before switching conversations is dropped.
+      const c =
+        typeof change !== "function"
+          ? change
+          : props.conversationId === id
+            ? change(left?.settings ?? settingsInEffect.value.settings)
+            : null;
+      if (c) left = { id, settings: await api.updateConversationSettings(id, c) };
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "Failed to change settings";
+      left = null;
+    }
+    // Once the queue empties, the conversation shows what's in effect.
+    return --settingsQueued ? left : null;
   });
 }
 
@@ -1654,14 +1684,32 @@ function setToolOverrides(next: Record<string, "on" | "off">) {
 }
 
 // ---- auto compaction nudge threshold (persisted) ----
-const COMPACT_NUDGE_KEY = "shelley.compactNudgeTokens";
+// Kept as a profile keeps it, 0 for the default, so that it follows the
+// default when that changes. The old key kept the default spelled out, when
+// that was 250k; any other pick carries over.
+const COMPACT_NUDGE_KEY = "shelley.compactNudge";
+const OLD_COMPACT_NUDGE_KEY = "shelley.compactNudgeTokens";
+const oldCompactNudge = Number(localStorage.getItem(OLD_COMPACT_NUDGE_KEY));
+if (oldCompactNudge) {
+  localStorage.removeItem(OLD_COMPACT_NUDGE_KEY);
+  try {
+    if (localStorage.getItem(COMPACT_NUDGE_KEY) === null && oldCompactNudge !== 250_000) {
+      localStorage.setItem(COMPACT_NUDGE_KEY, String(oldCompactNudge));
+    }
+  } catch {
+    /* ignore */
+  }
+}
 const compactNudgeTokens = ref<number>(
   Number(localStorage.getItem(COMPACT_NUDGE_KEY)) || DEFAULT_COMPACT_NUDGE_TOKENS,
 );
 function setCompactNudgeTokens(tokens: number) {
   compactNudgeTokens.value = tokens;
   try {
-    localStorage.setItem(COMPACT_NUDGE_KEY, String(tokens));
+    localStorage.setItem(
+      COMPACT_NUDGE_KEY,
+      String(tokens === DEFAULT_COMPACT_NUDGE_TOKENS ? 0 : tokens),
+    );
   } catch {
     /* ignore */
   }
@@ -1781,19 +1829,64 @@ function onProfileSaved(name: string) {
   const p = composerProfile.value;
   if (!conversationLive.value && p?.name === name) applyComposerProfile(p);
 }
+// Changes the tools or the nudge in effect, each on its own, worked out from
+// the settings in effect when made: see changeConversationSettings.
+function changeToolSettings(
+  change: (s: Settings) => Pick<SettingsChange, "tool_overrides" | "compact_nudge_tokens"> | null,
+) {
+  if (conversationLive.value) return changeConversationSettings(change);
+  const c = change(settingsInEffect.value.settings);
+  if (c?.tool_overrides) setToolOverrides(c.tool_overrides);
+  if (c?.compact_nudge_tokens !== undefined) {
+    setCompactNudgeTokens(c.compact_nudge_tokens || DEFAULT_COMPACT_NUDGE_TOKENS);
+  }
+}
+// A conversation started with -no-tools has only the tools turned on.
+const conversationNoTools = computed(
+  () => conversationLive.value && !!conversationOptions.value.disable_all_tools,
+);
 const knob = computed<SettingsKnob>(() => {
   const { profile, settings } = settingsInEffect.value;
+  const noTools = conversationNoTools.value;
   const p = profiles.value.find((candidate) => candidate.name === profile);
   return {
     profiles: profiles.value,
     profile,
     changes: p ? settingsDifferences(p, settings, models.value, availableTools.value) : [],
+    // Auto compaction has its own section.
     toolChanges: settingsDifferences(
       { ...settings, tool_overrides: {}, compact_nudge_tokens: 0 },
       settings,
       models.value,
       availableTools.value,
-    ),
+    ).filter((c) => !(c.kind === "tool" && c.name === COMPACT_IN_PLACE_TOOL) && c.kind !== "nudge"),
+    autoCompaction: {
+      on: toolOn(settings.tool_overrides, COMPACT_IN_PLACE_TOOL, availableTools.value, noTools),
+      nudge: settings.compact_nudge_tokens || DEFAULT_COMPACT_NUDGE_TOKENS,
+      needed: settings.idle_compaction_minutes > 0,
+    },
+    // The choice in effect changes nothing, however spelled: Assistant's
+    // explicit "on" stays.
+    setAutoCompaction: (on) =>
+      changeToolSettings((s) =>
+        toolOn(s.tool_overrides, COMPACT_IN_PLACE_TOOL, availableTools.value, noTools) === on
+          ? null
+          : {
+              tool_overrides: withTool(
+                s.tool_overrides,
+                COMPACT_IN_PLACE_TOOL,
+                on,
+                availableTools.value,
+                noTools,
+              ),
+            },
+      ),
+    setCompactNudge: (tokens) =>
+      changeToolSettings((s) =>
+        (s.compact_nudge_tokens || DEFAULT_COMPACT_NUDGE_TOKENS) === tokens
+          ? null
+          : { compact_nudge_tokens: tokens === DEFAULT_COMPACT_NUDGE_TOKENS ? 0 : tokens },
+      ),
     selectProfile: useProfile,
     updateProfile: async () => {
       await profilesApi.update(profile, settingsOf(settings, p));
@@ -2081,10 +2174,15 @@ const conversationThinkingLevel = computed<string | null>(
   () => conversationOptions.value.thinking_level || null,
 );
 
-// Whether this conversation has the compact_in_place tool on: it was started
-// with it, or the Compact in Place button enabled it.
-const compactInPlaceEnabled = computed(
-  () => conversationToolOverrides.value[COMPACT_IN_PLACE_TOOL] === "on",
+// Whether this conversation has the compact_in_place tool on: by default, as
+// started, or since the Compact in Place button enabled it.
+const compactInPlaceEnabled = computed(() =>
+  toolOn(
+    conversationToolOverrides.value,
+    COMPACT_IN_PLACE_TOOL,
+    availableTools.value,
+    conversationOptions.value.disable_all_tools,
+  ),
 );
 
 const displayTitle = computed(() => {
