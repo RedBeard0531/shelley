@@ -95,17 +95,17 @@ func TestBashBackgroundJobNotifiesConversation(t *testing.T) {
 	if n := len(backgroundJobNotices(t, database, id)); n != 1 {
 		t.Fatalf("%d notices, want 1", n)
 	}
-	if jobs := unnotifiedBackgroundJobs(t, database); len(jobs) != 0 {
-		t.Fatalf("unnotified jobs after notice: %+v", jobs)
+	if jobs := unfinishedBackgroundJobs(t, database); len(jobs) != 0 {
+		t.Fatalf("unfinished jobs after notice: %+v", jobs)
 	}
 }
 
-func unnotifiedBackgroundJobs(t *testing.T, database *db.DB) []generated.BackgroundJob {
+func unfinishedBackgroundJobs(t *testing.T, database *db.DB) []generated.BackgroundJob {
 	t.Helper()
 	var rows []generated.BackgroundJob
 	err := database.Queries(t.Context(), func(q *generated.Queries) error {
 		var err error
-		rows, err = q.ListUnnotifiedBackgroundJobs(t.Context())
+		rows, err = q.ListUnfinishedBackgroundJobs(t.Context())
 		return err
 	})
 	if err != nil {
@@ -230,7 +230,7 @@ func TestBackgroundJobRecoveryAfterRestart(t *testing.T) {
 	if got := noticeFor(running.job).Text; !strings.Contains(got, "finished: exit 0") || !strings.Contains(got, "running-output") {
 		t.Errorf("running notice = %q", got)
 	}
-	waitFor(t, 10*time.Second, func() bool { return len(unnotifiedBackgroundJobs(t, database)) == 0 })
+	waitFor(t, 10*time.Second, func() bool { return len(unfinishedBackgroundJobs(t, database)) == 0 })
 	if n := listedRunningJobs(t, server, id); n != 0 {
 		t.Fatalf("listed %d running jobs after every exit, want 0", n)
 	}
@@ -391,64 +391,5 @@ func TestKillBackgroundJobWithReusedPID(t *testing.T) {
 	notices := backgroundJobNotices(t, database, id)
 	if len(notices) != 1 || !strings.Contains(notices[0].Text, "lost") {
 		t.Fatalf("notices = %+v, want one lost notice", notices)
-	}
-}
-
-// Reconciling reports each job whose process vanished unseen exactly once,
-// and leaves live jobs running.
-func TestReconcileBackgroundJobs(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
-	server, database, _ := newTestServer(t)
-	defer stopActiveConversationLoops(server)
-	conv, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := conv.ConversationID
-	gate := filepath.Join(t.TempDir(), "gate")
-	if err := syscall.Mkfifo(gate, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	stash := make(stashedJobs, 1)
-	bash := (&claudetool.BashTool{
-		WorkingDir: claudetool.NewMutableWorkingDir(t.TempDir()),
-		Env:        claudetool.ShelleyEnv{ConversationID: id},
-		Jobs:       stash,
-	}).Tool()
-	input, err := json.Marshal(map[string]any{"command": "read -r _ < " + gate, "background": true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out := bash.Run(t.Context(), input); out.Error != nil {
-		t.Fatal(out.Error)
-	}
-	bg := <-stash
-	defer func() {
-		if err := bg.job.Kill(); err != nil {
-			t.Error(err)
-		}
-		<-bg.exited
-	}()
-	live, stale := bg.job, bg.job
-	stale.ID, stale.StartTime = "stale", live.StartTime+1
-	for _, job := range []claudetool.BackgroundJob{live, stale} {
-		if err := server.recordBackgroundJob(t.Context(), job); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	for range 2 {
-		if err := server.reconcileBackgroundJobs(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n := listedRunningJobs(t, server, id); n != 1 {
-		t.Fatalf("listed %d running jobs, want 1", n)
-	}
-	waitFor(t, 10*time.Second, func() bool { return len(backgroundJobNotices(t, database, id)) > 0 })
-	waitForIdle(t, server, id)
-	notices := backgroundJobNotices(t, database, id)
-	if len(notices) != 1 || notices[0].BackgroundJobID != "stale" {
-		t.Fatalf("notices = %+v, want one for stale", notices)
 	}
 }

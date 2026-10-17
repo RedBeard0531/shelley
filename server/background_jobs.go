@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,14 +55,15 @@ func (s *Server) recordBackgroundJob(ctx context.Context, job claudetool.Backgro
 	return nil
 }
 
-// recoverBackgroundJobs resumes reporting the jobs a previous Shelley
-// process backgrounded but did not report: jobs that exited (or vanished)
-// are reported now, running ones when they exit.
+// recoverBackgroundJobs finishes the jobs a previous Shelley process left
+// unfinished: exited jobs are reported now, running ones when they exit. A
+// job that cannot be watched stays running until the next startup, or a
+// Stop once its process is gone.
 func (s *Server) recoverBackgroundJobs(ctx context.Context) error {
 	var rows []generated.BackgroundJob
 	err := s.db.Queries(ctx, func(q *generated.Queries) error {
 		var err error
-		rows, err = q.ListUnnotifiedBackgroundJobs(ctx)
+		rows, err = q.ListUnfinishedBackgroundJobs(ctx)
 		return err
 	})
 	if err != nil {
@@ -107,54 +109,6 @@ func (s *Server) watchBackgroundJob(job claudetool.BackgroundJob, exited <-chan 
 	}()
 }
 
-const backgroundJobSweepInterval = time.Minute
-
-// sweepBackgroundJobs reconciles background jobs every
-// backgroundJobSweepInterval, for exits no watcher saw.
-func (s *Server) sweepBackgroundJobs() {
-	ticker := time.NewTicker(backgroundJobSweepInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.shutdownCh:
-			return
-		case <-ticker.C:
-			if err := s.reconcileBackgroundJobs(context.Background()); err != nil {
-				s.logger.Error("Failed to reconcile background jobs", "error", err)
-			}
-		}
-	}
-}
-
-// reconcileBackgroundJobs reports every job recorded as running whose
-// process is gone.
-func (s *Server) reconcileBackgroundJobs(ctx context.Context) error {
-	var rows []generated.BackgroundJob
-	err := s.db.Queries(ctx, func(q *generated.Queries) error {
-		var err error
-		rows, err = q.ListAllRunningBackgroundJobs(ctx)
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("list running background jobs: %w", err)
-	}
-	var errs []error
-	for _, r := range rows {
-		job := backgroundJobFromRow(r)
-		gone, err := job.Gone()
-		if err != nil {
-			errs = append(errs, fmt.Errorf("check background job %s: %w", job.ID, err))
-			continue
-		}
-		if gone {
-			if err := s.reportBackgroundJobExit(ctx, job); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
-	return errors.Join(errs...)
-}
-
 // runningBackgroundJobsOf returns conversationID's running jobs, oldest first.
 func (s *Server) runningBackgroundJobsOf(ctx context.Context, conversationID string) ([]claudetool.BackgroundJob, error) {
 	var rows []generated.BackgroundJob
@@ -174,19 +128,27 @@ func (s *Server) runningBackgroundJobsOf(ctx context.Context, conversationID str
 }
 
 // reportBackgroundJobExit records that job exited and, unless another
-// caller already did, schedules its notice. A failed write is retried
-// by the next sweep; until then, the job still counts as running.
+// caller already did or the job was already reported, schedules its
+// notice. Shelleys predating the exited column report jobs without
+// marking them exited. A failed write is retried at the next startup or
+// Stop; until then, the job still counts as running.
 func (s *Server) reportBackgroundJobExit(ctx context.Context, job claudetool.BackgroundJob) error {
-	var marked int64
+	notify := false
 	err := s.db.QueriesTx(ctx, func(q *generated.Queries) error {
-		var err error
-		marked, err = q.MarkBackgroundJobExited(ctx, job.ID)
-		return err
+		notified, err := q.MarkBackgroundJobExited(ctx, job.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		notify = !notified
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("record background job %s exit: %w", job.ID, err)
 	}
-	if marked == 1 {
+	if notify {
 		go s.notifyBackgroundJobExit(job)
 	}
 	return nil

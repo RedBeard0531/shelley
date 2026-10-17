@@ -40,7 +40,7 @@ func TestBackgroundJobExitWriteFailure(t *testing.T) {
 		s, database, _ := newTestServer(t)
 		defer stopActiveConversationLoops(s)
 		job := recordStaleBackgroundJob(t, s)
-		// Fail the commit after the UPDATE reports one affected row.
+		// Fail the commit after the UPDATE returns its row.
 		if err := database.Pool().Exec(t.Context(), `
 			CREATE TABLE exit_parent (id INTEGER PRIMARY KEY);
 			CREATE TABLE exit_child (id INTEGER REFERENCES exit_parent(id) DEFERRABLE INITIALLY DEFERRED);
@@ -52,8 +52,8 @@ func TestBackgroundJobExitWriteFailure(t *testing.T) {
 		if w := stopBackgroundJob(t, s, job); w.Code != http.StatusInternalServerError {
 			t.Fatalf("stop: %d %s, want 500", w.Code, w.Body.String())
 		}
-		if err := s.reconcileBackgroundJobs(t.Context()); err == nil {
-			t.Fatal("reconciliation hid the failed exit write")
+		if err := s.recoverBackgroundJobs(t.Context()); err != nil {
+			t.Fatal(err)
 		}
 		synctest.Wait()
 		if n := listedRunningJobs(t, s, job.ConversationID); n != 1 {
@@ -79,7 +79,7 @@ func TestBackgroundJobExitWriteFailure(t *testing.T) {
 }
 
 func TestBackgroundJobExitDoesNotWaitForConversation(t *testing.T) {
-	for _, action := range []string{"stop", "sweep"} {
+	for _, action := range []string{"stop", "recover"} {
 		t.Run(action, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				s, database, _ := newTestServer(t)
@@ -107,8 +107,8 @@ func TestBackgroundJobExitDoesNotWaitForConversation(t *testing.T) {
 
 				done := make(chan error, 1)
 				go func() {
-					if action == "sweep" {
-						done <- s.reconcileBackgroundJobs(t.Context())
+					if action == "recover" {
+						done <- s.recoverBackgroundJobs(t.Context())
 					} else {
 						w := stopBackgroundJob(t, s, job)
 						if w.Code != http.StatusNoContent {
@@ -148,15 +148,10 @@ func TestBackgroundJobConcurrentExitReportsOnce(t *testing.T) {
 		s, database, _ := newTestServer(t)
 		defer stopActiveConversationLoops(s)
 		job := recordStaleBackgroundJob(t, s)
-		// Startup recovery takes its snapshot before requests can report exits.
+		// Startup recovery's watcher races Stop and other reports.
 		if err := s.recoverBackgroundJobs(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		go func() {
-			if err := s.reconcileBackgroundJobs(t.Context()); err != nil {
-				t.Error(err)
-			}
-		}()
 		go func() {
 			w := stopBackgroundJob(t, s, job)
 			if w.Code != http.StatusNoContent && w.Code != http.StatusNotFound {
@@ -177,46 +172,41 @@ func TestBackgroundJobConcurrentExitReportsOnce(t *testing.T) {
 		if notices := backgroundJobNotices(t, database, job.ConversationID); len(notices) != 1 {
 			t.Fatalf("notices = %+v, want exactly one", notices)
 		}
-		if jobs := unnotifiedBackgroundJobs(t, database); len(jobs) != 0 {
-			t.Fatalf("unnotified jobs = %+v", jobs)
+		if jobs := unfinishedBackgroundJobs(t, database); len(jobs) != 0 {
+			t.Fatalf("unfinished jobs = %+v", jobs)
 		}
 	})
 }
 
-func TestBackgroundJobSweepStopsOnShutdown(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		s, database, _ := newTestServer(t)
-		defer stopActiveConversationLoops(s)
-		job := recordStaleBackgroundJob(t, s)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			s.sweepBackgroundJobs()
-		}()
-		synctest.Wait()
-		<-time.After(backgroundJobSweepInterval)
-		synctest.Wait()
-		if n := listedRunningJobs(t, s, job.ConversationID); n != 0 {
-			t.Fatalf("running jobs = %d after sweep, want 0", n)
-		}
-		if notices := backgroundJobNotices(t, database, job.ConversationID); len(notices) != 1 {
-			t.Fatalf("notices = %+v, want one", notices)
-		}
-		close(s.shutdownCh)
-		synctest.Wait()
-		select {
-		case <-done:
-		default:
-			t.Fatal("sweep did not stop on shutdown")
-		}
-		job.ID = "after-shutdown"
-		if err := s.recordBackgroundJob(t.Context(), job); err != nil {
-			t.Fatal(err)
-		}
-		<-time.After(2 * backgroundJobSweepInterval)
-		synctest.Wait()
-		if n := listedRunningJobs(t, s, job.ConversationID); n != 1 {
-			t.Fatalf("sweep continued after shutdown: running jobs = %d, want 1", n)
-		}
-	})
+// A Shelley predating the exited column reports jobs without marking them
+// exited, so after an upgrade they look running. Clearing them must not
+// report them again.
+func TestBackgroundJobExitAfterNoticeIsSilent(t *testing.T) {
+	for _, action := range []string{"stop", "recover"} {
+		t.Run(action, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s, database, _ := newTestServer(t)
+				defer stopActiveConversationLoops(s)
+				job := recordStaleBackgroundJob(t, s)
+				// What such a Shelley ran on reporting a job.
+				if err := database.Pool().Exec(t.Context(), "UPDATE background_jobs SET notified = TRUE WHERE job_id = ?", job.ID); err != nil {
+					t.Fatal(err)
+				}
+				if action == "recover" {
+					if err := s.recoverBackgroundJobs(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+				} else if w := stopBackgroundJob(t, s, job); w.Code != http.StatusNoContent {
+					t.Fatalf("stop: %d %s", w.Code, w.Body.String())
+				}
+				synctest.Wait()
+				if n := listedRunningJobs(t, s, job.ConversationID); n != 0 {
+					t.Fatalf("running jobs = %d, want 0", n)
+				}
+				if notices := backgroundJobNotices(t, database, job.ConversationID); len(notices) != 0 {
+					t.Fatalf("reported a job again: %+v", notices)
+				}
+			})
+		})
+	}
 }

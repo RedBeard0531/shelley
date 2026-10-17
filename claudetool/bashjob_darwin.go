@@ -127,16 +127,6 @@ func (j BackgroundJob) leader() error {
 	return nil
 }
 
-// Gone reports whether j's wrapper has exited or its PID now names
-// another process.
-func (j BackgroundJob) Gone() (bool, error) {
-	err := j.leader()
-	if errors.Is(err, ErrBackgroundJobGone) {
-		return true, nil
-	}
-	return false, err
-}
-
 // Kill sends SIGTERM to the job's process group after checking its leader.
 func (j BackgroundJob) Kill() error {
 	// kill(0) signals our group; kill(-1) signals every permitted process,

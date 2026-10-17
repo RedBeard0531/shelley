@@ -1902,8 +1902,6 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 		}
 	}()
 
-	go s.sweepBackgroundJobs()
-
 	// Recover durable queued transcription workers independently of browser
 	// connections and request lifetimes.
 	go s.recoverQueuedTranscriptions(context.Background())
