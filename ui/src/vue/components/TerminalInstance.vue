@@ -96,8 +96,10 @@ onMounted(() => {
     fontFamily: FONT_FAMILY,
     theme: getTerminalTheme(props.isDark),
     scrollback: 10000,
-    // Kitty keyboard protocol — clients opt in via `CSI = u` so this is safe to leave on.
-    vtExtensions: { kittyKeyboard: true },
+    // Kitty keyboard protocol off. When xterm.js offers it, nvim turns it on,
+    // and xterm.js then sends macOS Cmd shortcuts to the app as keys (Cmd+V
+    // arrives as `<D-v>` instead of pasting).
+    vtExtensions: { kittyKeyboard: false },
   } as ConstructorParameters<typeof Terminal>[0]);
   xtermInst = xterm;
 
