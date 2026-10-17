@@ -11759,6 +11759,8 @@ kbd {
 }
 
 .dark .markdown-content .shelley-code-block pre {
+  /* Let the wrapper's inset border show through around the code. */
+  background: transparent;
   box-shadow: none;
 }
 

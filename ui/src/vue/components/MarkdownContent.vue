@@ -28,6 +28,7 @@ import * as markdownMath from "../../utils/markdownMath";
 import { renderMarkdownToSafeHTML } from "../../utils/markdownRender";
 import { perfWrap } from "../../utils/perf";
 import { handleImageCommentClick, openImageComment } from "../composables/imageComment";
+import { handleMarkdownDocClick } from "../composables/markdownDoc";
 import { whenNearViewport } from "../composables/nearViewport";
 
 const props = defineProps<{
@@ -256,6 +257,12 @@ function onActivate(e: MouseEvent | KeyboardEvent) {
     const button = target.closest<HTMLButtonElement>(".shelley-code-copy");
     if (button) {
       void copyCodeBlock(button);
+      return;
+    }
+    // Only the sanitizer sets download, on sandbox: links (utils/markdownRender.ts).
+    const download = target.closest<HTMLAnchorElement>("a[download]");
+    if (download) {
+      handleMarkdownDocClick(e, download);
       return;
     }
   }

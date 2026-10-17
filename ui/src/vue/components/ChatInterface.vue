@@ -537,6 +537,13 @@
       @close="closeImageComment"
     />
 
+    <MarkdownDocModal
+      v-if="markdownDoc"
+      :key="markdownDoc.url"
+      :doc="markdownDoc"
+      @close="closeMarkdownDoc"
+    />
+
     <!-- Diff Viewer -->
     <DiffViewer
       :cwd="(diffViewerCwd || currentConversation?.cwd || selectedCwd) as string"
@@ -649,6 +656,7 @@ import { useFeatureFlag } from "../composables/featureFlags";
 import { useVersionChecker } from "../composables/versionChecker";
 import { provideToolProgress } from "../composables/toolProgress";
 import { closeImageComment, useImageCommentTarget } from "../composables/imageComment";
+import { closeMarkdownDoc, useMarkdownDoc } from "../composables/markdownDoc";
 import { isImeComposing } from "../../utils/imeComposing";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import { buildMessageQuote } from "../../utils/messageQuote";
@@ -731,6 +739,7 @@ import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
 import DiffViewer from "./DiffViewer.vue";
 import type { ReviewConversationStart } from "./useReviewRecording";
 import ImageCommentModal from "./ImageCommentModal.vue";
+import MarkdownDocModal from "./MarkdownDocModal.vue";
 import GitGraphViewer from "./GitGraphViewer.vue";
 import AgentsMdEditorModal from "./AgentsMdEditorModal.vue";
 import TerminalPanel from "./TerminalPanel.vue";
@@ -1254,6 +1263,7 @@ const diffCommentText = ref("");
 // The image being annotated, if any (module state so any image in the message
 // tree can open the view without prop drilling).
 const imageCommentTarget = useImageCommentTarget();
+const markdownDoc = useMarkdownDoc();
 const agentWorking = ref(false);
 const resumingInterrupted = ref(false);
 const cancelling = ref(false);
@@ -4641,6 +4651,7 @@ watch(
     // An annotation view belongs to the image it was opened from; switching
     // conversations leaves it stranded.
     closeImageComment();
+    closeMarkdownDoc();
     clearConversationLoading();
     // Reset scroll bookkeeping so state from the previous conversation can't
     // leak across the switch. lastListHeight/clampBudget are especially
@@ -5552,7 +5563,8 @@ onUnmounted(() => {
   mobileMq.removeEventListener("change", onMobileChange);
   if (loadingProgressDelay) clearTimeout(loadingProgressDelay);
   if (highlightTimeout) clearTimeout(highlightTimeout);
-  // Module state: an image left open would reappear over the next conversation.
+  // Module state: a view left open would reappear over the next conversation.
   closeImageComment();
+  closeMarkdownDoc();
 });
 </script>
