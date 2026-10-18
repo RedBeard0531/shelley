@@ -178,19 +178,26 @@ func (t *TerminalSessions) Get(id string) *TerminalSession {
 	return t.sessions[id]
 }
 
+// terminalCwd returns cwd if it names an existing directory. Otherwise
+// (empty, deleted, or not a directory) it returns the server's working
+// directory, or / if that is unavailable.
+func terminalCwd(cwd string) string {
+	if info, err := os.Stat(cwd); err == nil && info.IsDir() {
+		return cwd
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "/"
+}
+
 // Spawn launches a new persistent session and immediately attaches to it.
 // Production sessions use exe-scroll; tests can set a legacy dtach spawner.
 func (t *TerminalSessions) Spawn(command, cwd, conversationID string, closeOnExit bool, cols, rows uint16, extraEnv []string) (*TerminalSession, terminalClient, error) {
 	if command == "" {
 		return nil, nil, errors.New("terminals: empty command")
 	}
-	if cwd == "" {
-		if wd, err := os.Getwd(); err == nil {
-			cwd = wd
-		} else {
-			cwd = "/"
-		}
-	}
+	cwd = terminalCwd(cwd)
 	if err := os.MkdirAll(t.dir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("terminals: mkdir %s: %w", t.dir, err)
 	}

@@ -228,15 +228,16 @@ test("keeps terminal launch errors visible", async ({ page, request }) => {
     request,
     "terminal launch failure test",
   );
-  // Exercise a real server spawn failure without changing the conversation's
-  // working directory or breaking the agent fixture.
+  // Exercise a real server launch failure without changing the conversation's
+  // working directory or breaking the agent fixture. A missing cwd falls back
+  // to the default, so ask for a terminal session that doesn't exist instead.
   await page.addInitScript(() => {
     const NativeWebSocket = window.WebSocket;
     window.WebSocket = class extends NativeWebSocket {
       constructor(url: string | URL, protocols?: string | string[]) {
         const address = new URL(url, window.location.href);
         if (address.pathname === "/api/exec-ws" && address.searchParams.has("cmd")) {
-          address.searchParams.set("cwd", "/nonexistent-shelley-terminal-test-directory");
+          address.searchParams.set("term_id", "nonexistent-shelley-terminal-test-session");
         }
         super(address, protocols);
       }

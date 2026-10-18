@@ -96,6 +96,9 @@ func (s *Server) handleExecWS(w http.ResponseWriter, r *http.Request) {
 			slug = *conv.Slug
 		}
 	}
+	// Resolve the cwd before building the env so SHELLEY_CWD and
+	// SHELLEY_GIT_ROOT describe the directory the command actually runs in.
+	cwd = terminalCwd(cwd)
 	extraEnv := buildTerminalEnv(conversationID, slug, model, userEmail, cwd, s.listenPort, s.socketPath)
 	sess, dc, err := s.attachOrSpawn(termID, cmd, cwd, conversationID, closeOnExit, cols, rows, extraEnv)
 	if err != nil {
