@@ -233,9 +233,6 @@ export const upgoer5: TranslationKeys = {
   columnImages: "Pictures",
   imageSupportAutoShort: "maybe",
   imageSupportAutoResolved: "turns into:",
-  tagsPlaceholder: "put a small low mark between each one, like: fast, big",
-  tagsTooltip:
-    "Marks for this brain, each one after the other with a small low mark between. You can use a mark to make this brain be the one that writes short names for your talks. If you do not put that mark on any brain, the brain you are using right now will make the name all on its own.",
   reasoningEffort: "Reasoning Effort",
   reasoningEffortPlaceholder: "e.g., medium, high, xhigh, none — leave blank for default",
   reasoningEffortHint:

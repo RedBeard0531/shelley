@@ -233,7 +233,6 @@ func Build(catalog []models.Model, sources []Source, httpc *http.Client, logger 
 				ID:           id,
 				DisplayName:  id,
 				Provider:     m.Provider,
-				Tags:         m.Tags,
 				Source:       label,
 				ReleaseDate:  modelReleaseDate(baseURL, m.APIModelName),
 				Service:      svc,

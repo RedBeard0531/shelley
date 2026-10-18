@@ -586,7 +586,7 @@ func (m *claudeLLMManager) HasModel(modelID string) bool {
 
 func (m *claudeLLMManager) GetModelInfo(modelID string) *models.ModelInfo {
 	if modelID == "claude-haiku-4.5" {
-		return &models.ModelInfo{DisplayName: "Claude Haiku", Tags: "slug"}
+		return &models.ModelInfo{DisplayName: "Claude Haiku"}
 	}
 	return nil
 }

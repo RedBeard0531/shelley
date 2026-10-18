@@ -8,7 +8,6 @@ const customModel = (overrides: Record<string, unknown> = {}) => ({
   api_key: "test-key",
   model_name: "custom-model",
   max_tokens: 200000,
-  tags: "",
   reasoning_effort: "",
   reasoning_support: "auto",
   reasoning_map: "",

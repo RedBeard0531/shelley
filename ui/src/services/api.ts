@@ -1287,7 +1287,6 @@ export interface CustomModel {
   api_key: string;
   model_name: string;
   max_tokens: number;
-  tags: string; // Comma-separated tags (e.g., "slug" for slug generation)
   reasoning_effort: string; // Legacy provider-verbatim default
   reasoning_replay: "auto" | "none" | "reasoning_content";
   resolved_reasoning_replay?: "none" | "reasoning_content";
@@ -1305,7 +1304,6 @@ export interface CreateCustomModelRequest {
   api_key: string;
   model_name: string;
   max_tokens: number;
-  tags: string; // Comma-separated tags
   reasoning_effort: string; // Legacy provider-verbatim default
   reasoning_replay: "auto" | "none" | "reasoning_content";
   reasoning_support: "auto" | "yes" | "no";

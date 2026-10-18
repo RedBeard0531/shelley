@@ -225,8 +225,6 @@ export interface TranslationKeys {
   imageSupportYes: string;
   imageSupportNo: string;
   tags: string;
-  tagsPlaceholder: string;
-  tagsTooltip: string;
   columnName: string;
   columnModelId: string;
   columnProvider: string;

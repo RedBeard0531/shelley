@@ -234,9 +234,6 @@ export const ru: TranslationKeys = {
   columnImages: "Изображения",
   imageSupportAutoShort: "авто",
   imageSupportAutoResolved: "разрешается в:",
-  tagsPlaceholder: "через запятую, напр., slug, cheap",
-  tagsTooltip:
-    'Теги через запятую для этой модели. Используйте "slug", чтобы отметить модель для генерации заголовков диалогов. Если ни одна модель не имеет тега "slug", будет использована модель диалога.',
   reasoningEffort: "Reasoning Effort",
   reasoningEffortPlaceholder: "e.g., medium, high, xhigh, none — leave blank for default",
   reasoningEffortHint:

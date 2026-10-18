@@ -36,7 +36,6 @@ func newUsageCollectingServer(t *testing.T) (*Server, *db.DB) {
 			ID:       "predictable",
 			Provider: models.ProviderBuiltIn,
 			Source:   "test",
-			Tags:     "slug",
 			Service:  predictable.NewService(),
 		}},
 		Logger: logger,

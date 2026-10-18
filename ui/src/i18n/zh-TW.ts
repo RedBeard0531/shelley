@@ -233,9 +233,6 @@ export const zhTW: TranslationKeys = {
   columnImages: "圖片",
   imageSupportAutoShort: "自動",
   imageSupportAutoResolved: "解析為：",
-  tagsPlaceholder: "逗號分隔，例如：slug, cheap",
-  tagsTooltip:
-    '此模型的逗號分隔標籤。使用 "slug" 標記此模型用於產生對話標題。若沒有模型帶有 "slug" 標籤，將使用對話目前的模型。',
   reasoningEffort: "Reasoning Effort",
   reasoningEffortPlaceholder: "e.g., medium, high, xhigh, none — leave blank for default",
   reasoningEffortHint:

@@ -106,7 +106,6 @@ type Model struct {
 	ApiKey           string    `json:"api_key"`
 	ModelName        string    `json:"model_name"`
 	MaxTokens        int64     `json:"max_tokens"`
-	Tags             string    `json:"tags"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 	ReasoningEffort  string    `json:"reasoning_effort"`

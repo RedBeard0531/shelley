@@ -73,9 +73,6 @@ type Model struct {
 	// Description is a human-readable description.
 	Description string
 
-	// Tags is a comma-separated list of tags (e.g. "slug").
-	Tags string
-
 	// APIModelName is the model name sent on the wire (e.g. "claude-opus-4-7").
 	// Also used to match against an LLM integration's /v1/models allow-list.
 	APIModelName string
@@ -106,7 +103,6 @@ type Built struct {
 	Provider    Provider
 	Mode        string
 	Source      string // human-readable origin ("exe.dev gateway", "$ANTHROPIC_API_KEY", "custom", ...)
-	Tags        string
 	ReleaseDate string // ISO date from models.dev; empty when unknown
 	Service     llm.Service
 
@@ -525,7 +521,6 @@ type serviceEntry struct {
 	mode        string
 	source      string
 	displayName string
-	tags        string
 	releaseDate string
 	baseURL     string
 	apiType     APIType
@@ -680,7 +675,6 @@ func (m *Manager) registerBuiltModelsLocked(built []Built) {
 			mode:         b.Mode,
 			source:       b.Source,
 			displayName:  dn,
-			tags:         b.Tags,
 			releaseDate:  b.ReleaseDate,
 			baseURL:      b.BaseURL,
 			apiType:      b.APIType,
@@ -724,7 +718,6 @@ func (m *Manager) loadCustomModelsLocked(dbModels []generated.Model) {
 			modelID:      model.ModelID,
 			source:       SourceCustomLabel,
 			displayName:  model.DisplayName,
-			tags:         model.Tags,
 			baseURL:      model.Endpoint,
 			apiModelName: model.ModelName,
 		}
@@ -839,7 +832,6 @@ type ModelInfo struct {
 	DisplayName string
 	Provider    Provider
 	Mode        string
-	Tags        string
 	Source      string
 	ReleaseDate string
 	BaseURL     string
@@ -856,7 +848,7 @@ func (m *Manager) GetModelInfo(modelID string) *ModelInfo {
 	if !ok {
 		return nil
 	}
-	return &ModelInfo{DisplayName: entry.displayName, Provider: entry.provider, Mode: entry.mode, Tags: entry.tags, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType), APIModelName: entry.apiModelName}
+	return &ModelInfo{DisplayName: entry.displayName, Provider: entry.provider, Mode: entry.mode, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType), APIModelName: entry.apiModelName}
 }
 
 type reasoningMapping struct {

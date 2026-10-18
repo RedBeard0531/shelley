@@ -233,9 +233,6 @@ export const vi: TranslationKeys = {
   columnImages: "Hình ảnh",
   imageSupportAutoShort: "tự động",
   imageSupportAutoResolved: "phân giải thành:",
-  tagsPlaceholder: "phân cách bằng dấu phẩy, ví dụ slug, rẻ",
-  tagsTooltip:
-    'Sử dụng tag phân cách bằng dấu phẩy cho model. Dùng "slug" để đánh dấu model này làm model tạo tiêu đề hội thoại. Nếu không có model nào có tag "slug", model của hội thoại sẽ được sử dụng.',
   reasoningEffort: "Mức độ suy nghĩ",
   reasoningEffortPlaceholder: "ví dụ: medium, high, xhigh, none — để trống là mức mặc định",
   reasoningEffortHint:

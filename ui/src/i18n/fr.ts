@@ -236,9 +236,6 @@ export const fr: TranslationKeys = {
   columnImages: "Images",
   imageSupportAutoShort: "auto",
   imageSupportAutoResolved: "se résout en :",
-  tagsPlaceholder: "séparées par des virgules, ex : slug, cheap",
-  tagsTooltip:
-    "Étiquettes séparées par des virgules pour ce modèle. Utilisez « slug » pour marquer ce modèle pour la génération de titres de conversation. Si aucun modèle n'a l'étiquette « slug », le modèle de la conversation sera utilisé.",
   reasoningEffort: "Reasoning Effort",
   reasoningEffortPlaceholder: "e.g., medium, high, xhigh, none — leave blank for default",
   reasoningEffortHint:

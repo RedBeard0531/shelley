@@ -234,9 +234,6 @@ export const en: TranslationKeys = {
   columnImages: "Images",
   imageSupportAutoShort: "auto",
   imageSupportAutoResolved: "resolves to:",
-  tagsPlaceholder: "comma-separated, e.g., slug, cheap",
-  tagsTooltip:
-    'Comma-separated tags for this model. Use "slug" to mark this model for generating conversation titles. If no model has the "slug" tag, the conversation\'s model will be used.',
   reasoningEffort: "Reasoning Effort",
   reasoningEffortPlaceholder: "e.g., medium, high, xhigh, none — leave blank for default",
   reasoningEffortHint:

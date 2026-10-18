@@ -235,9 +235,6 @@ export const es: TranslationKeys = {
   columnImages: "Imágenes",
   imageSupportAutoShort: "auto",
   imageSupportAutoResolved: "se resuelve a:",
-  tagsPlaceholder: "separadas por comas, ej., slug, cheap",
-  tagsTooltip:
-    'Etiquetas separadas por comas para este modelo. Use "slug" para marcar este modelo para generar títulos de conversación. Si ningún modelo tiene la etiqueta "slug", se usará el modelo de la conversación.',
   reasoningEffort: "Reasoning Effort",
   reasoningEffortPlaceholder: "e.g., medium, high, xhigh, none — leave blank for default",
   reasoningEffortHint:
