@@ -20,6 +20,7 @@ const point = (parts: Record<string, number>, segment = 0): Point => ({
   segment,
   parts,
   toolBreakdown: { "repo/read": { "a.go": 3000, "b.go": 1000 } },
+  prompt: parts,
 });
 const points = [
   point({ user: 100, assistant: 50 }),

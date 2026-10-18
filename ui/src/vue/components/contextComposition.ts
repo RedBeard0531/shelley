@@ -19,6 +19,9 @@ export type Point = {
   segment: number;
   parts: Composition;
   toolBreakdown: ToolBreakdown;
+  /** parts as the call was sent: without its own response, which only the
+   *  next call reads. */
+  prompt: Composition;
 };
 type Attribution = { key: string; detail?: string };
 type CommandInvocation = { name: string; args: string[] };
@@ -117,6 +120,7 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
       continue;
     }
     const seq = message.sequence_id;
+    const prompt = message.type === "agent" ? { ...context.parts } : {};
     generationHasMedia =
       addMessage(context.toolKeys, message, (toolUseID, attribution, tokens) =>
         context.add(seq, seq, toolUseID, attribution, tokens),
@@ -132,6 +136,7 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
       segment,
       parts: estimated > 0 ? { ...context.parts } : generationHasMedia ? {} : { assistant: total },
       toolBreakdown: copyToolBreakdown(context.toolBreakdown),
+      prompt: estimated > 0 ? prompt : {},
     });
   }
 
@@ -147,9 +152,11 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
   }
   return raw.map((point) => {
     const scale = scaleBySegment.get(point.segment) || 1;
-    const parts = Object.fromEntries(
-      Object.entries(point.parts).map(([key, tokens]) => [key, Math.round(tokens * scale)]),
-    );
+    const scaled = (c: Composition) =>
+      Object.fromEntries(
+        Object.entries(c).map(([key, tokens]) => [key, Math.round(tokens * scale)]),
+      );
+    const parts = scaled(point.parts);
     const toolBreakdown = Object.fromEntries(
       Object.entries(point.toolBreakdown).map(([key, details]) => [
         key,
@@ -158,7 +165,7 @@ export function contextCompositionPoints(messages: Message[]): Point[] {
         ),
       ]),
     );
-    return { ...point, parts, toolBreakdown };
+    return { ...point, parts, toolBreakdown, prompt: scaled(point.prompt) };
   });
 }
 

@@ -12998,6 +12998,13 @@ kbd {
   pointer-events: none;
 }
 
+/* Cache misses: a mark above each bar whose call missed. The readout and
+   its hint use the same glyph, colored with .text-error. */
+.token-cost-miss-mark {
+  fill: var(--error-text);
+  pointer-events: none;
+}
+
 .token-cost-gen-line {
   stroke: var(--text-primary);
   stroke-width: 1;
@@ -13016,11 +13023,22 @@ kbd {
 }
 
 .token-cost-hover-readout {
+  display: grid;
   margin-top: 2px;
   font-size: 0.7rem;
   line-height: 1.35;
   color: var(--text-secondary);
-  min-height: 2.7em;
+}
+
+/* The live readout and its hidden, worst-case sizers share one cell, so the
+   readout is as tall as the longest call's whatever is hovered. */
+.token-cost-hover-readout > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.token-cost-readout-sizer {
+  visibility: hidden;
 }
 
 /* The amounts always show in full, wrapping if they must; only the message
@@ -13036,6 +13054,20 @@ kbd {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-cost-call-parts {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.token-cost-call-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   white-space: nowrap;
 }
 

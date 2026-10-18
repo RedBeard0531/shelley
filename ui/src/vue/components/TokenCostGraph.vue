@@ -9,7 +9,10 @@
      strip stacks the same segments per call; where calls are denser than bars
      can be drawn, a bar shows its group's most expensive call, and hovering
      picks that call. A hover guide runs through every pane, and the readout
-     and context legend follow it.
+     and context legend follow it. With a cost graph on, the readout also
+     splits the hovered call's cost by token type, and notes a cache miss or
+     what its uncached prompt was (see utils/callCost.ts). A triangle above
+     the strip marks each bar whose call missed the cache.
 
      Subagent cost and "other" (indirect) LLM usage — compaction
      summarization, LLM-backed tools, slug generation, … — are not part of the
@@ -96,6 +99,7 @@
               {{ tick.label }}
             </text>
           </g>
+          <path v-if="missMarks" :d="missMarks" class="token-cost-miss-mark" />
           <path
             v-for="i in markStarts"
             :key="`mark-${i}`"
@@ -111,12 +115,45 @@
             {{ xAxisLabel }}
           </text>
         </svg>
+        <!-- The live readout shares a grid cell with hidden, worst-case
+             ones, which keep its height constant: the popup is anchored at
+             its bottom, so a readout that grew on hover would move the graph
+             out from under the pointer. -->
         <div v-if="paneViews.length > 0" class="token-cost-hover-readout">
-          <div v-if="hoverText" class="token-cost-hover-text">
-            <span>{{ hoverText }}</span>
-            <span v-if="hoverSnippet" class="token-cost-hover-snippet"> ({{ hoverSnippet }})</span>
+          <div
+            v-for="view in readoutViews"
+            :key="view.key"
+            :class="view.key === 'live' ? 'token-cost-readout-live' : 'token-cost-readout-sizer'"
+            :aria-hidden="view.key === 'live' ? undefined : 'true'"
+          >
+            <template v-if="view.text">
+              <div class="token-cost-hover-text">
+                <span>{{ view.text }}</span>
+                <span v-if="view.snippet" class="token-cost-hover-snippet">
+                  ({{ view.snippet }})</span
+                >
+              </div>
+              <div v-if="view.parts.length > 0" class="token-cost-call-parts">
+                <span v-for="part in view.parts" :key="part.text" class="token-cost-call-part">
+                  <span
+                    class="token-cost-chip"
+                    :style="{ backgroundColor: part.color }"
+                    aria-hidden="true"
+                  />{{ part.text }}
+                </span>
+              </div>
+              <div v-if="view.why" class="token-cost-call-why text-primary">
+                <span v-if="view.miss" class="text-error" aria-hidden="true">▼ </span>{{ view.why }}
+              </div>
+            </template>
+            <div v-else>
+              {{ hintText
+              }}<template v-if="missMarks"
+                >{{ hintText ? " " : "" }}<span class="text-error">▼</span> marks a cache
+                miss.</template
+              >
+            </div>
           </div>
-          <div v-else>{{ hintText }}</div>
         </div>
         <ContextLegend
           v-if="showsContext && legendPoint"
@@ -303,8 +340,14 @@ import {
   type UsageEntry,
   type XLayout,
 } from "../../utils/tokenCostGraph";
+import { callCostParts, callNote, missedBars, readPrompts } from "../../utils/callCost";
 import { layoutPanes, type PaneBox, type UsagePane } from "../../utils/usagePanes";
-import { contextCategories, contextLayers, contextSegmentStarts } from "./contextCategories";
+import {
+  contextCategories,
+  contextLayers,
+  contextSegmentStarts,
+  promptGrowth,
+} from "./contextCategories";
 import { contextCompositionPoints, type Point } from "./contextComposition";
 
 const props = defineProps<{
@@ -659,6 +702,21 @@ const bars = computed<DeltaBar[]>(() => {
   return deltaBars(layout.value.xs, s.deltaLayers[s.segments.length - 1]);
 });
 
+// What each call's prompt was against the cache; misses are marked above
+// their bars in the incremental strip.
+const promptReadings = computed(() => readPrompts(props.entries));
+
+const missMarks = computed(() => {
+  const box = paneViews.value.find((pane) => pane.id === "incremental")?.box;
+  if (!box) return "";
+  return missedBars(bars.value, promptReadings.value)
+    .map((b) => {
+      const x = PADL + ((b.left + b.right) / 2) * plotW.value;
+      return `M${(x - 3).toFixed(1)},${box.top - 6}h6l-3,5z`;
+    })
+    .join("");
+});
+
 // One path per segment holding a rect per bar with a nonzero share.
 function barPaths(s: TokenCostStack, yAt: (v: number) => number): string[] {
   if (s.maxDelta === 0) return [];
@@ -779,7 +837,14 @@ const xAxisLabel = computed(() => {
   return lay.turns.length > 1 ? `${dur} · gaps = idle between turns` : dur;
 });
 
-const hintText = computed(() => (markStarts.value.length ? "Dashed lines mark compactions." : ""));
+const hintText = computed(() =>
+  [
+    needsPricing.value ? "Hover a call to see what drove its cost." : "",
+    markStarts.value.length ? "Dashed lines mark compactions." : "",
+  ]
+    .filter(Boolean)
+    .join(" "),
+);
 
 // ChatGPT subscriptions report zero writes even when caching works.
 // Usage uses native model names, not picker IDs. A graph group can combine
@@ -880,34 +945,140 @@ const legendPoint = computed<Point | null>(() => {
 
 // "call 169, $1.61, cumulative $47.05, context 174k", then the snippet:
 // "(bash)". Each graph that is on adds its figure. Time mode adds the time.
+function readoutHeader(call: number, f: ReadoutFigures): string {
+  const parts = [`call ${call}`];
+  if (xMode.value === "time" && f.time) {
+    const d = new Date(f.time);
+    const day = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    parts.push(`${day} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`);
+  }
+  if (props.panes.includes("incremental")) parts.push(f.cost);
+  if (props.panes.includes("cumulative")) parts.push(`cumulative ${f.cumulative}`);
+  if (f.context) parts.push(`context ${f.context}`);
+  return parts.join(", ");
+}
+
+interface ReadoutFigures {
+  time?: number;
+  cost: string;
+  cumulative: string;
+  context?: string;
+}
+
 const hoverText = computed(() => {
   const s = stack.value;
   const i = hoverIndex.value;
   if (!s || i === null) return "";
   const e = props.entries[i];
   const top = s.segments.length - 1;
-  const parts = [`call ${i + 1}`];
-  if (xMode.value === "time" && e.timestamp) {
-    const d = new Date(e.timestamp);
-    const day = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    parts.push(`${day} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`);
-  }
-  if (props.panes.includes("incremental")) {
-    // A call to an unpriced model adds nothing to a dollar graph, but it is
-    // not free: say so, with the provider's own figure when there is one.
-    if (s.weighted && !(e.model && costs.value[e.model])) {
-      parts.push(e.cost_usd > 0 ? `${formatUsd(e.cost_usd)} reported` : "unpriced");
-    } else {
-      parts.push(amount(s.deltaLayers[top][i]));
-    }
-  }
-  if (props.panes.includes("cumulative")) parts.push(`cumulative ${amount(s.layers[top][i])}`);
+  // A call to an unpriced model adds nothing to a dollar graph, but it is
+  // not free: say so, with the provider's own figure when there is one.
+  const cost =
+    s.weighted && !(e.model && costs.value[e.model])
+      ? e.cost_usd > 0
+        ? `${formatUsd(e.cost_usd)} reported`
+        : "unpriced"
+      : amount(s.deltaLayers[top][i]);
   const point = props.panes.includes("context") ? legendPoint.value : null;
-  if (point && ctxHoverIndex.value !== null) parts.push(`context ${formatTokenCount(point.total)}`);
-  return parts.join(", ");
+  return readoutHeader(i + 1, {
+    time: e.timestamp,
+    cost,
+    cumulative: amount(s.layers[top][i]),
+    context: point && ctxHoverIndex.value !== null ? formatTokenCount(point.total) : undefined,
+  });
 });
+
+// The hovered call's cost by token type, colored like its bar: what it paid
+// for. Shown whenever a cost graph is on.
+const hoverParts = computed(() => {
+  const s = stack.value;
+  const i = hoverIndex.value;
+  if (!s || i === null || !needsPricing.value) return [];
+  const e = props.entries[i];
+  const model = e.model || "unknown model";
+  const rows = s.perModel.find((m) => m.model === model)?.rows;
+  const parts = callCostParts(e, e.model ? costs.value[e.model] : null);
+  // A free call's split is all "$0": the token counts say enough.
+  const free = parts.every((part) => !part.usd);
+  return parts.map((part) => ({
+    // "Cache write 148k $0.739": one string, so no template whitespace is lost.
+    text: [
+      TOKEN_BANDS[part.band].label,
+      formatTokenCount(part.tokens),
+      ...(part.usd === null || free ? [] : [formatUsd(part.usd)]),
+    ].join(" "),
+    color: rows?.[part.band].color ?? "",
+  }));
+});
+
+// A note on the hovered call: a cache miss, or what its uncached prompt
+// was when that cost the most.
+const hoverWhy = computed(() => {
+  const i = hoverIndex.value;
+  if (i === null || !needsPricing.value) return "";
+  const e = props.entries[i];
+  const growth = ctxAligned.value ? promptGrowth(ctxPoints.value, i, categories.value) : null;
+  return callNote(e, promptReadings.value[i], e.model ? costs.value[e.model] : null, growth);
+});
+const hoverMiss = computed(
+  () => hoverIndex.value !== null && promptReadings.value[hoverIndex.value]?.kind === "miss",
+);
 
 const hoverSnippet = computed(() =>
   hoverIndex.value === null ? "" : props.entries[hoverIndex.value]?.snippet || "",
 );
+
+interface ReadoutView {
+  key: string;
+  text: string;
+  snippet: string;
+  parts: { text: string; color: string }[];
+  why: string;
+  miss: boolean;
+}
+
+// Readouts at least as tall as any call's, for the live one to share a cell
+// with: the longest header, all four token types, and each of the longest
+// notes.
+const sizerViews = computed<ReadoutView[]>(() => {
+  const s = stack.value;
+  if (!s) return [];
+  const big = s.weighted ? "$99,999" : "999.9M tok";
+  const text = readoutHeader(99_999, {
+    time: new Date(2026, 8, 30, 12, 59).getTime(),
+    cost: s.weighted ? "$0.0000 reported" : big,
+    cumulative: big,
+    context: props.panes.includes("context") ? "999k" : undefined,
+  });
+  const parts = needsPricing.value
+    ? TOKEN_BANDS.map((band) => ({
+        text: `${band.label} 999k${s.weighted ? " $9.999" : ""}`,
+        color: "",
+      }))
+    : [];
+  const longest = (names: string[]) => names.reduce((a, b) => (b.length > a.length ? b : a), "");
+  const model = longest(s.perModel.map((m) => m.model));
+  const category = longest(categories.value.map((c) => c.label));
+  const whys = needsPricing.value
+    ? [
+        `Cache miss, 9999h 59m after the previous call: 999k of 999k prompt tokens were still cached (999k new, mostly ${category}).`,
+        `Cache miss on switching back to ${model}: 999k of 999k prompt tokens were still cached (999k new).`,
+        `First call on ${model}: 999k prompt tokens weren't cached yet.`,
+      ]
+    : [""];
+  const snippet = "x".repeat(100);
+  return whys.map((why, k) => ({ key: `sizer-${k}`, text, snippet, parts, why, miss: true }));
+});
+
+const readoutViews = computed<ReadoutView[]>(() => [
+  ...sizerViews.value,
+  {
+    key: "live",
+    text: hoverText.value,
+    snippet: hoverSnippet.value,
+    parts: hoverParts.value,
+    why: hoverWhy.value,
+    miss: hoverMiss.value,
+  },
+]);
 </script>

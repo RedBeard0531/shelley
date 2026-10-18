@@ -74,6 +74,8 @@ func requestMentions(req *llm.Request, needle string) bool {
 //   - "subagent: <slug> <prompt>" - triggers subagent tool
 //   - "change_dir: <path>" - triggers change_dir tool
 //   - "delay: <seconds>" - delays response by specified seconds
+//   - "cache: <read> <write>" - reports a prompt of that many cache read and
+//     cache write tokens, and no others
 //   - "fail <error>" - emits a retry warning and returns a failure
 //   - See Do() method for complete list of supported patterns
 type Service struct {
@@ -322,6 +324,17 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 				prompt = parts[1]
 			}
 			return s.makeSubagentToolResponse(slug, prompt, inputTokens), nil
+		}
+
+		if rest, ok := strings.CutPrefix(inputText, "cache: "); ok {
+			var read, write uint64
+			if _, err := fmt.Sscan(rest, &read, &write); err != nil {
+				return nil, fmt.Errorf("predictable cache: want \"<read> <write>\": %w", err)
+			}
+			resp := s.makeResponse("Done.", 0)
+			resp.Usage.CacheReadInputTokens = read
+			resp.Usage.CacheCreationInputTokens = write
+			return resp, nil
 		}
 
 		if text, ok := strings.CutPrefix(inputText, "markdown: "); ok {

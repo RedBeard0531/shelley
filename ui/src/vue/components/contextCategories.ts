@@ -2,7 +2,7 @@
 // per-call parts (see contextComposition.ts) share a color and legend row,
 // plus the stacked layers the graph draws from them.
 import { formatTokenCount } from "../../utils/tokenCostGraph";
-import type { Point } from "./contextComposition";
+import type { Composition, Point } from "./contextComposition";
 
 export type ContextCategory = { key: string; label: string; color: string };
 
@@ -75,8 +75,32 @@ export function contextCategories(points: Point[]): ContextCategory[] {
 /** Tokens a category holds at one call; "text" folds user, assistant and
  *  reasoning together. */
 export function categoryTokens(point: Point, key: string): number {
-  if (key === "text") return TEXT_PARTS.reduce((sum, part) => sum + (point.parts[part] || 0), 0);
-  return point.parts[key] || 0;
+  return compositionTokens(point.parts, key);
+}
+
+function compositionTokens(parts: Composition, key: string): number {
+  if (key === "text") return TEXT_PARTS.reduce((sum, part) => sum + (parts[part] || 0), 0);
+  return parts[key] || 0;
+}
+
+/** The category that grew the most between the prompts of calls i-1 and i:
+ *  what call i's new prompt tokens mostly were (the previous call's response
+ *  and the tool results it got back). Null across a compaction, which
+ *  rewrites the context rather than adding to it. */
+export function promptGrowth(
+  points: Point[],
+  i: number,
+  categories: ContextCategory[],
+): { label: string; tokens: number } | null {
+  const cur = points[i];
+  const prev = points[i - 1];
+  if (!cur || !prev || cur.segment !== prev.segment) return null;
+  let best: { label: string; tokens: number } | null = null;
+  for (const c of categories) {
+    const tokens = compositionTokens(cur.prompt, c.key) - compositionTokens(prev.prompt, c.key);
+    if (tokens > (best?.tokens ?? 0)) best = { label: c.label, tokens };
+  }
+  return best;
 }
 
 /** Stacked upper boundaries, bottom-to-top: layers[c][i] is the sum over

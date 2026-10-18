@@ -2127,8 +2127,11 @@ const usageData = computed<{ entries: UsageEntry[]; otherRows: OtherUsageRow[] }
   // Timestamp of the message that triggered the pending turn; anchors the
   // first call's duration (created_at only marks call completion).
   let turnStartTs = 0;
+  // An in-place compaction rewrote the context since the last call.
+  let compacted = false;
   for (const m of messages.value) {
     otherEntries.push(...parseOtherUsage(m));
+    if (m.type === "inplacecompaction") compacted = true;
     if (isHumanUserMessage(m)) {
       nextStartsTurn = true;
       turnStartTs = Date.parse(m.created_at) || 0;
@@ -2152,11 +2155,13 @@ const usageData = computed<{ entries: UsageEntry[]; otherRows: OtherUsageRow[] }
         ...u,
         snippet: messageSnippet(m),
         generation: m.generation,
+        afterCompaction: compacted,
         timestamp: Date.parse(m.created_at) || 0,
         startsTurn: nextStartsTurn,
         turnStartTimestamp: nextStartsTurn && turnStartTs ? turnStartTs : undefined,
       });
       nextStartsTurn = false;
+      compacted = false;
     }
     if (endsTurn) {
       nextStartsTurn = true;

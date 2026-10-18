@@ -434,18 +434,42 @@ test.describe("Context usage popup", () => {
     // anchored above the status bar, so anything that changes its height (a
     // pane switched off, the sub-agent lookup landing) moves the graph: point
     // at it afresh on every attempt rather than at where it was measured.
-    const readout = graph.locator(".token-cost-hover-readout");
+    const readout = graph.locator(".token-cost-readout-live");
+    await expect(readout).toHaveText("Hover a call to see what drove its cost.");
+    // The readout is as tall as it can get before any hover, so a hover
+    // doesn't move the graph out from under the pointer.
+    const readoutBox = graph.locator(".token-cost-hover-readout");
+    const unhovered = (await readoutBox.boundingBox())!.height;
+    const graphTop = (await svg.boundingBox())!.y;
     const hoverGraph = async (y: (height: number) => number, text: RegExp) => {
       await expect(async () => {
         const { width, height } = (await svg.boundingBox())!;
         await svg.hover({ position: { x: width / 2, y: y(height) } });
-        await expect(readout).toHaveText(text, { timeout: 1000 });
+        await expect(readout.locator(".token-cost-hover-text")).toHaveText(text, {
+          timeout: 1000,
+        });
       }).toPass({ timeout: 15000 });
     };
     await hoverGraph(
       (height) => height / 2,
       /^call 1, \$[\d.]+, cumulative \$[\d.]+, context [\d.]+k?( \(.+\))?$/,
     );
+    // Under it, what the call paid for, colored like its bar, and why.
+    const parts = readout.locator(".token-cost-call-part");
+    await expect(parts.first()).toHaveText(/^(Input|Output) [\d.]+k? \$[\d.]+$/);
+    const chip = await parts
+      .first()
+      .locator(".token-cost-chip")
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    const barColors = await svg
+      .locator('g[data-pane="incremental"] path[fill]')
+      .evaluateAll((els) => els.map((el) => getComputedStyle(el).fill));
+    expect(barColors).toContain(chip);
+    await expect(readout.locator(".token-cost-call-why")).toHaveText(
+      "predictable-v1 reports no prompt caching.",
+    );
+    expect(Math.abs((await readoutBox.boundingBox())!.height - unhovered)).toBeLessThan(0.5);
+    expect(Math.abs((await svg.boundingBox())!.y - graphTop)).toBeLessThan(0.5);
 
     // Switching a graph off removes its pane and its part of the readout.
     await popup.getByRole("checkbox", { name: "Context length" }).click();
@@ -467,6 +491,94 @@ test.describe("Context usage popup", () => {
     await popup.getByRole("checkbox", { name: "Context length" }).click();
     await expect(svg).toHaveCount(0);
     await expect(toggles).toHaveCount(3);
+  });
+
+  test("cache misses are marked above their calls", async ({ page, request }) => {
+    test.setTimeout(60000);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.route("**/api/model-costs", async (route) => {
+      const body = route.request().postDataJSON() as { models: { model: string }[] };
+      const costs = Object.fromEntries(
+        body.models.map(({ model }) => [
+          model,
+          { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        ]),
+      );
+      await route.fulfill({ json: { costs } });
+    });
+    // A first call writes the prompt to the cache, a second reads it back,
+    // and a third finds only a little of it still cached.
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(
+      request,
+      "cache: 0 10000",
+    );
+    for (const [k, message] of ["cache: 10000 500", "cache: 500 10500"].entries()) {
+      const chat = await request.post(`/api/conversation/${conversationId}/chat`, {
+        data: { message, model: "predictable" },
+      });
+      expect(chat.ok()).toBeTruthy();
+      await expect(async () => {
+        const body = await (await request.get(`/api/conversation/${conversationId}`)).json();
+        const turns = body.messages.filter(
+          (m: { type: string; end_of_turn?: boolean }) => m.type === "agent" && m.end_of_turn,
+        );
+        expect(turns).toHaveLength(k + 2);
+      }).toPass({ timeout: 30000 });
+    }
+    await page.goto(`/c/${slug}`);
+    await page.locator(".context-usage-label").click();
+    const graph = page.locator(".chat-context-popup .token-cost-graph");
+    const svg = graph.locator(".token-cost-graph-svg");
+    await expect(svg).toBeVisible({ timeout: 30000 });
+
+    // One mark, over the third call's bar, and the hint says what it means.
+    const mark = svg.locator(".token-cost-miss-mark");
+    await expect(mark).toHaveCount(1);
+    expect((await mark.getAttribute("d"))!.match(/M/g)).toHaveLength(1);
+    const readout = graph.locator(".token-cost-readout-live");
+    await expect(readout).toContainText("▼ marks a cache miss.");
+    const markBox = (await mark.boundingBox())!;
+    const strip = (await svg
+      .locator('g[data-pane="incremental"] .token-cost-axis')
+      .first()
+      .boundingBox())!;
+    expect(markBox.y + markBox.height).toBeLessThanOrEqual(strip.y + 0.5);
+    const bars = await svg
+      .locator('g[data-pane="incremental"] path[fill]')
+      .evaluateAll((els) =>
+        els.flatMap((el) =>
+          [...(el.getAttribute("d") || "").matchAll(/M([\d.]+),[\d.]+V[\d.]+H([\d.]+)/g)].map(
+            (m) => [Number(m[1]), Number(m[2])],
+          ),
+        ),
+      );
+    const lefts = [...new Set(bars.map(([left]) => left))].sort((a, b) => a - b);
+    expect(lefts).toHaveLength(3);
+    const third = bars.find(([left]) => left === lefts[2])!;
+    const markMid = Number((await mark.getAttribute("d"))!.match(/^M([\d.]+)/)![1]) + 3;
+    expect(markMid).toBeGreaterThan(third[0]);
+    expect(markMid).toBeLessThan(third[1]);
+
+    // Hovering it says so; hovering the hit before it doesn't.
+    const hover = async (x: number, header: RegExp) => {
+      await expect(async () => {
+        const box = (await svg.boundingBox())!;
+        const viewBoxW = Number((await svg.getAttribute("viewBox"))!.split(" ")[2]);
+        await svg.hover({
+          position: { x: (x / viewBoxW) * box.width, y: box.height / 2 },
+        });
+        await expect(readout.locator(".token-cost-hover-text")).toHaveText(header, {
+          timeout: 1000,
+        });
+      }).toPass({ timeout: 15000 });
+    };
+    await hover(markMid, /^call 3,/);
+    await expect(readout.locator(".token-cost-call-why")).toHaveText(
+      /^▼ Cache miss(, [\dhms ]+ after the previous call)?: 500 of 11k prompt tokens were still cached\.$/,
+    );
+    const second = bars.find(([left]) => left === lefts[1])!;
+    await hover((second[0] + second[1]) / 2, /^call 2,/);
+    await expect(readout.locator(".token-cost-call-why")).toHaveCount(0);
   });
 
   test("remembers which graphs are on across page loads", async ({ page, request }) => {

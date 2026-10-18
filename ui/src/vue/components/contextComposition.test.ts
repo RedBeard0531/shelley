@@ -1,4 +1,5 @@
 import type { Message } from "../../types";
+import { contextCategories, promptGrowth } from "./contextCategories";
 import { contextCompositionPoints } from "./contextComposition";
 
 let failed = 0;
@@ -61,6 +62,30 @@ assert(fileRead(after) < 1_000, `trimmed file read after = ${fileRead(after)}`);
 assert(!JSON.stringify(after.toolBreakdown).includes("-"), "no negative breakdown");
 const sum = Object.values(after.parts).reduce((a, b) => a + b, 0);
 assert(Math.abs(sum - 150) <= 5, `after parts sum to the reported total: ${sum}`);
+
+// A call's new prompt tokens are the previous call's response and the tool
+// results it got back, not the call's own response.
+{
+  const out = (text: string, tool: string, command: string) => [
+    ...(text ? [{ Type: 2, Text: text }] : []),
+    ...(tool ? [{ Type: 5, ID: tool, ToolName: "bash", ToolInput: { command } }] : []),
+  ];
+  const result = (tool: string, text: string) =>
+    msg("user", [{ Type: 6, ToolUseID: tool, ToolResult: [{ Type: 2, Text: text }] }]);
+  const points = contextCompositionPoints([
+    msg("user", [{ Type: 2, Text: "go" }]),
+    msg("agent", out(big, "r1", "cat f"), usage(10_100)),
+    result("r1", "y".repeat(4_000)),
+    msg("agent", out("", "r2", "cat g"), usage(11_200)),
+    result("r2", big),
+    msg("agent", out("z".repeat(80_000), "", ""), usage(41_300)),
+  ]);
+  const cats = contextCategories(points);
+  const label = (i: number) => promptGrowth(points, i, cats)?.label;
+  assert(label(1) === "text", `after a long reply and a short result: ${label(1)}`);
+  assert(label(2) === "bash · file read", `after a long result, not its own reply: ${label(2)}`);
+  assert(promptGrowth(points, 0, cats) === null, "the first call has nothing to grow from");
+}
 
 if (failed) process.exit(1);
 console.log("✓ in-place compaction resets the composition");

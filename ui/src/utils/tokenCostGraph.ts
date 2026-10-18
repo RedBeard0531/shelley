@@ -17,8 +17,14 @@ export interface UsageEntry {
   snippet?: string;
   /** Conversation generation this call belongs to (increments on compaction). */
   generation?: number;
+  /** An in-place compaction rewrote the context since the previous call. */
+  afterCompaction?: boolean;
   /** ms since epoch of the message, for the time x-axis. */
   timestamp?: number;
+  /** When the call was sent and when it finished (RFC 3339), as recorded in
+   *  its usage; they measure idle time between calls. */
+  start_time?: string | null;
+  end_time?: string | null;
   /** True when this call begins a new turn (first call, or first call after a
    *  user message / end-of-turn). Idle time before it is collapsed into a
    *  fixed-width gap on the time x-axis. */
