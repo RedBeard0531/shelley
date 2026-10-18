@@ -104,7 +104,8 @@ func TestLiveSession(t *testing.T) {
 	for _, item := range req.Session.Input {
 		dialogue = append(dialogue, item.Role+": "+item.Content[0].Text)
 	}
-	if got := strings.Join(dialogue, "|"); got != "user: fix the bug|user: Spoken request:\nlint it|user: Spoken request:\nqueued lint|assistant: fixed it" {
+	// Live speaks first: the input ends with the greeting instruction.
+	if got := strings.Join(dialogue, "|"); got != "user: fix the bug|user: Spoken request:\nlint it|user: Spoken request:\nqueued lint|assistant: fixed it|developer: "+liveGreeting {
 		t.Errorf("Live got more than the dialogue: %q", got)
 	}
 	if n := len(e.ps.GetRecentRequests()); n != 0 || len(listMessages(t, e.database, id)) != 7 {
@@ -129,7 +130,7 @@ func TestLiveSession(t *testing.T) {
 	if voicePrompt(req) != "" {
 		t.Errorf("the default profile has no voice prompt: %s", req.Session.Instructions)
 	}
-	if len(req.Session.Input) != 0 {
+	if len(req.Session.Input) != 1 || req.Session.Input[0].Role != "developer" {
 		t.Errorf("empty draft history = %+v", req.Session.Input)
 	}
 	req = call(draft.ConversationID, `,"cwd":"`+cwd+`","conversation_options":{"profile":"Personal","thinking_level":"high"}`)

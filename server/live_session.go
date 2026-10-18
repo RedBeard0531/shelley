@@ -67,6 +67,11 @@ Do not delegate when:
 
 Create the client delegation before making any handoff or progress claim. "I'll check" by itself does not send a task. Until the client confirms acceptance or queuing, do not say the request was sent, that you are checking it or that work has started. Once accepted, acknowledge briefly and keep listening; if queued, say it is waiting behind earlier work. If delivery fails, say it was not sent and ask the user to repeat it. Do not invent or guess results, progress or completion; report only what the backend returns.`
 
+// liveGreeting makes Live speak first. GPT-Live has no "respond now"
+// event: a developer message closing session.input is how it is asked to
+// open the call, and that only improves the odds that it does.
+const liveGreeting = "The call just connected. Greet the user now with a brief hello in the language of the dialogue above, or else English, then pause and listen."
+
 // liveInstructions are Live's instructions: who to speak as, from the
 // profile's voice prompt if it has one, then the voice and delegation
 // policies, then the state at the start of the call.
@@ -150,7 +155,7 @@ func (s *Server) handleLiveSession(w http.ResponseWriter, r *http.Request, conve
 		"session": map[string]any{
 			"model":        "gpt-live-1",
 			"instructions": liveInstructions(profile.VoicePrompt, s.liveSituation(conversation)),
-			"input":        history,
+			"input":        append(history, liveHistoryItem{Type: "message", Role: "developer", Content: []liveHistoryText{{Type: "input_text", Text: liveGreeting}}}),
 			"delegation":   map[string]string{"type": "client"},
 		},
 		"transport": map[string]string{"type": "webrtc", "sdp": offer.SDP},
