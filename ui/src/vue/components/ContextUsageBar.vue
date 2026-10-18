@@ -1,7 +1,6 @@
 <!-- The token-count segment of the status readout ("15k"). Opens token/cost
      graphs and manual compaction actions. The count warms up at 100k / 200k /
-     300k tokens (or 70/80/90% of a known context window) and the popup
-     auto-opens once per browser at the first step. -->
+     300k tokens (or 70/80/90% of a known context window). -->
 <template>
   <div ref="barRef" class="context-usage-root">
     <Popover
@@ -98,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch } from "vue";
+import { computed, ref, useId, watch } from "vue";
 import Popover from "primevue/popover";
 import type { Message, Model } from "../../types";
 import { contextUsageLevel, contextUsageLevelLabel } from "../../utils/contextUsage";
@@ -130,7 +129,6 @@ const props = defineProps<{
    *  so it needs a beat's warning; the graph renders empty for one tick and
    *  fills in on the next. */
   onUsageNeeded?: () => void;
-  agentWorking?: boolean;
 }>();
 
 const distilling = ref(false);
@@ -151,10 +149,8 @@ const usageLevel = computed(() =>
 const usageLevelClass = computed(() =>
   usageLevel.value ? `context-usage-label-tokens-${usageLevel.value}` : "",
 );
-// The popup's advice and its once-per-browser auto-open fire exactly when the
-// count first colors.
+// The popup's advice appears exactly when the count first colors.
 const showLongConversationWarning = computed(() => usageLevel.value !== "");
-let hasAutoOpened = false;
 
 // Spelled out for the accessible name; the level is named in words too since
 // hue alone is no signal for some readers.
@@ -175,9 +171,6 @@ function openPopup(event: Event) {
   popoverRef.value?.toggle(event);
 }
 
-// Every path that makes the graph visible funnels through the Popover's show
-// event, including the programmatic auto-open below, so ask again here: the
-// hover/focus/click hints above are an optimization, this is the guarantee.
 function onPopupShow() {
   // Keep a tall breakdown above its trigger, including on short viewports.
   // Otherwise Popover clamps it to the viewport top and can cover the label.
@@ -185,7 +178,6 @@ function onPopupShow() {
     popupAvailableHeight.value = `${Math.max(0, barRef.value.getBoundingClientRect().top - 16)}px`;
   }
   popupOpen.value = true;
-  props.onUsageNeeded?.();
 }
 
 // This component is not remounted on a conversation switch, but the parent
@@ -196,36 +188,6 @@ watch(
   () => {
     if (popupOpen.value) props.onUsageNeeded?.();
   },
-);
-
-// Auto-open popup once per browser at the long-conversation threshold.
-// Programmatic open: PrimeVue's show() anchors to event.currentTarget, so pass
-// the usage label element explicitly as the target.
-watch(
-  [showLongConversationWarning, () => props.agentWorking, () => props.conversationId],
-  () => {
-    const isMobile = window.innerWidth <= 768;
-    if (
-      showLongConversationWarning.value &&
-      !props.agentWorking &&
-      !isMobile &&
-      props.conversationId &&
-      !hasAutoOpened &&
-      localStorage.getItem("shelley_long_convo_popup_shown") !== "1"
-    ) {
-      hasAutoOpened = true;
-      // Wait a tick: with { immediate: true } this can fire before mount,
-      // when barRef/popoverRef are still null. Only burn the once-per-browser
-      // localStorage flag if the popup actually opens.
-      void nextTick(() => {
-        const anchor = barRef.value?.querySelector<HTMLElement>(".context-usage-label");
-        if (!anchor || !popoverRef.value) return;
-        localStorage.setItem("shelley_long_convo_popup_shown", "1");
-        popoverRef.value.show(new Event("click"), anchor);
-      });
-    }
-  },
-  { immediate: true },
 );
 
 async function handleDistillNewGeneration() {
