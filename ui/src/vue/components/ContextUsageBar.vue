@@ -27,6 +27,7 @@
         :messages="messages || []"
         :models="models"
         :other-usage-rows="otherUsageRows || []"
+        :other-usage-entries="otherUsageEntries || []"
         :conversation-id="conversationId"
         :panes="panes"
         active
@@ -102,7 +103,7 @@ import Popover from "primevue/popover";
 import type { Message, Model } from "../../types";
 import { contextUsageLevel, contextUsageLevelLabel } from "../../utils/contextUsage";
 import { formatTokenCount } from "../../utils/tokenCostGraph";
-import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
+import type { OtherUsageEntry, OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
 import { useUsagePanesPreference } from "../composables/usagePanesPreference";
 import TokenCostGraph from "./TokenCostGraph.vue";
 import UsageGraphSwitch from "./UsageGraphSwitch.vue";
@@ -118,6 +119,7 @@ const props = defineProps<{
   // findModelByName).
   models: Model[];
   otherUsageRows?: OtherUsageRow[];
+  otherUsageEntries?: OtherUsageEntry[];
   messages?: Message[];
   onDistillNewGeneration?: () => Promise<void> | void;
   onStartNewGeneration?: () => Promise<void> | void;

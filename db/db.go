@@ -218,7 +218,63 @@ func (db *DB) Migrate(ctx context.Context) error {
 		}
 	}
 
-	return db.updateBuiltinProfiles(ctx)
+	if err := db.updateBuiltinProfiles(ctx); err != nil {
+		return err
+	}
+	return db.refreshTierBounds(ctx)
+}
+
+// refreshTierBounds syncs the tier_bounds table with the embedded models.dev
+// snapshot's context-tier pricing boundaries (modelsdev.BandBounds). The
+// table feeds the band split in the usage-aggregation queries; it is derived
+// data, so startup simply rewrites it when it differs.
+func (db *DB) refreshTierBounds(ctx context.Context) error {
+	bounds := modelsdev.BandBounds()
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		var current []int64
+		rows, err := tx.Query("SELECT bound FROM tier_bounds ORDER BY bound")
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var b int64
+			if err := rows.Scan(&b); err != nil {
+				rows.Close()
+				return err
+			}
+			current = append(current, b)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if len(current) == len(bounds) {
+			same := true
+			for i, b := range bounds {
+				if int64(b) != current[i] {
+					same = false
+					break
+				}
+			}
+			if same {
+				return nil
+			}
+		}
+		if _, err := tx.Exec("DELETE FROM tier_bounds"); err != nil {
+			return err
+		}
+		for _, b := range bounds {
+			if _, err := tx.Exec("INSERT INTO tier_bounds (bound) VALUES (?)", b); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to refresh tier bounds: %w", err)
+	}
+	return nil
 }
 
 // runMigration executes a single migration file within a transaction,
@@ -2534,15 +2590,13 @@ func (db *DB) GetSubagentOtherUsage(ctx context.Context, parentID string) ([]gen
 // GetConversationCosts returns each conversation's own LLM cost in USD
 // (direct agent messages plus indirect other-usage), priced via modelsdev
 // rates with the provider-reported cost_usd as the fallback for unpriced
-// models.
+// models. Usage rows arrive split by pricing band; each band prices at its
+// own rates (see modelsdev.Cost.Rates).
 func (db *DB) GetConversationCosts(ctx context.Context) (map[string]float64, error) {
 	direct := make(map[string]float64)
-	fold := func(convID, model, url string, in, cacheWrite, cacheRead, out int64, costUsd float64) {
+	fold := func(convID, model, url string, band int64, in, cacheWrite, cacheRead, out int64, costUsd float64) {
 		if c, found := modelsdev.LookupCost(url, model); found {
-			direct[convID] += float64(in)*c.Input/1e6 +
-				float64(cacheWrite)*c.CacheWrite/1e6 +
-				float64(cacheRead)*c.CacheRead/1e6 +
-				float64(out)*c.Output/1e6
+			direct[convID] += c.Rates(int(band)).Estimate(in, cacheWrite, cacheRead, out)
 		} else {
 			direct[convID] += costUsd
 		}
@@ -2554,14 +2608,14 @@ func (db *DB) GetConversationCosts(ctx context.Context) (map[string]float64, err
 			return err
 		}
 		for _, r := range rows {
-			fold(r.ConversationID, r.ModelName, r.LlmApiUrl, r.InputTokens, r.CacheCreationInputTokens, r.CacheReadInputTokens, r.OutputTokens, r.CostUsd)
+			fold(r.ConversationID, r.ModelName, r.LlmApiUrl, r.Band, r.InputTokens, r.CacheCreationInputTokens, r.CacheReadInputTokens, r.OutputTokens, r.CostUsd)
 		}
 		otherRows, err := q.GetConversationOtherUsageByModel(ctx)
 		if err != nil {
 			return err
 		}
 		for _, r := range otherRows {
-			fold(r.ConversationID, r.ModelName, r.LlmApiUrl, r.InputTokens, r.CacheCreationInputTokens, r.CacheReadInputTokens, r.OutputTokens, r.CostUsd)
+			fold(r.ConversationID, r.ModelName, r.LlmApiUrl, r.Band, r.InputTokens, r.CacheCreationInputTokens, r.CacheReadInputTokens, r.OutputTokens, r.CostUsd)
 		}
 		return nil
 	})

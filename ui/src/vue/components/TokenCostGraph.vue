@@ -370,6 +370,7 @@ import {
   type ModelUsage,
   type OtherPurposeUsage,
   type OtherUsageBreakdown,
+  type OtherUsageEntry,
   type OtherUsageRow,
   type TokenCostStack,
   type UsageEntry,
@@ -394,6 +395,10 @@ const props = defineProps<{
   // (e.g. "accounts/fireworks/models/glm-5p3-flash") into display names.
   models: Model[];
   otherUsageRows?: OtherUsageRow[];
+  /** The calls behind otherUsageRows, unaggregated: the breakdown prices each
+   *  at its own prompt's rates (a compaction call can cross a context-tier
+   *  boundary its purpose's other calls never reach). */
+  otherUsageEntries?: OtherUsageEntry[];
   conversationId?: string | null;
   active?: boolean;
   /** Which graphs are on; they stack in a fixed order whatever this one is. */
@@ -471,8 +476,8 @@ const distinctModels = computed(() => {
   for (const e of props.entries) {
     if (e.model && !seen.has(e.model)) seen.set(e.model, e.url || "");
   }
-  for (const row of props.otherUsageRows ?? []) {
-    if (row.model && !seen.has(row.model)) seen.set(row.model, row.url || "");
+  for (const e of props.otherUsageEntries ?? []) {
+    if (e.model && !seen.has(e.model)) seen.set(e.model, e.url || "");
   }
   return seen;
 });
@@ -644,9 +649,9 @@ const modelComparison = computed(() =>
 );
 
 const otherBreakdown = computed<OtherUsageBreakdown | null>(() => {
-  const rows = props.otherUsageRows;
-  if (!rows || rows.length === 0) return null;
-  return buildOtherUsageBreakdown(rows, costs.value);
+  const entries = props.otherUsageEntries;
+  if (!entries || entries.length === 0) return null;
+  return buildOtherUsageBreakdown(entries, costs.value);
 });
 
 const otherKnownUsd = computed(() => {

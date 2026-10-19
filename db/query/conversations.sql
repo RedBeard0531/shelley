@@ -396,17 +396,27 @@ ORDER BY created_at ASC;
 
 -- name: GetSubtreeUsage :many
 -- Aggregate LLM usage across a conversation and all its descendants
--- (recursively), grouped by model. Unlike GetSubagentUsage, the conversation
--- itself is included.
+-- (recursively), grouped by model and pricing band. Unlike GetSubagentUsage,
+-- the conversation itself is included.
+--
+-- The tier_bounds table holds modelsdev.BandBounds: the catalog's
+-- context-tier boundaries. Each row's band counts how many boundaries the
+-- call's total prompt (input + cache write + cache read) exceeded;
+-- modelsdev.Cost.Rates turns a band back into that model's rates.
 WITH RECURSIVE descendants(conversation_id) AS (
   SELECT c.conversation_id FROM conversations c WHERE c.conversation_id = ?
   UNION ALL
   SELECT c.conversation_id FROM conversations c
   JOIN descendants d ON c.parent_conversation_id = d.conversation_id
-)
+),
+band_bounds(bound) AS (SELECT bound FROM tier_bounds)
 SELECT
   m.model_name,
   m.llm_api_url,
+  CAST((SELECT COUNT(*) FROM band_bounds bb
+        WHERE bb.bound < (m.usage_data ->> 'input_tokens')
+          + (m.usage_data ->> 'cache_creation_input_tokens')
+          + (m.usage_data ->> 'cache_read_input_tokens')) AS INTEGER) AS band,
   COUNT(*) AS llm_calls,
   CAST(COALESCE(SUM(m.usage_data ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
   CAST(COALESCE(SUM(m.usage_data ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
@@ -416,7 +426,7 @@ SELECT
 FROM messages m
 JOIN descendants d ON m.conversation_id = d.conversation_id
 WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
-GROUP BY m.model_name, m.llm_api_url;
+GROUP BY m.model_name, m.llm_api_url, band;
 
 -- name: GetSubagentUsage :many
 -- Per-call LLM usage across all descendant conversations (subagents,
@@ -482,17 +492,24 @@ WHERE m.conversation_id = d.conversation_id
 
 -- name: GetSubtreeOtherUsage :many
 -- Aggregate indirect LLM usage (messages.other_usage_data entries) across a
--- conversation and all its descendants (recursively), grouped by model.
--- Unlike GetSubagentOtherUsage, the conversation itself is included.
+-- conversation and its descendants (recursively), grouped by model and
+-- pricing band. Unlike GetSubagentOtherUsage, the conversation itself is
+-- included. The tier_bounds table holds modelsdev.BandBounds; see
+-- GetSubtreeUsage.
 WITH RECURSIVE descendants(conversation_id) AS (
   SELECT c.conversation_id FROM conversations c WHERE c.conversation_id = ?
   UNION ALL
   SELECT c.conversation_id FROM conversations c
   JOIN descendants d ON c.parent_conversation_id = d.conversation_id
-)
+),
+band_bounds(bound) AS (SELECT bound FROM tier_bounds)
 SELECT
   CAST(COALESCE(je.value ->> 'model', '') AS TEXT) AS model_name,
   CAST(COALESCE(je.value ->> 'url', '') AS TEXT) AS llm_api_url,
+  CAST((SELECT COUNT(*) FROM band_bounds bb
+        WHERE bb.bound < (je.value ->> 'input_tokens')
+          + (je.value ->> 'cache_creation_input_tokens')
+          + (je.value ->> 'cache_read_input_tokens')) AS INTEGER) AS band,
   COUNT(*) AS llm_calls,
   CAST(COALESCE(SUM(je.value ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
   CAST(COALESCE(SUM(je.value ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
@@ -503,7 +520,7 @@ FROM messages m
 JOIN descendants d ON m.conversation_id = d.conversation_id,
   json_each(m.other_usage_data) je
 WHERE m.other_usage_data IS NOT NULL
-GROUP BY je.value ->> 'model', je.value ->> 'url';
+GROUP BY je.value ->> 'model', je.value ->> 'url', band;
 
 -- name: GetConversationBySlugAndParent :one
 SELECT * FROM conversations
@@ -519,11 +536,17 @@ WHERE parent_conversation_id IS NOT NULL;
 -- messages. Powers the conversation list's per-row price: the server prices
 -- the token totals via modelsdev rates (falling back to the reported
 -- cost_usd for unpriced models) and folds descendant costs into parents'
--- totals. Mirrors GetSubtreeUsage but keyed by conversation.
+-- totals. Mirrors GetSubtreeUsage but keyed by conversation. The tier_bounds
+-- table holds modelsdev.BandBounds; see GetSubtreeUsage.
+WITH band_bounds(bound) AS (SELECT bound FROM tier_bounds)
 SELECT
   m.conversation_id,
   COALESCE(m.model_name, '') AS model_name,
   COALESCE(m.llm_api_url, '') AS llm_api_url,
+  CAST((SELECT COUNT(*) FROM band_bounds bb
+        WHERE bb.bound < (m.usage_data ->> 'input_tokens')
+          + (m.usage_data ->> 'cache_creation_input_tokens')
+          + (m.usage_data ->> 'cache_read_input_tokens')) AS INTEGER) AS band,
   COUNT(*) AS llm_calls,
   CAST(COALESCE(SUM(m.usage_data ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
   CAST(COALESCE(SUM(m.usage_data ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
@@ -532,16 +555,22 @@ SELECT
   CAST(COALESCE(SUM(m.usage_data ->> 'cost_usd'), 0) AS REAL) AS cost_usd
 FROM messages m
 WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
-GROUP BY m.conversation_id, COALESCE(m.model_name, ''), COALESCE(m.llm_api_url, '');
+GROUP BY m.conversation_id, COALESCE(m.model_name, ''), COALESCE(m.llm_api_url, ''), band;
 
 -- name: GetConversationOtherUsageByModel :many
 -- Indirect LLM usage (messages.other_usage_data entries: compaction, slug
 -- generation, ...) keyed by conversation. Folded into the drawer price
--- alongside GetConversationUsageByModel, matching handleSubagentUsage.
+-- alongside GetConversationUsageByModel, matching handleSubagentUsage. The
+-- tier_bounds table holds modelsdev.BandBounds; see GetSubtreeUsage.
+WITH band_bounds(bound) AS (SELECT bound FROM tier_bounds)
 SELECT
   m.conversation_id,
   CAST(COALESCE(je.value ->> 'model', '') AS TEXT) AS model_name,
   CAST(COALESCE(je.value ->> 'url', '') AS TEXT) AS llm_api_url,
+  CAST((SELECT COUNT(*) FROM band_bounds bb
+        WHERE bb.bound < (je.value ->> 'input_tokens')
+          + (je.value ->> 'cache_creation_input_tokens')
+          + (je.value ->> 'cache_read_input_tokens')) AS INTEGER) AS band,
   COUNT(*) AS llm_calls,
   CAST(COALESCE(SUM(je.value ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
   CAST(COALESCE(SUM(je.value ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
@@ -551,7 +580,7 @@ SELECT
 FROM messages m
 CROSS JOIN json_each(m.other_usage_data) je
 WHERE m.other_usage_data IS NOT NULL
-GROUP BY m.conversation_id, COALESCE(je.value ->> 'model', ''), COALESCE(je.value ->> 'url', '');
+GROUP BY m.conversation_id, COALESCE(je.value ->> 'model', ''), COALESCE(je.value ->> 'url', ''), band;
 
 -- name: UpdateConversationModel :exec
 UPDATE conversations

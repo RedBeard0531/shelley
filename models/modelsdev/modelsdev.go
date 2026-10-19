@@ -176,6 +176,45 @@ func (c Cost) AtContext(promptTokens int) Cost {
 	return rates
 }
 
+// bandBounds is the sorted set of distinct context-tier sizes across the
+// whole catalog. SQL groups usage rows by how many of these a call's prompt
+// exceeds (its "band"), so one small parameter serves every model in a
+// query; Rates maps a row's band back to the model's own tier.
+var bandBounds []int
+
+// BandBounds returns the global band boundaries that usage-aggregation SQL
+// splits prompt sizes into. Rows carry their band index; Rates turns a band
+// index back into effective rates for a specific model.
+func BandBounds() []int {
+	load()
+	return bandBounds
+}
+
+// Rates returns the effective rates for a call whose prompt fell in band
+// `band`, as counted against BandBounds: band 0 is below every boundary, band
+// n exceeded the (n-1)th. The usage queries carry only the band index, so this
+// turns it back into the prompt size AtContext picks a tier from. Every
+// model's thresholds are part of BandBounds, so a band never straddles one.
+func (c Cost) Rates(band int) Cost {
+	bounds := BandBounds()
+	if band > len(bounds) {
+		band = len(bounds)
+	}
+	if band <= 0 {
+		return c.AtContext(0)
+	}
+	return c.AtContext(bounds[band-1] + 1)
+}
+
+// Estimate prices token counts at these rates (USD per million tokens).
+// Output tokens already include reasoning tokens, so they are priced once.
+func (c Cost) Estimate(in, cacheWrite, cacheRead, out int64) float64 {
+	return float64(in)*c.Input/1e6 +
+		float64(cacheWrite)*c.CacheWrite/1e6 +
+		float64(cacheRead)*c.CacheRead/1e6 +
+		float64(out)*c.Output/1e6
+}
+
 func (c Cost) isZero() bool {
 	return c.Input == 0 && c.Output == 0 && c.CacheRead == 0 && c.CacheWrite == 0
 }
@@ -225,6 +264,18 @@ func load() map[string]providerEntry {
 				hostIndex[host] = append(hostIndex[host], p)
 			}
 		}
+		seen := map[int]bool{}
+		for _, p := range parsed {
+			for _, m := range p.Models {
+				for _, t := range m.Cost.Tiers {
+					if t.Context > 0 && !seen[t.Context] {
+						seen[t.Context] = true
+						bandBounds = append(bandBounds, t.Context)
+					}
+				}
+			}
+		}
+		sort.Ints(bandBounds)
 	})
 	return parsed
 }

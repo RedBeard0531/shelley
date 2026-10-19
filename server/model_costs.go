@@ -204,14 +204,11 @@ func (s *Server) handleSubagentUsage(w http.ResponseWriter, r *http.Request, con
 		if child.Slug != nil {
 			dto.Slug = *child.Slug
 		}
-		childFold := func(model, url string, llmCalls, in, cacheWrite, cacheRead, out int64, costUsd float64) {
+		childFold := func(model, url string, band int64, llmCalls, in, cacheWrite, cacheRead, out int64, costUsd float64) {
 			dto.LLMCalls += llmCalls
 			dto.ReportedUsd += costUsd
 			if c, found := modelsdev.LookupCost(url, model); found {
-				dto.EstimatedUsd += float64(in)*c.Input/1e6 +
-					float64(cacheWrite)*c.CacheWrite/1e6 +
-					float64(cacheRead)*c.CacheRead/1e6 +
-					float64(out)*c.Output/1e6
+				dto.EstimatedUsd += c.Rates(int(band)).Estimate(in, cacheWrite, cacheRead, out)
 			} else if in+cacheWrite+cacheRead+out > 0 {
 				// Zero-usage calls (failed/canceled) price to nothing under
 				// any model; see the aggregate fold above.
@@ -226,10 +223,10 @@ func (s *Server) handleSubagentUsage(w http.ResponseWriter, r *http.Request, con
 			if row.LlmApiUrl != nil {
 				url = *row.LlmApiUrl
 			}
-			childFold(model, url, row.LlmCalls, row.InputTokens, row.CacheCreationInputTokens, row.CacheReadInputTokens, row.OutputTokens, row.CostUsd)
+			childFold(model, url, row.Band, row.LlmCalls, row.InputTokens, row.CacheCreationInputTokens, row.CacheReadInputTokens, row.OutputTokens, row.CostUsd)
 		}
 		for _, row := range childOther {
-			childFold(row.ModelName, row.LlmApiUrl, row.LlmCalls, row.InputTokens, row.CacheCreationInputTokens, row.CacheReadInputTokens, row.OutputTokens, row.CostUsd)
+			childFold(row.ModelName, row.LlmApiUrl, row.Band, row.LlmCalls, row.InputTokens, row.CacheCreationInputTokens, row.CacheReadInputTokens, row.OutputTokens, row.CostUsd)
 		}
 		resp.Subagents = append(resp.Subagents, dto)
 	}

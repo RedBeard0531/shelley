@@ -2165,8 +2165,8 @@ const usageWanted = ref(false);
 // message (any type) carrying other_usage_data, aggregated into per-
 // (purpose, model, url) rows. Inclusion semantics are identical to
 // usage_data: forked copies carry both fields and both are counted.
-const usageData = computed<{ entries: UsageEntry[]; otherRows: OtherUsageRow[] }>(() => {
-  if (!usageWanted.value) return { entries: [], otherRows: [] };
+const usageData = computed<{ entries: UsageEntry[]; otherEntries: OtherUsageEntry[]; otherRows: OtherUsageRow[] }>(() => {
+  if (!usageWanted.value) return { entries: [], otherEntries: [], otherRows: [] };
   perfCount("chat.usageEntries");
   const out: UsageEntry[] = [];
   const otherEntries: OtherUsageEntry[] = [];
@@ -2220,10 +2220,11 @@ const usageData = computed<{ entries: UsageEntry[]; otherRows: OtherUsageRow[] }
       turnStartTs = 0;
     }
   }
-  return { entries: out, otherRows: aggregateOtherUsage(otherEntries) };
+  return { entries: out, otherEntries, otherRows: aggregateOtherUsage(otherEntries) };
 });
 const usageEntries = computed<UsageEntry[]>(() => usageData.value.entries);
 const otherUsageRows = computed<OtherUsageRow[]>(() => usageData.value.otherRows);
+const otherUsageEntries = computed<OtherUsageEntry[]>(() => usageData.value.otherEntries);
 
 watch(
   selectedModelInfo,
@@ -4447,6 +4448,7 @@ const statusContentProps = computed(() => {
     maxContextTokens: maxContextTokens.value,
     usageEntries: usageEntries.value,
     otherUsageRows: otherUsageRows.value,
+    otherUsageEntries: otherUsageEntries.value,
     messages: messages.value,
     hostname,
     models: models.value,

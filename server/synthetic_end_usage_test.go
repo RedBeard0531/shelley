@@ -71,7 +71,12 @@ func TestSyntheticEndMarkerDoesNotCountLLMCall(t *testing.T) {
 				}
 			}
 			rows, err := database.GetSubagentUsage(ctx, parent.ConversationID)
-			if err != nil || len(rows) != 1 || rows[0].LlmCalls != tc.calls || rows[0].CostUsd != wantCost {
+			// One row per call: the synthetic marker is not among them.
+			var subagentCost float64
+			for _, row := range rows {
+				subagentCost += row.CostUsd
+			}
+			if err != nil || int64(len(rows)) != tc.calls || subagentCost != wantCost {
 				t.Fatalf("subagent usage: rows=%+v error=%v", rows, err)
 			}
 			var billing []generated.GetConversationUsageByModelRow
