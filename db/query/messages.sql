@@ -143,6 +143,13 @@ WHERE m.conversation_id = sqlc.arg('conversation_id')
   ), 0)
 ORDER BY m.sequence_id ASC;
 
+-- name: ListMessagesBefore :many
+-- A page of rows before a sequence id, newest first.
+SELECT * FROM messages
+WHERE conversation_id = ? AND sequence_id < ?
+ORDER BY sequence_id DESC
+LIMIT ?;
+
 -- name: ListMessagesSince :many
 -- The client cache-repair path (?last_sequence_id=N). Must NOT filter any type:
 -- it is what heals a client whose view of the sequence space has a hole, so it

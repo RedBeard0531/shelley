@@ -507,6 +507,61 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID string) ([]Me
 	return items, nil
 }
 
+const listMessagesBefore = `-- name: ListMessagesBefore :many
+SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data, external_message_id FROM messages
+WHERE conversation_id = ? AND sequence_id < ?
+ORDER BY sequence_id DESC
+LIMIT ?
+`
+
+type ListMessagesBeforeParams struct {
+	ConversationID string `json:"conversation_id"`
+	SequenceID     int64  `json:"sequence_id"`
+	Limit          int64  `json:"limit"`
+}
+
+// A page of rows before a sequence id, newest first.
+func (q *Queries) ListMessagesBefore(ctx context.Context, arg ListMessagesBeforeParams) ([]Message, error) {
+	rows, err := q.db.QueryContext(ctx, listMessagesBefore, arg.ConversationID, arg.SequenceID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Message{}
+	for rows.Next() {
+		var i Message
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.ConversationID,
+			&i.SequenceID,
+			&i.Type,
+			&i.LlmData,
+			&i.UserData,
+			&i.UsageData,
+			&i.CreatedAt,
+			&i.DisplayData,
+			&i.ExcludedFromContext,
+			&i.Generation,
+			&i.LlmApiUrl,
+			&i.ModelName,
+			&i.ForkedFromMessageID,
+			&i.UserEmail,
+			&i.OtherUsageData,
+			&i.ExternalMessageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMessagesByType = `-- name: ListMessagesByType :many
 SELECT message_id, conversation_id, sequence_id, type, llm_data, user_data, usage_data, created_at, display_data, excluded_from_context, generation, llm_api_url, model_name, forked_from_message_id, user_email, other_usage_data, external_message_id FROM messages
 WHERE conversation_id = ? AND type = ?

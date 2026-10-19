@@ -3,13 +3,15 @@ package server
 import (
 	"context"
 	"fmt"
+	"math"
+	"slices"
 
 	"shelley.exe.dev/db/generated"
 )
 
 const (
 	liveContextMessages  = 6   // user requests and final assistant replies kept
-	liveContextTailRows  = 100 // rows scanned (tool rows included) to find them
+	liveContextPageRows  = 100 // rows read at a time, newest first, until enough are found
 	liveContextItemRunes = 800 // per-item cap; keeps well under Live's input limit
 )
 
@@ -26,38 +28,51 @@ type liveHistoryText struct {
 }
 
 // liveContext returns only the user's typed messages and final backend
-// replies. Tool results, subagent reports, background jobs and other machine
-// notices must not enter the Live session.
+// replies, the latest liveContextMessages of them however many tool rows
+// lie between. Tool results, subagent reports, background jobs and other
+// machine notices must not enter the Live session.
 func (s *Server) liveContext(ctx context.Context, conversationID string) (items []liveHistoryItem, lastSeq int64, err error) {
-	var rows []generated.Message
-	err = s.db.Queries(ctx, func(q *generated.Queries) error {
-		var err error
-		rows, err = q.ListMessagesTail(ctx, generated.ListMessagesTailParams{ConversationID: conversationID, Limit: liveContextTailRows})
-		return err
-	})
-	if err != nil {
-		return nil, 0, fmt.Errorf("load live context: %w", err)
-	}
-	items = make([]liveHistoryItem, 0, liveContextMessages)
-	for _, row := range rows {
-		lastSeq = row.SequenceID
-		if row.ExcludedFromContext {
-			continue
-		}
-		user, text, _, err := liveDialogue(row)
+	before := int64(math.MaxInt64)
+	for len(items) < liveContextMessages {
+		var rows []generated.Message
+		err = s.db.Queries(ctx, func(q *generated.Queries) error {
+			var err error
+			rows, err = q.ListMessagesBefore(ctx, generated.ListMessagesBeforeParams{ConversationID: conversationID, SequenceID: before, Limit: liveContextPageRows})
+			return err
+		})
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, fmt.Errorf("load live context: %w", err)
 		}
-		if text == "" {
-			continue
+		if len(rows) == 0 {
+			break
 		}
-		role, contentType := "assistant", "output_text"
-		if user {
-			role, contentType = "user", "input_text"
+		if before == math.MaxInt64 {
+			lastSeq = rows[0].SequenceID
 		}
-		items = append(items, liveHistoryItem{Type: "message", Role: role, Content: []liveHistoryText{{Type: contentType, Text: truncateRunes(text, liveContextItemRunes)}}})
+		before = rows[len(rows)-1].SequenceID
+		for _, row := range rows {
+			if row.ExcludedFromContext {
+				continue
+			}
+			user, text, _, err := liveDialogue(row)
+			if err != nil {
+				return nil, 0, err
+			}
+			if text == "" {
+				continue
+			}
+			role, contentType := "assistant", "output_text"
+			if user {
+				role, contentType = "user", "input_text"
+			}
+			items = append(items, liveHistoryItem{Type: "message", Role: role, Content: []liveHistoryText{{Type: contentType, Text: truncateRunes(text, liveContextItemRunes)}}})
+			if len(items) == liveContextMessages {
+				break
+			}
+		}
 	}
-	return items[max(0, len(items)-liveContextMessages):], lastSeq, nil
+	slices.Reverse(items)
+	return items, lastSeq, nil
 }
 
 func truncateRunes(s string, limit int) string {
