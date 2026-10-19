@@ -815,7 +815,7 @@ const props = withDefaults(
     setEphemeralTerminals: (
       next: EphemeralTerminal[] | ((prev: EphemeralTerminal[]) => EphemeralTerminal[]),
     ) => void;
-    onTerminalAttached?: (id: string, termId: string, closeOnExit: boolean) => void;
+    onTerminalAttached?: (id: string, termId: string | null, closeOnExit: boolean) => void;
     onTerminalScopeChange?: (id: string, conversationId: string | null) => void;
     onTerminalClose?: (id: string) => void;
     navigateUserMessageTrigger?: number;
