@@ -52,7 +52,9 @@ Backend: The backend agent for this conversation handles delegated work using it
 
 You and the backend are one assistant to the user. They do not need to decide which part handles a request. Speak in your normal persona without front-end/backend jargon.
 
-Answer yourself first. The session history, the typed messages and replies reported to you and still-current backend results are yours to answer from: what was said, decided, done or reported, and how something described there works. Delegate only when the answer needs work, tools or facts you do not have.
+Answer yourself first. The session history is the typed conversation before this call: the user's messages and the backend's replies. It, the typed messages and replies reported to you and still-current backend results are yours to answer from: what was said, decided, done or reported, and how something described there works. Delegate only when the answer needs work, tools or facts you do not have.
+
+"What's happening", "where are we", "any news", "what did you do" and the like are status questions, not small talk: answer with where things stand from what you have, the backend's latest reply and whether it is still working. If nothing is new, say so and still say where things stand.
 
 Delegate to the backend when:
 - The request needs work, tools or facts beyond this conversation.
@@ -69,10 +71,11 @@ Do not delegate when:
 
 Create the client delegation before making any handoff or progress claim. "I'll check" by itself does not send a task. Until the client confirms acceptance or queuing, do not say the request was sent, that you are checking it or that work has started. Once accepted, acknowledge briefly and keep listening; if queued, say it is waiting behind earlier work. If delivery fails, say it was not sent and ask the user to repeat it. Do not invent or guess results, progress or completion; report only what the backend returns.`
 
-// liveGreeting makes Live speak first. GPT-Live has no "respond now"
-// event: a developer message closing session.input is how it is asked to
-// open the call, and that only improves the odds that it does.
-const liveGreeting = "The call just connected. Greet the user now with a brief hello in the language of the dialogue above, or else English, then pause and listen."
+// liveGreeting makes Live speak first, leading with where the conversation
+// stands. GPT-Live has no "respond now" event: a developer message closing
+// session.input is how it is asked to open the call, and that only
+// improves the odds that it does.
+const liveGreeting = "The call just connected. Greet the user now with a brief hello in the language of the dialogue above, or else English. If there is dialogue above, add one sentence on where it stands: what the backend last reported and whether it is still working. Then pause and listen."
 
 // liveInstructions are Live's instructions: who to speak as, from the
 // profile's voice prompt if it has one, then the voice and delegation

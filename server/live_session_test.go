@@ -95,7 +95,7 @@ func TestLiveSession(t *testing.T) {
 	if req.Session.Model != "gpt-live-1" || req.Transport.SDP != "v=0\r\nm=audio test" || voicePrompt(req) != juniper {
 		t.Fatalf("session = %+v", req)
 	}
-	for _, want := range []string{"Delegation policy:", "Answer yourself first.", "Interruption policy:", "Backend state: idle.", "Working directory: " + cwd + ".", "Backend model: model-b."} {
+	for _, want := range []string{"Delegation policy:", "Answer yourself first.", "are status questions, not small talk", "Interruption policy:", "Backend state: idle.", "Working directory: " + cwd + ".", "Backend model: model-b."} {
 		if !strings.Contains(req.Session.Instructions, want) {
 			t.Errorf("instructions lack %q:\n%s", want, req.Session.Instructions)
 		}
