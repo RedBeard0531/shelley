@@ -145,7 +145,9 @@ for (const viewport of [
       for (const name of ["Command menu", "Edit File…", "MCP Servers"]) {
         await expect(menu.getByRole("button", { name: new RegExp(`^${name}`) })).toBeVisible();
       }
-      for (const name of mobile ? ["vm.example"] : ["Diffs", "Git Graph", "Terminal", "vm.example", "New Conversation"]) {
+      for (const name of mobile
+        ? ["vm.example"]
+        : ["Diffs", "Git Graph", "Terminal", "vm.example", "New Conversation"]) {
         await expect(menu.getByRole("button", { name: new RegExp(`^${name}`) })).toHaveCount(0);
       }
       if (mobile) {
@@ -203,7 +205,9 @@ for (const viewport of [
       const activeTerminal = page.locator(
         '.terminal-panel-content [data-terminal-id][style*="display: block"]',
       );
-      await expect(activeTerminal.locator(".xterm-helper-textarea")).toBeVisible();
+      await expect(
+        activeTerminal.getByRole("textbox", { name: "Terminal input", exact: true }),
+      ).toBeVisible();
       const terminalId = await activeTerminal.getAttribute("data-terminal-id");
       expect(terminalId).toBeTruthy();
       const openedTerminal = page.locator(`[data-terminal-id="${terminalId}"]`);

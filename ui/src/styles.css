@@ -11335,7 +11335,7 @@ kbd {
   align-items: center;
   gap: 2px;
   overflow-x: auto;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   scrollbar-width: none;
 }
@@ -11405,8 +11405,22 @@ kbd {
   color: var(--error-text);
 }
 
+/* Narrow enough that one tab and the + button fit on a phone. */
+/* pre: the split can fall next to a space, which nowrap would trim away. */
 .terminal-panel-tab-label {
-  max-width: 120px;
+  display: flex;
+  min-width: 0;
+  max-width: min(180px, 25vw);
+  white-space: pre;
+}
+
+.terminal-panel-new-btn {
+  flex-shrink: 0;
+  margin-right: auto;
+}
+
+/* overflow: hidden lets the head shrink; the tail keeps its content width. */
+.terminal-panel-tab-label-head {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -11561,12 +11575,18 @@ kbd {
   inset: 4px;
 }
 
+.terminal-instance-error {
+  margin: 8px;
+  color: var(--error-text);
+  font-family: var(--font-mono);
+}
+
 @media (pointer: coarse) {
   /* xterm.js positions its helper textarea off-screen with zero dimensions
      (left: -9999em; width/height: 0), so on iOS/Android focus() doesn't open
      the soft keyboard. Pull it back on-screen and give it real dimensions so
-     focus() inside a touch gesture (see TerminalPanel's pointerdown handler)
-     reliably opens the keyboard. pointer-events: none keeps touches passing
+     focus() inside a tap (see terminalTouch.ts) reliably opens the
+     keyboard. pointer-events: none keeps touches passing
      through to the terminal for native scrolling. */
   .terminal-panel .xterm .xterm-helpers {
     position: absolute !important;
@@ -11584,7 +11604,10 @@ kbd {
     pointer-events: none !important;
     /* Stay invisible while still being focusable. */
     opacity: 0 !important;
-    /* iOS auto-zooms inputs whose font-size is < 16px; prevent that. */
+  }
+  /* The input textarea of either renderer: iOS auto-zooms inputs whose
+     font-size is < 16px; prevent that. */
+  .terminal-panel-content textarea {
     font-size: 16px !important;
   }
 }

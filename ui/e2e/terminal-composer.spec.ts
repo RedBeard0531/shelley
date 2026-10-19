@@ -1,7 +1,11 @@
 import { expect, test, type WebSocketRoute } from "@playwright/test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createConversationViaAPIWithDetails, testWorkingDirectory } from "./helpers";
+import {
+  chooseTerminalMenuItem,
+  createConversationViaAPIWithDetails,
+  testWorkingDirectory,
+} from "./helpers";
 
 test("opens terminals for bare shell commands", async ({ page, request }) => {
   const { conversationId } = await createConversationViaAPIWithDetails(
@@ -42,9 +46,7 @@ for (const command of ["!", "/shell", "!bash", "!/bin/bash -i"]) {
     await terminalInput.press("Enter");
     await expect
       .poll(async () => {
-        await page
-          .getByRole("button", { name: "Insert all output into input", exact: true })
-          .click();
+        await chooseTerminalMenuItem(page, "Insert all output into input");
         return input.inputValue();
       })
       .toMatch(/shell-ready\r?\n/);
@@ -88,7 +90,7 @@ test("shell exit closes only its own tab, keeping command output", async ({ page
     "title",
     "printf preserved-output",
   );
-  await page.getByRole("button", { name: "Insert all output into input", exact: true }).click();
+  await chooseTerminalMenuItem(page, "Insert all output into input");
   await expect(input).toHaveValue(/preserved-output/);
 });
 
@@ -145,7 +147,7 @@ test("restores each terminal's explicit exit policy after reload", async ({ page
   await terminalInput.pressSequentially("retained-after-reload");
   await terminalInput.press("Enter");
   await expect(page.locator(".terminal-panel-tab-success")).toHaveCount(1);
-  await page.getByRole("button", { name: "Insert all output into input", exact: true }).click();
+  await chooseTerminalMenuItem(page, "Insert all output into input");
   await expect(input).toHaveValue(/retained-after-reload/);
 });
 
@@ -158,7 +160,7 @@ test("keeps one-shot bash output visible", async ({ page, request }) => {
   await page.getByTestId("message-input").fill("!bash -c 'echo one-shot-output'");
   await page.getByTestId("send-button").click();
   await expect(page.locator(".terminal-panel-tab-success")).toHaveCount(1);
-  await page.getByRole("button", { name: "Insert all output into input", exact: true }).click();
+  await chooseTerminalMenuItem(page, "Insert all output into input");
   await expect(page.getByTestId("message-input")).toHaveValue(/one-shot-output/);
 });
 
@@ -175,7 +177,7 @@ test("keeps bash script output visible", async ({ page, request }) => {
     await page.getByTestId("message-input").fill("!bash script.sh");
     await page.getByTestId("send-button").click();
     await expect(page.locator(".terminal-panel-tab-success")).toHaveCount(1);
-    await page.getByRole("button", { name: "Insert all output into input", exact: true }).click();
+    await chooseTerminalMenuItem(page, "Insert all output into input");
     await expect(page.getByTestId("message-input")).toHaveValue(/script-output/);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -191,7 +193,7 @@ test("keeps failed command output visible", async ({ page, request }) => {
   await page.getByTestId("message-input").fill("!false");
   await page.getByTestId("send-button").click();
   await expect(page.locator(".terminal-panel-tab-error")).toHaveCount(1);
-  await page.getByRole("button", { name: "Insert all output into input", exact: true }).click();
+  await chooseTerminalMenuItem(page, "Insert all output into input");
   await expect(page.getByTestId("message-input")).toHaveValue(/completed with exit\s+code 1/);
 });
 
@@ -247,6 +249,6 @@ test("keeps terminal launch errors visible", async ({ page, request }) => {
   await page.getByTestId("message-input").fill("!");
   await page.getByTestId("send-button").click();
   await expect(page.locator(".terminal-panel-tab-error")).toHaveCount(1);
-  await page.getByRole("button", { name: "Insert all output into input", exact: true }).click();
+  await chooseTerminalMenuItem(page, "Insert all output into input");
   await expect(page.getByTestId("message-input")).toHaveValue(/Error:/);
 });

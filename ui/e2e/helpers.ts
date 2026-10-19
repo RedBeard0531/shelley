@@ -234,6 +234,35 @@ export async function setPageFeatureFlag(page: Page, name: string, value: boolea
   );
 }
 
+/** End the terminals running in `cwd`. Every page load replays every running
+ *  terminal on the shared server, so ones left running slow later tests. */
+export async function closeTerminalsIn(request: APIRequestContext, cwd: string): Promise<void> {
+  const terminals: Array<{ id: string; cwd: string }> = await (
+    await request.get("/api/terminals")
+  ).json();
+  for (const { id } of terminals.filter((terminal) => terminal.cwd === cwd)) {
+    expect((await request.delete(`/api/terminals/${id}`)).ok()).toBe(true);
+  }
+}
+
+/** Choose `item` from the terminal panel's menu. */
+export async function chooseTerminalMenuItem(page: Page, item: string): Promise<void> {
+  await page.getByRole("button", { name: "Terminal menu", exact: true }).click();
+  await page
+    .locator(".overflow-menu-panel")
+    .getByRole("button", { name: item, exact: true })
+    .click();
+}
+
+/** Have terminals on this page render with `renderer`, as if chosen in the
+ *  terminal panel's menu. Call before the first `page.goto(...)`. */
+export async function setPageTerminalRenderer(
+  page: Page,
+  renderer: "ghostty" | "xterm",
+): Promise<void> {
+  await page.addInitScript((r) => localStorage.setItem("shelley-terminal-renderer", r), renderer);
+}
+
 /** Run `fn` with a fresh temp directory, removing it afterwards. Specs that
  *  need a real cwd with real files on disk (file finder, patch cards) use this
  *  so a full suite run doesn't litter /tmp. */

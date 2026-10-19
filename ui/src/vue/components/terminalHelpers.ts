@@ -13,6 +13,16 @@ export function base64ToUint8Array(base64String: string): Uint8Array {
 
 export type TermStatus = "connecting" | "running" | "exited" | "error";
 
+// The command behind "Open Terminal" and the tab bar's + button.
+export const INTERACTIVE_SHELL_COMMAND = 'exec "${SHELL:-bash}" -i';
+
+// Tab label until the program sets a window title: "shell" for the in-app
+// shell, otherwise the command's first word.
+export function terminalFallbackLabel(command: string): string {
+  if (command === INTERACTIVE_SHELL_COMMAND) return "shell";
+  return command.trim().split(/\s+/)[0];
+}
+
 // Recognize direct shell launches at creation, not when the process exits.
 // Scripts, -c commands, and shell syntax must retain their output.
 export function isInteractiveShellLaunch(command: string): boolean {

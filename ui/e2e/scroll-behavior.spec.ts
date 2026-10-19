@@ -1780,7 +1780,7 @@ test.describe("Cmd/Ctrl+ArrowDown scroll-to-bottom shortcut", () => {
   test("leaves the terminal alone", async ({ page, request }) => {
     // Regression: xterm consumes almost every key, but deliberately passes
     // ArrowDown+Meta through (macOS reserves the chord). It arrives with the
-    // empty .xterm-helper-textarea as the target, and the terminal dock sits
+    // terminal's empty input textarea as the target, and the terminal dock sits
     // below the message list rather than over it, so neither the textarea rule
     // nor the cover check caught it -- Cmd+Down at a shell prompt scrolled the
     // conversation behind the dock.
@@ -1790,7 +1790,9 @@ test.describe("Cmd/Ctrl+ArrowDown scroll-to-bottom shortcut", () => {
     await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
 
     await openWorkspaceTool(page, "Terminal");
-    const xtermInput = page.locator(".terminal-panel .xterm-helper-textarea");
+    const xtermInput = page
+      .locator(".terminal-panel")
+      .getByRole("textbox", { name: "Terminal input", exact: true });
     await expect(xtermInput).toBeVisible({ timeout: 30000 });
     await xtermInput.focus();
 

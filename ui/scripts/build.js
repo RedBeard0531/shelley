@@ -151,6 +151,18 @@ async function build() {
       },
     });
 
+    // ghostty-web, the default terminal emulator, with its WebAssembly inlined.
+    // Fetched as /ghostty-web.js when the first terminal opens.
+    log("Building ghostty-web bundle...");
+    await esbuild.build({
+      entryPoints: ["node_modules/ghostty-web/dist/ghostty-web.js"],
+      bundle: true,
+      outfile: "dist/ghostty-web.js",
+      format: "esm",
+      minify: isProd,
+      sourcemap: !noSourceMaps,
+    });
+
     // Build the Vue 3 + PrimeVue app (src/vue/main.ts). It emits dist/main.js +
     // dist/main.css, which index.html links statically (see src/index.html).
     log("Building main application (src/vue/main.ts)...");
@@ -162,7 +174,7 @@ async function build() {
       minify: isProd,
       sourcemap: !noSourceMaps,
       metafile: true,
-      external: ["monaco-editor", "/monaco-editor.js"],
+      external: ["monaco-editor", "/monaco-editor.js", "/ghostty-web.js"],
       loader: {
         ".png": "dataurl",
         ".svg": "text",
@@ -271,6 +283,7 @@ async function build() {
     log("\nGenerating gzip compressed files...");
     const filesToCompress = [
       "monaco-editor.js",
+      "ghostty-web.js",
       "editor.worker.js",
       "diffs-worker.js",
       "markdown-highlight-worker.js",

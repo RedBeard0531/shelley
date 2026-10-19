@@ -1,11 +1,17 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
-import { openWorkspaceTool, createConversationViaAPIWithDetails } from "./helpers";
+import {
+  openWorkspaceTool,
+  createConversationViaAPIWithDetails,
+  setPageTerminalRenderer,
+} from "./helpers";
 
 // At 1x the WebGL renderer rounds cells to whole pixels (8px rather than the
 // DOM renderer's 8.4px), so the two renderers fit different column counts.
 test.use({ deviceScaleFactor: 1 });
 
 async function openTerminal(page: Page, request: APIRequestContext) {
+  // The WebGL renderer is xterm.js's; ghostty-web always draws to a canvas.
+  await setPageTerminalRenderer(page, "xterm");
   const { conversationId } = await createConversationViaAPIWithDetails(
     request,
     "terminal webgl test",

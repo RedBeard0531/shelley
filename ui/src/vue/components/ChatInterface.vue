@@ -345,6 +345,7 @@
       @insert-into-input="handleInsertFromTerminal"
       @auto-focus-consumed="terminalAutoFocusId = null"
       @active-terminal-exited="focusMessageInputIfUnfocused"
+      @new-terminal="openInAppTerminal"
     />
 
     <!-- Low disk space notice: server-wide, shown once per episode until dismissed. -->
@@ -708,7 +709,7 @@ import {
 import { coalesceMessages, type CoalescedItem } from "./coalesce";
 import type { RenderNode, RenderChunk, GenerationBlock } from "./renderNode";
 import type { EphemeralTerminal } from "./terminalTypes";
-import { isInteractiveShellLaunch } from "./terminalHelpers";
+import { INTERACTIVE_SHELL_COMMAND, isInteractiveShellLaunch } from "./terminalHelpers";
 import {
   THINKING_LEVELS,
   normalizeThinkingLevelForModel,
@@ -4031,7 +4032,7 @@ function openInAppTerminal() {
     "/";
   const terminal: EphemeralTerminal = {
     id: `term-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-    command: 'exec "${SHELL:-bash}" -i',
+    command: INTERACTIVE_SHELL_COMMAND,
     closeOnExit: true,
     cwd,
     createdAt: new Date(),

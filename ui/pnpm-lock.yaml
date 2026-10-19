@@ -82,6 +82,9 @@ importers:
       emoji-picker-element:
         specifier: ^1.29.1
         version: 1.29.1
+      ghostty-web:
+        specifier: 0.4.0-next.14.g6a1a50d
+        version: 0.4.0-next.14.g6a1a50d
       idb:
         specifier: ^8.0.3
         version: 8.0.3
@@ -1792,6 +1795,9 @@ packages:
 
   get-tsconfig@4.13.0:
     resolution: {integrity: sha512-1VKTZJCwBrvbd+Wn3AOgQP/2Av+TfTCOlE4AcRJE72W1ksZXbAx8PPBR9RzgTeSPzlPMHrbANMH3LbltH73wxQ==}
+
+  ghostty-web@0.4.0-next.14.g6a1a50d:
+    resolution: {integrity: sha512-01H59pAKq43Y8ZZiIhH98cu0ahZaoGoPQPtW4KnZPT0JFdQYen2djsXrOnt27JnMv64D4eLeAq8D6h72mo52xQ==}
 
   glob-parent@5.1.2:
     resolution: {integrity: sha512-AOIgSQCepiJYwP3ARnGx+5VnTu2HBYdzbGP45eLw1vr3zB3vZLeyed1sC9hnbcOc9/SrMyM5RPQrkGz4aS9Zow==}
@@ -4376,6 +4382,8 @@ snapshots:
   get-tsconfig@4.13.0:
     dependencies:
       resolve-pkg-maps: 1.0.0
+
+  ghostty-web@0.4.0-next.14.g6a1a50d: {}
 
   glob-parent@5.1.2:
     dependencies:
