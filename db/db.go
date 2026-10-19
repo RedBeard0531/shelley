@@ -40,6 +40,22 @@ func GenerateConversationID() (string, error) {
 	return "c" + text[:6], nil
 }
 
+// SlugAttempts bounds the SlugCandidate retry loops.
+const SlugAttempts = 10
+
+// SlugCandidate returns the slug to try on a given attempt when base may
+// already be taken: base, base-1, base-2, base-3, then base-<random>.
+func SlugCandidate(base string, attempt int) string {
+	switch {
+	case attempt == 0:
+		return base
+	case attempt <= 3:
+		return fmt.Sprintf("%s-%d", base, attempt)
+	default:
+		return base + "-" + strings.ToLower(rand.Text()[:6])
+	}
+}
+
 // DB wraps the database connection pool and provides high-level operations
 type DB struct {
 	pool *Pool
@@ -2569,29 +2585,19 @@ func (a *SubagentDBAdapter) GetOrCreateSubagentConversation(ctx context.Context,
 		return existing.ConversationID, *existing.Slug, nil
 	}
 
-	// Try to create new, handling unique constraint violations by appending numbers
-	baseSlug := slug
-	actualSlug := slug
-	for attempt := 0; attempt < 100; attempt++ {
+	// Slugs are unique across all conversations, so pick a free variant.
+	for attempt := range SlugAttempts {
+		actualSlug := SlugCandidate(slug, attempt)
 		conv, err := a.DB.CreateSubagentConversation(ctx, actualSlug, parentID, &cwd)
 		if err == nil {
 			return conv.ConversationID, actualSlug, nil
 		}
-
-		// Check if this is a unique constraint violation
 		errLower := strings.ToLower(err.Error())
-		if strings.Contains(errLower, "unique constraint") ||
-			strings.Contains(errLower, "duplicate") {
-			// Try with a numeric suffix
-			actualSlug = fmt.Sprintf("%s-%d", baseSlug, attempt+1)
-			continue
+		if !strings.Contains(errLower, "unique constraint") && !strings.Contains(errLower, "duplicate") {
+			return "", "", err
 		}
-
-		// Some other error occurred
-		return "", "", err
 	}
-
-	return "", "", fmt.Errorf("failed to create unique subagent slug after 100 attempts")
+	return "", "", fmt.Errorf("failed to create unique subagent slug after %d attempts", SlugAttempts)
 }
 
 // GetModels returns all models from the database

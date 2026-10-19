@@ -3860,13 +3860,11 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, 
 			base = *source.Slug + "-fork"
 		}
 		if sanitized := slug.Sanitize(base); sanitized != "" {
-			candidate := sanitized
-			for attempt := 0; attempt < 100; attempt++ {
-				if updated, uerr := s.db.UpdateConversationSlug(ctx, forked.ConversationID, candidate); uerr == nil {
+			for attempt := range db.SlugAttempts {
+				if updated, uerr := s.db.UpdateConversationSlug(ctx, forked.ConversationID, db.SlugCandidate(sanitized, attempt)); uerr == nil {
 					forked = updated
 					break
 				} else if isUniqueConstraintErr(uerr) {
-					candidate = fmt.Sprintf("%s-%d", sanitized, attempt+1)
 					continue
 				} else {
 					s.logger.Warn("Failed to assign slug to forked conversation", "conversationID", forked.ConversationID, "error", uerr)

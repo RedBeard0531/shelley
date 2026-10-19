@@ -1707,3 +1707,40 @@ func TestConversationListCounts(t *testing.T) {
 		}
 	}
 }
+
+// A subagent slug that many earlier conversations already use still yields a
+// new subagent: base, base-1..base-3, then base-<random>.
+func TestGetOrCreateSubagentConversationCrowdedSlug(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := t.Context()
+	adapter := &SubagentDBAdapter{DB: db}
+
+	taken := map[string]bool{}
+	for i := range 100 {
+		slug := "review"
+		if i > 0 {
+			slug = fmt.Sprintf("review-%d", i)
+		}
+		if _, err := db.CreateConversation(ctx, &slug, true, nil, nil, ConversationOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		taken[slug] = true
+	}
+	parent, err := db.CreateConversation(ctx, stringPtr("crowded-parent"), true, nil, nil, ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id, slug, err := adapter.GetOrCreateSubagentConversation(ctx, "review", parent.ConversationID, "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taken[slug] || !strings.HasPrefix(slug, "review-") {
+		t.Fatalf("slug = %q, want a new review-<suffix>", slug)
+	}
+	again, _, err := adapter.GetOrCreateSubagentConversation(ctx, slug, parent.ConversationID, "/tmp")
+	if err != nil || again != id {
+		t.Fatalf("reuse %q: got %q, %v; want %q", slug, again, err, id)
+	}
+}

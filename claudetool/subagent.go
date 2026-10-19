@@ -60,7 +60,7 @@ func resolveModel(available []AvailableModel, name string) (string, error) {
 type SubagentDB interface {
 	// GetOrCreateSubagentConversation retrieves or creates a subagent conversation.
 	// Returns the conversation ID and the actual slug used (may differ from requested
-	// slug if a numeric suffix was added for uniqueness).
+	// slug if a suffix was added for uniqueness).
 	GetOrCreateSubagentConversation(ctx context.Context, slug, parentID, cwd string) (conversationID, actualSlug string, err error)
 }
 
