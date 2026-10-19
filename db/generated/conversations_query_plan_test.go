@@ -23,6 +23,8 @@ func TestSubagentUsageQueriesSearchMessagesByConversation(t *testing.T) {
 		`CREATE INDEX idx_messages_conversation_id ON messages(conversation_id)`,
 		`CREATE INDEX idx_messages_type ON messages(type)`,
 		`CREATE INDEX idx_messages_conv_type_seq ON messages(conversation_id, type, sequence_id)`,
+		// Pricing bands: the usage queries count these per call.
+		`CREATE TABLE tier_bounds (bound INTEGER PRIMARY KEY)`,
 	} {
 		if _, err := database.Exec(statement); err != nil {
 			t.Fatal(err)

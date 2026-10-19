@@ -15,12 +15,12 @@ import {
   formatUsd,
   generationStarts,
   ModelUsage,
-  OtherUsageRow,
+  OtherUsageEntry,
   segmentColor,
   stackedAreaPaths,
   timeXLayout,
   TOKEN_BANDS,
-  totalPromptTokens,
+  promptSize,
   UsageEntry,
   yTicks,
 } from "./tokenCostGraph";
@@ -60,13 +60,50 @@ function entry(partial: Partial<UsageEntry>): UsageEntry {
     output_tokens: 200,
   });
   assert(
-    totalPromptTokens(usage) === 5_001_000,
+    promptSize(usage) === 5_001_000,
     "prompt total includes uncached, cache write, and cache read",
   );
   assert(
     approx(estimateUsageCost(usage, opusCost), 14.01),
     "estimated cost prices each prompt band and output once",
   );
+}
+
+// Context-tier pricing: prompts past a tier boundary bill at the tier's rates
+// (haiku 5.5: 5x above 100k); prompts below it stay at the base rates.
+{
+  const haiku = {
+    input: 0.1,
+    output: 0.5,
+    cache_read: 0.01,
+    cache_write: 0.125,
+    tiers: [
+      { context: 100_000, input: 0.5, output: 2.5, cache_read: 0.05, cache_write: 0.625 },
+    ],
+  };
+  const under = entry({ input_tokens: 99_999, output_tokens: 1_000 });
+  const over = entry({ input_tokens: 100_001, output_tokens: 1_000 });
+  const total = (u: UsageEntry) => estimateUsageCost(u, haiku);
+  assert(approx(total(under), (99_999 * 0.1 + 1_000 * 0.5) / 1e6), "tier: under stays base");
+  assert(approx(total(over), (100_001 * 0.5 + 1_000 * 2.5) / 1e6), "tier: over bills tiered");
+  // The tier counts the whole prompt: cache reads push a call over too.
+  const cached = entry({ cache_read_input_tokens: 100_001 });
+  assert(
+    approx(total(cached), (100_001 * 0.05) / 1e6),
+    "tier: cache reads count toward the boundary",
+  );
+  // Tiers are cumulative: the highest one the prompt passed wins.
+  const stacked = {
+    ...haiku,
+    tiers: [
+      ...haiku.tiers,
+      { context: 200_000, input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
+    ],
+  };
+  const way = entry({ input_tokens: 200_001 });
+  const mid = entry({ input_tokens: 150_000 });
+  assert(approx(total(mid), (150_000 * 0.5) / 1e6), "tier: mid prompt uses first tier");
+  assert(approx(estimateUsageCost(way, stacked), (200_001 * 1) / 1e6), "tier: highest passed tier wins");
 }
 
 function modelUsage(
@@ -291,12 +328,12 @@ function modelUsage(
   assert(aggregateOtherUsage([]).length === 0, "otherAgg: empty input");
 }
 
-// Other-usage breakdown: per-purpose aggregation with estimated cost.
+// Other-usage breakdown: per-purpose aggregation with estimated cost, each
+// call priced at its own prompt's rates.
 {
-  const row = (partial: Partial<OtherUsageRow>): OtherUsageRow => ({
+  const entry = (partial: Partial<OtherUsageEntry>): OtherUsageEntry => ({
     purpose: "compaction",
     model: "claude-opus-4-6",
-    llm_calls: 1,
     input_tokens: 0,
     cache_creation_input_tokens: 0,
     cache_read_input_tokens: 0,
@@ -307,10 +344,16 @@ function modelUsage(
 
   const b = buildOtherUsageBreakdown(
     [
-      row({ purpose: "compaction", llm_calls: 2, input_tokens: 1_000_000, output_tokens: 100_000 }),
-      row({ purpose: "slug", llm_calls: 3, cache_read_input_tokens: 2_000_000, cost_usd: 0.25 }),
+      entry({ purpose: "compaction", input_tokens: 500_000, output_tokens: 50_000 }),
+      entry({ purpose: "compaction", input_tokens: 500_000, output_tokens: 50_000 }),
+      entry({ purpose: "slug", cache_read_input_tokens: 666_667, cost_usd: 0.25 }),
+      entry({ purpose: "slug", cache_read_input_tokens: 666_666, cost_usd: 0 }),
+      entry({ purpose: "slug", cache_read_input_tokens: 666_667, cost_usd: 0 }),
       // Second model for the same purpose merges into one per-purpose row.
-      row({ purpose: "slug", model: "mystery", llm_calls: 4, input_tokens: 500, cost_usd: 0.1 }),
+      entry({ purpose: "slug", model: "mystery", input_tokens: 125, cost_usd: 0.1 }),
+      entry({ purpose: "slug", model: "mystery", input_tokens: 125, cost_usd: 0 }),
+      entry({ purpose: "slug", model: "mystery", input_tokens: 125, cost_usd: 0 }),
+      entry({ purpose: "slug", model: "mystery", input_tokens: 125, cost_usd: 0 }),
     ],
     { "claude-opus-4-6": opusCost, mystery: null },
   );

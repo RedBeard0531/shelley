@@ -125,7 +125,9 @@ func TestSubagentUsageHandler(t *testing.T) {
 	// Direct and indirect usage for the same (model, URL) merge across descendants.
 	addUsage(child.ConversationID, "claude-opus-4-6", opusURL, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 1.25)
 	addOtherUsage(grandchild.ConversationID, "claude-opus-4-6", opusURL, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 0.75)
-	// A different model remains a separate priced row.
+	// A different model remains a separate priced row. Its 1M-token prompt
+	// crosses gpt-5.5's 272k context-tier boundary, so it bills at the tier's
+	// rates: 10/45 instead of the base 5/30.
 	addUsage(grandchild.ConversationID, "gpt-5.5-2026-04-23", gptURL, 1_000_000, 0, 0, 1_000_000, 2)
 	// The same model at different provider URLs uses each provider's pricing.
 	addUsage(child.ConversationID, "qwen/qwen3.5-397b-a17b", "https://api.tokengo.com/v1", 1_000_000, 0, 0, 1_000_000, 0.5)

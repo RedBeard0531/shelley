@@ -41,21 +41,6 @@ type TokenUsageBreakdown = Pick<
   "input_tokens" | "cache_creation_input_tokens" | "cache_read_input_tokens" | "output_tokens"
 >;
 
-export function totalPromptTokens(usage: TokenUsageBreakdown): number {
-  return usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
-}
-
-export function estimateUsageCost(usage: TokenUsageBreakdown, cost: ModelCost): number {
-  // Output tokens already include reasoning tokens, so price the output once.
-  return (
-    (usage.input_tokens * cost.input +
-      usage.cache_creation_input_tokens * cost.cache_write +
-      usage.cache_read_input_tokens * cost.cache_read +
-      usage.output_tokens * cost.output) /
-    1e6
-  );
-}
-
 /** models.dev pricing, USD per million tokens. */
 export interface ModelCost {
   input: number;
@@ -66,6 +51,18 @@ export interface ModelCost {
    *  pricing. Once a call's prompt exceeds a tier's threshold, the whole call
    *  bills at that tier's rates. See effectiveCost. */
   tiers?: CostTier[];
+}
+
+export function estimateUsageCost(usage: TokenUsageBreakdown, cost: ModelCost): number {
+  // Output tokens already include reasoning tokens, so price the output once.
+  const rates = effectiveCost(cost, promptSize(usage));
+  return (
+    (usage.input_tokens * rates.input +
+      usage.cache_creation_input_tokens * rates.cache_write +
+      usage.cache_read_input_tokens * rates.cache_read +
+      usage.output_tokens * rates.output) /
+    1e6
+  );
 }
 
 /** The rates that replace the base rates once a call's prompt exceeds
@@ -81,8 +78,8 @@ export interface CostTier {
 /** The prompt (context) size a pricing tier is measured against: every token
  *  sent up, i.e. fresh input plus cache writes and reads. Output isn't part of
  *  the context window. */
-export function promptSize(e: UsageEntry): number {
-  return e.input_tokens + e.cache_creation_input_tokens + e.cache_read_input_tokens;
+export function promptSize(usage: TokenUsageBreakdown): number {
+  return usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
 }
 
 /** The per-token rates that apply to a call whose prompt is promptTokens long,
@@ -473,10 +470,11 @@ export interface OtherUsageBreakdown {
   };
 }
 
-/** Aggregate other-usage rows into a per-purpose breakdown, estimating cost
- *  with the same tokens × price/1e6 per band formula as the graph. */
+/** Aggregate other-usage entries into a per-purpose breakdown, pricing each
+ *  call at its own prompt's rates (a compaction call can cross a context-tier
+ *  boundary its purpose's other calls never reach). */
 export function buildOtherUsageBreakdown(
-  rows: OtherUsageRow[],
+  entries: OtherUsageEntry[],
   costs: Record<string, ModelCost | null | undefined>,
 ): OtherUsageBreakdown {
   const byPurpose = new Map<string, OtherPurposeUsage>();
@@ -487,11 +485,12 @@ export function buildOtherUsageBreakdown(
     llmCalls: 0,
     unpricedCalls: 0,
   };
-  for (const row of rows) {
-    let p = byPurpose.get(row.purpose);
+  for (const e of entries) {
+    const purpose = e.purpose || "";
+    let p = byPurpose.get(purpose);
     if (!p) {
       p = {
-        purpose: row.purpose,
+        purpose,
         llmCalls: 0,
         tokens: 0,
         estimatedUsd: 0,
@@ -499,34 +498,33 @@ export function buildOtherUsageBreakdown(
         reportedUsd: 0,
         priced: true,
       };
-      byPurpose.set(row.purpose, p);
+      byPurpose.set(purpose, p);
     }
-    const cost = costs[row.model];
-    // These rows are already summed across calls (by purpose, model, url), so
-    // we can't tell which calls crossed a context-size pricing tier; the
-    // estimate uses base rates. A tiered model's indirect usage (e.g.
-    // compaction of a long context) is therefore undercounted here, though
-    // reported_usd still carries the gateway's exact charge. Tiering this would
-    // mean pricing each raw OtherUsageEntry before aggregateOtherUsage folds it.
-    for (const band of TOKEN_BANDS) {
-      const tokens = row[band.key] || 0;
-      p.tokens += tokens;
-      if (cost) {
-        const usd = tokens * (cost[band.costKey] / 1e6);
-        p.estimatedUsd += usd;
-        totals.estimatedUsd += usd;
-      }
+    const cost = e.model ? costs[e.model] : undefined;
+    if (cost) {
+      const usd = estimateUsageCost(
+        {
+          input_tokens: e.input_tokens || 0,
+          cache_creation_input_tokens: e.cache_creation_input_tokens || 0,
+          cache_read_input_tokens: e.cache_read_input_tokens || 0,
+          output_tokens: e.output_tokens || 0,
+        },
+        cost,
+      );
+      p.estimatedUsd += usd;
+      totals.estimatedUsd += usd;
     }
+    for (const key of TOKEN_BANDS) p.tokens += e[key.key] || 0;
     if (!cost) {
       p.priced = false;
-      p.reportedUnpricedUsd += row.cost_usd || 0;
-      totals.reportedUnpricedUsd += row.cost_usd || 0;
-      totals.unpricedCalls += row.llm_calls;
+      p.reportedUnpricedUsd += e.cost_usd || 0;
+      totals.reportedUnpricedUsd += e.cost_usd || 0;
+      totals.unpricedCalls += 1;
     }
-    p.llmCalls += row.llm_calls;
-    p.reportedUsd += row.cost_usd || 0;
-    totals.llmCalls += row.llm_calls;
-    totals.reportedUsd += row.cost_usd || 0;
+    p.llmCalls += 1;
+    p.reportedUsd += e.cost_usd || 0;
+    totals.llmCalls += 1;
+    totals.reportedUsd += e.cost_usd || 0;
   }
   return { perPurpose: [...byPurpose.values()], totals };
 }

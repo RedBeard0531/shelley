@@ -640,3 +640,44 @@ func TestLookupModalities(t *testing.T) {
 		})
 	}
 }
+
+// Haiku 5.5's long-context pricing: 5x above a 100k prompt. Bands are the
+// catalog-wide boundaries the usage queries group by; Rates must map a band
+// back to the model's own tier.
+func TestTieredPricing(t *testing.T) {
+	c, found := LookupCost("", "claude-haiku-5-5")
+	if !found {
+		t.Fatal("LookupCost(claude-haiku-5-5) not found")
+	}
+	bounds := BandBounds()
+	if len(bounds) == 0 {
+		t.Fatal("BandBounds() is empty")
+	}
+	band := 0
+	for i, b := range bounds {
+		if b < 150_000 {
+			band = i + 1
+		}
+	}
+	if band == 0 {
+		t.Fatalf("BandBounds() = %v, want a boundary below 150k", bounds)
+	}
+	base := c.Rates(0)
+	tiered := c.Rates(band)
+	want := Cost{Input: 0.5, Output: 2.5, CacheRead: 0.05, CacheWrite: 0.625}
+	if !reflect.DeepEqual(tiered, want) {
+		t.Errorf("c.Rates(%d) = %+v, want %+v", band, tiered, want)
+	}
+	if !reflect.DeepEqual(base, Cost{Input: 0.1, Output: 0.5, CacheRead: 0.01, CacheWrite: 0.125}) {
+		t.Errorf("c.Rates(0) = %+v, want base rates", base)
+	}
+	// Estimate: 150k input tokens + 1k output, at the tier's rates.
+	if got := tiered.Estimate(150_000, 0, 0, 1_000); got != (150_000*0.5+1_000*2.5)/1e6 {
+		t.Errorf("tiered.Estimate = %v", got)
+	}
+	// A band past every boundary prices at the model's top tier.
+	top := c.Rates(len(bounds) + 5)
+	if !reflect.DeepEqual(top, want) {
+		t.Errorf("c.Rates(past end) = %+v, want top tier %+v", top, want)
+	}
+}

@@ -49,6 +49,7 @@
       :usage-entries="usageEntries"
       :models="models"
       :other-usage-rows="otherUsageRows"
+      :other-usage-entries="otherUsageEntries"
       :messages="messages"
       :on-compact-in-place="onCompactInPlace"
       :compact-in-place-busy="compactInPlaceBusy"
@@ -99,7 +100,7 @@
 import PathText from "./PathText.vue";
 import { computed } from "vue";
 import type { Message, Model } from "../../types";
-import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
+import type { OtherUsageEntry, OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
 import { tildifyPath } from "../../utils/tildify";
 import { useI18n } from "../composables/i18n";
 import type { ThinkingLevel } from "./thinkingLevel";
@@ -114,6 +115,7 @@ const props = defineProps<{
   maxContextTokens: number;
   usageEntries?: UsageEntry[];
   otherUsageRows?: OtherUsageRow[];
+  otherUsageEntries?: OtherUsageEntry[];
   messages?: Message[];
   models: Model[];
   selectedModel: string;

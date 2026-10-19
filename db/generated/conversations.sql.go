@@ -488,10 +488,15 @@ func (q *Queries) GetConversationOptions(ctx context.Context, conversationID str
 }
 
 const getConversationOtherUsageByModel = `-- name: GetConversationOtherUsageByModel :many
+WITH band_bounds(bound) AS (SELECT bound FROM tier_bounds)
 SELECT
   m.conversation_id,
   CAST(COALESCE(je.value ->> 'model', '') AS TEXT) AS model_name,
   CAST(COALESCE(je.value ->> 'url', '') AS TEXT) AS llm_api_url,
+  CAST((SELECT COUNT(*) FROM band_bounds bb
+        WHERE bb.bound < (je.value ->> 'input_tokens')
+          + (je.value ->> 'cache_creation_input_tokens')
+          + (je.value ->> 'cache_read_input_tokens')) AS INTEGER) AS band,
   COUNT(*) AS llm_calls,
   CAST(COALESCE(SUM(je.value ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
   CAST(COALESCE(SUM(je.value ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
@@ -501,13 +506,14 @@ SELECT
 FROM messages m
 CROSS JOIN json_each(m.other_usage_data) je
 WHERE m.other_usage_data IS NOT NULL
-GROUP BY m.conversation_id, COALESCE(je.value ->> 'model', ''), COALESCE(je.value ->> 'url', '')
+GROUP BY m.conversation_id, COALESCE(je.value ->> 'model', ''), COALESCE(je.value ->> 'url', ''), band
 `
 
 type GetConversationOtherUsageByModelRow struct {
 	ConversationID           string  `json:"conversation_id"`
 	ModelName                string  `json:"model_name"`
 	LlmApiUrl                string  `json:"llm_api_url"`
+	Band                     int64   `json:"band"`
 	LlmCalls                 int64   `json:"llm_calls"`
 	InputTokens              int64   `json:"input_tokens"`
 	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
@@ -518,7 +524,8 @@ type GetConversationOtherUsageByModelRow struct {
 
 // Indirect LLM usage (messages.other_usage_data entries: compaction, slug
 // generation, ...) keyed by conversation. Folded into the drawer price
-// alongside GetConversationUsageByModel, matching handleSubagentUsage.
+// alongside GetConversationUsageByModel, matching handleSubagentUsage. The
+// tier_bounds table holds modelsdev.BandBounds; see GetSubtreeUsage.
 func (q *Queries) GetConversationOtherUsageByModel(ctx context.Context) ([]GetConversationOtherUsageByModelRow, error) {
 	rows, err := q.db.QueryContext(ctx, getConversationOtherUsageByModel)
 	if err != nil {
@@ -532,6 +539,7 @@ func (q *Queries) GetConversationOtherUsageByModel(ctx context.Context) ([]GetCo
 			&i.ConversationID,
 			&i.ModelName,
 			&i.LlmApiUrl,
+			&i.Band,
 			&i.LlmCalls,
 			&i.InputTokens,
 			&i.CacheCreationInputTokens,
@@ -599,10 +607,15 @@ func (q *Queries) GetConversationQueuedMessages(ctx context.Context, conversatio
 }
 
 const getConversationUsageByModel = `-- name: GetConversationUsageByModel :many
+WITH band_bounds(bound) AS (SELECT bound FROM tier_bounds)
 SELECT
   m.conversation_id,
   COALESCE(m.model_name, '') AS model_name,
   COALESCE(m.llm_api_url, '') AS llm_api_url,
+  CAST((SELECT COUNT(*) FROM band_bounds bb
+        WHERE bb.bound < (m.usage_data ->> 'input_tokens')
+          + (m.usage_data ->> 'cache_creation_input_tokens')
+          + (m.usage_data ->> 'cache_read_input_tokens')) AS INTEGER) AS band,
   COUNT(*) AS llm_calls,
   CAST(COALESCE(SUM(m.usage_data ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
   CAST(COALESCE(SUM(m.usage_data ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
@@ -611,13 +624,14 @@ SELECT
   CAST(COALESCE(SUM(m.usage_data ->> 'cost_usd'), 0) AS REAL) AS cost_usd
 FROM messages m
 WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
-GROUP BY m.conversation_id, COALESCE(m.model_name, ''), COALESCE(m.llm_api_url, '')
+GROUP BY m.conversation_id, COALESCE(m.model_name, ''), COALESCE(m.llm_api_url, ''), band
 `
 
 type GetConversationUsageByModelRow struct {
 	ConversationID           string  `json:"conversation_id"`
 	ModelName                string  `json:"model_name"`
 	LlmApiUrl                string  `json:"llm_api_url"`
+	Band                     int64   `json:"band"`
 	LlmCalls                 int64   `json:"llm_calls"`
 	InputTokens              int64   `json:"input_tokens"`
 	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
@@ -630,7 +644,8 @@ type GetConversationUsageByModelRow struct {
 // messages. Powers the conversation list's per-row price: the server prices
 // the token totals via modelsdev rates (falling back to the reported
 // cost_usd for unpriced models) and folds descendant costs into parents'
-// totals. Mirrors GetSubtreeUsage but keyed by conversation.
+// totals. Mirrors GetSubtreeUsage but keyed by conversation. The tier_bounds
+// table holds modelsdev.BandBounds; see GetSubtreeUsage.
 func (q *Queries) GetConversationUsageByModel(ctx context.Context) ([]GetConversationUsageByModelRow, error) {
 	rows, err := q.db.QueryContext(ctx, getConversationUsageByModel)
 	if err != nil {
@@ -644,6 +659,7 @@ func (q *Queries) GetConversationUsageByModel(ctx context.Context) ([]GetConvers
 			&i.ConversationID,
 			&i.ModelName,
 			&i.LlmApiUrl,
+			&i.Band,
 			&i.LlmCalls,
 			&i.InputTokens,
 			&i.CacheCreationInputTokens,
@@ -865,10 +881,15 @@ WITH RECURSIVE descendants(conversation_id) AS (
   UNION ALL
   SELECT c.conversation_id FROM conversations c
   JOIN descendants d ON c.parent_conversation_id = d.conversation_id
-)
+),
+band_bounds(bound) AS (SELECT bound FROM tier_bounds)
 SELECT
   CAST(COALESCE(je.value ->> 'model', '') AS TEXT) AS model_name,
   CAST(COALESCE(je.value ->> 'url', '') AS TEXT) AS llm_api_url,
+  CAST((SELECT COUNT(*) FROM band_bounds bb
+        WHERE bb.bound < (je.value ->> 'input_tokens')
+          + (je.value ->> 'cache_creation_input_tokens')
+          + (je.value ->> 'cache_read_input_tokens')) AS INTEGER) AS band,
   COUNT(*) AS llm_calls,
   CAST(COALESCE(SUM(je.value ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
   CAST(COALESCE(SUM(je.value ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
@@ -879,12 +900,13 @@ FROM messages m
 JOIN descendants d ON m.conversation_id = d.conversation_id,
   json_each(m.other_usage_data) je
 WHERE m.other_usage_data IS NOT NULL
-GROUP BY je.value ->> 'model', je.value ->> 'url'
+GROUP BY je.value ->> 'model', je.value ->> 'url', band
 `
 
 type GetSubtreeOtherUsageRow struct {
 	ModelName                string  `json:"model_name"`
 	LlmApiUrl                string  `json:"llm_api_url"`
+	Band                     int64   `json:"band"`
 	LlmCalls                 int64   `json:"llm_calls"`
 	InputTokens              int64   `json:"input_tokens"`
 	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
@@ -894,8 +916,10 @@ type GetSubtreeOtherUsageRow struct {
 }
 
 // Aggregate indirect LLM usage (messages.other_usage_data entries) across a
-// conversation and all its descendants (recursively), grouped by model.
-// Unlike GetSubagentOtherUsage, the conversation itself is included.
+// conversation and its descendants (recursively), grouped by model and
+// pricing band. Unlike GetSubagentOtherUsage, the conversation itself is
+// included. The tier_bounds table holds modelsdev.BandBounds; see
+// GetSubtreeUsage.
 func (q *Queries) GetSubtreeOtherUsage(ctx context.Context, conversationID string) ([]GetSubtreeOtherUsageRow, error) {
 	rows, err := q.db.QueryContext(ctx, getSubtreeOtherUsage, conversationID)
 	if err != nil {
@@ -908,6 +932,7 @@ func (q *Queries) GetSubtreeOtherUsage(ctx context.Context, conversationID strin
 		if err := rows.Scan(
 			&i.ModelName,
 			&i.LlmApiUrl,
+			&i.Band,
 			&i.LlmCalls,
 			&i.InputTokens,
 			&i.CacheCreationInputTokens,
@@ -934,10 +959,15 @@ WITH RECURSIVE descendants(conversation_id) AS (
   UNION ALL
   SELECT c.conversation_id FROM conversations c
   JOIN descendants d ON c.parent_conversation_id = d.conversation_id
-)
+),
+band_bounds(bound) AS (SELECT bound FROM tier_bounds)
 SELECT
   m.model_name,
   m.llm_api_url,
+  CAST((SELECT COUNT(*) FROM band_bounds bb
+        WHERE bb.bound < (m.usage_data ->> 'input_tokens')
+          + (m.usage_data ->> 'cache_creation_input_tokens')
+          + (m.usage_data ->> 'cache_read_input_tokens')) AS INTEGER) AS band,
   COUNT(*) AS llm_calls,
   CAST(COALESCE(SUM(m.usage_data ->> 'input_tokens'), 0) AS INTEGER) AS input_tokens,
   CAST(COALESCE(SUM(m.usage_data ->> 'cache_creation_input_tokens'), 0) AS INTEGER) AS cache_creation_input_tokens,
@@ -947,12 +977,13 @@ SELECT
 FROM messages m
 JOIN descendants d ON m.conversation_id = d.conversation_id
 WHERE m.type = 'agent' AND m.usage_data IS NOT NULL
-GROUP BY m.model_name, m.llm_api_url
+GROUP BY m.model_name, m.llm_api_url, band
 `
 
 type GetSubtreeUsageRow struct {
 	ModelName                *string `json:"model_name"`
 	LlmApiUrl                *string `json:"llm_api_url"`
+	Band                     int64   `json:"band"`
 	LlmCalls                 int64   `json:"llm_calls"`
 	InputTokens              int64   `json:"input_tokens"`
 	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
@@ -962,8 +993,13 @@ type GetSubtreeUsageRow struct {
 }
 
 // Aggregate LLM usage across a conversation and all its descendants
-// (recursively), grouped by model. Unlike GetSubagentUsage, the conversation
-// itself is included.
+// (recursively), grouped by model and pricing band. Unlike GetSubagentUsage,
+// the conversation itself is included.
+//
+// The tier_bounds table holds modelsdev.BandBounds: the catalog's
+// context-tier boundaries. Each row's band counts how many boundaries the
+// call's total prompt (input + cache write + cache read) exceeded;
+// modelsdev.Cost.Rates turns a band back into that model's rates.
 func (q *Queries) GetSubtreeUsage(ctx context.Context, conversationID string) ([]GetSubtreeUsageRow, error) {
 	rows, err := q.db.QueryContext(ctx, getSubtreeUsage, conversationID)
 	if err != nil {
@@ -976,6 +1012,7 @@ func (q *Queries) GetSubtreeUsage(ctx context.Context, conversationID string) ([
 		if err := rows.Scan(
 			&i.ModelName,
 			&i.LlmApiUrl,
+			&i.Band,
 			&i.LlmCalls,
 			&i.InputTokens,
 			&i.CacheCreationInputTokens,

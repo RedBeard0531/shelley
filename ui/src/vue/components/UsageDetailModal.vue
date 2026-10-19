@@ -78,7 +78,7 @@
 import { computed, onMounted, ref } from "vue";
 import { modelCostsApi, type ModelCostDTO } from "../../services/api";
 import type { Usage } from "../../types";
-import { estimateUsageCost, formatUsd, totalPromptTokens } from "../../utils/tokenCostGraph";
+import { estimateUsageCost, formatUsd, promptSize } from "../../utils/tokenCostGraph";
 import Modal from "./Modal.vue";
 
 const props = defineProps<{
@@ -87,7 +87,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
-const promptTokens = computed(() => totalPromptTokens(props.usage));
+const promptTokens = computed(() => promptSize(props.usage));
 const reasoningBreakdownAvailable = computed(
   () =>
     props.usage.reasoning_tokens !== undefined &&
