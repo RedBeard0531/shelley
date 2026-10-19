@@ -153,6 +153,12 @@ func TestAssignTiers(t *testing.T) {
 		}
 	})
 
+	t.Run("dated DeepSeek V4.1 Flash 1017 shadows the undated build", func(t *testing.T) {
+		tiers := AssignTiers([]string{"deepseek-v4.1-flash-1017-fireworks", "deepseek-v4.1-flash-fireworks"})
+		if tiers["deepseek-v4.1-flash-1017-fireworks"] != Tier1 || tiers["deepseek-v4.1-flash-fireworks"] != Tier2 {
+			t.Fatalf("tiers = %v", tiers)
+		}
+	})
 	t.Run("every input id is assigned a tier", func(t *testing.T) {
 		avail := IDs()
 		tiers := AssignTiers(avail)

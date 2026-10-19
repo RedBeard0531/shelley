@@ -249,6 +249,16 @@ var (
 		SupportsImages:   true,
 	}
 
+	DeepseekV41Flash1017Fireworks = Model{
+		UserName:         "deepseek-v4.1-flash-1017-fireworks",
+		ModelName:        "accounts/fireworks/models/deepseek-v4p1-flash-1017",
+		TextVerbosity:    "",
+		URL:              FireworksURL,
+		APIKeyEnv:        FireworksAPIKeyEnv,
+		IsReasoningModel: true,
+		SupportsImages:   true,
+	}
+
 	MoonshotKimiK2 = Model{
 		UserName:         "moonshot-kimi-k2",
 		ModelName:        "moonshot-v1-auto",
@@ -643,6 +653,7 @@ var ModelsRegistry = []Model{
 	TogetherMistralSmall,
 	// Fireworks / misc providers
 	DeepseekV41FlashFireworks,
+	DeepseekV41Flash1017Fireworks,
 	MoonshotKimiK2,
 	MistralMedium,
 	DevstralSmall,

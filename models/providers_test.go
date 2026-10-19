@@ -212,7 +212,9 @@ func TestSavedProviderReasoningDoesNotOverrideInternalRequests(t *testing.T) {
 	}
 	for _, tc := range []struct{ protocol, endpoint, model string }{
 		{"anthropic", "https://api.anthropic.com/v1", "claude-opus-4-8"},
-		{"anthropic", "https://api.anthropic.com/v1", "claude-haiku-5-5"},
+		// sonnet-5-5, not haiku-5-5: the latter advertises an off toggle, which
+		// this fixture must not have.
+		{"anthropic", "https://api.anthropic.com/v1", "claude-sonnet-5-5"},
 		{"openai", "https://api.openai.com/v1", "gpt-6.1-sol"},
 		{"openai-responses", "https://api.openai.com/v1", "gpt-6.1-sol"},
 	} {

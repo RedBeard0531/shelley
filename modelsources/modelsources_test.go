@@ -135,6 +135,7 @@ func TestEnvSourceLabels(t *testing.T) {
 		// Also pins that the embedded models.dev snapshot knows this model: the
 		// loop below requires a non-empty release date, which the UI sorts by.
 		{"deepseek-v4.1-flash-fireworks", "$FIREWORKS_API_KEY"},
+		{"deepseek-v4.1-flash-1017-fireworks", "$FIREWORKS_API_KEY"},
 	} {
 		b := findBuilt(bs, tt.id)
 		if b == nil {

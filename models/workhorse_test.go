@@ -64,6 +64,7 @@ func TestWorkhorseModel(t *testing.T) {
 		// deepseek-v4.1-flash ID still matches.
 		Built{ID: "deepseek-v4-pro-fireworks", Provider: ProviderFireworks, ReleaseDate: "2026-08-13"},
 		Built{ID: "deepseek-v4.1-flash-fireworks", Provider: ProviderFireworks, ReleaseDate: "2026-09-10"},
+		Built{ID: "deepseek-v4.1-flash-1017-fireworks", Provider: ProviderFireworks, ReleaseDate: "2026-10-17"},
 		Built{ID: "deepseek-v4-flash-0801-fireworks", Provider: ProviderFireworks, ReleaseDate: "2026-08-01"},
 		Built{ID: "nemotron-lightning-3p5", Provider: ProviderFireworks},
 	)
@@ -76,7 +77,7 @@ func TestWorkhorseModel(t *testing.T) {
 		{"claude-haiku-4-5", "claude-haiku-5.5"},
 		{"gpt-5.4-nano", "gpt-5.7-luna"},
 		{"gemini-3-flash", "gemini-3.6-flash"},
-		{"nemotron-lightning-3p5", "deepseek-v4.1-flash-fireworks"},
+		{"nemotron-lightning-3p5", "deepseek-v4.1-flash-1017-fireworks"},
 		{"unknown-custom-model", "unknown-custom-model"},
 		{"", ""},
 	} {
