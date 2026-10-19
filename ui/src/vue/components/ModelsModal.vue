@@ -25,7 +25,7 @@
           :disabled="refreshing || loading"
           @click="handleRefreshModels"
         />
-        <Button size="small" @click="handleAddNew">+ {{ t("addModel") }}</Button>
+        <Button size="small" @click="handleAddNew">+ {{ t("addModels") }}</Button>
       </div>
     </template>
 
@@ -40,15 +40,20 @@
         <span>{{ t("loadingModels") }}</span>
       </div>
 
+      <p v-if="!loading && providerLoadFailed" class="model-provider-load-error" role="status">
+        {{ t("providerListUnavailable") }}
+      </p>
+
       <!-- Empty state -->
-      <div v-else-if="builtInModels.length === 0 && models.length === 0" class="models-empty">
+      <div v-if="!loading && !hasAnyEntries && !providerLoadFailed" class="models-empty">
         <p>{{ t("noModelsConfigured") }}</p>
         <p class="models-empty-hint">{{ t("noModelsHint") }}</p>
       </div>
 
       <!-- Model List -->
       <DataTable
-        v-else
+        v-if="showList"
+        data-testid="model-provider-list"
         :value="tableRows"
         data-key="key"
         size="small"
@@ -61,20 +66,100 @@
         :pt="{ rowGroupHeaderCell: { colspan: 5 } }"
       >
         <template #groupheader="{ data }">
-          <span class="models-group-name">{{ data.groupLabel }}</span>
-          <span class="models-group-count">({{ groupCounts[data.groupKey] }})</span>
-          <span v-if="data.groupEndpoint" class="models-group-endpoint">{{
-            data.groupEndpoint
-          }}</span>
+          <div v-if="data.provider" class="models-provider-group" data-testid="provider-connection">
+            <div class="models-provider-line">
+              <span class="models-group-name">{{ data.provider ? providerName(data.provider) : data.groupLabel }}</span>
+              <span
+                v-if="providerSuffix(data.provider)"
+                class="models-group-endpoint"
+                :title="t('providerDisplayName')"
+                >{{ providerSuffix(data.provider) }}</span
+              >
+              <span class="models-group-count">({{ data.provider.model_count }})</span>
+              <span class="models-group-endpoint">{{ data.provider.endpoint }}</span>
+              <span class="models-provider-actions">
+                <Button
+                  class="btn-icon"
+                  text
+                  severity="secondary"
+                  v-tooltip.top="t('refreshModels')"
+                  :aria-label="t('refreshModels')"
+                  :disabled="refreshingProviderIds.has(data.provider.provider_id)"
+                  :data-testid="`refresh-provider-${data.provider.provider_id}`"
+                  @click="refreshProvider(data.provider)"
+                >
+                  <svg
+                    :class="{ spinning: refreshingProviderIds.has(data.provider.provider_id) }"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    width="16"
+                    height="16"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      :stroke-width="2"
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+                </Button>
+                <Button
+                  class="btn-icon"
+                  text
+                  severity="secondary"
+                  v-tooltip.top="t('editProvider')"
+                  :aria-label="t('editProvider')"
+                  :data-testid="`edit-provider-${data.provider.provider_id}`"
+                  @click="openProviderForm(data.provider)"
+                >
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      :stroke-width="2"
+                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                    />
+                  </svg>
+                </Button>
+                <Button
+                  class="btn-icon btn-danger"
+                  text
+                  severity="danger"
+                  v-tooltip.top="t('removeProvider')"
+                  :aria-label="t('removeProvider')"
+                  :data-testid="`remove-provider-${data.provider.provider_id}`"
+                  @click="openRemoveProvider(data.provider)"
+                >
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      :stroke-width="2"
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
+                  </svg>
+                </Button>
+              </span>
+            </div>
+          </div>
+          <template v-else>
+            <span class="models-group-name">{{ data.groupLabel }}</span>
+            <span class="models-group-count">({{ groupCounts[data.groupKey] }})</span>
+            <span v-if="data.groupEndpoint" class="models-group-endpoint">{{
+              data.groupEndpoint
+            }}</span>
+          </template>
         </template>
         <Column :header="t('columnName')" field="name">
           <template #body="{ data }">
-            <span class="models-cell-name">{{ data.name }}</span>
+            <span v-if="data.placeholder" class="models-cell-muted">{{ t("noModelsFound") }}</span>
+            <span v-else class="models-cell-name">{{ data.name }}</span>
           </template>
         </Column>
         <Column :header="t('columnModelId')" field="modelId">
           <template #body="{ data }">
-            <span class="models-cell-mono">{{ data.modelId }}</span>
+            <span class="models-cell-mono" :title="data.modelId">{{ data.wireId }}</span>
             <div v-if="data.endpoint" class="models-cell-endpoint" :title="data.endpoint">
               {{ data.endpoint }}
             </div>
@@ -82,12 +167,13 @@
         </Column>
         <Column :header="t('columnProvider')" field="apiShape">
           <template #body="{ data }">
-            <span :class="{ 'models-cell-muted': !data.apiShape }">{{ data.apiShape || "—" }}</span>
+            <span :class="{ 'models-cell-muted': !data.apiShape }">{{ data.placeholder ? "" : data.apiShape || "—" }}</span>
           </template>
         </Column>
         <Column :header="t('columnImages')" field="supportsImages" class="models-col-images">
           <template #body="{ data }">
             <span
+              v-if="!data.placeholder"
               :class="data.supportsImages ? 'models-table-image-yes' : 'models-table-image-no'"
               role="img"
               :title="data.imageTitle"
@@ -167,9 +253,46 @@
   <ModelFormModal
     :is-open="formOpen"
     :edit-model="editModel"
+    :edit-provider="editingProvider"
     @saved="handleFormSaved"
+    @provider-saved="handleProviderSaved"
     @close="formOpen = false"
   />
+  <Modal
+    :is-open="!!providerToRemove"
+    :title="t('removeProviderTitle')"
+    class-name="modal-wide"
+    @close="providerToRemove = null"
+  >
+    <div class="model-provider-confirm">
+      <p>
+        {{
+          t("removeProviderConfirmation").replace(
+            "{name}",
+            providerToRemove ? providerName(providerToRemove) : "",
+          )
+        }}
+      </p>
+      <div v-if="removeError" class="models-error" role="alert">{{ removeError }}</div>
+      <div class="form-actions">
+        <Button
+          type="button"
+          severity="secondary"
+          :label="t('cancel')"
+          :disabled="removingProvider"
+          @click="providerToRemove = null"
+        />
+        <Button
+          type="button"
+          severity="danger"
+          :label="removingProvider ? t('removingProvider') : t('removeProvider')"
+          :disabled="removingProvider || !providerToRemove"
+          data-testid="confirm-remove-provider"
+          @click="confirmRemoveProvider"
+        />
+      </div>
+    </div>
+  </Modal>
 </template>
 
 <script setup lang="ts">
@@ -181,9 +304,17 @@ import Modal from "./Modal.vue";
 import ModelFormModal from "./ModelFormModal.vue";
 import { modelsTableDt } from "./modelsTableDt";
 import { prettyModelLabels } from "../../utils/modelNames";
+import { accountSuffixes } from "../../utils/providerAccounts";
 import { API_TYPE_LABELS, PROVIDER_LABELS } from "./customModelConstants";
 import { useI18n } from "../composables/i18n";
-import { api, customModelsApi, type AvailableModel, type CustomModel } from "../../services/api";
+import {
+  api,
+  customModelsApi,
+  modelProvidersApi,
+  type AvailableModel,
+  type CustomModel,
+  type ModelProviderConnection,
+} from "../../services/api";
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: "close"): void; (e: "modelsChanged"): void }>();
@@ -195,6 +326,13 @@ const loading = ref(true);
 const refreshing = ref(false);
 const error = ref<string | null>(null);
 const builtInModels = ref<AvailableModel[]>([]);
+const providerConnections = ref<ModelProviderConnection[]>([]);
+const providerLoadFailed = ref(false);
+const refreshingProviderIds = ref(new Set<string>());
+const editingProvider = ref<ModelProviderConnection | null>(null);
+const providerToRemove = ref<ModelProviderConnection | null>(null);
+const removingProvider = ref(false);
+const removeError = ref<string | null>(null);
 
 // Stacked add/edit dialog state. `editModel` is the custom model being edited,
 // or null when adding a new one.
@@ -208,9 +346,30 @@ const builtInModelsFiltered = computed(() =>
 // True when the model-list DataTable (not the empty/loading views) is showing.
 // The list fills the modal edge-to-edge, so we drop the wrapper padding in that
 // state (see .models-modal-list).
-const showList = computed(
-  () => !loading.value && (builtInModels.value.length > 0 || models.value.length > 0),
+const hasAnyEntries = computed(
+  () => builtInModelsFiltered.value.length > 0 || models.value.length > 0 || providerConnections.value.length > 0,
 );
+const showList = computed(() => !loading.value && hasAnyEntries.value);
+const providerSuffixes = computed(() => {
+  const accounts = new Map<string, string>();
+  for (const provider of providerConnections.value) {
+    accounts.set(provider.provider_id, providerName(provider));
+  }
+  for (const model of builtInModels.value) {
+    if (model.source_id && !accounts.has(model.source_id)) {
+      accounts.set(model.source_id, model.source || model.source_id);
+    }
+  }
+  return accountSuffixes([...accounts].map(([id, label]) => ({ id, label })));
+});
+
+function providerName(provider: ModelProviderConnection): string {
+  return provider.display_name || PROVIDER_LABELS[provider.provider_type];
+}
+
+function providerSuffix(provider: ModelProviderConnection): string {
+  return providerSuffixes.value.get(provider.provider_id) ?? "";
+}
 
 // Normalized rows so built-in + custom models render through one DataTable.
 // `model` is only present for custom rows, which are the editable/deletable
@@ -231,20 +390,45 @@ interface TableRow {
   imageTitle: string;
   imageAuto: boolean;
   model: CustomModel | null;
+  provider: ModelProviderConnection | null;
+  placeholder: boolean;
+  wireId: string;
 }
 
 const tableRows = computed<TableRow[]>(() => {
   const labels = prettyModelLabels(builtInModelsFiltered.value);
-  // Group built-ins by source, preserving catalog order within and across
-  // groups (first appearance wins).
-  const groups = new Map<string, AvailableModel[]>();
+  const providersByID = new Map(
+    providerConnections.value.map((provider) => [provider.provider_id, provider]),
+  );
+  const groups = new Map<string, { label: string; models: AvailableModel[] }>();
+  for (const provider of providerConnections.value) {
+    groups.set(`provider:${provider.provider_id}`, { label: providerName(provider), models: [] });
+  }
   for (const m of builtInModelsFiltered.value) {
     const src = m.source || "";
-    if (!groups.has(src)) groups.set(src, []);
-    groups.get(src)!.push(m);
+    const sourceID = m.source_id || "";
+    const key = sourceID ? `provider:${sourceID}` : `builtin:${src}`;
+    if (!groups.has(key)) {
+      const provider = providersByID.get(sourceID);
+      const label = provider ? providerName(provider) : src;
+      const suffix = sourceID ? providerSuffixes.value.get(sourceID) : undefined;
+      groups.set(key, { label: suffix ? `${label} ${suffix}` : label, models: [] });
+    }
+    groups.get(key)!.models.push(m);
   }
   const rows: TableRow[] = [];
-  for (const [src, group] of groups) {
+  for (const [groupKey, { label, models: group }] of groups) {
+    const provider = groupKey.startsWith("provider:")
+      ? providersByID.get(groupKey.slice("provider:".length)) ?? null
+      : null;
+    if (provider && group.length === 0) {
+      rows.push({
+        key: `${groupKey}:empty`, groupKey, groupLabel: label, groupEndpoint: "",
+        name: "", modelId: "", wireId: "", apiShape: null, endpoint: "",
+        supportsImages: false, imageTitle: "", imageAuto: false, model: null,
+        provider, placeholder: true,
+      });
+    }
     // Endpoint shared by every model in the group renders once in the group
     // header; otherwise it stays per-row.
     const endpoints = new Set(group.map((m) => m.base_url || ""));
@@ -252,8 +436,8 @@ const tableRows = computed<TableRow[]>(() => {
     for (const m of group) {
       rows.push({
         key: `builtin:${m.id}`,
-        groupKey: `builtin:${src}`,
-        groupLabel: src,
+        groupKey,
+        groupLabel: label,
         groupEndpoint: common,
         name: labels.get(m.id) || m.id,
         modelId: m.id,
@@ -263,6 +447,9 @@ const tableRows = computed<TableRow[]>(() => {
         imageTitle: (m.supports_images ?? true) ? t("imageSupportYes") : t("imageSupportNo"),
         imageAuto: false,
         model: null,
+        provider,
+        placeholder: false,
+        wireId: m.api_model_name || m.id,
       });
     }
   }
@@ -280,6 +467,9 @@ const tableRows = computed<TableRow[]>(() => {
       imageTitle: customModelImageTitle(m),
       imageAuto: (m.image_support ?? "auto") === "auto",
       model: m,
+      provider: null,
+      placeholder: false,
+      wireId: m.model_name,
     });
   }
   return rows;
@@ -289,7 +479,7 @@ const tableRows = computed<TableRow[]>(() => {
 const groupCounts = computed<Record<string, number>>(() => {
   const counts: Record<string, number> = {};
   for (const row of tableRows.value) {
-    counts[row.groupKey] = (counts[row.groupKey] || 0) + 1;
+    if (!row.placeholder) counts[row.groupKey] = (counts[row.groupKey] || 0) + 1;
   }
   return counts;
 });
@@ -313,27 +503,34 @@ function customModelImageTitle(model: CustomModel): string {
 }
 
 async function loadModels() {
-  try {
-    loading.value = true;
-    error.value = null;
-    models.value = await customModelsApi.getCustomModels();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : "Failed to load models";
-  } finally {
-    loading.value = false;
-  }
+  loading.value = true;
+  error.value = null;
+  const [customResult, modelsResult, providersResult] = await Promise.allSettled([
+    customModelsApi.getCustomModels(),
+    api.getModels(),
+    modelProvidersApi.list(),
+  ]);
+  if (customResult.status === "fulfilled") models.value = customResult.value;
+  else error.value = customResult.reason instanceof Error ? customResult.reason.message : String(customResult.reason);
+  if (modelsResult.status === "fulfilled") setBuiltInFromModelList(modelsResult.value);
+  else if (!error.value) error.value = modelsResult.reason instanceof Error ? modelsResult.reason.message : String(modelsResult.reason);
+  providerLoadFailed.value = providersResult.status === "rejected";
+  if (providersResult.status === "fulfilled") providerConnections.value = providersResult.value;
+  loading.value = false;
 }
 
 function setBuiltInFromModelList(modelList: AvailableModel[]) {
-  builtInModels.value = modelList.filter((m) => m.source && m.source !== "custom");
+  builtInModels.value = modelList.filter((m) => m.source && (m.source_id || m.source !== "custom"));
 }
 
 function handleAddNew() {
+  editingProvider.value = null;
   editModel.value = null;
   formOpen.value = true;
 }
 
 function handleEdit(model: CustomModel) {
+  editingProvider.value = null;
   editModel.value = model;
   formOpen.value = true;
 }
@@ -342,6 +539,83 @@ function handleEdit(model: CustomModel) {
 async function handleFormSaved() {
   await loadModels();
   emit("modelsChanged");
+}
+
+function openProviderForm(provider: ModelProviderConnection) {
+  editModel.value = null;
+  editingProvider.value = provider;
+  formOpen.value = true;
+}
+
+function openRemoveProvider(provider: ModelProviderConnection) {
+  removeError.value = null;
+  providerToRemove.value = provider;
+}
+
+function saveProviderLocally(provider: ModelProviderConnection) {
+  const index = providerConnections.value.findIndex((saved) => saved.provider_id === provider.provider_id);
+  if (index < 0) providerConnections.value.push(provider);
+  else providerConnections.value[index] = provider;
+}
+
+
+async function refreshModelList() {
+  try {
+    const modelList = await api.getModels();
+    setBuiltInFromModelList(modelList);
+    if (window.__SHELLEY_INIT__) window.__SHELLEY_INIT__.models = modelList;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function handleProviderSaved(provider: ModelProviderConnection) {
+  formOpen.value = false;
+  editingProvider.value = null;
+  providerLoadFailed.value = false;
+  saveProviderLocally(provider);
+  error.value = null;
+  await refreshModelList();
+  emit("modelsChanged");
+}
+
+async function refreshProvider(provider: ModelProviderConnection) {
+  if (refreshingProviderIds.value.has(provider.provider_id)) return;
+  refreshingProviderIds.value = new Set(refreshingProviderIds.value).add(provider.provider_id);
+  error.value = null;
+  try {
+    saveProviderLocally(await modelProvidersApi.refresh(provider.provider_id));
+    providerLoadFailed.value = false;
+    await refreshModelList();
+    emit("modelsChanged");
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    const ids = new Set(refreshingProviderIds.value);
+    ids.delete(provider.provider_id);
+    refreshingProviderIds.value = ids;
+  }
+}
+
+async function confirmRemoveProvider() {
+  const provider = providerToRemove.value;
+  if (!provider || removingProvider.value) return;
+  removingProvider.value = true;
+  removeError.value = null;
+  try {
+    await modelProvidersApi.remove(provider.provider_id);
+    providerConnections.value = providerConnections.value.filter(
+      (saved) => saved.provider_id !== provider.provider_id,
+    );
+    providerLoadFailed.value = false;
+    providerToRemove.value = null;
+    await refreshModelList();
+    emit("modelsChanged");
+  } catch (err) {
+    removeError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    removingProvider.value = false;
+  }
 }
 
 async function handleDuplicate(model: CustomModel) {

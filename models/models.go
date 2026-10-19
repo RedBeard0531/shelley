@@ -506,6 +506,7 @@ type Manager struct {
 	logger              *slog.Logger
 	db                  *db.DB
 	httpc               *http.Client
+	providersEnabled    bool
 }
 
 // GetWorkhorseService returns a service that uses a cheap model from the
@@ -515,15 +516,17 @@ func (m *Manager) GetWorkhorseService(conversationModelID string) (llm.Service, 
 }
 
 type serviceEntry struct {
-	service     llm.Service
-	provider    Provider
-	modelID     string
-	mode        string
-	source      string
-	displayName string
-	releaseDate string
-	baseURL     string
-	apiType     APIType
+	sourceID        string
+	serviceRevision uint64
+	service         llm.Service
+	provider        Provider
+	modelID         string
+	mode            string
+	source          string
+	displayName     string
+	releaseDate     string
+	baseURL         string
+	apiType         APIType
 	// apiModelName is the wire model name used for models.dev lookups.
 	apiModelName string
 }
@@ -734,10 +737,11 @@ func (m *Manager) RefreshCustomModels() error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previous := append([]string(nil), m.modelOrder...)
 	newOrder := make([]string, 0, len(m.modelOrder))
 	for _, id := range m.modelOrder {
 		entry, ok := m.services[id]
-		if ok && entry.source != SourceCustomLabel {
+		if ok && (entry.sourceID != "" || entry.source != SourceCustomLabel) {
 			newOrder = append(newOrder, id)
 		} else {
 			delete(m.services, id)
@@ -745,6 +749,9 @@ func (m *Manager) RefreshCustomModels() error {
 	}
 	m.modelOrder = newOrder
 	m.loadCustomModelsLocked(dbModels)
+	if m.providersEnabled {
+		m.preserveProviderOrder(previous)
+	}
 	return nil
 }
 
@@ -757,30 +764,45 @@ func (m *Manager) RefreshBuiltModels(built []Built) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previous := append([]string(nil), m.modelOrder...)
+	saved := make(map[string]serviceEntry)
+	for id, entry := range m.services {
+		if entry.sourceID != "" {
+			saved[id] = entry
+		}
+	}
 	m.services = map[string]serviceEntry{}
 	m.modelOrder = nil
 	m.registerBuiltModelsLocked(built)
 	m.loadCustomModelsLocked(dbModels)
+	for _, id := range previous {
+		if entry, ok := saved[id]; ok {
+			m.services[id] = entry
+			m.modelOrder = append(m.modelOrder, id)
+		}
+	}
 	return nil
 }
 
 // GetService returns the LLM service for modelID, wrapped with logging.
 func (m *Manager) GetService(modelID string) (llm.Service, error) {
-	m.mu.RLock()
-	entry, ok := m.services[modelID]
-	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("unsupported model: %s", modelID)
+	entry, err := m.lookupService(modelID)
+	if err != nil {
+		return nil, err
 	}
+	return m.loggedService(entry), nil
+}
+
+func (m *Manager) loggedService(entry serviceEntry) llm.Service {
 	if m.logger != nil {
 		return &loggingService{
 			service:  entry.service,
 			logger:   m.logger,
 			modelID:  entry.modelID,
 			provider: entry.provider,
-		}, nil
+		}
 	}
-	return entry.service, nil
+	return entry.service
 }
 
 func (m *Manager) GetAvailableModels() []string {
@@ -821,14 +843,13 @@ func (m *Manager) GetTranscriptionModels(modelName string) ([]TranscriptionModel
 }
 
 func (m *Manager) HasModel(modelID string) bool {
-	m.mu.RLock()
-	_, ok := m.services[modelID]
-	m.mu.RUnlock()
-	return ok
+	_, err := m.lookupService(modelID)
+	return err == nil
 }
 
 // ModelInfo contains display name, provider metadata, and release date for a model.
 type ModelInfo struct {
+	SourceID    string
 	DisplayName string
 	Provider    Provider
 	Mode        string
@@ -842,13 +863,11 @@ type ModelInfo struct {
 }
 
 func (m *Manager) GetModelInfo(modelID string) *ModelInfo {
-	m.mu.RLock()
-	entry, ok := m.services[modelID]
-	m.mu.RUnlock()
-	if !ok {
+	entry, err := m.lookupService(modelID)
+	if err != nil {
 		return nil
 	}
-	return &ModelInfo{DisplayName: entry.displayName, Provider: entry.provider, Mode: entry.mode, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType), APIModelName: entry.apiModelName}
+	return &ModelInfo{SourceID: entry.sourceID, DisplayName: entry.displayName, Provider: entry.provider, Mode: entry.mode, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType), APIModelName: entry.apiModelName}
 }
 
 type reasoningMapping struct {
@@ -857,6 +876,7 @@ type reasoningMapping struct {
 }
 
 type reasoningService struct {
+	disableWebSearch bool
 	llm.Service
 	supported     bool
 	levels        []llm.ThinkingLevel
@@ -867,6 +887,9 @@ type reasoningService struct {
 func (s *reasoningService) SupportsReasoning() bool { return s.supported }
 func (s *reasoningService) PatchProfile() string    { return llm.PatchProfile(s.Service) }
 func (s *reasoningService) SupportsServerSideWebSearch() bool {
+	if s.disableWebSearch {
+		return false
+	}
 	type capable interface{ SupportsServerSideWebSearch() bool }
 	c, ok := s.Service.(capable)
 	return ok && c.SupportsServerSideWebSearch()

@@ -1841,6 +1841,18 @@ func (s *Server) handleRetryConversation(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
+	if modelID := manager.GetModel(); isSavedProviderRouteID(modelID) {
+		service, err := s.llmManager.GetService(modelID)
+		if err != nil {
+			http.Error(w, unsupportedModelMessage(modelID, s.getModelList()), http.StatusBadRequest)
+			return
+		}
+		if err := manager.ensureLoop(service, modelID); err != nil {
+			s.internalError(w, "Failed to refresh provider service for retry", err)
+			return
+		}
+	}
+
 	if err := manager.RetryLastLLMRequest(ctx); err != nil {
 		if errors.Is(err, errRetryNotApplicable) {
 			// The bottom message is no longer a retryable error (e.g. a
@@ -2277,6 +2289,10 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 		}
 	}
 
+	if includeConversationListPatches && !writeStreamData(StreamResponse{ModelsChanged: true}) {
+		return
+	}
+
 	if conversationID == "" {
 		// Stream without backfill: forward events from streamPub and list
 		// patches, with a periodic heartbeat so intermediaries don't time
@@ -2544,6 +2560,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 
 // ModelInfo represents a model in the API response
 type ModelInfo struct {
+	SourceID     string `json:"source_id,omitempty"`
 	ID           string `json:"id"`
 	DisplayName  string `json:"display_name,omitempty"`
 	Mode         string `json:"mode,omitempty"`
@@ -2878,6 +2895,7 @@ func (s *Server) getModelList() []ModelInfo {
 			info := ModelInfo{ID: id, Ready: err == nil, SupportsImages: supportsImages, SupportsReasoning: supportsReasoning, ReasoningLevels: reasoningLevels, DefaultReasoningLevel: defaultReasoning}
 			// Add display name and source from model info
 			if modelInfo := s.llmManager.GetModelInfo(id); modelInfo != nil {
+				info.SourceID = modelInfo.SourceID
 				info.DisplayName = modelInfo.DisplayName
 				info.Mode = modelInfo.Mode
 				info.Source = modelInfo.Source
@@ -2906,7 +2924,7 @@ func assignModelTiers(modelList []ModelInfo) {
 	tiers := models.AssignTiers(readyIDs)
 	for i := range modelList {
 		if modelList[i].Ready {
-			if modelList[i].Source == models.SourceCustomLabel {
+			if modelList[i].SourceID != "" || modelList[i].Source == models.SourceCustomLabel {
 				modelList[i].Tier = models.Tier1
 			} else {
 				modelList[i].Tier = tiers[modelList[i].ID]
@@ -2970,6 +2988,7 @@ func (s *Server) handleModelRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.notifyModelsChanged()
 	modelList := s.getModelList()
 	markDefaultModel(modelList, s.effectiveDefaultModel(modelList))
 	w.Header().Set("Content-Type", "application/json")

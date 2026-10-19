@@ -53,7 +53,7 @@ func catalogued(info *models.ModelInfo) bool {
 // themselves.
 func (s *Server) voicePromptModel(modelID string) string {
 	info := s.llmManager.GetModelInfo(modelID)
-	if info == nil || info.Source == "" || info.BaseURL == "" || info.Source == models.SourceCustomLabel || !catalogued(info) {
+	if info == nil || info.Source == "" || info.BaseURL == "" || (info.SourceID == "" && info.Source == models.SourceCustomLabel) || !catalogued(info) {
 		return modelID
 	}
 	family, ok := voicePromptFamilies[info.Provider]
@@ -63,7 +63,7 @@ func (s *Server) voicePromptModel(modelID string) string {
 	best, bestDate := "", ""
 	for _, id := range s.llmManager.GetAvailableModels() {
 		c := s.llmManager.GetModelInfo(id)
-		if c == nil || c.Provider != info.Provider || c.Source != info.Source || c.BaseURL != info.BaseURL || !strings.Contains(c.APIModelName, family) || !catalogued(c) {
+		if c == nil || c.Provider != info.Provider || !sameVoicePromptAccount(info, c) || !strings.Contains(c.APIModelName, family) || !catalogued(c) {
 			continue
 		}
 		if best == "" || c.ReleaseDate > bestDate {
@@ -144,4 +144,11 @@ func (s *Server) handleGenerateVoicePrompt(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"voice_prompt": prompt})
+}
+
+func sameVoicePromptAccount(a, b *models.ModelInfo) bool {
+	if a.SourceID != "" || b.SourceID != "" {
+		return a.SourceID == b.SourceID
+	}
+	return a.Source == b.Source && a.BaseURL == b.BaseURL
 }

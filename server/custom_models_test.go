@@ -40,6 +40,61 @@ func TestValidReasoningReplay(t *testing.T) {
 	}
 }
 
+func TestCustomModelMutationsNotifyModelsChanged(t *testing.T) {
+	h := NewTestHarness(t)
+	mux := http.NewServeMux()
+	h.server.RegisterRoutes(mux)
+	body := []byte(`{
+		"display_name":"Custom model",
+		"provider_type":"openai",
+		"endpoint":"https://proxy.example/v1",
+		"api_key":"test-key",
+		"model_name":"custom-model"
+	}`)
+	var model ModelAPI
+	for _, step := range []struct {
+		method string
+		suffix string
+		status int
+	}{
+		{http.MethodPost, "", http.StatusCreated},
+		{http.MethodPut, "", http.StatusOK},
+		{http.MethodPost, "/duplicate", http.StatusCreated},
+		{http.MethodDelete, "", http.StatusNoContent},
+	} {
+		ctx, cancel := context.WithCancel(t.Context())
+		nextA := h.server.streamPub.Subscribe(ctx, -1)
+		nextB := h.server.streamPub.Subscribe(ctx, -1)
+		path := "/api/custom-models"
+		if model.ModelID != "" {
+			path += "/" + model.ModelID
+		}
+		path += step.suffix
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(step.method, path, bytes.NewReader(body)))
+		cancel()
+		if rec.Code != step.status {
+			t.Fatalf("%s %s: status=%d body=%s", step.method, path, rec.Code, rec.Body.String())
+		}
+		for i, next := range []func() (StreamResponse, bool){nextA, nextB} {
+			count := 0
+			for event, ok := next(); ok; event, ok = next() {
+				if event.ModelsChanged {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Fatalf("%s %s: subscriber %d got %d catalog events, want 1", step.method, path, i, count)
+			}
+		}
+		if model.ModelID == "" {
+			if err := json.Unmarshal(rec.Body.Bytes(), &model); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 func TestCustomModelReasoningReplayLifecycle(t *testing.T) {
 	h := NewTestHarness(t)
 	createBody := []byte(`{

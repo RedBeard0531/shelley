@@ -688,3 +688,24 @@ func TestSystemdListenerIntegration(t *testing.T) {
 		t.Errorf("Unexpected status code %d, body: %s", resp.StatusCode, body)
 	}
 }
+
+func TestToolModelsStayWithinSavedAccount(t *testing.T) {
+	parent := models.ProviderRouteID("work", "gpt-6.1-sol")
+	sibling := models.ProviderRouteID("work", "gpt-6-luna")
+	other := models.ProviderRouteID("personal", "gpt-6-luna")
+	provider := &tieredModelProvider{
+		ids: []string{"gpt-6.1-sol", sibling, other}, // parent is no longer listed
+		infos: map[string]*models.ModelInfo{
+			parent:  {SourceID: "work", Source: "Same label", APIModelName: "gpt-6.1-sol"},
+			sibling: {SourceID: "work", Source: "Same label", APIModelName: "gpt-6-luna"},
+			other:   {SourceID: "personal", Source: "Same label", APIModelName: "gpt-6-luna"},
+		},
+	}
+	choices := setupToolSetConfig(nil, provider).BuildAvailableModels
+	if got := choices(parent); !slices.Equal(got, []claudetool.AvailableModel{{Name: "gpt-6.1-sol", ID: parent}, {Name: "gpt-6-luna", ID: sibling}}) {
+		t.Fatalf("saved choices crossed accounts or lost parent: %+v", got)
+	}
+	if got := choices("gpt-6.1-sol"); !slices.Equal(got, []claudetool.AvailableModel{{Name: "gpt-6.1-sol", ID: "gpt-6.1-sol"}}) {
+		t.Fatalf("legacy choices gained saved-account routes: %+v", got)
+	}
+}

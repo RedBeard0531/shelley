@@ -118,6 +118,21 @@ export function suggestURL(command: string): string {
   return `https://exe.dev/suggest?command=${encodeURIComponent(command)}`;
 }
 
+export function savedProviderSourceID(route: string): string | undefined {
+  const parts = route.split(":");
+  if (parts.length !== 3 || parts[0] !== "provider" || !parts[1] || !parts[2]) return undefined;
+  try {
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const bytes = Uint8Array.from(
+      atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)),
+      (character) => character.charCodeAt(0),
+    );
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // canSendWithModel gates sending on having a model the server actually
 // serves. This replaces the old hardcoded-fallback behavior: a model id that
 // isn't in the ready list (empty selection, or a stale id left in
@@ -130,8 +145,14 @@ export function suggestURL(command: string): string {
 export function canSendWithModel(
   model: string | undefined,
   readyModelIds?: readonly string[],
+  providerIds?: readonly string[],
 ): boolean {
   if (!model || model.trim() === "") return false;
+  if (model.startsWith("provider:")) {
+    if (providerIds === undefined) return true;
+    const sourceID = savedProviderSourceID(model);
+    return !!sourceID && providerIds.includes(sourceID);
+  }
   if (!readyModelIds) return true;
   return readyModelIds.includes(model);
 }

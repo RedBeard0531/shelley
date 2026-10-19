@@ -81,7 +81,8 @@
             :class="{ 'is-active': voicePhase !== 'idle' }"
             :disabled="
               voicePhase === 'idle' &&
-              (!!currentConversation?.archived || !canSendWithModel(selectedModel, readyModelIds))
+              (!!currentConversation?.archived ||
+                !canSendWithModel(selectedModel, readyModelIds, providerIds))
             "
             :aria-label="headerCallLabel"
             :title="headerCallLabel"
@@ -171,7 +172,13 @@
                 <p v-if="modelSetupHint.footer">{{ t(modelSetupHint.footer) }}</p>
               </PvMessage>
               <p v-else-if="voicePhase === 'idle'" class="text-sm chat-secondary-text">
-                {{ t(canSendWithModel(selectedModel, readyModelIds) ? "sendOrTalkToStart" : "sendMessageToStart") }}
+                {{
+                  t(
+                    canSendWithModel(selectedModel, readyModelIds, providerIds)
+                      ? "sendOrTalkToStart"
+                      : "sendMessageToStart",
+                  )
+                }}
               </p>
             </div>
           </div>
@@ -620,7 +627,7 @@ import {
   COMPACT_IN_PLACE_TOOL,
   DEFAULT_COMPACT_NUDGE_TOKENS,
 } from "./autoCompaction";
-import { api, ApiError, profilesApi } from "../../services/api";
+import { api, ApiError, modelProvidersApi, profilesApi } from "../../services/api";
 import { btwStore } from "../../services/btwStore";
 import { messageStore } from "../../services/messageStore";
 import { cacheDiag } from "../../services/cacheDiag";
@@ -1002,6 +1009,7 @@ async function dismissDiskSpaceNotice() {
   }
 }
 const models = ref<Model[]>(window.__SHELLEY_INIT__?.models || []);
+const providerIds = ref<string[] | undefined>(undefined);
 
 // Ready model ids, surfaced to MessageInput for /model argument autocomplete.
 const readyModelIds = computed(() => models.value.filter((m) => m.ready).map((m) => m.id));
@@ -1024,6 +1032,12 @@ const modelSetupHint = computed(() =>
 // links), so repeating them in the status bar would just be noise; inside an
 // existing conversation the panel is hidden, so add the one-line note.
 function noModelErrorMessage(): string {
+  if (
+    selectedModel.value.startsWith("provider:") &&
+    !canSendWithModel(selectedModel.value, readyModelIds.value, providerIds.value)
+  ) {
+    return t("providerSelectionRequired");
+  }
   const hint = modelSetupHint.value;
   if (messages.value.length === 0 || !hint.note) return t(hint.title);
   return `${t(hint.title)}. ${t(hint.note)}`;
@@ -1045,8 +1059,11 @@ function thinkingLevelForModel(modelId: string, level: ThinkingLevel): ThinkingL
 // "claude-sonnet-4.6") made the composer look usable and turned a clear
 // "no models configured" state into a misleading "Unsupported model:
 // claude-sonnet-4.6" error from the server. Empty disables sending instead.
+const initialPreferredModel = storedSelectedModel();
 const selectedModel = ref<string>(
-  pickReadyModel(window.__SHELLEY_INIT__?.models || [], storedSelectedModel()),
+  initialPreferredModel?.startsWith("provider:")
+    ? initialPreferredModel
+    : pickReadyModel(models.value, initialPreferredModel),
 );
 provide(RefusalContinueKey, { models, selectedModel, thinkingLevel });
 // applyModel updates the picker's local state only (ref + localStorage).
@@ -1054,6 +1071,7 @@ provide(RefusalContinueKey, { models, selectedModel, thinkingLevel });
 function applyModel(model: string) {
   selectedModel.value = model;
   localStorage.setItem(SELECTED_MODEL_KEY, model);
+  if (error.value === t("providerSelectionRequired")) error.value = null;
 }
 // In-flight picker PUT tracking. While a PUT for a draft is outstanding,
 // the conversation-model watch ignores echoes FOR THAT DRAFT: they are
@@ -1818,7 +1836,16 @@ watch([composerProfile, () => conversationLive.value], ([p, live]) => {
 watch(
   () => conversationLive.value,
   (live) => {
-    if (!live) selectedModel.value = pickReadyModel(models.value, storedSelectedModel());
+    if (live) return;
+    const preferred = storedSelectedModel();
+    if (preferred?.startsWith("provider:")) {
+      selectedModel.value = preferred;
+      if (!canSendWithModel(preferred, readyModelIds.value, providerIds.value)) {
+        error.value = t("providerSelectionRequired");
+      }
+      return;
+    }
+    selectedModel.value = pickReadyModel(models.value, preferred, providerIds.value);
   },
 );
 // Switches whichever settings are in effect to the named profile's.
@@ -3211,7 +3238,7 @@ async function queueMessageTo(conversationId: string, model: string, message: st
   // Same guard as sendMessage: a queued turn runs the LLM later, so an
   // unavailable model just defers the confusing "Unsupported model" error.
   // Throws (not returns) so MessageInput's catch restores the composer text.
-  if (!canSendWithModel(model, readyModelIds.value)) {
+  if (!canSendWithModel(model, readyModelIds.value, providerIds.value)) {
     const err = new Error(noModelErrorMessage());
     error.value = err.message;
     throw err;
@@ -3252,7 +3279,7 @@ function getLiveConversation(id: string): Conversation | undefined {
 // the draft is created only once the call can proceed, as a recording's is,
 // and belongs to this composer session even if the user navigates meanwhile.
 function captureLiveConversation(): LiveCallDestination {
-  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value, providerIds.value)) {
     throw new Error(noModelErrorMessage());
   }
   const conversationId = props.conversationId;
@@ -3354,7 +3381,7 @@ function buildConversationOptions(): ChatRequest["conversation_options"] {
 // composer recording, to this page's draft; if the page has moved on by the
 // time it's sent (or is archived), elsewhere (see ReviewConversationStart).
 function startReviewConversation(): ReviewConversationStart {
-  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value, providerIds.value)) {
     throw new Error(noModelErrorMessage());
   }
   const sessionVersion = draftSessionVersion;
@@ -3402,7 +3429,7 @@ function followReviewConversation() {
 
 async function sendFirstMessage(prompt: string) {
   if (!props.onFirstMessage) return;
-  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value, providerIds.value)) {
     throw new Error(noModelErrorMessage());
   }
   if (selectedCwd.value) {
@@ -3594,7 +3621,10 @@ async function sendMessage(message: string) {
   // and only restores it in its catch ("Keep the message on error so user can
   // retry"). Returning would look like success and silently discard what the
   // user typed — along with its cached draft — exactly when they can't send.
-  if (!canSendWithModel(selectedModel.value, readyModelIds.value) && needsModel(trimmedMessage)) {
+  if (
+    !canSendWithModel(selectedModel.value, readyModelIds.value, providerIds.value) &&
+    needsModel(trimmedMessage)
+  ) {
     const err = new Error(noModelErrorMessage());
     error.value = err.message;
     throw err;
@@ -4530,19 +4560,27 @@ async function handleRefreshModels() {
   }
 }
 
-// Refresh models list when triggered or when starting a new conversation.
+// The stream announces the catalog on connection and after changes.
 watch(
-  [() => props.modelsRefreshTrigger, () => props.conversationId],
-  () => {
-    if (props.modelsRefreshTrigger === undefined) return;
-    if (props.modelsRefreshTrigger === 0 && props.conversationId !== null) return;
-    api
-      .getModels()
-      .then((newModels) => {
-        models.value = newModels;
-        if (window.__SHELLEY_INIT__) window.__SHELLEY_INIT__.models = newModels;
-      })
-      .catch((err) => console.error("Failed to refresh models:", err));
+  () => props.modelsRefreshTrigger,
+  async (trigger) => {
+    if (!trigger) return;
+    const [modelsResult, providersResult] = await Promise.allSettled([
+      api.getModels(),
+      modelProvidersApi.list(),
+    ]);
+    if (modelsResult.status === "fulfilled") {
+      models.value = modelsResult.value;
+      if (window.__SHELLEY_INIT__) window.__SHELLEY_INIT__.models = modelsResult.value;
+    } else {
+      console.error("Failed to refresh models:", modelsResult.reason);
+    }
+    if (providersResult.status === "fulfilled") {
+      providerIds.value = providersResult.value.map((provider) => provider.provider_id);
+    } else {
+      // A failed list request is not evidence that any saved account was removed.
+      console.error("Failed to load model providers:", providersResult.reason);
+    }
   },
   { immediate: true },
 );
@@ -4556,12 +4594,16 @@ watch(
 // Clear the selection so the picker reads "No model available" and the send
 // guard blocks locally with setup advice.
 watch(
-  readyModelIds,
-  (ready) => {
+  [readyModelIds, providerIds],
+  ([ready, providers]) => {
     // A conversation under way keeps its model; the server names the
     // problem if it's gone.
     if (!selectedModel.value || conversationLive.value) return;
-    if (ready.includes(selectedModel.value)) return;
+    if (canSendWithModel(selectedModel.value, ready, providers)) return;
+    if (selectedModel.value.startsWith("provider:")) {
+      error.value = t("providerSelectionRequired");
+      return;
+    }
     // Prefer the server's default (or any ready model) over showing nothing,
     // so a mere catalog reshuffle doesn't strand the composer.
     applyModel(pickReadyModel(models.value));

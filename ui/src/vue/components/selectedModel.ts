@@ -2,6 +2,7 @@
 // customized-build rebase action need a *ready* model id, seeded from the
 // user's last pick, and both must agree on where that pick is stored.
 import type { Model } from "../../types";
+import { canSendWithModel } from "../../utils/modelSetupHint";
 
 export const SELECTED_MODEL_KEY = "shelley_selected_model";
 
@@ -19,8 +20,16 @@ export function serverDefaultModel(): string {
 // model. "" when the catalog serves nothing ready — deliberately no invented
 // fallback id, which would turn "no models configured" into a confusing
 // "Unsupported model" from the server.
-export function pickReadyModel(models: Pick<Model, "id" | "ready">[], preferred?: string): string {
+export function pickReadyModel(
+  models: Pick<Model, "id" | "ready">[],
+  preferred?: string,
+  providerIds?: readonly string[],
+): string {
   const ready = (id?: string) => !!id && models.some((m) => m.id === id && m.ready);
+  if (preferred?.startsWith("provider:")) {
+    if (providerIds === undefined) return ready(preferred) ? preferred : "";
+    return canSendWithModel(preferred, undefined, providerIds) ? preferred : "";
+  }
   if (ready(preferred)) return preferred as string;
   if (ready(serverDefaultModel())) return serverDefaultModel();
   return models.find((m) => m.ready)?.id || "";

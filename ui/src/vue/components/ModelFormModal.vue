@@ -1,17 +1,40 @@
-<!-- Add / edit dialog for a custom model. Renders as its own Modal (a stacked
-     PrimeVue Dialog) layered on top of ModelsModal's list, so it has a proper
-     title + close button and the list stays visible/unchanged underneath
-     rather than being swapped out. Owns the whole form + test/save lifecycle;
-     emits `saved` (parent reloads the list) and `close`. `editModel` is the
-     custom model being edited, or null when adding. -->
+<!-- Add/edit a single model or a saved provider account. -->
 <template>
   <Modal
     :is-open="isOpen"
-    :title="editModel ? t('editModel') : t('addModel')"
+    :title="editProvider ? t('editProvider') : editModel ? t('editModel') : t('addModels')"
     class-name="modal-wide"
-    @close="emit('close')"
+    @close="requestClose"
   >
-    <div class="model-form">
+    <div v-if="!editModel && !editProvider" class="form-group">
+      <div class="endpoint-toggle" role="group" :aria-label="t('addModels')">
+        <button
+          type="button"
+          data-testid="model-mode-provider"
+          :class="['toggle-btn', { selected: providerMode }]"
+          :aria-pressed="providerMode"
+          :disabled="providerSaving"
+          @click="addMode = 'provider'"
+        >{{ t("addProvider") }}</button>
+        <button
+          type="button"
+          data-testid="model-mode-single"
+          :class="['toggle-btn', { selected: !providerMode }]"
+          :aria-pressed="!providerMode"
+          :disabled="providerSaving"
+          @click="addMode = 'single'"
+        >{{ t("addModelSingle") }}</button>
+      </div>
+    </div>
+    <ModelProviderForm
+      ref="providerForm"
+      v-if="isOpen && !editModel"
+      v-show="providerMode"
+      :provider="editProvider"
+      @saved="emit('providerSaved', $event)"
+      @close="requestClose"
+    />
+    <div v-show="!providerMode" class="model-form">
       <div v-if="error" class="models-error">
         {{ error }}
         <button class="models-error-dismiss" @click="error = null">×</button>
@@ -20,46 +43,28 @@
       <!-- Provider Selection -->
       <div class="form-group">
         <label>{{ t("providerApiFormat") }}</label>
-        <div class="provider-buttons">
+        <div class="provider-buttons" role="group" :aria-label="t('providerApiFormat')">
           <button
             v-for="p in providerTypes"
             :key="p"
             type="button"
             :class="`provider-btn ${form.provider_type === p ? 'selected' : ''}`"
+            :aria-label="PROVIDER_LABELS[p]"
+            :aria-pressed="form.provider_type === p"
             @click="handleProviderChange(p)"
           >
-            {{ PROVIDER_LABELS[p] }}
+            {{ PROVIDER_TAB_LABELS[p] }}
           </button>
         </div>
       </div>
 
-      <!-- Endpoint Selection -->
       <div class="form-group">
-        <label>{{ t("endpoint") }}</label>
-        <div class="endpoint-toggle">
-          <button
-            type="button"
-            :class="`toggle-btn ${!form.endpoint_custom ? 'selected' : ''}`"
-            @click="handleEndpointModeChange(false)"
-          >
-            {{ t("defaultEndpoint") }}
-          </button>
-          <button
-            type="button"
-            :class="`toggle-btn ${form.endpoint_custom ? 'selected' : ''}`"
-            @click="handleEndpointModeChange(true)"
-          >
-            {{ t("customEndpoint") }}
-          </button>
-        </div>
-        <InputText
-          v-if="form.endpoint_custom"
+        <label for="model-endpoint">{{ t("endpoint") }}</label>
+        <ModelEndpointInput
           v-model="form.endpoint"
-          placeholder="https://..."
-          fluid
-          :dt="inputFieldDt"
+          input-id="model-endpoint"
+          :presets="endpointPresets"
         />
-        <div v-else class="endpoint-display">{{ form.endpoint }}</div>
       </div>
 
       <!-- Model Name with autocomplete suggestions -->
@@ -101,6 +106,7 @@
         <label>{{ t("apiKey") }}</label>
         <InputText
           v-model="form.api_key"
+          type="password"
           :placeholder="t('enterApiKey')"
           fluid
           :dt="inputFieldDt"
@@ -231,7 +237,7 @@
 
       <!-- Form Actions -->
       <div class="form-actions">
-        <Button type="button" severity="secondary" :label="t('cancel')" @click="emit('close')" />
+        <Button type="button" severity="secondary" :label="t('cancel')" @click="requestClose" />
         <Button
           type="button"
           severity="secondary"
@@ -264,10 +270,13 @@ import InputText from "primevue/inputtext";
 import Select from "primevue/select";
 import { inputFieldDt, selectFieldDt } from "./configFieldDt";
 import Modal from "./Modal.vue";
+import ModelProviderForm from "./ModelProviderForm.vue";
+import ModelEndpointInput from "./ModelEndpointInput.vue";
 import { useI18n } from "../composables/i18n";
 import {
   customModelsApi,
   type CustomModel,
+  type ModelProviderConnection,
   type CreateCustomModelRequest,
   type TestCustomModelRequest,
 } from "../../services/api";
@@ -276,16 +285,33 @@ import {
   DEFAULT_MODELS,
   DEFAULT_REASONING_MAP,
   PROVIDER_LABELS,
+  PROVIDER_TAB_LABELS,
   REASONING_EFFORT_SUGGESTIONS,
   REASONING_LEVELS,
   emptyForm,
+  endpointPresetsFor,
   providerTypes,
   type FormData,
   type ProviderType,
 } from "./customModelConstants";
 
-const props = defineProps<{ isOpen: boolean; editModel: CustomModel | null }>();
-const emit = defineEmits<{ (e: "close"): void; (e: "saved"): void }>();
+const props = defineProps<{
+  isOpen: boolean;
+  editModel: CustomModel | null;
+  editProvider: ModelProviderConnection | null;
+}>();
+const emit = defineEmits<{
+  (e: "close"): void;
+  (e: "saved"): void;
+  (e: "providerSaved", provider: ModelProviderConnection): void;
+}>();
+const providerForm = ref<InstanceType<typeof ModelProviderForm> | null>(null);
+const providerSaving = computed(() => providerForm.value?.saving ?? false);
+function requestClose() {
+  if (!providerSaving.value) emit("close");
+}
+const addMode = ref<"provider" | "single">("provider");
+const providerMode = computed(() => !!props.editProvider || (!props.editModel && addMode.value === "provider"));
 
 const { t } = useI18n();
 
@@ -306,6 +332,7 @@ const reasoningReplayOptions = computed(() => [
 ]);
 
 const form = reactive<FormData>({ ...emptyForm });
+const endpointPresets = computed(() => endpointPresetsFor(form.provider_type));
 
 const error = ref<string | null>(null);
 const testing = ref(false);
@@ -368,6 +395,7 @@ watch(
   () => props.isOpen,
   (open) => {
     if (!open) return;
+    addMode.value = "provider";
     error.value = null;
     testResult.value = null;
     const m = props.editModel;
@@ -376,7 +404,6 @@ watch(
         display_name: m.display_name,
         provider_type: m.provider_type,
         endpoint: m.endpoint,
-        endpoint_custom: m.endpoint !== DEFAULT_ENDPOINTS[m.provider_type as ProviderType],
         api_key: m.api_key,
         model_name: m.model_name,
         max_tokens: m.max_tokens,
@@ -394,13 +421,11 @@ watch(
 );
 
 function handleProviderChange(provider: ProviderType) {
+  const wasPreset = endpointPresets.value.some((preset) => preset.url === form.endpoint);
   form.provider_type = provider;
-  form.endpoint = form.endpoint_custom ? form.endpoint : DEFAULT_ENDPOINTS[provider];
-}
-
-function handleEndpointModeChange(custom: boolean) {
-  form.endpoint_custom = custom;
-  form.endpoint = custom ? form.endpoint : DEFAULT_ENDPOINTS[form.provider_type];
+  if (wasPreset && !endpointPresets.value.some((preset) => preset.url === form.endpoint)) {
+    form.endpoint = DEFAULT_ENDPOINTS[provider];
+  }
 }
 
 function onModelNameInput(v: string) {

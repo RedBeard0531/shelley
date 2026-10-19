@@ -13,6 +13,7 @@ import (
 	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/modelsources"
+	"shelley.exe.dev/subpub"
 )
 
 type modelListReasoningService struct{ llm.Service }
@@ -187,6 +188,7 @@ func TestHandleModelRefreshReturnsRefreshedModels(t *testing.T) {
 	s := &Server{
 		llmManager: mgr,
 		logger:     slog.Default(),
+		streamPub:  subpub.New[StreamResponse](),
 		refreshBuiltModels: func(context.Context) ([]models.Built, error) {
 			return []models.Built{
 				{
@@ -205,9 +207,12 @@ func TestHandleModelRefreshReturnsRefreshedModels(t *testing.T) {
 		},
 	}
 
+	ctx, cancel := context.WithCancel(t.Context())
+	next := s.streamPub.Subscribe(ctx, -1)
 	req := httptest.NewRequest(http.MethodPost, "/api/models/refresh", nil)
 	rec := httptest.NewRecorder()
 	s.handleModelRefresh(rec, req)
+	cancel()
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
@@ -224,6 +229,12 @@ func TestHandleModelRefreshReturnsRefreshedModels(t *testing.T) {
 	}
 	if mgr.HasModel("old-built") {
 		t.Fatal("old built model was not removed")
+	}
+	if event, ok := next(); !ok || !event.ModelsChanged {
+		t.Fatalf("catalog event = %+v, ok=%v", event, ok)
+	}
+	if event, ok := next(); ok {
+		t.Fatalf("unexpected extra event: %+v", event)
 	}
 }
 

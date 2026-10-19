@@ -55,6 +55,15 @@ withDefault(undefined, () => {
   );
 });
 
+const saved = "provider:YQ:bQ";
+check("rebase requires a listed ready saved route", pickReadyModel(models, saved) === "");
+check(
+  "rebase retains a listed saved route",
+  pickReadyModel([{ id: saved, ready: true }], saved) === saved,
+);
+check("known account permits an unlisted route", pickReadyModel([], saved, ["a"]) === saved);
+check("removed account does not switch to another model", pickReadyModel(models, saved, []) === "");
+
 console.log(`selectedModel: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.error(failures.join("\n"));

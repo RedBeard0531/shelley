@@ -58,6 +58,7 @@ export interface AvailableModel {
   id: string;
   display_name?: string;
   source?: string;
+  source_id?: string;
   mode?: string;
   base_url?: string;
   api_type?: string;
@@ -1403,6 +1404,81 @@ class CustomModelsApi {
 }
 
 export const customModelsApi = new CustomModelsApi();
+
+export type ModelProviderType = "anthropic" | "openai" | "openai-responses";
+
+export interface ModelProviderInput {
+  provider_type: ModelProviderType;
+  endpoint: string;
+  api_key: string;
+  display_name: string;
+}
+
+export interface ModelProviderConnection {
+  provider_id: string;
+  provider_type: ModelProviderType;
+  endpoint: string;
+  display_name: string;
+  has_api_key: boolean;
+  model_count: number;
+}
+
+export const modelProvidersApi = {
+  async check(input: ModelProviderInput, id?: string): Promise<{ id: string; name?: string }[]> {
+    const path = id
+      ? `/api/model-providers/${encodeURIComponent(id)}/check`
+      : "/api/model-providers/check";
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) throw await responseError(response, "Failed to check models");
+    return response.json();
+  },
+
+  async list(): Promise<ModelProviderConnection[]> {
+    const response = await fetch("/api/model-providers");
+    if (!response.ok) throw await responseError(response, "Failed to load providers");
+    return response.json();
+  },
+
+  async create(input: ModelProviderInput): Promise<ModelProviderConnection> {
+    const response = await fetch("/api/model-providers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) throw await responseError(response, "Failed to add provider");
+    return response.json();
+  },
+
+  async update(id: string, input: ModelProviderInput): Promise<ModelProviderConnection> {
+    const response = await fetch(`/api/model-providers/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) throw await responseError(response, "Failed to update provider");
+    return response.json();
+  },
+
+  async refresh(id: string): Promise<ModelProviderConnection> {
+    const response = await fetch(`/api/model-providers/${encodeURIComponent(id)}/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!response.ok) throw await responseError(response, "Failed to refresh provider");
+    return response.json();
+  },
+
+  async remove(id: string): Promise<void> {
+    const response = await fetch(`/api/model-providers/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) throw await responseError(response, "Failed to remove provider");
+  },
+};
 
 export interface McpServer {
   name: string;

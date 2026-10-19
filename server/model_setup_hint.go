@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
 	"shelley.exe.dev/exeenv"
+	"shelley.exe.dev/models"
 	"shelley.exe.dev/modelsources"
 )
 
@@ -35,6 +37,9 @@ func unsupportedModelMessage(modelID string, modelList []ModelInfo) string {
 // so a test that calls through it only ever exercises whichever branch its
 // host happens to be on (dev VMs are on exe.dev, CI is not).
 func unsupportedModelMessageIn(modelID string, modelList []ModelInfo, onExeDev bool) string {
+	if _, wire, ok := models.ParseProviderRouteID(modelID); ok {
+		return fmt.Sprintf("Saved provider model %q is unavailable (route %s). Reconnect its provider or choose another model.", wire, modelID)
+	}
 	if len(modelList) > 0 {
 		return fmt.Sprintf("Unsupported model: %s", modelID)
 	}
@@ -280,3 +285,5 @@ func resetReflectionStateCache() {
 	reflectionStateAt = time.Time{}
 	reflectionStateMu.Unlock()
 }
+
+func isSavedProviderRouteID(id string) bool { return strings.HasPrefix(id, "provider:") }

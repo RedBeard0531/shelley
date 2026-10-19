@@ -165,8 +165,33 @@ export interface TranslationKeys {
   // Models Modal
   manageModels: string;
   addModel: string;
+  addModels: string;
+  accountLabelPlaceholder: string;
+  checkModels: string;
+  checkingModels: string;
+  providerNoModels: string;
+  providerChatModelCount: string;
+
   refreshModels: string;
   refreshingModels: string;
+  providerAccounts: string;
+  addProvider: string;
+  addModelSingle: string;
+  connectProvider: string;
+  editProvider: string;
+  refreshProvider: string;
+  removeProvider: string;
+  removeProviderTitle: string;
+  removeProviderConfirmation: string;
+  providerModelCount: string;
+  providerListUnavailable: string;
+  noProviderAccounts: string;
+  providerKeySaved: string;
+  providerDisplayName: string;
+  providerApiKeyKeepExisting: string;
+  providerSaving: string;
+  removingProvider: string;
+  providerSelectionRequired: string;
   searchModels: string;
   recentModels: string;
   noModelsFound: string;

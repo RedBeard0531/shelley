@@ -77,6 +77,9 @@ func (s *Service) PatchProfile() string {
 }
 
 func (s *Service) SupportsReasoning() bool {
+	if s.DisableReasoning {
+		return false
+	}
 	caps, found := modelsdev.LookupReasoningCapabilities(s.URL, cmp.Or(s.Model, DefaultModel))
 	return !found || caps.Supported
 }
@@ -85,6 +88,9 @@ func (s *Service) SupportsReasoning() bool {
 // Budget-token and unknown models return nil and retain the historical
 // standard-level fallback.
 func (s *Service) SupportedReasoningLevels() []llm.ThinkingLevel {
+	if s.DisableReasoning {
+		return nil
+	}
 	caps, found := modelsdev.LookupReasoningCapabilities(s.URL, cmp.Or(s.Model, DefaultModel))
 	if !found {
 		return nil
@@ -107,6 +113,9 @@ func (s *Service) SupportsServerSideWebSearch() bool {
 // ThinkingLevelDefault and ThinkingLevelOff as "send no thinking", so those
 // surface as "off"; any other configured level surfaces by name.
 func (s *Service) DefaultReasoningLevel() string {
+	if s.DisableReasoning {
+		return "off"
+	}
 	eff := s.ThinkingLevel
 	if eff == llm.ThinkingLevelDefault || eff == llm.ThinkingLevelOff {
 		return "off"
@@ -159,6 +168,7 @@ func (s *Service) MaxImageBytes() int {
 // Service provides Claude completions.
 // Fields should not be altered concurrently with calling any method on Service.
 type Service struct {
+	DisableReasoning      bool              // omit thinking controls for unrecognized provider capabilities
 	HTTPC                 *http.Client      // defaults to http.DefaultClient if nil
 	URL                   string            // defaults to DefaultURL if empty
 	APIKey                string            // must be non-empty
@@ -840,7 +850,9 @@ func (s *Service) buildRequest(r *llm.Request, stripThinking bool) *request {
 		System:     mapped(r.System, fromLLMSystem),
 	}
 
-	applyAnthropicThinking(req, model, llm.EffectiveThinkingLevel(s.ThinkingLevel, r.ThinkingLevel), maxTokens, s.supportsThinkingBinding())
+	if !s.DisableReasoning {
+		applyAnthropicThinking(req, model, llm.EffectiveThinkingLevel(s.ThinkingLevel, r.ThinkingLevel), maxTokens, s.supportsThinkingBinding())
+	}
 	if req.Thinking != nil && req.Thinking.Type == "adaptive" && r.ToolChoice != nil {
 		switch r.ToolChoice.Type {
 		case llm.ToolChoiceTypeAny, llm.ToolChoiceTypeTool:

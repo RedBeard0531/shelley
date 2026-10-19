@@ -22,6 +22,8 @@ import (
 var apiJSON []byte
 
 type modelEntry struct {
+	Name             string              `json:"name"`
+	ToolCall         bool                `json:"tool_call"`
 	Reasoning        bool                `json:"reasoning"`
 	ReasoningOptions []reasoningOption   `json:"reasoning_options"`
 	Interleaved      interleavedMetadata `json:"interleaved"`

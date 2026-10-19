@@ -30,6 +30,7 @@ import (
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/mcp"
+	"shelley.exe.dev/modelproviders"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/server/diskspace"
 	"shelley.exe.dev/server/notifications"
@@ -96,6 +97,7 @@ type ConversationWithState struct {
 
 // StreamResponse represents the response format for conversation streaming
 type StreamResponse struct {
+	ModelsChanged bool `json:"models_changed,omitempty"`
 	// ConversationID identifies which conversation this per-conversation
 	// event belongs to. The unified /api/stream2 delivers events for all
 	// active conversations on a single connection; clients route by this
@@ -332,6 +334,7 @@ func calculateContextWindowSizeFromMsg(msg *generated.Message) uint64 {
 
 // Server manages the HTTP API and active conversations
 type Server struct {
+	modelProviders      *modelproviders.Manager
 	db                  *db.DB
 	llmManager          LLMProvider
 	toolSetConfig       claudetool.ToolSetConfig
@@ -508,6 +511,14 @@ func (s *Server) SetModelRefresher(refresh func(context.Context) ([]models.Built
 	s.refreshBuiltModels = refresh
 }
 
+func (s *Server) SetModelProviderManager(manager *modelproviders.Manager) { s.modelProviders = manager }
+
+func (s *Server) notifyModelsChanged() {
+	if s.streamPub != nil {
+		s.streamPub.Broadcast(StreamResponse{ModelsChanged: true})
+	}
+}
+
 // RegisterNotificationChannel adds a backend notification channel to the dispatcher.
 func (s *Server) RegisterNotificationChannel(ch notifications.Channel) {
 	s.notifDispatcher.Register(ch)
@@ -574,6 +585,14 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.HandleFunc("DELETE /api/custom-models/{id}", func(w http.ResponseWriter, r *http.Request) { s.handleDeleteModel(w, r, r.PathValue("id")) })
 	api.HandleFunc("POST /api/custom-models/{id}/duplicate", func(w http.ResponseWriter, r *http.Request) { s.handleDuplicateModel(w, r, r.PathValue("id")) })
 	api.HandleFunc("POST /api/custom-models-test", s.handleTestModel)
+
+	api.HandleFunc("GET /api/model-providers", s.handleListModelProviders)
+	api.HandleFunc("POST /api/model-providers", s.handleCreateModelProvider)
+	api.HandleFunc("POST /api/model-providers/check", s.handleCheckModelProvider)
+	api.HandleFunc("POST /api/model-providers/{id}/check", s.handleCheckModelProvider)
+	api.HandleFunc("PUT /api/model-providers/{id}", s.handleUpdateModelProvider)
+	api.HandleFunc("DELETE /api/model-providers/{id}", s.handleDeleteModelProvider)
+	api.HandleFunc("POST /api/model-providers/{id}/refresh", s.handleRefreshModelProvider)
 
 	s.registerMCPRoutes(api, mux)
 	s.registerProfileRoutes(api)
@@ -1032,6 +1051,11 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 			config.ParentMessenger = nil
 		}
 		manager := NewConversationManager(conversationID, s.db, s.logger, config, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
+		if snapshots, ok := s.llmManager.(interface {
+			GetServiceSnapshot(string) (llm.Service, string, uint64, error)
+		}); ok {
+			manager.resolveModelService = snapshots.GetServiceSnapshot
+		}
 		manager.role = role
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.followProfile = func(ctx context.Context) (llm.Service, string, error) {

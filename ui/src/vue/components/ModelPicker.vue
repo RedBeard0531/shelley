@@ -136,7 +136,7 @@
         <div class="model-picker-option-content">
           <span class="model-picker-option-name">{{ option.label }}</span>
           <span
-            v-if="option.source && option.source !== dominantSource"
+            v-if="option.source && (option.source_id || option.source !== dominantSource)"
             class="model-picker-option-source"
             >{{ option.source }}</span
           >
@@ -384,6 +384,7 @@ import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import Select from "primevue/select";
 import { statusPickerDt } from "./statusPickerDt";
 import { prettyModelLabels } from "../../utils/modelNames";
+import { accountSuffixes } from "../../utils/providerAccounts";
 import { THINKING_LEVELS, type ThinkingLevel } from "./thinkingLevel";
 import { useI18n } from "../composables/i18n";
 import type { Model } from "../../types";
@@ -489,8 +490,22 @@ if (!conversations) throw new Error("ModelPicker requires ConversationsListKey")
 // ---- model list -------------------------------------------------------
 
 const labels = computed(() => prettyModelLabels(props.models));
+const sourceSuffixes = computed(() => {
+  const accounts = new Map<string, string>();
+  for (const model of props.models) {
+    if (model.source_id && model.source) accounts.set(model.source_id, model.source);
+  }
+  return accountSuffixes([...accounts].map(([id, label]) => ({ id, label })));
+});
 const decorated = computed<PickerModel[]>(() =>
-  props.models.map((m) => ({ ...m, label: labels.value.get(m.id) || m.id })),
+  props.models.map((model) => {
+    const suffix = model.source_id ? sourceSuffixes.value.get(model.source_id) : undefined;
+    return {
+      ...model,
+      source: suffix ? `${model.source} ${suffix}` : model.source,
+      label: labels.value.get(model.id) || model.id,
+    };
+  }),
 );
 
 // Source sub-labels are pure noise when every model comes from the same

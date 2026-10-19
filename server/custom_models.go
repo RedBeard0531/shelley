@@ -250,6 +250,8 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 	// Refresh the model manager's cache
 	if err := s.llmManager.RefreshCustomModels(); err != nil {
 		s.logger.Warn("Failed to refresh custom models cache", "error", err)
+	} else {
+		s.notifyModelsChanged()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -353,6 +355,8 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request, model
 	// Refresh the model manager's cache
 	if err := s.llmManager.RefreshCustomModels(); err != nil {
 		s.logger.Warn("Failed to refresh custom models cache", "error", err)
+	} else {
+		s.notifyModelsChanged()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -369,6 +373,8 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request, model
 	// Refresh the model manager's cache
 	if err := s.llmManager.RefreshCustomModels(); err != nil {
 		s.logger.Warn("Failed to refresh custom models cache", "error", err)
+	} else {
+		s.notifyModelsChanged()
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -429,6 +435,8 @@ func (s *Server) handleDuplicateModel(w http.ResponseWriter, r *http.Request, mo
 	// Refresh the model manager's cache
 	if err := s.llmManager.RefreshCustomModels(); err != nil {
 		s.logger.Warn("Failed to refresh custom models cache", "error", err)
+	} else {
+		s.notifyModelsChanged()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

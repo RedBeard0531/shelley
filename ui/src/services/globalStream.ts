@@ -2,8 +2,8 @@
 //
 // Subscribes to /api/stream2. The server delivers per-conversation events for
 // ALL active conversations on a single connection, plus server-wide events
-// (conversation_list_patch, notification_event, heartbeat). Per-conversation
-// events are tagged with `conversation_id` for routing.
+// (conversation_list_patch, notification_event, models_changed, heartbeat).
+// Per-conversation events are tagged with `conversation_id` for routing.
 //
 // This module fans out:
 //   * persistent updates (messages, conversation, context_window_size,
@@ -65,6 +65,8 @@ export interface GlobalStreamOptions {
   getHash: () => string | null;
   onListPatch: (event: ConversationListPatchEvent) => void;
   onNotificationEvent?: (event: NotificationEvent) => void;
+  /** Refresh the existing model catalog trigger after a server-side change. */
+  onModelsChanged?: () => void;
   onStatusChange?: (status: StreamStatus) => void;
   /**
    * Called once after every successful re-establishment of the EventSource
@@ -108,6 +110,7 @@ export function connectGlobalStream({
   getHash,
   onListPatch,
   onNotificationEvent,
+  onModelsChanged,
   onStatusChange,
   onReconnect,
   onDiskSpaceStatus,
@@ -218,6 +221,9 @@ export function connectGlobalStream({
     }
     if (data.notification_event && onNotificationEvent) {
       onNotificationEvent(data.notification_event);
+    }
+    if (data.models_changed) {
+      onModelsChanged?.();
     }
     if (data.disk_space_status && onDiskSpaceStatus) {
       onDiskSpaceStatus(data.disk_space_status, !diskSnapshotSeen);

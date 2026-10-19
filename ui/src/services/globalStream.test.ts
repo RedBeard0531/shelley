@@ -175,10 +175,14 @@ messageStore.markAllStale = () => {
 
 function newStream() {
   let reconnects = 0;
+  let modelsChanged = 0;
   const statuses: string[] = [];
   const handle = connectGlobalStream({
     getHash: () => "hash0",
     onListPatch: () => {},
+    onModelsChanged: () => {
+      modelsChanged += 1;
+    },
     onStatusChange: (s) => statuses.push(s),
     onReconnect: () => {
       reconnects += 1;
@@ -187,6 +191,9 @@ function newStream() {
   return {
     handle,
     statuses,
+    get modelsChanged() {
+      return modelsChanged;
+    },
     get reconnects() {
       return reconnects;
     },
@@ -208,6 +215,14 @@ await run("connects on creation", () => {
   // First connect must NOT trigger a stale-backfill.
   assert(markAllStaleCalls === 0, "no markAllStale on first connect");
   assert(s.reconnects === 0, "no onReconnect on first connect");
+  s.handle.close();
+});
+
+await run("routes global model changes", () => {
+  reset();
+  const s = newStream();
+  latest().emitMessage({ models_changed: true });
+  assert(s.modelsChanged === 1, "global model change routed to App callback");
   s.handle.close();
 });
 

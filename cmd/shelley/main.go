@@ -17,6 +17,7 @@ import (
 	"shelley.exe.dev/client"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm/llmhttp"
+	"shelley.exe.dev/modelproviders"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/modelsources"
 	"shelley.exe.dev/server"
@@ -199,6 +200,15 @@ func runServe(global GlobalConfig, args []string) {
 
 	// Initialize LLM service manager (includes custom model support via database)
 	llmManager := server.NewLLMServiceManager(llmConfig)
+	var providerManager *modelproviders.Manager
+	if !global.PredictableOnly {
+		registry := llmManager.(*models.Manager)
+		if err := registry.RefreshProviders(); err != nil {
+			logger.Error("Failed to load saved providers", "error", err)
+			os.Exit(1)
+		}
+		providerManager = modelproviders.New(database, registry, llmConfig.HTTPC)
+	}
 
 	// Log available models
 	availableModels := llmManager.GetAvailableModels()
@@ -209,6 +219,7 @@ func runServe(global GlobalConfig, args []string) {
 	// Create server
 	svr := server.NewServer(database, llmManager, toolSetConfig, logger, global.PredictableOnly, llmConfig.DefaultModel, *requireHeader)
 	svr.SetModelRefresher(llmConfig.RefreshBuiltModels)
+	svr.SetModelProviderManager(providerManager)
 	svr.Banner = *banner
 
 	// Load notification channels from DB.
@@ -426,8 +437,11 @@ func setupToolSetConfig(llmProvider claudetool.LLMServiceProvider, llmManager se
 			// models.AssignTiers) or are unknown integration models and would
 			// just clutter the model enum. Explicit custom models stay visible.
 			keepParentRoute := alwaysIncludeID != "" && id == alwaysIncludeID
-			if !keepParentRoute && tiers[names[i]] == models.Tier2 && (info == nil || info.Source != models.SourceCustomLabel) {
+			if !keepParentRoute && tiers[names[i]] == models.Tier2 && (info == nil || info.Source != models.SourceCustomLabel && info.SourceID == "") {
 				continue
+			}
+			if info != nil && info.SourceID != "" {
+				names[i] = info.APIModelName
 			}
 			nameCount[names[i]]++
 			out = append(out, claudetool.AvailableModel{Name: names[i], ID: id})
@@ -445,6 +459,21 @@ func setupToolSetConfig(llmProvider claudetool.LLMServiceProvider, llmManager se
 	buildAvailableModels := func(parentModelID string) []claudetool.AvailableModel {
 		availableIDs := llmManager.GetAvailableModels()
 		parentInfo := llmManager.GetModelInfo(parentModelID)
+		// Bound the helper tool enum, retaining the parent even when unlisted.
+		if parentInfo != nil && parentInfo.SourceID != "" {
+			scoped := []string{parentModelID}
+			for _, id := range availableIDs {
+				info := llmManager.GetModelInfo(id)
+				if id != parentModelID && info != nil && info.SourceID == parentInfo.SourceID && len(scoped) < 32 {
+					scoped = append(scoped, id)
+				}
+			}
+			return buildAvailableModelsForIDs(scoped, "", parentModelID)
+		}
+		availableIDs = slices.DeleteFunc(slices.Clone(availableIDs), func(id string) bool {
+			info := llmManager.GetModelInfo(id)
+			return info != nil && info.SourceID != ""
+		})
 		if parentInfo == nil || !isChatGPTSubscriptionRoute(parentInfo, parentInfo.BaseURL) {
 			return buildAvailableModelsForIDs(availableIDs, "", "")
 		}

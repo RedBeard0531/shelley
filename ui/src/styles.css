@@ -202,7 +202,8 @@ body {
   justify-content: center;
 }
 
-.justify-between {
+.justify-between,
+.model-provider-heading {
   justify-content: space-between;
 }
 
@@ -5526,7 +5527,10 @@ svg {
   gap: 0.5rem;
 }
 
-.status-bar-controls {
+.status-bar-controls,
+.model-provider-heading,
+.model-provider-row,
+.model-provider-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -10006,6 +10010,69 @@ button.tour-visibility-control:focus-visible,
   padding: 0.5rem;
 }
 
+.model-provider-section {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.model-provider-heading h3 {
+  margin: 0;
+  font-size: var(--font-size-14);
+}
+
+.model-provider-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-provider-row {
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.model-provider-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  min-width: 0;
+}
+
+.model-provider-count,
+.model-provider-key,
+.model-provider-suffix,
+.model-provider-empty,
+.model-provider-load-error {
+  color: var(--text-secondary);
+  font-size: var(--font-size-12);
+}
+
+.model-provider-actions {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.model-provider-load-error {
+  margin: 0.5rem 0;
+  color: var(--error-text);
+}
+
+.model-provider-empty {
+  margin: 0.5rem 0 0;
+}
+
+.model-provider-confirm {
+  padding: 0.25rem 0;
+}
+
 .models-loading {
   display: flex;
   align-items: center;
@@ -10105,6 +10172,39 @@ button.tour-visibility-control:focus-visible,
 .models-cell-name {
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* Provider connection group header inside the models table. */
+.models-provider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  /* Don't let the nowrap endpoint widen the whole table. */
+  width: 0;
+  min-width: 100%;
+}
+.models-provider-line {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 1.75rem;
+}
+.models-provider-actions {
+  display: flex;
+  margin-left: auto;
+}
+.models-provider-actions .btn-icon {
+  padding: 0.25rem;
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+@media (max-width: 520px) {
+  .provider-btn {
+    flex: 1 1 30%;
+    font-size: var(--font-size-12);
+    padding: 0.5rem 0.25rem;
+  }
 }
 
 /* Source group subheader: source name, model count, common endpoint. */
@@ -11653,7 +11753,8 @@ kbd {
   margin: 0.5em 0;
 }
 
-.markdown-content p:first-child {
+.markdown-content p:first-child,
+.model-provider-confirm p {
   margin-top: 0;
 }
 
@@ -16642,7 +16743,8 @@ kbd {
   align-items: center;
   gap: 0.75rem;
 }
-.p-select-overlay.model-picker-panel .model-picker-section-text {
+.p-select-overlay.model-picker-panel .model-picker-section-text,
+.model-provider-endpoint {
   color: var(--text-secondary);
   font-size: var(--font-size-12);
   overflow-wrap: anywhere;

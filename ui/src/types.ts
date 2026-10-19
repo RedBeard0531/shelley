@@ -111,6 +111,7 @@ export interface Model {
   id: string;
   display_name?: string;
   source?: string; // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
+  source_id?: string;
   mode?: string; // exe.dev integration mode (chatgpt, managed, byok); absent when unknown
   base_url?: string;
   api_type?: string;
@@ -229,6 +230,7 @@ export interface StreamResponse extends Omit<StreamResponseForTS, "messages"> {
   heartbeat?: boolean;
   notification_event?: NotificationEvent;
   disk_space_status?: DiskSpaceStatus;
+  models_changed?: boolean;
   tool_progress?: ToolProgress;
   stream_delta?: StreamDelta;
 }

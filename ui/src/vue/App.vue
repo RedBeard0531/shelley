@@ -1065,6 +1065,7 @@ onMounted(() => {
     getHash: () => conversationListHash,
     onListPatch: handleConversationListPatch,
     onNotificationEvent: handleNotificationEvent,
+    onModelsChanged: () => modelsRefreshTrigger.value++,
     onStatusChange: (status) => (streamStatus.value = status),
     onDiskSpaceStatus: applyDiskSpaceStatus,
     onReconnect: () => {
