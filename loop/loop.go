@@ -83,6 +83,9 @@ type Config struct {
 	// must record the messages before returning them, so the DB sequence
 	// order matches the in-memory splice point. An error ends the turn.
 	InjectMessages func(ctx context.Context) (Injection, error)
+	// RewriteFinalReply, if set, may turn a reply that would end the turn
+	// into tool calls, at most once per turn. See Hooks.RewriteFinalReply.
+	RewriteFinalReply func(context.Context, llm.Message) (llm.Message, bool)
 }
 
 // Injection is what Config.InjectMessages splices into a running turn.
@@ -119,6 +122,7 @@ type Loop struct {
 	onStreamDone     func()
 	onSuccess        func(*llm.Request)
 	injectMessages   func(ctx context.Context) (Injection, error)
+	rewriteReply     func(context.Context, llm.Message) (llm.Message, bool)
 	thinkingLevel    llm.ThinkingLevel
 	promptCacheKey   string
 	notify           chan struct{} // signaled when a message is queued or retry requested
@@ -158,6 +162,7 @@ func NewLoop(config Config) *Loop {
 		onStreamDone:     config.OnStreamDone,
 		onSuccess:        config.OnSuccessfulRequest,
 		injectMessages:   config.InjectMessages,
+		rewriteReply:     config.RewriteFinalReply,
 		thinkingLevel:    config.ThinkingLevel,
 		promptCacheKey:   config.PromptCacheKey,
 		notify:           make(chan struct{}, 1),
@@ -422,6 +427,7 @@ func (l *Loop) hooks() Hooks {
 	h := Hooks{
 		OnStreamDone:        l.onStreamDone,
 		OnSuccessfulRequest: l.onSuccess,
+		RewriteFinalReply:   l.rewriteReply,
 		OnResponse: func(ctx context.Context, r Response) error {
 			l.mu.Lock()
 			l.totalUsage.Add(r.Usage)

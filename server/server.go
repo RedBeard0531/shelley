@@ -1076,6 +1076,9 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		manager.keepRecentTokens = s.keepRecentTokens()
 		switch role {
 		case roleSubagent:
+			manager.rewriteFinalReply = func(ctx context.Context, reply llm.Message) (llm.Message, bool) {
+				return s.reportUnreportedReply(ctx, manager, reply)
+			}
 		case roleBtwReader:
 			manager.decorateService = func(service llm.Service) (llm.Service, error) {
 				return newBtwService(context.Background(), s.logger, s.db, btwIdentity.ParentConversationID, btwIdentity.ParentPointer, btwReaderParentHistoryLimit, service)

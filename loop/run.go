@@ -44,6 +44,10 @@ type Hooks struct {
 	OnSuccessfulRequest func(*llm.Request)
 	OnToolResponse      func(context.Context, ToolResponse) error
 	OnWarning           func(context.Context, string) error
+	// RewriteFinalReply may turn a reply that would end the turn into tool
+	// calls, which then run as if the model had made them. It is consulted
+	// at most once per turn.
+	RewriteFinalReply func(context.Context, llm.Message) (llm.Message, bool)
 }
 
 // RunConfig describes one agent turn. It is separate from the long-lived
@@ -111,6 +115,7 @@ func cloneContents(contents []llm.Content) []llm.Content {
 func (l *RunConfig) run(ctx context.Context) error {
 	messages := cloneMessages(l.Messages)
 	iterations := 0
+	rewritten := false
 	for {
 		if l.MaxIterations > 0 && iterations >= l.MaxIterations {
 			return fmt.Errorf("agent loop exceeded %d iterations", l.MaxIterations)
@@ -258,7 +263,13 @@ func (l *RunConfig) run(ctx context.Context) error {
 		// Convert response to a message, persist it through the response hook,
 		// and retain it for the next model request.
 		assistantMessage := resp.ToMessage()
-		if resp.StopReason == llm.StopReasonToolUse {
+		toolUse := resp.StopReason == llm.StopReasonToolUse
+		if !toolUse && !rewritten && l.Hooks.RewriteFinalReply != nil {
+			if m, ok := l.Hooks.RewriteFinalReply(ctx, assistantMessage); ok {
+				assistantMessage, toolUse, rewritten = m, true, true
+			}
+		}
+		if toolUse {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -270,12 +281,12 @@ func (l *RunConfig) run(ctx context.Context) error {
 		}
 		messages = append(messages, assistantMessage)
 
-		if resp.StopReason != llm.StopReasonToolUse {
+		if !toolUse {
 			return nil
 		}
 
-		l.Logger.Debug("handling tool calls", "content_count", len(resp.Content))
-		if err := l.executeToolCalls(ctx, resp.Content, &messages); err != nil {
+		l.Logger.Debug("handling tool calls", "content_count", len(assistantMessage.Content))
+		if err := l.executeToolCalls(ctx, assistantMessage.Content, &messages); err != nil {
 			if errors.Is(err, errToolEndedTurn) {
 				return nil
 			}

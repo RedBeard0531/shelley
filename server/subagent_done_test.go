@@ -1,11 +1,16 @@
 package server
 
 import (
+	"encoding/json"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/predictable"
 )
@@ -81,47 +86,179 @@ func newSubagentDoneFixture(t *testing.T, subResponse string) *subagentDoneFixtu
 	}
 }
 
-// Ending a turn does not wake the parent, whether the parent delegated the
-// turn or the user drove the child directly; only message_parent does. A
-// subagent can end many turns (waiting on background jobs, chatting with the
-// user), and each wake would re-read the parent's whole context.
-func TestSubagentTurnEndDoesNotWakeParent(t *testing.T) {
+// A subagent that ends its turn with a plain reply instead of
+// message_parent(end_turn=true) has the reply sent as that call once nothing
+// it started can wake it again. A turn that ends while a background job
+// runs keeps its reply: the job's notice wakes the subagent again.
+func TestSubagentUnreportedReplyReachesParent(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
 	ctx := t.Context()
 	child, err := database.CreateSubagentConversation(ctx, "quiet-child", parent.ConversationID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewSubagentRunner(server).RunSubagent(ctx, child.ConversationID, "echo: delegated turn", "predictable", ""); err != nil {
+	job := testBackgroundJob(t, child.ConversationID)
+	if err := server.recordBackgroundJob(ctx, job); err != nil {
 		t.Fatal(err)
 	}
-	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, "echo: delegated turn"))
-	response := postBtwChat(t, server, child.ConversationID,
-		ChatRequest{Message: "echo: manual child turn", Model: "predictable"})
-	if response.Code != 202 {
-		t.Fatalf("manual child turn status=%d body=%s", response.Code, response.Body.String())
+	if _, err := NewSubagentRunner(server).RunSubagent(ctx, child.ConversationID, "echo: waiting for the tests", "predictable", ""); err != nil {
+		t.Fatal(err)
 	}
-	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, "echo: manual child turn"))
+	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, "echo: waiting for the tests"))
 
-	// An explicit report is the parent's first wake.
-	if err := NewSubagentRunner(server).MessageParent(ctx, child.ConversationID, "explicit report"); err != nil {
+	// The job's notice wakes the child, which forgets message_parent.
+	if err := server.reportBackgroundJobExit(ctx, job); err != nil {
 		t.Fatal(err)
 	}
-	wrapped := `<subagent_message conversation_id="` + child.ConversationID + `" slug="quiet-child">` +
-		"\nexplicit report\n</subagent_message>"
-	releaseAndWaitIdle(t, server, parent.ConversationID, held.waitCall(t, wrapped))
-	for _, m := range listMessages(t, database, parent.ConversationID) {
+	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, backgroundJobNotice(job)))
+
+	const reply = "edit predictable.go to add a response for that one..."
+	releaseAndWaitIdle(t, server, parent.ConversationID, held.waitCall(t, subagentMessage(child, reply)))
+	if got := subagentTexts(t, database, parent.ConversationID); !slices.Equal(got, []string{reply}) {
+		t.Fatalf("parent heard %q, want only the final reply", got)
+	}
+	var texts, warnings []string
+	reports := 0
+	for _, m := range listMessages(t, database, child.ConversationID) {
+		switch m.Type {
+		case string(db.MessageTypeWarning):
+			warnings = append(warnings, derefString(m.UserData))
+		case string(db.MessageTypeAgent):
+			msg, err := convertToLLMMessage(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if text := messageText(msg); text != "" {
+				texts = append(texts, text)
+			}
+			for _, c := range msg.Content {
+				if c.ToolName == "message_parent" && strings.Contains(string(c.ToolInput), reply) {
+					reports++
+				}
+			}
+		}
+	}
+	if !slices.Equal(texts, []string{"waiting for the tests"}) || reports != 1 {
+		t.Fatalf("child replies %q with %d reports, want the final reply rewritten into one report", texts, reports)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "message_parent(end_turn=true)") {
+		t.Fatalf("child warnings = %q, want one noting the report", warnings)
+	}
+}
+
+func TestOwesReport(t *testing.T) {
+	row := func(typ db.MessageType, m llm.Message, userData string) generated.Message {
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := generated.Message{Type: string(typ), LlmData: strPtr(string(data)), ExcludedFromContext: m.ExcludedFromContext}
+		if userData != "" {
+			row.UserData = &userData
+		}
+		return row
+	}
+	prompt := row(db.MessageTypeUser, llm.UserStringMessage("go"), "")
+	notice := row(db.MessageTypeUser, llm.UserStringMessage("job done"), `{"background_job_id":"j"}`)
+	parentMessage := row(db.MessageTypeUser, llm.UserStringMessage("also this"), `{"sender_conversation_id":"p","sender_relationship":"parent"}`)
+	reply := row(db.MessageTypeAgent, llm.Message{Role: llm.MessageRoleAssistant, Content: []llm.Content{llm.StringContent("ok")}, EndOfTurn: true}, "")
+	report := func(id string, endTurn bool) generated.Message {
+		input, _ := json.Marshal(map[string]any{"text": "r", "end_turn": endTurn})
+		return row(db.MessageTypeAgent, llm.Message{Role: llm.MessageRoleAssistant, Content: []llm.Content{{ID: id, Type: llm.ContentTypeToolUse, ToolName: "message_parent", ToolInput: input}}}, "")
+	}
+	result := func(id string, failed bool) generated.Message {
+		return row(db.MessageTypeUser, llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeToolResult, ToolUseID: id, ToolError: failed}}}, "")
+	}
+	marker := row(db.MessageTypeAgent, llm.Message{Role: llm.MessageRoleAssistant, EndOfTurn: true, ExcludedFromContext: true}, "")
+	for _, tc := range []struct {
+		name string
+		msgs []generated.Message
+		want bool
+	}{
+		{"prompt", []generated.Message{prompt}, true},
+		{"final report", []generated.Message{prompt, report("a", true), result("a", false), marker, notice}, false},
+		{"progress report", []generated.Message{prompt, report("a", false), result("a", false)}, true},
+		{"failed final report", []generated.Message{prompt, report("a", true), result("a", true)}, true},
+		{"report before this prompt", []generated.Message{prompt, report("a", true), result("a", false), marker, prompt}, true},
+		{"job notice after a reply", []generated.Message{prompt, reply, notice}, true},
+		{"parent message after a report", []generated.Message{prompt, report("a", true), result("a", false), marker, parentMessage}, true},
+	} {
+		if got := owesReport(tc.msgs); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// After a final report, a turn the parent didn't ask for (here a background
+// job's notice) ends without disturbing the parent.
+func TestSubagentReplyAfterFinalReportStaysPut(t *testing.T) {
+	server, database, held, parent := newBtwTest(t)
+	ctx := t.Context()
+	child, err := database.CreateSubagentConversation(ctx, "quiet-child", parent.ConversationID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewSubagentRunner(server)
+	report := func(text string) {
+		t.Helper()
+		prompt := "message_parent_final: " + text
+		if _, err := runner.RunSubagent(ctx, child.ConversationID, prompt, "predictable", ""); err != nil {
+			t.Fatal(err)
+		}
+		releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, prompt))
+		releaseAndWaitIdle(t, server, parent.ConversationID, held.waitCall(t, subagentMessage(child, text)))
+	}
+	report("all done")
+
+	job := testBackgroundJob(t, child.ConversationID)
+	if err := server.recordBackgroundJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.reportBackgroundJobExit(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, backgroundJobNotice(job)))
+
+	report("second")
+	if got := subagentTexts(t, database, parent.ConversationID); !slices.Equal(got, []string{"all done", "second"}) {
+		t.Fatalf("parent heard %q, want only the two reports", got)
+	}
+}
+
+func testBackgroundJob(t *testing.T, conversationID string) claudetool.BackgroundJob {
+	dir := t.TempDir()
+	return claudetool.BackgroundJob{
+		ID:             "job1",
+		ConversationID: conversationID,
+		Command:        "make test",
+		LogPath:        filepath.Join(dir, "job1.log"),
+		ExitPath:       filepath.Join(dir, "job1.exit"),
+		StartedAt:      time.Now(),
+	}
+}
+
+func backgroundJobNotice(job claudetool.BackgroundJob) string {
+	return `<background_job id="` + job.ID + `">` + "\n" + xmlProvenanceText(job.Outcome().Notice()) + "\n</background_job>"
+}
+
+func subagentMessage(child *generated.Conversation, text string) string {
+	return `<subagent_message conversation_id="` + child.ConversationID + `" slug="` + derefString(child.Slug) + `">` +
+		"\n" + text + "\n</subagent_message>"
+}
+
+// subagentTexts returns what the conversation's subagents told it, in order.
+func subagentTexts(t *testing.T, database *db.DB, conversationID string) []string {
+	t.Helper()
+	var texts []string
+	for _, m := range listMessages(t, database, conversationID) {
 		if m.Type != string(db.MessageTypeUser) || m.UserData == nil {
 			continue
 		}
-		data, ok, err := parseSenderMessageUserData([]byte(*m.UserData))
-		if err != nil || !ok {
-			continue
-		}
-		if data.Text != "explicit report" {
-			t.Fatalf("child turn end woke the parent with %q", data.Text)
+		if data, ok, err := parseSenderMessageUserData([]byte(*m.UserData)); err == nil && ok {
+			texts = append(texts, data.Text)
 		}
 	}
+	return texts
 }
 
 // Cleanup must never evict a conversation manager whose agent is mid-turn
@@ -209,7 +346,7 @@ func TestSubagentLoadedOutsideSubagentToolKeepsItsRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, 15*time.Second, func() bool {
-		return countByType(listMessages(t, database, sub.ConversationID), db.MessageTypeAgent) == 1 && !server.IsAgentWorking(sub.ConversationID)
+		return countByType(listMessages(t, database, sub.ConversationID), db.MessageTypeAgent) > 0 && !server.IsAgentWorking(sub.ConversationID)
 	})
 	tools := map[string]bool{}
 	for _, tool := range requestWithText(t, ps, "echo: delegated work").Tools {
@@ -255,7 +392,7 @@ func TestSubagentSystemPromptAsksForMessageParent(t *testing.T) {
 			t.Fatal(err)
 		}
 		waitFor(t, 15*time.Second, func() bool {
-			return countByType(listMessages(t, database, tc.id), db.MessageTypeAgent) == 1 && !server.IsAgentWorking(tc.id)
+			return countByType(listMessages(t, database, tc.id), db.MessageTypeAgent) > 0 && !server.IsAgentWorking(tc.id)
 		})
 		var system strings.Builder
 		for _, s := range requestWithText(t, ps, tc.prompt).System {

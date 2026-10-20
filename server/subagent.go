@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
@@ -203,6 +206,127 @@ func (s *Server) messageParent(ctx context.Context, conv generated.Conversation,
 		Text:                 text,
 	})
 	return parent.InjectMessage(ctx, s, modelID, llm.UserStringMessage(text))
+}
+
+// reportedReplyWarning notes, in a subagent, each turn-ending reply that
+// Shelley rewrote into message_parent(end_turn=true).
+const reportedReplyWarning = "Turned this reply into message_parent(end_turn=true), since the turn ended without reporting to the parent."
+
+var messageParentTool = (&claudetool.MessageParentTool{}).Tool()
+
+// reportUnreportedReply rewrites the subagent's turn-ending reply into
+// message_parent(end_turn=true) when the parent would otherwise never hear
+// it: nothing has been reported since the parent's last prompt, and nothing
+// queued or still running can wake the subagent again. A grandchild's report
+// is queued just after the grandchild goes idle; a turn ending in that gap
+// reports early, and the parent hears twice.
+func (s *Server) reportUnreportedReply(ctx context.Context, cm *ConversationManager, reply llm.Message) (llm.Message, bool) {
+	text := strings.TrimSpace(messageText(reply))
+	if text == "" || slices.ContainsFunc(reply.Content, func(c llm.Content) bool { return c.Type == llm.ContentTypeToolUse }) {
+		return reply, false
+	}
+	conv, err := s.db.GetConversationByID(ctx, cm.conversationID)
+	if err != nil {
+		s.logger.Error("Failed to load subagent", "conversationID", cm.conversationID, "error", err)
+		return reply, false
+	}
+	if !isDelegatedSubagent(*conv) || len(db.ParseQueuedMessages(conv.QueuedMessages)) > 0 {
+		return reply, false
+	}
+	s.mu.Lock()
+	stopped := s.stoppedParents[*conv.ParentConversationID]
+	s.mu.Unlock()
+	if stopped {
+		return reply, false
+	}
+	busy, err := s.hasActiveDelegatedWork(ctx, conv.ConversationID)
+	if err == nil && !busy {
+		// An exited job wakes the subagent once its notice is queued.
+		var jobs []generated.BackgroundJob
+		err = s.db.Queries(ctx, func(q *generated.Queries) (err error) {
+			jobs, err = q.ListUnfinishedBackgroundJobs(ctx)
+			return err
+		})
+		busy = slices.ContainsFunc(jobs, func(j generated.BackgroundJob) bool { return j.ConversationID == conv.ConversationID })
+	}
+	if err != nil {
+		s.logger.Error("Failed to check subagent's delegated work", "conversationID", conv.ConversationID, "error", err)
+	}
+	if busy || err != nil {
+		return reply, false
+	}
+	msgs, err := s.db.ListMessages(ctx, conv.ConversationID)
+	if err != nil {
+		s.logger.Error("Failed to list subagent messages", "conversationID", conv.ConversationID, "error", err)
+		return reply, false
+	}
+	if !owesReport(msgs) {
+		return reply, false
+	}
+	input, err := json.Marshal(map[string]any{"text": text, "end_turn": true})
+	if err != nil {
+		return reply, false
+	}
+	// Short ID: some OpenAI-compatible APIs cap tool call IDs at 40 bytes.
+	call := llm.Content{ID: "reported_" + rand.Text(), Type: llm.ContentTypeToolUse, ToolName: messageParentTool.Name, ToolInput: input}
+	report := reply
+	report.EndOfTurn = false
+	report.Content = nil
+	for _, c := range reply.Content {
+		if c.Type != llm.ContentTypeText {
+			report.Content = append(report.Content, c)
+		} else if call.Signature == "" {
+			// Gemini signs a final answer's text and a function call itself.
+			call.Signature = c.Signature
+		}
+	}
+	report.Content = append(report.Content, call)
+	if err := cm.recordWarning(ctx, reportedReplyWarning); err != nil {
+		s.logger.Error("Failed to note reported subagent reply", "conversationID", conv.ConversationID, "error", err)
+	}
+	return report, true
+}
+
+// fromParent reports whether a user row is the parent's: a delegated prompt,
+// which carries no user_data, or a message the parent sent.
+func fromParent(msg generated.Message) bool {
+	if msg.UserData == nil {
+		return true
+	}
+	data, ok, _ := parseSenderMessageUserData([]byte(*msg.UserData))
+	return ok && data.SenderRelationship == senderRelationshipParent
+}
+
+// owesReport reports whether no message_parent(end_turn=true) has reached
+// the parent since its last prompt in msgs.
+func owesReport(msgs []generated.Message) bool {
+	failed := make(map[string]bool) // tool_use IDs whose results are errors
+	for i := len(msgs) - 1; i >= 0; i-- {
+		msg, err := convertToLLMMessage(msgs[i])
+		if err != nil {
+			continue
+		}
+		switch msgs[i].Type {
+		case string(db.MessageTypeAgent):
+			for _, c := range msg.Content {
+				if c.Type == llm.ContentTypeToolUse && c.ToolName == messageParentTool.Name && !failed[c.ID] && messageParentTool.EndsTurnWhen(c.ToolInput) {
+					return false
+				}
+			}
+		case string(db.MessageTypeUser):
+			results := false
+			for _, c := range msg.Content {
+				if c.Type == llm.ContentTypeToolResult {
+					results = true
+					failed[c.ToolUseID] = c.ToolError
+				}
+			}
+			if !results && fromParent(msgs[i]) {
+				return true
+			}
+		}
+	}
+	return true
 }
 
 // Ensure SubagentRunner implements claudetool.SubagentRunner.

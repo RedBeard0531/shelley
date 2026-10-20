@@ -465,3 +465,60 @@ func TestRunFlushesStreamBeforeRecording(t *testing.T) {
 		}
 	}
 }
+
+// RewriteFinalReply turns a turn-ending reply into tool calls that run like
+// the model's own, at most once per turn.
+func TestRunRewriteFinalReply(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		endTurn    bool
+		wantRounds int
+	}{
+		{name: "tool ends the turn", endTurn: true, wantRounds: 1},
+		{name: "tool fails", endTurn: false, wantRounds: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &runTestService{response: &llm.Response{
+				Role: llm.MessageRoleAssistant, StopReason: llm.StopReasonEndTurn, Content: llm.TextContent("my report"),
+			}}
+			var rewrites, runs int
+			var recorded []llm.Message
+			err := Run(t.Context(), RunConfig{
+				LLM:      service,
+				Messages: []llm.Message{llm.UserStringMessage("start")},
+				Tools: []*llm.Tool{{Name: "report", Run: func(_ context.Context, input json.RawMessage) llm.ToolOut {
+					runs++
+					if string(input) != `"my report"` {
+						t.Errorf("tool input = %s", input)
+					}
+					if !tc.endTurn {
+						return llm.ToolOut{Error: errors.New("parent stopped")}
+					}
+					return llm.ToolOut{LLMContent: llm.TextContent("sent"), EndTurn: true}
+				}}},
+				Hooks: Hooks{
+					RewriteFinalReply: func(_ context.Context, reply llm.Message) (llm.Message, bool) {
+						rewrites++
+						input, _ := json.Marshal(reply.Content[0].Text)
+						return llm.Message{Role: llm.MessageRoleAssistant, Content: []llm.Content{
+							{Type: llm.ContentTypeToolUse, ID: "r", ToolName: "report", ToolInput: input},
+						}}, true
+					},
+					OnResponse: func(_ context.Context, response Response) error {
+						recorded = append(recorded, response.Message)
+						return nil
+					},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rewrites != 1 || runs != 1 || len(service.requests) != tc.wantRounds {
+				t.Fatalf("rewrites=%d runs=%d rounds=%d, want 1, 1, %d", rewrites, runs, len(service.requests), tc.wantRounds)
+			}
+			if first := recorded[0]; first.EndOfTurn || first.Content[0].Type != llm.ContentTypeToolUse {
+				t.Fatalf("recorded reply = %+v, want the rewritten tool call", first)
+			}
+		})
+	}
+}

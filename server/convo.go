@@ -205,6 +205,9 @@ type ConversationManager struct {
 	// followProfile is Server.followProfile for this conversation; see
 	// takeProfileEdits.
 	followProfile func(ctx context.Context) (llm.Service, string, error)
+	// rewriteFinalReply, if set, may turn a turn-ending reply into tool calls;
+	// see loop.Config.RewriteFinalReply.
+	rewriteFinalReply func(context.Context, llm.Message) (llm.Message, bool)
 	// recordDrainedQueued records a queued item's messages and removes the item
 	// from the queue in one transaction.
 	recordDrainedQueued func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) (int64, error)
@@ -2394,6 +2397,10 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 	if role == roleSubagent || role == roleWorker {
 		promptCacheKey = subagentPromptCacheKey(system, modelID)
 	}
+	var rewriteFinalReply func(context.Context, llm.Message) (llm.Message, bool)
+	if slices.ContainsFunc(toolSet.Tools(), func(t *llm.Tool) bool { return t.Name == messageParentTool.Name }) {
+		rewriteFinalReply = cm.rewriteFinalReply
+	}
 	loopInstance := loop.NewLoop(loop.Config{
 		LLM:            service,
 		ModelID:        modelID,
@@ -2436,6 +2443,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		InjectMessages: func(ctx context.Context) (loop.Injection, error) {
 			return cm.takeInjectable(ctx, generation, nudger)
 		},
+		RewriteFinalReply: rewriteFinalReply,
 	})
 
 	cm.mu.Lock()

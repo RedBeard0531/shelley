@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -626,15 +627,17 @@ func TestResumeAfterUpgradeResumesSubagent(t *testing.T) {
 	startTestServer(t, srv)
 
 	waitFor(t, 15*time.Second, func() bool {
-		return countByType(listMessages(t, database, sub.ConversationID), db.MessageTypeAgent) == 1 &&
+		return slices.Equal(subagentTexts(t, database, parent.ConversationID), []string{"subagent result"}) &&
 			!srv.IsAgentWorking(sub.ConversationID)
 	})
 	msgs := listMessages(t, database, sub.ConversationID)
-	if got := countByType(msgs, db.MessageTypeUser); got != 1 {
-		t.Errorf("subagent user messages = %d, want 1", got)
+	// The prompt, and the result of the report its reply became.
+	if got := countByType(msgs, db.MessageTypeUser); got != 2 {
+		t.Errorf("subagent user messages = %d, want 2", got)
 	}
-	if got := countByType(msgs, db.MessageTypeWarning); got != 1 {
-		t.Errorf("subagent warning messages = %d, want 1", got)
+	// The resume notice, and the note that the reply went to the parent.
+	if got := countByType(msgs, db.MessageTypeWarning); got != 2 {
+		t.Errorf("subagent warning messages = %d, want 2", got)
 	}
 }
 
