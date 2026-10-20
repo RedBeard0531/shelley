@@ -2488,8 +2488,9 @@ func (db *DB) CreateSubagentConversation(ctx context.Context, slug, parentID str
 	return &conversation, err
 }
 
-// GetSubagentUsage aggregates LLM usage across all descendant conversations
-// of parentID (recursively), grouped by model.
+// GetSubagentUsage returns per-call LLM usage across all descendant
+// conversations of parentID (recursively), one row per call so the caller can
+// price each by its context-size tier.
 func (db *DB) GetSubagentUsage(ctx context.Context, parentID string) ([]generated.GetSubagentUsageRow, error) {
 	var rows []generated.GetSubagentUsageRow
 	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
@@ -2501,9 +2502,9 @@ func (db *DB) GetSubagentUsage(ctx context.Context, parentID string) ([]generate
 	return rows, err
 }
 
-// GetSubagentOtherUsage aggregates indirect LLM usage (other_usage_data
-// entries) across all descendant conversations of parentID (recursively),
-// grouped by model.
+// GetSubagentOtherUsage returns per-entry indirect LLM usage (other_usage_data
+// entries) across all descendant conversations of parentID (recursively), one
+// row per entry so the caller can price each by its context-size tier.
 func (db *DB) GetSubagentOtherUsage(ctx context.Context, parentID string) ([]generated.GetSubagentOtherUsageRow, error) {
 	var rows []generated.GetSubagentOtherUsageRow
 	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {

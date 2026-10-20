@@ -18,6 +18,7 @@ import {
   SystemPromptInfo,
   TemplateProblem,
 } from "../types";
+import type { CostTier } from "../utils/tokenCostGraph";
 
 export type LiveConversationSettings = Pick<ChatRequest, "model" | "cwd" | "conversation_options">;
 
@@ -1242,11 +1243,16 @@ export const faviconEmojiApi = {
 };
 
 // models.dev pricing, USD per million tokens. null = model known but unpriced.
+// Mirrors ModelCost in utils/tokenCostGraph; stays structurally compatible so
+// the fetched costs feed the cost-graph math directly.
 export interface ModelCostDTO {
   input: number;
   output: number;
   cache_read: number;
   cache_write: number;
+  // Context-size pricing cliffs (ascending by context); absent for flat
+  // pricing. See effectiveCost in utils/tokenCostGraph.
+  tiers?: CostTier[];
 }
 
 // Module-level cache so reopening the context popup doesn't refetch.
@@ -1275,6 +1281,11 @@ export const modelCostsApi = {
 };
 
 // Descendant direct and indirect usage grouped by (model, endpoint).
+// One (model, endpoint, effective-rate) aggregate of subagent usage. A model
+// whose calls crossed a context-size pricing tier yields more than one row —
+// one per rate — each carrying that tier's flat rates in `cost` (no nested
+// tiers). The UI regroups rows by model and shows "mixed rates" where they
+// differ; estimated_usd is already tier-accurate.
 export interface SubagentModelUsageDTO {
   model: string;
   url: string;
