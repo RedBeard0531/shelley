@@ -68,6 +68,9 @@ var shadowPairs = []shadowPair{
 	{Better: "gpt-5.6-terra", Worse: "gpt-5.4-mini"},
 	{Better: "gpt-5.6-luna", Worse: "gpt-5.4-nano"},
 	{Better: "glm-5.3-fireworks", Worse: "glm-5.2-fireworks"},
+	// 1017 is a minor update to V4.1 Flash at the identical rate card, better on
+	// every axis DeepSeek reports, and shorter-winded per task.
+	{Better: "deepseek-v4.1-flash-1017-fireworks", Worse: "deepseek-v4.1-flash-fireworks"},
 
 	// Arguable / cross-family supersessions. We still encode them so the
 	// default list stays lean; the reasoning is noted inline.

@@ -442,6 +442,12 @@ func All() []Model {
 			Build: oaiResponsesSvc(oai.GPT53Codex),
 		},
 		{
+			ID: "deepseek-v4.1-flash-1017-fireworks", Provider: ProviderFireworks,
+			Description: "DeepSeek V4.1 Flash 1017 on Fireworks", APIModelName: oai.DeepseekV41Flash1017Fireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.DeepseekV41Flash1017Fireworks, "fireworks"),
+		},
+		{
 			ID: "deepseek-v4.1-flash-fireworks", Provider: ProviderFireworks,
 			Description: "DeepSeek V4.1 Flash on Fireworks", APIModelName: oai.DeepseekV41FlashFireworks.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,

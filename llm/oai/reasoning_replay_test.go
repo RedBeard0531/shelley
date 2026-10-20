@@ -23,7 +23,7 @@ func TestResolveReasoningReplay(t *testing.T) {
 	}{
 		{
 			name: "auto native Fireworks", endpoint: "https://llm.int.exe.xyz/v1",
-			model: "accounts/fireworks/models/glm-5p2", configured: ReasoningReplayAuto, want: ReasoningReplayContent,
+			model: "accounts/fireworks/models/glm-5p3", configured: ReasoningReplayAuto, want: ReasoningReplayContent,
 		},
 		{
 			name: "auto public Fireworks slug", endpoint: "https://proxy.example/v1",
@@ -31,7 +31,7 @@ func TestResolveReasoningReplay(t *testing.T) {
 		},
 		{
 			name: "auto bare Fireworks name", endpoint: "https://proxy.example/v1",
-			model: "glm-5p2", want: ReasoningReplayContent,
+			model: "glm-5p3", want: ReasoningReplayContent,
 		},
 		{
 			name: "qualified OpenRouter model does not inherit Fireworks metadata", endpoint: "https://openrouter.ai/api/v1",

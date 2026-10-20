@@ -159,6 +159,16 @@ func TestAssignTiers(t *testing.T) {
 		}
 	})
 
+	t.Run("deepseek v4.1 flash 1017 shadows v4.1 flash", func(t *testing.T) {
+		tiers := AssignTiers([]string{"deepseek-v4.1-flash-1017-fireworks", "deepseek-v4.1-flash-fireworks"})
+		if tiers["deepseek-v4.1-flash-1017-fireworks"] != Tier1 {
+			t.Errorf("1017 tier = %d, want %d", tiers["deepseek-v4.1-flash-1017-fireworks"], Tier1)
+		}
+		if tiers["deepseek-v4.1-flash-fireworks"] != Tier2 {
+			t.Errorf("v4.1 flash tier = %d, want %d", tiers["deepseek-v4.1-flash-fireworks"], Tier2)
+		}
+	})
+
 	t.Run("every input id is assigned a tier", func(t *testing.T) {
 		avail := IDs()
 		tiers := AssignTiers(avail)

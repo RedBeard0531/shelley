@@ -212,7 +212,11 @@ func TestSavedProviderReasoningDoesNotOverrideInternalRequests(t *testing.T) {
 	}
 	for _, tc := range []struct{ protocol, endpoint, model string }{
 		{"anthropic", "https://api.anthropic.com/v1", "claude-opus-4-8"},
-		{"anthropic", "https://api.anthropic.com/v1", "claude-haiku-5-5"},
+		// Sonnet 5.5 advertises effort levels with no toggle, so "off" is absent
+		// from its advertised set -- which is what this test needs to prove an
+		// internal off request still reaches the adapter. (Haiku 5.5 used to serve
+		// that role; models.dev now lists a toggle for it.)
+		{"anthropic", "https://api.anthropic.com/v1", "claude-sonnet-5-5"},
 		{"openai", "https://api.openai.com/v1", "gpt-6.1-sol"},
 		{"openai-responses", "https://api.openai.com/v1", "gpt-6.1-sol"},
 	} {

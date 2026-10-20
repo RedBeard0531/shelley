@@ -3035,7 +3035,9 @@ func TestSupportedReasoningLevels(t *testing.T) {
 		model string
 		want  string
 	}{
-		{Claude55Haiku, "low,medium,high,xhigh,max"},
+		// models.dev now records a toggle for Haiku 5.5, so "off" is advertised
+		// and an off request turns thinking off instead of clamping to low.
+		{Claude55Haiku, "off,low,medium,high,xhigh,max"},
 		{Claude55Opus, "low,medium,high,xhigh,max"},
 		{Claude55Sonnet, "low,medium,high,xhigh,max"},
 		{Claude48Opus, "low,medium,high,xhigh,max"},
@@ -3069,7 +3071,7 @@ func TestFromLLMRequestThinkingLevels(t *testing.T) {
 	}{
 		{name: "adaptive haiku 5.5 medium", model: Claude55Haiku, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive haiku 5.5 xhigh", model: Claude55Haiku, svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelXHigh, wantType: "adaptive", wantEffort: "xhigh"},
-		{name: "adaptive haiku 5.5 off rounds to low", model: Claude55Haiku, svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelOff, wantType: "adaptive", wantEffort: "low"},
+		{name: "adaptive haiku 5.5 off disables thinking", model: Claude55Haiku, svcLevel: llm.ThinkingLevelMedium, reqLevel: llm.ThinkingLevelOff, wantType: ""},
 		{name: "adaptive opus 5.5 default medium", model: Claude55Opus, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive sonnet 5.5 default medium", model: Claude55Sonnet, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
 		{name: "adaptive default medium", model: Claude47Opus, svcLevel: llm.ThinkingLevelMedium, wantType: "adaptive", wantEffort: "medium"},
