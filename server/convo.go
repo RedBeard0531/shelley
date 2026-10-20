@@ -149,9 +149,11 @@ type ConversationManager struct {
 	// cacheWarmTimer replays cacheWarmRequest, the last successful provider
 	// request, through cacheWarmService. All are guarded by mu and share
 	// idleCompactionVersion.
-	cacheWarmTimer   *time.Timer
-	cacheWarmRequest *llm.Request
-	cacheWarmService llm.Service
+	cacheWarmTimer    *time.Timer
+	cacheWarmRequest  *llm.Request
+	cacheWarmService  llm.Service
+	cacheWarmModelID  string
+	cacheWarmRevision uint64
 
 	// distilling is true while a distillation goroutine is inserting content
 	// into this conversation. When true, queued messages should NOT be drained
@@ -2215,13 +2217,12 @@ func (cm *ConversationManager) serviceForLoop(service llm.Service) (llm.Service,
 
 func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID string) error {
 	sourceID, sourceRevision := "", uint64(0)
-	if cm.resolveModelService != nil && isSavedProviderRouteID(modelID) {
+	if cm.resolveModelService != nil {
 		current, currentSource, revision, err := cm.resolveModelService(modelID)
 		if err != nil {
 			return err
-		} else if currentSource != "" {
-			service, sourceID, sourceRevision = current, currentSource, revision
 		}
+		service, sourceID, sourceRevision = current, currentSource, revision
 	}
 	cm.mu.Lock()
 	// cm.modelID is the conversation's model once hydrated, even without a
@@ -2429,6 +2430,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 			warm.OnStream, warm.OnRetry = nil, nil
 			cm.mu.Lock()
 			cm.cacheWarmRequest, cm.cacheWarmService = &warm, service
+			cm.cacheWarmModelID, cm.cacheWarmRevision = modelID, sourceRevision
 			cm.mu.Unlock()
 		},
 		InjectMessages: func(ctx context.Context) (loop.Injection, error) {

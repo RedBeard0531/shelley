@@ -83,6 +83,9 @@ func TestProviderSnapshotsStayOfflineAndAccountBound(t *testing.T) {
 	if slices.Contains(manager.GetAvailableModels(), id) {
 		t.Fatal("unlisted route remained in picker")
 	}
+	if _, _, revision, err := manager.GetServiceSnapshot(id); err != nil || revision != initial {
+		t.Fatalf("unlisting changed the connection revision: %v", err)
+	}
 	row.APIKey = "rotated"
 	update()
 	service, source, revision, err = manager.GetServiceSnapshot(id)

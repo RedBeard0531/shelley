@@ -2,18 +2,14 @@ package models
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
-	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/ant"
 	"shelley.exe.dev/llm/oai"
 	"shelley.exe.dev/models/modelsdev"
@@ -142,19 +138,6 @@ func (m *Manager) resolveProviderService(id string) (serviceEntry, error) {
 	return m.providerEntry(*row, wire)
 }
 
-// A turn boundary checks the persisted account, even if publication failed.
-func (m *Manager) GetServiceSnapshot(id string) (llm.Service, string, uint64, error) {
-	lookup := m.lookupService
-	if strings.HasPrefix(id, "provider:") {
-		lookup = m.resolveProviderService
-	}
-	entry, err := lookup(id)
-	if err != nil {
-		return nil, "", 0, err
-	}
-	return m.loggedService(entry), entry.sourceID, entry.serviceRevision, nil
-}
-
 func (m *Manager) providerEntry(row db.ModelProvider, wire string) (serviceEntry, error) {
 	model := generated.Model{
 		ModelID: ProviderRouteID(row.ProviderID, wire), ModelName: wire,
@@ -209,11 +192,7 @@ func (m *Manager) providerEntry(row db.ModelProvider, wire string) (serviceEntry
 			}
 		}
 	}
-	identity, err := json.Marshal([]string{row.ProviderType, row.Endpoint, row.APIKey, wire})
-	if err != nil {
-		return serviceEntry{}, err
-	}
-	hash := sha256.Sum256(identity)
+
 	label := row.DisplayName
 	if label == "" {
 		label = row.Endpoint
@@ -224,7 +203,7 @@ func (m *Manager) providerEntry(row db.ModelProvider, wire string) (serviceEntry
 	}
 	return serviceEntry{
 		service: service, provider: provider, modelID: model.ModelID, sourceID: row.ProviderID,
-		serviceRevision: binary.BigEndian.Uint64(hash[:8]), source: label, displayName: model.DisplayName,
+		serviceRevision: ConnectionRevision(row.ProviderType, row.Endpoint, row.APIKey, wire), source: label, displayName: model.DisplayName,
 		baseURL: row.Endpoint, apiType: apiType, apiModelName: wire, releaseDate: known.ReleaseDate,
 	}, nil
 }

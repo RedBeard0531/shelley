@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -13,6 +15,8 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/predictable"
+	"shelley.exe.dev/models"
 )
 
 // Use real chat turns, not scheduleIdleCompaction: forgetting to arm the timer
@@ -472,4 +476,136 @@ func TestCacheWarmSkipsCacheThatOutlivesWindow(t *testing.T) {
 			t.Fatalf("warms = %d, want 0", got)
 		}
 	})
+}
+
+func newCacheWarmSnapshotHarness(t *testing.T, service llm.Service) (*TestHarness, *models.Manager, models.Built) {
+	t.Helper()
+	h := NewTestHarness(t)
+	built := models.Built{ID: "predictable", Service: service, ServiceRevision: 1}
+	registry, err := models.NewManager(&models.Config{Models: []models.Built{built}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.server.llmManager = registry
+	h.convOpts = &db.ConversationOptions{CacheKeepWarmMinutes: 20, DisableNotifications: true}
+	t.Cleanup(func() { stopActiveConversationLoops(h.server) })
+	return h, registry, built
+}
+
+func TestCacheWarmConnectionChanges(t *testing.T) {
+	for _, change := range []string{"unchanged", "label", "other model", "rotated", "removed"} {
+		t.Run(change, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				old, next := predictable.NewService(), predictable.NewService()
+				h, registry, built := newCacheWarmSnapshotHarness(t, old)
+				h.NewConversation("echo: garden plan", "")
+				synctest.Wait()
+				built.Service = next
+				replacement := []models.Built{built}
+				stale := change == "rotated" || change == "removed"
+				switch change {
+				case "label":
+					replacement[0].DisplayName = "Renamed"
+				case "other model":
+					replacement = append(replacement, models.Built{ID: "other", Service: next, ServiceRevision: 2})
+				case "rotated":
+					replacement[0].ServiceRevision = 2
+				case "removed":
+					replacement = nil
+				}
+				if err := registry.RefreshBuiltModels(replacement); err != nil {
+					t.Fatal(err)
+				}
+				<-time.After(4 * time.Minute)
+				synctest.Wait()
+				want := 1
+				if stale {
+					want = 0
+				}
+				if got := len(old.WarmRequests()); got != want || len(next.WarmRequests()) != 0 {
+					t.Fatalf("old warms=%d new warms=%d, want old=%d new=0", got, len(next.WarmRequests()), want)
+				}
+				if change == "rotated" {
+					cm, err := h.server.getOrCreateConversationManager(t.Context(), h.convID, "")
+					if err != nil {
+						t.Fatal(err)
+					}
+					cm.ResetLoop()
+					h.Chat("echo: fresh turn")
+					synctest.Wait()
+					<-time.After(4 * time.Minute)
+					synctest.Wait()
+					if len(next.WarmRequests()) != 1 || len(old.WarmRequests()) != 0 {
+						t.Fatal("fresh turn did not warm exclusively through the new connection")
+					}
+				}
+			})
+		})
+	}
+}
+
+type cacheWarmBlockedService struct {
+	*predictable.Service
+	blockDo          bool
+	started, release chan struct{}
+	startedOnce      sync.Once
+}
+
+func (s *cacheWarmBlockedService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	if s.blockDo {
+		s.startedOnce.Do(func() { close(s.started) })
+		<-s.release
+	}
+	return s.Service.Do(ctx, req)
+}
+
+func (s *cacheWarmBlockedService) WarmCache(ctx context.Context, req *llm.Request) (llm.Usage, error) {
+	if !s.blockDo {
+		s.startedOnce.Do(func() { close(s.started) })
+		<-s.release
+	}
+	return s.Service.WarmCache(ctx, req)
+}
+
+func TestCacheWarmConnectionChangesDuringRequests(t *testing.T) {
+	for _, blockDo := range []bool{true, false} {
+		t.Run(fmt.Sprintf("inference=%t", blockDo), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				service := &cacheWarmBlockedService{
+					Service: predictable.NewService(), blockDo: blockDo,
+					started: make(chan struct{}), release: make(chan struct{}),
+				}
+				h, registry, built := newCacheWarmSnapshotHarness(t, service)
+				h.NewConversation("echo: garden plan", "")
+				synctest.Wait()
+				cm, err := h.server.getOrCreateConversationManager(t.Context(), h.convID, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !blockDo {
+					<-time.After(4 * time.Minute)
+				}
+				<-service.started
+				timer := cm.cacheWarmTimer
+				built.Service, built.ServiceRevision = predictable.NewService(), 2
+				if err := registry.RefreshBuiltModels([]models.Built{built}); err != nil {
+					t.Fatal(err)
+				}
+				close(service.release)
+				synctest.Wait()
+				if !blockDo && cm.cacheWarmTimer != timer {
+					t.Fatal("in-flight warm rearmed after its connection changed")
+				}
+				<-time.After(30 * time.Minute)
+				synctest.Wait()
+				want := 0
+				if !blockDo {
+					want = 1
+				}
+				if len(service.WarmRequests()) != want || len(cacheWarmUsage(t, h)) != want {
+					t.Fatalf("warms=%d recorded=%d, want %d", len(service.WarmRequests()), len(cacheWarmUsage(t, h)), want)
+				}
+			})
+		})
+	}
 }

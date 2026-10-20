@@ -112,7 +112,11 @@ func (cm *ConversationManager) warmCache(s *Server, version uint64, warmUntil ti
 		return nil
 	}
 	req, service := cm.cacheWarmRequest, cm.cacheWarmService
+	modelID, revision := cm.cacheWarmModelID, cm.cacheWarmRevision
 	cm.mu.Unlock()
+	if current, err := cm.cacheWarmConnectionCurrent(modelID, revision); err != nil || !current {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	refreshed := time.Now()
@@ -129,12 +133,23 @@ func (cm *ConversationManager) warmCache(s *Server, version uint64, warmUntil ti
 		return err
 	}
 	s.notifySubscribers(ctx, cm.conversationID, *marker)
+	if current, err := cm.cacheWarmConnectionCurrent(modelID, revision); err != nil || !current {
+		return err
+	}
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	if cm.idleCompactionVersion == version {
 		cm.scheduleCacheWarmLocked(s, version, warmUntil, refreshed)
 	}
 	return nil
+}
+
+func (cm *ConversationManager) cacheWarmConnectionCurrent(modelID string, revision uint64) (bool, error) {
+	if cm.resolveModelService == nil {
+		return true, nil
+	}
+	_, _, current, err := cm.resolveModelService(modelID)
+	return current == revision, err
 }
 
 // compactIdleConversation makes a one-shot attempt: a turn, started by an

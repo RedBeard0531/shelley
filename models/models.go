@@ -105,6 +105,8 @@ type Built struct {
 	Source      string // human-readable origin ("exe.dev gateway", "$ANTHROPIC_API_KEY", "custom", ...)
 	ReleaseDate string // ISO date from models.dev; empty when unknown
 	Service     llm.Service
+	// ServiceRevision identifies the connection, not its label or catalog position.
+	ServiceRevision uint64
 
 	// APIModelName is the model name sent on the wire, used for models.dev
 	// lookups (see Model.APIModelName).
@@ -672,16 +674,17 @@ func (m *Manager) registerBuiltModelsLocked(built []Built) {
 			dn = b.ID
 		}
 		m.services[b.ID] = serviceEntry{
-			service:      b.Service,
-			provider:     b.Provider,
-			modelID:      b.ID,
-			mode:         b.Mode,
-			source:       b.Source,
-			displayName:  dn,
-			releaseDate:  b.ReleaseDate,
-			baseURL:      b.BaseURL,
-			apiType:      b.APIType,
-			apiModelName: b.APIModelName,
+			service:         b.Service,
+			serviceRevision: b.ServiceRevision,
+			provider:        b.Provider,
+			modelID:         b.ID,
+			mode:            b.Mode,
+			source:          b.Source,
+			displayName:     dn,
+			releaseDate:     b.ReleaseDate,
+			baseURL:         b.BaseURL,
+			apiType:         b.APIType,
+			apiModelName:    b.APIModelName,
 		}
 		m.modelOrder = append(m.modelOrder, b.ID)
 		if m.logger != nil {
@@ -711,20 +714,25 @@ func (m *Manager) loadCustomModelsLocked(dbModels []generated.Model) {
 		if _, exists := m.services[model.ModelID]; exists {
 			continue
 		}
-		svc := m.createServiceFromModel(&model)
-		if svc == nil {
+		entry := m.customModelEntry(model)
+		if entry.service == nil {
 			continue
 		}
-		m.services[model.ModelID] = serviceEntry{
-			service:      svc,
-			provider:     Provider(model.ProviderType),
-			modelID:      model.ModelID,
-			source:       SourceCustomLabel,
-			displayName:  model.DisplayName,
-			baseURL:      model.Endpoint,
-			apiModelName: model.ModelName,
-		}
+		m.services[model.ModelID] = entry
 		m.modelOrder = append(m.modelOrder, model.ModelID)
+	}
+}
+
+func (m *Manager) customModelEntry(model generated.Model) serviceEntry {
+	return serviceEntry{
+		service:         m.createServiceFromModel(&model),
+		serviceRevision: ConnectionRevision(model.ProviderType, model.Endpoint, model.ApiKey, model.ModelName),
+		provider:        Provider(model.ProviderType),
+		modelID:         model.ModelID,
+		source:          SourceCustomLabel,
+		displayName:     model.DisplayName,
+		baseURL:         model.Endpoint,
+		apiModelName:    model.ModelName,
 	}
 }
 

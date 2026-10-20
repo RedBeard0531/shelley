@@ -55,6 +55,43 @@ func TestPredictableBuilds(t *testing.T) {
 	}
 }
 
+func TestBuildConnectionRevisions(t *testing.T) {
+	catalog := []models.Model{*models.ByID("claude-opus-4.7")}
+	for _, source := range []Source{
+		Env("old", "", "", ""),
+		LLMIntegration(&LLMIntegrationConfig{
+			Name: "llm", Host: "fixture.invalid", URL: "https://fixture.invalid",
+			Models: []IntegrationModel{{
+				ID: "anthropic/claude-opus-4-7", Provider: "anthropic",
+				NativeID: "claude-opus-4-7", APIs: []string{"anthropic_messages"},
+			}},
+		}, ""),
+	} {
+		build := func() models.Built {
+			t.Helper()
+			built := Build(catalog, []Source{source}, &http.Client{}, nil)
+			if len(built) != 1 {
+				t.Fatalf("built %d models, want 1", len(built))
+			}
+			return built[0]
+		}
+		first := build()
+		source.label = "renamed"
+		next := build()
+		if first.Service == next.Service || first.ServiceRevision == 0 || first.ServiceRevision != next.ServiceRevision {
+			t.Fatal("unchanged connection did not retain its revision across service rebuild")
+		}
+		if source.integration != nil {
+			source.integration.URL = "https://other.invalid"
+		} else {
+			source.providers[models.ProviderAnthropic].apiKey = "rotated"
+		}
+		if build().ServiceRevision == first.ServiceRevision {
+			t.Fatal("changed connection retained its old revision")
+		}
+	}
+}
+
 func TestEnvSourceBuildsAllProviders(t *testing.T) {
 	src := Env("a", "o", "g", "f")
 	bs := Build(models.All(), []Source{src}, &http.Client{}, nil)
