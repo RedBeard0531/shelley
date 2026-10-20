@@ -194,7 +194,9 @@
               {{ upgradingHeadless ? "Upgrading Browser..." : "Upgrade Browser" }}
             </button>
           </div>
-          <div v-else class="version-up-to-date">Browser is up to date</div>
+          <div v-else-if="versionInfo.headless_shell_latest" class="version-up-to-date">
+            Browser is up to date
+          </div>
         </div>
       </div>
     </template>
