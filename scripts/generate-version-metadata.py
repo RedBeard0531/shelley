@@ -10,6 +10,15 @@ import sys
 from pathlib import Path
 
 
+# The headless-shell release to advertise instead of the newest one. Chromium
+# releases, and so the chromedp/headless-shell builds the release workflow
+# publishes, still trust the compromised eMudhra intermediates
+# (https://emudhra.we-have-a-problem.com). This release is Chromium
+# 156.0.8078.48 with their blocklist (chromium da63b94c4ee2) applied. Remove
+# the pin once a chromedp build has the blocklist.
+HEADLESS_SHELL_PIN = "headless-shell/v156.0.8078.48.p1"
+
+
 def get_headless_shell_release() -> tuple[str, str]:
     """Find the newest headless-shell release from its git tags.
 
@@ -25,6 +34,11 @@ def get_headless_shell_release() -> tuple[str, str]:
         print("ERROR: no headless-shell/v* tags found", file=sys.stderr)
         sys.exit(1)
     tag = tags[0]
+    if HEADLESS_SHELL_PIN:
+        if HEADLESS_SHELL_PIN not in tags:
+            print(f"ERROR: pinned tag {HEADLESS_SHELL_PIN} not found", file=sys.stderr)
+            sys.exit(1)
+        tag = HEADLESS_SHELL_PIN
     return f"Chromium {tag.removeprefix('headless-shell/v')}", tag
 
 
