@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -235,7 +237,7 @@ func (vc *VersionChecker) fetchVersionInfo(ctx context.Context) (*VersionInfo, e
 	info.HasUpdate = vc.isNewerMinor(info.CurrentTag, latestRelease.TagName)
 
 	// Headless shell version info
-	info.HeadlessShellCurrent = getLocalHeadlessShellVersion(ctx)
+	info.HeadlessShellCurrent = getLocalHeadlessShellVersion(ctx, headlessShellPath)
 	if latestRelease.HeadlessShellVersion != "" && info.HeadlessShellCurrent != "" {
 		info.HeadlessShellLatest = latestRelease.HeadlessShellVersion
 		info.HeadlessShellUpdate = headlessShellHasUpdate(info.HeadlessShellCurrent, info.HeadlessShellLatest)
@@ -381,43 +383,105 @@ func extractSHAFromTag(tag string) string {
 
 const headlessShellPath = "/headless-shell/headless-shell"
 
-// getLocalHeadlessShellVersion runs headless-shell --version and returns the output.
-// Returns empty string if the binary doesn't exist or fails.
-func getLocalHeadlessShellVersion(ctx context.Context) string {
-	cmd := exec.CommandContext(ctx, headlessShellPath, "--version")
-	out, err := cmd.Output()
+// headlessShellVersionFile, beside the binary, records the version of the
+// headless-shell release installed there and the sha256 of its binary.
+// Releases can add a patch level such as the ".p1" in
+// "Chromium 156.0.8078.48.p1", which the binary's --version doesn't print.
+const headlessShellVersionFile = "headless-shell-version.txt"
+
+// getLocalHeadlessShellVersion returns the version of the headless-shell at
+// bin: the version recorded beside it if bin is the binary it was recorded
+// for, else what bin --version prints. Returns empty string if the binary
+// doesn't exist or fails.
+func getLocalHeadlessShellVersion(ctx context.Context, bin string) string {
+	out, err := exec.CommandContext(ctx, bin, "--version").Output()
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	version := strings.TrimSpace(string(out))
+	recorded, err := os.ReadFile(filepath.Join(filepath.Dir(bin), headlessShellVersionFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return version
+	}
+	if err != nil {
+		slog.Warn("Failed to read recorded headless-shell version", "error", err)
+		return version
+	}
+	sum, err := headlessShellSHA256(bin)
+	if err != nil {
+		slog.Warn("Failed to hash headless-shell", "error", err)
+		return version
+	}
+	release, recordedSum, _ := strings.Cut(strings.TrimSpace(string(recorded)), "\n")
+	if recordedSum != "sha256 "+sum {
+		return version
+	}
+	return release
 }
 
-// headlessShellHasUpdate compares two version strings like "Chromium 141.0.7390.55"
-// and returns true if latest is newer than current.
+// recordHeadlessShellVersion records release as the version of the
+// headless-shell binary bin.
+func recordHeadlessShellVersion(bin, release string) error {
+	sum, err := headlessShellSHA256(bin)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(filepath.Dir(bin), headlessShellVersionFile), []byte(release+"\nsha256 "+sum+"\n"), 0o644)
+}
+
+func headlessShellSHA256(bin string) (string, error) {
+	f, err := os.Open(bin)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// isHeadlessShellRelease reports whether release is the version of a
+// headless-shell release whose binary prints version: version itself, or
+// version with a patch level.
+func isHeadlessShellRelease(release, version string) bool {
+	r, ok := parseHeadlessShellVersion(release)
+	v, vok := parseHeadlessShellVersion(version)
+	return ok && vok && slices.Equal(r[:4], v[:4])
+}
+
+// parseHeadlessShellVersion parses a version like "Chromium 141.0.7390.55"
+// or "Chromium 156.0.8078.48.p1" into its four numbers and its patch level,
+// which is 0 when there is none.
+func parseHeadlessShellVersion(s string) ([5]uint64, bool) {
+	var v [5]uint64
+	parts := strings.Split(strings.TrimPrefix(s, "Chromium "), ".")
+	if len(parts) == 5 {
+		p, ok := strings.CutPrefix(parts[4], "p")
+		if !ok {
+			return v, false
+		}
+		parts[4] = p
+	} else if len(parts) != 4 {
+		return v, false
+	}
+	for i, p := range parts {
+		n, err := strconv.ParseUint(p, 10, 64)
+		if err != nil {
+			return v, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+// headlessShellHasUpdate reports whether latest is a newer headless-shell
+// version than current, comparing their patch levels as well.
 func headlessShellHasUpdate(current, latest string) bool {
-	currentVer := strings.TrimPrefix(current, "Chromium ")
-	latestVer := strings.TrimPrefix(latest, "Chromium ")
-	if currentVer == "" || latestVer == "" {
-		return false
-	}
-
-	currentParts := strings.Split(currentVer, ".")
-	latestParts := strings.Split(latestVer, ".")
-
-	for i := 0; i < len(currentParts) && i < len(latestParts); i++ {
-		c, err1 := strconv.Atoi(currentParts[i])
-		l, err2 := strconv.Atoi(latestParts[i])
-		if err1 != nil || err2 != nil {
-			return false
-		}
-		if l > c {
-			return true
-		}
-		if l < c {
-			return false
-		}
-	}
-	return false
+	c, ok := parseHeadlessShellVersion(current)
+	l, lok := parseHeadlessShellVersion(latest)
+	return ok && lok && slices.Compare(l[:], c[:]) > 0
 }
 
 // findHeadlessShellURL finds the headless-shell download URL for the current platform.

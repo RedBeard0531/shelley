@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -398,6 +400,18 @@ func TestHeadlessShellHasUpdate(t *testing.T) {
 		{"newer patch", "Chromium 141.0.7390.55", "Chromium 141.0.7390.56", true},
 		{"numeric not lexicographic", "Chromium 999.0.0.0", "Chromium 1001.0.0.0", true},
 		{"numeric not lexicographic reverse", "Chromium 1001.0.0.0", "Chromium 999.0.0.0", false},
+		{"patch level over the same version", "Chromium 156.0.8078.48", "Chromium 156.0.8078.48.p1", true},
+		{"patch level over an older version", "Chromium 156.0.8078.36", "Chromium 156.0.8078.48.p1", true},
+		{"same patch level", "Chromium 156.0.8078.48.p1", "Chromium 156.0.8078.48.p1", false},
+		{"same version without the patch level", "Chromium 156.0.8078.48.p1", "Chromium 156.0.8078.48", false},
+		{"newer patch level", "Chromium 156.0.8078.48.p1", "Chromium 156.0.8078.48.p2", true},
+		{"patch level numeric not lexicographic", "Chromium 156.0.8078.48.p2", "Chromium 156.0.8078.48.p10", true},
+		{"newer version without a patch level", "Chromium 156.0.8078.48.p1", "Chromium 156.0.8078.60", true},
+		{"malformed patch level", "Chromium 156.0.8078.48", "Chromium 156.0.8078.48.x1", false},
+		{"three parts", "Chromium 156.0.8078", "Chromium 156.0.8078.48", false},
+		{"five numeric parts", "Chromium 156.0.8078.48", "Chromium 156.0.8078.48.1", false},
+		{"empty patch level", "Chromium 156.0.8078.48", "Chromium 156.0.8078.48.p", false},
+		{"uppercase patch level", "Chromium 156.0.8078.48", "Chromium 156.0.8078.48.P1", false},
 		{"empty current", "", "Chromium 141.0.7390.55", false},
 		{"empty latest", "Chromium 141.0.7390.55", "", false},
 		{"both empty", "", "", false},
@@ -411,6 +425,87 @@ func TestHeadlessShellHasUpdate(t *testing.T) {
 					tt.current, tt.latest, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestLocalHeadlessShellVersion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const version = "Chromium 156.0.8078.48"
+	const release = "Chromium 156.0.8078.48.p1"
+	tests := []struct {
+		name   string
+		record func(t *testing.T, bin string)
+		want   string
+	}{
+		{"no recorded version", func(t *testing.T, bin string) {}, version},
+		{"recorded", func(t *testing.T, bin string) {
+			if err := recordHeadlessShellVersion(bin, release); err != nil {
+				t.Fatal(err)
+			}
+		}, release},
+		{"recorded for another binary of the same version", func(t *testing.T, bin string) {
+			if err := recordHeadlessShellVersion(bin, release); err != nil {
+				t.Fatal(err)
+			}
+			writeFakeHeadlessShell(t, bin, "# unpatched\necho '"+version+"'")
+		}, version},
+		{"garbage", func(t *testing.T, bin string) {
+			if err := os.WriteFile(filepath.Join(filepath.Dir(bin), headlessShellVersionFile), []byte(release+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, version},
+		{"binary fails", func(t *testing.T, bin string) {
+			if err := recordHeadlessShellVersion(bin, release); err != nil {
+				t.Fatal(err)
+			}
+			writeFakeHeadlessShell(t, bin, "exit 1")
+		}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			bin := filepath.Join(t.TempDir(), "headless-shell")
+			writeFakeHeadlessShell(t, bin, "echo '"+version+"'")
+			tt.record(t, bin)
+			got := getLocalHeadlessShellVersion(ctx, bin)
+			if got != tt.want {
+				t.Errorf("getLocalHeadlessShellVersion() = %q, want %q", got, tt.want)
+			}
+			if tt.want == release && headlessShellHasUpdate(got, release) {
+				t.Errorf("an update to the recorded %s is still offered", release)
+			}
+		})
+	}
+	if got := getLocalHeadlessShellVersion(ctx, filepath.Join(t.TempDir(), "headless-shell")); got != "" {
+		t.Errorf("getLocalHeadlessShellVersion(missing) = %q, want \"\"", got)
+	}
+}
+
+func TestIsHeadlessShellRelease(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		release, version string
+		want             bool
+	}{
+		{"Chromium 156.0.8078.48", "Chromium 156.0.8078.48", true},
+		{"Chromium 156.0.8078.48.p1", "Chromium 156.0.8078.48", true},
+		{"Chromium 156.0.8078.60.p1", "Chromium 156.0.8078.48", false},
+		{"Chromium 156.0.8078.4", "Chromium 156.0.8078.48", false},
+		{"Chromium 156.0.8078.48.p1", "HeadlessChrome", false},
+	}
+	for _, tt := range tests {
+		if got := isHeadlessShellRelease(tt.release, tt.version); got != tt.want {
+			t.Errorf("isHeadlessShellRelease(%q, %q) = %v, want %v", tt.release, tt.version, got, tt.want)
+		}
+	}
+}
+
+// writeFakeHeadlessShell writes a shell script with body to bin.
+func writeFakeHeadlessShell(t *testing.T, bin, body string) {
+	t.Helper()
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 

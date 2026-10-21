@@ -3542,7 +3542,17 @@ func (s *Server) handleUpgradeHeadlessShell(w http.ResponseWriter, r *http.Reque
 		http.Error(w, fmt.Sprintf("Extracted binary failed --version: %v", err), http.StatusInternalServerError)
 		return
 	}
-	newVersion := strings.TrimSpace(string(versionOutput))
+	newVersion := info.HeadlessShellLatest
+	if binVersion := strings.TrimSpace(string(versionOutput)); !isHeadlessShellRelease(newVersion, binVersion) {
+		s.logger.Error("Downloaded headless-shell is the wrong version", "version", binVersion, "want", newVersion)
+		http.Error(w, fmt.Sprintf("Downloaded headless-shell is %s, want %s", binVersion, newVersion), http.StatusInternalServerError)
+		return
+	}
+	if err := recordHeadlessShellVersion(extractedBin, newVersion); err != nil {
+		s.logger.Error("Failed to record headless-shell version", "error", err)
+		http.Error(w, fmt.Sprintf("Failed to record version: %v", err), http.StatusInternalServerError)
+		return
+	}
 	s.logger.Info("New headless-shell version verified", "version", newVersion)
 
 	// Replace the install dir using sudo: backup -> move new -> cleanup
