@@ -77,16 +77,23 @@ type CommitInfo struct {
 
 // ReleaseInfo represents release metadata.
 type ReleaseInfo struct {
-	TagName              string            `json:"tag_name"`
-	Version              string            `json:"version"`
-	Commit               string            `json:"commit"`
-	CommitFull           string            `json:"commit_full"`
-	CommitTime           string            `json:"commit_time"`
-	PublishedAt          string            `json:"published_at"`
-	DownloadURLs         map[string]string `json:"download_urls"`
-	ChecksumsURL         string            `json:"checksums_url"`
-	HeadlessShellVersion string            `json:"headless_shell_version,omitempty"`
-	HeadlessShellURLs    map[string]string `json:"headless_shell_urls,omitempty"`
+	TagName      string            `json:"tag_name"`
+	Version      string            `json:"version"`
+	Commit       string            `json:"commit"`
+	CommitFull   string            `json:"commit_full"`
+	CommitTime   string            `json:"commit_time"`
+	PublishedAt  string            `json:"published_at"`
+	DownloadURLs map[string]string `json:"download_urls"`
+	ChecksumsURL string            `json:"checksums_url"`
+	// HeadlessShells is the headless-shell build to install, by platform
+	// (e.g. "linux_amd64").
+	HeadlessShells map[string]HeadlessShellBuild `json:"headless_shells,omitempty"`
+}
+
+// HeadlessShellBuild is a headless-shell release's build for one platform.
+type HeadlessShellBuild struct {
+	Version string `json:"version"` // e.g. "Chromium 156.0.8078.48.p1"
+	URL     string `json:"url"`
 }
 
 // StaticCommitInfo represents a commit from commits.json.
@@ -238,8 +245,8 @@ func (vc *VersionChecker) fetchVersionInfo(ctx context.Context) (*VersionInfo, e
 
 	// Headless shell version info
 	info.HeadlessShellCurrent = getLocalHeadlessShellVersion(ctx, headlessShellPath)
-	if latestRelease.HeadlessShellVersion != "" && info.HeadlessShellCurrent != "" {
-		info.HeadlessShellLatest = latestRelease.HeadlessShellVersion
+	if hs, ok := findHeadlessShell(latestRelease); ok && info.HeadlessShellCurrent != "" {
+		info.HeadlessShellLatest = hs.Version
 		info.HeadlessShellUpdate = headlessShellHasUpdate(info.HeadlessShellCurrent, info.HeadlessShellLatest)
 	}
 
@@ -484,13 +491,10 @@ func headlessShellHasUpdate(current, latest string) bool {
 	return ok && lok && slices.Compare(l[:], c[:]) > 0
 }
 
-// findHeadlessShellURL finds the headless-shell download URL for the current platform.
-func findHeadlessShellURL(release *ReleaseInfo) string {
-	key := fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH)
-	if url, ok := release.HeadlessShellURLs[key]; ok {
-		return url
-	}
-	return ""
+// findHeadlessShell finds the headless-shell build for the current platform.
+func findHeadlessShell(release *ReleaseInfo) (HeadlessShellBuild, bool) {
+	hs, ok := release.HeadlessShells[runtime.GOOS+"_"+runtime.GOARCH]
+	return hs, ok
 }
 
 // fetchLatestRelease fetches the latest release info from GitHub Pages.

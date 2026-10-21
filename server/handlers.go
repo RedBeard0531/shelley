@@ -3477,16 +3477,16 @@ func (s *Server) handleUpgradeHeadlessShell(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	downloadURL := findHeadlessShellURL(info.ReleaseInfo)
-	if downloadURL == "" {
+	hs, ok := findHeadlessShell(info.ReleaseInfo)
+	if !ok {
 		http.Error(w, fmt.Sprintf("No headless-shell download for %s/%s", runtime.GOOS, runtime.GOARCH), http.StatusBadRequest)
 		return
 	}
 
-	s.logger.Info("Upgrading headless-shell", "url", downloadURL, "from", info.HeadlessShellCurrent, "to", info.HeadlessShellLatest)
+	s.logger.Info("Upgrading headless-shell", "url", hs.URL, "from", info.HeadlessShellCurrent, "to", info.HeadlessShellLatest)
 
 	// Download the tarball
-	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", hs.URL, nil)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create request: %v", err), http.StatusInternalServerError)
 		return

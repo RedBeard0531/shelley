@@ -291,6 +291,33 @@ func TestVersionCheckerCache(t *testing.T) {
 	})
 }
 
+func TestFindHeadlessShell(t *testing.T) {
+	t.Parallel()
+	platform := runtime.GOOS + "_" + runtime.GOARCH
+	// The shape scripts/generate-version-metadata.py writes.
+	metadata := fmt.Sprintf(`{
+		"tag_name": "v0.10.0",
+		"headless_shells": {
+			%q: {"version": "Chromium 156.0.8078.48.p1", "url": "https://example.com/headless-shell.tar.gz"},
+			"plan9_mips": {"version": "Chromium 157.0.8103.6", "url": "https://example.com/other.tar.gz"}
+		},
+		"headless_shell_version": "Chromium 1.0.0.0",
+		"headless_shell_urls": {%[1]q: "https://example.com/legacy.tar.gz"}
+	}`, platform)
+	var release ReleaseInfo
+	if err := json.Unmarshal([]byte(metadata), &release); err != nil {
+		t.Fatal(err)
+	}
+	want := HeadlessShellBuild{Version: "Chromium 156.0.8078.48.p1", URL: "https://example.com/headless-shell.tar.gz"}
+	if got, ok := findHeadlessShell(&release); !ok || got != want {
+		t.Errorf("findHeadlessShell() = %+v, %v; want %+v, true", got, ok, want)
+	}
+	delete(release.HeadlessShells, platform)
+	if got, ok := findHeadlessShell(&release); ok {
+		t.Errorf("findHeadlessShell() without a build for %s = %+v, want none", platform, got)
+	}
+}
+
 func TestFindDownloadURL(t *testing.T) {
 	t.Parallel()
 	platform := runtime.GOOS + "_" + runtime.GOARCH
