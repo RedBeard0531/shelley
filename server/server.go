@@ -421,6 +421,11 @@ type Server struct {
 	// a giant transcript.
 	piDistillKeepRecentTokens int
 
+	// idleCompactionMinTokens overrides the context size below which idle
+	// compaction is not worth a turn (see idleCompactionMinTokens). Zero
+	// means defaultIdleCompactionMinTokens. Tests set it to 1.
+	idleCompactionMinTokens int
+
 	// IndexedDB cache encryption master secret — see cache_key.go.
 	// Lives on the Server (not a package-global) so tests with
 	// independent DBs don't share state.
@@ -1074,6 +1079,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		manager.serverPort = s.listenPort
 		manager.serverSocket = s.socketPath
 		manager.keepRecentTokens = s.keepRecentTokens()
+		manager.idleCompactionMinTokens = s.idleCompactionMinTokensOrDefault()
 		switch role {
 		case roleSubagent:
 			manager.rewriteFinalReply = func(ctx context.Context, reply llm.Message) (llm.Message, bool) {
