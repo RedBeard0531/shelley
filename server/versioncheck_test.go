@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -504,6 +505,11 @@ func TestIsHeadlessShellRelease(t *testing.T) {
 // writeFakeHeadlessShell writes a shell script with body to bin.
 func writeFakeHeadlessShell(t *testing.T, bin, body string) {
 	t.Helper()
+	// A process forked while bin is open for writing keeps it open until it
+	// execs, and running bin meanwhile fails with ETXTBSY
+	// (https://go.dev/issue/22315). ForkLock keeps forks out until it's closed.
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
