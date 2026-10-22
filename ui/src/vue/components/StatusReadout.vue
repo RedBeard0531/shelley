@@ -48,8 +48,6 @@
       :models="models"
       :other-usage-rows="otherUsageRows"
       :messages="messages"
-      :on-distill-new-generation="onDistillNewGeneration"
-      :on-start-new-generation="onStartNewGeneration"
       :on-compact-in-place="onCompactInPlace"
       :compact-in-place-busy="compactInPlaceBusy"
       :on-usage-needed="onUsageNeeded"
@@ -118,9 +116,7 @@ const props = defineProps<{
   thinkingLevel: ThinkingLevel;
   refreshingModels?: boolean;
   agentWorking?: boolean;
-  onDistillNewGeneration?: () => Promise<void> | void;
-  onStartNewGeneration?: () => Promise<void> | void;
-  onCompactInPlace?: () => Promise<void> | void;
+  onCompactInPlace: () => Promise<void> | void;
   compactInPlaceBusy?: boolean;
   onUsageNeeded?: () => void;
   onChangeConversationCwd?: () => void;

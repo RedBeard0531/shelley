@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"shelley.exe.dev/db"
-	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
 )
 
@@ -194,7 +193,7 @@ func (s *Server) generateLoremConversation(ctx context.Context, turns int, model
 		return "", fmt.Errorf("set slug: %w", err)
 	}
 
-	g := &loremGen{s: s, convID: convID, model: model, cwd: cwd, generation: 1, clock: time.Now().Add(-time.Duration(turns) * time.Minute)}
+	g := &loremGen{s: s, convID: convID, model: model, cwd: cwd, clock: time.Now().Add(-time.Duration(turns) * time.Minute)}
 
 	// One-time preamble: system prompt + a gitinfo marker, flushed as its
 	// own batch before the turns begin.
@@ -204,32 +203,9 @@ func (s *Server) generateLoremConversation(ctx context.Context, turns int, model
 		return "", err
 	}
 
-	// Compaction cadence. Real conversations compact rarely (the busiest in
-	// the DB reach generation ~6). We want generation dividers and compaction
-	// summaries to actually appear, but not hundreds of them, so we target a
-	// bounded number of compactions (~maxCompactions) spread across the
-	// conversation. For a small conversation that would never otherwise
-	// compact, compact once in the middle so the feature is still represented.
-	const minCompactInterval = 40 // never compact more often than this
-	const maxCompactions = 8
-	compactEvery := minCompactInterval
-	if turns/maxCompactions > compactEvery {
-		compactEvery = turns / maxCompactions
-	}
-	if turns >= 6 && turns <= minCompactInterval {
-		compactEvery = turns / 2
-	}
-
 	for i := 0; i < turns; i++ {
 		if err := g.turn(ctx, i); err != nil {
 			return "", fmt.Errorf("turn %d: %w", i, err)
-		}
-		// Compact after this turn (but never on the very last turn, so the
-		// final generation always has real turns of its own).
-		if compactEvery > 0 && (i+1)%compactEvery == 0 && i+1 < turns {
-			if err := g.compact(ctx, i); err != nil {
-				return "", fmt.Errorf("compact after turn %d: %w", i, err)
-			}
 		}
 	}
 	return convID, nil
@@ -241,11 +217,6 @@ type loremGen struct {
 	convID string
 	model  string
 	cwd    string
-	// generation is the conversation's current generation. It starts at 1
-	// and is bumped by compact(), mirroring the real distillation flow so
-	// generated rows carry the right generation stamp and the UI draws a
-	// "new generation" divider.
-	generation int
 	// clock advances a few seconds per message so timestamps and tool
 	// durations look realistic and monotonic.
 	clock time.Time
@@ -320,83 +291,6 @@ func (g *loremGen) flush(ctx context.Context) error {
 	}
 	g.pending = g.pending[:0]
 	return nil
-}
-
-// compact simulates a conversation compaction (pi-style distillation) after
-// turn i. It mirrors the real flow in distill.go/distill_pi.go: bump the
-// conversation's generation, then in the NEW generation write an in_progress
-// distill status, a fresh system prompt, the compaction summary, a handful of
-// verbatim carried-forward messages, and a terminal "complete" status. Because
-// insertMessageTx stamps each row with the conversation's current generation,
-// bumping first lands all of these in the new generation, so the UI draws a
-// "new generation" divider, shows the compaction summary, and collapses the
-// carried tail behind a "messages carried forward" band.
-func (g *loremGen) compact(ctx context.Context, turnIdx int) error {
-	// Snapshot a few of the just-written messages to carry forward verbatim
-	// BEFORE we bump the generation. In the real flow these are the recent
-	// messages kept out of the summary; here we synthesize an equivalent tail.
-	carried := g.carriedTail(turnIdx)
-
-	// Bump the conversation generation (mirrors IncrementConversationGeneration).
-	if _, err := db.WithTxRes(g.s.db, ctx, func(q *generated.Queries) (generated.Conversation, error) {
-		return q.IncrementConversationGeneration(ctx, g.convID)
-	}); err != nil {
-		return fmt.Errorf("increment generation: %w", err)
-	}
-	g.generation++
-	sourceSlug := fmt.Sprintf("loremipsum-gen%d", g.generation-1)
-
-	// in_progress status (immediately superseded by the terminal one; the UI
-	// collapses the pair, but both are present as they are in real data).
-	g.recordTyped(db.MessageTypeAgent, llm.Message{
-		Role:                llm.MessageRoleAssistant,
-		Content:             []llm.Content{{Type: llm.ContentTypeText, Text: "Distilling conversation…"}},
-		ExcludedFromContext: true,
-	}, llm.Usage{}, map[string]string{
-		"distill_status": "in_progress",
-		"source_slug":    sourceSlug,
-		"new_generation": "true",
-		"distill_method": "compact",
-	})
-
-	// A fresh system prompt opens the new generation (Hydrate re-adds one).
-	g.recordTyped(db.MessageTypeSystem, g.systemMessage(), llm.Usage{}, nil)
-
-	// The compaction summary, wrapped exactly as the real pi flow wraps it,
-	// with the distilled=true marker so the UI renders it as a summary.
-	wrapped := piCompactionSummaryPrefix + g.compactionSummary(turnIdx) + piCompactionSummarySuffix
-	g.recordTyped(db.MessageTypeUser, llm.Message{
-		Role:    llm.MessageRoleUser,
-		Content: []llm.Content{{Type: llm.ContentTypeText, Text: wrapped}},
-	}, llm.Usage{}, map[string]string{
-		"distilled":            "true",
-		"distillation_content": wrapped,
-		"distill_method":       "compact",
-	})
-
-	// Verbatim carried-forward tail, each stamped compaction_carried=true so
-	// the UI collapses it behind a "messages carried forward" band.
-	for _, c := range carried {
-		mt, err := g.s.getMessageType(c)
-		if err != nil {
-			return err
-		}
-		g.recordTyped(mt, c, llm.Usage{}, map[string]string{"compaction_carried": "true"})
-	}
-
-	// Terminal complete status.
-	g.recordTyped(db.MessageTypeAgent, llm.Message{
-		Role:                llm.MessageRoleAssistant,
-		Content:             []llm.Content{{Type: llm.ContentTypeText, Text: "Distillation complete"}},
-		ExcludedFromContext: true,
-	}, llm.Usage{}, map[string]string{
-		"distill_status": "complete",
-		"source_slug":    sourceSlug,
-		"new_generation": "true",
-		"distill_method": "compact",
-	})
-
-	return g.flush(ctx)
 }
 
 // turn writes one user prompt, an agent thinking+text+tool_use message, the

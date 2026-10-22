@@ -337,42 +337,17 @@
         />
         <div ref="queueMenuRef" class="message-send-wrapper">
           <!-- Slack-style split button: [Send | ▾] — always same width -->
-          <div
-            v-if="showQueueOption && hasQueueHandler"
-            :class="`send-split-btn${autoQueue ? ' send-split-btn-queue' : ''}`"
-          >
+          <div v-if="showQueueOption && hasQueueHandler" class="send-split-btn">
             <button
               type="submit"
               :disabled="!canSubmit"
               class="send-split-main"
-              :aria-label="
-                autoQueue
-                  ? 'Queue message'
-                  : compactSendArmed
-                    ? 'Compact and send'
-                    : t('sendMessage')
-              "
+              :aria-label="t('sendMessage')"
               data-testid="send-button"
-              @click="handleSendClick"
             >
               <div v-if="isDisabled || submitting" class="flex items-center justify-center">
                 <div class="spinner spinner-small message-send-spinner-white"></div>
               </div>
-              <svg
-                v-else-if="compactSendArmed"
-                class="compact-send-icon"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-              >
-                <polyline points="4 14 10 14 10 20" />
-                <polyline points="20 10 14 10 14 4" />
-                <line x1="14" y1="10" x2="21" y2="3" />
-                <line x1="3" y1="21" x2="10" y2="14" />
-              </svg>
               <svg v-else fill="currentColor" viewBox="0 0 24 24" width="18" height="18">
                 <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z" />
               </svg>
@@ -380,8 +355,8 @@
             <div class="send-split-divider" />
             <button
               type="button"
-              :disabled="!canSubmit || (!canQueue && !autoQueue && !canCompact)"
-              :class="`send-split-chevron${canQueue || autoQueue || canCompact ? '' : ' send-split-chevron-inactive'}`"
+              :disabled="!canSubmit || !canQueue"
+              :class="`send-split-chevron${canQueue ? '' : ' send-split-chevron-inactive'}`"
               aria-label="Send options"
               data-testid="send-options-button"
               @click="showQueueMenu = !showQueueMenu"
@@ -390,58 +365,14 @@
                 <path d="M7 10l5 5 5-5z" />
               </svg>
             </button>
-            <div v-if="showQueueMenu && (canQueue || autoQueue || canCompact)" class="queue-menu">
+            <div v-if="showQueueMenu && canQueue" class="queue-menu">
               <button
-                v-if="preferCompactAndSend"
-                type="button"
-                class="queue-menu-item"
-                data-testid="send-option"
-                @click="handleSelectSend"
-              >
-                <svg fill="currentColor" viewBox="0 0 24 24" width="16" height="16">
-                  <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z" />
-                </svg>
-                Send
-              </button>
-              <button
-                v-if="canQueue || autoQueue"
                 type="button"
                 class="queue-menu-item"
                 data-testid="queue-option"
-                @click="autoQueue ? handleSendNow() : handleQueueMessage()"
+                @click="handleQueueMessage()"
               >
-                <!-- During distill (autoQueue=true), main button queues, dropdown offers "send now" -->
-                <template v-if="autoQueue">
-                  <svg fill="currentColor" viewBox="0 0 24 24" width="16" height="16">
-                    <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z" />
-                  </svg>
-                  Send now
-                </template>
                 <!-- Clock icon — "queue for later" -->
-                <template v-else>
-                  <svg
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    viewBox="0 0 24 24"
-                    width="16"
-                    height="16"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
-                  Queue after agent finishes
-                </template>
-              </button>
-              <!-- Compact the conversation, then queue this message to run once
-                   compaction finishes. -->
-              <button
-                v-if="canCompact && !preferCompactAndSend"
-                type="button"
-                class="queue-menu-item"
-                data-testid="compact-and-send-option"
-                @click="handleCompactAndSend"
-              >
                 <svg
                   fill="none"
                   stroke="currentColor"
@@ -450,15 +381,10 @@
                   width="16"
                   height="16"
                 >
-                  <polyline points="4 14 10 14 10 20" />
-                  <polyline points="20 10 14 10 14 4" />
-                  <line x1="14" y1="10" x2="21" y2="3" />
-                  <line x1="3" y1="21" x2="10" y2="14" />
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
                 </svg>
-                Compact and send
-                <span class="overflow-menu-shortcut"
-                  ><kbd>{{ compactSendShortcut }}</kbd></span
-                >
+                Queue after agent finishes
               </button>
             </div>
           </div>
@@ -490,20 +416,13 @@ import { useFileCompletion } from "../composables/fileCompletion";
 import { useI18n } from "../composables/i18n";
 import { pickPlaceholderHint } from "../../utils/placeholderHints";
 import HighlightedText from "./HighlightedText.vue";
-import type { ContextUsageLevel } from "../../utils/contextUsage";
 import { SLASH_COMMANDS, slashCommandsForConversation } from "../../utils/slashCommands";
-import {
-  composerDispatch,
-  composerSessionID,
-  guardComposerClear,
-  type ComposerSubmissionIntent,
-} from "./composerDispatch";
+import { composerDispatch, composerSessionID, guardComposerClear } from "./composerDispatch";
 import { isImeComposing } from "../../utils/imeComposing";
 import RecordButton from "./RecordButton.vue";
 import RecordingPanel from "./RecordingPanel.vue";
 import type { RecordingDestination, RecordingMode, RecordingPreparation } from "./recordingDestination";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
-import { isMac } from "../../utils/menuShortcuts";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,
@@ -539,20 +458,10 @@ const props = withDefaults(
     recordingInlineAvailable?: boolean;
     /** Async queue handler (awaited). Mirrors React's onQueue prop. */
     onQueue?: (message: string) => Promise<void> | void;
-    /** Async compact-and-queue handler (awaited). When provided, the
-     * send-options menu offers "Compact and send": it compacts the
-     * conversation and then queues the composed message so it runs once
-     * compaction finishes. One handler, so the parent can pin both halves to
-     * the same conversation even if the user navigates away mid-compaction. */
-    onCompactAndQueue?: (message: string) => Promise<void> | void;
     /** Show the split send button with queue chevron (e.g. when in a conversation) */
     showQueueOption?: boolean;
     /** Whether queuing is available right now (agent is working) */
     canQueue?: boolean;
-    /** Auto-queue instead of sending (e.g. when distilling) */
-    autoQueue?: boolean;
-    /** Context usage level; "" means plain Send. */
-    compactSendLevel?: ContextUsageLevel;
     disabled?: boolean;
     autoFocus?: boolean;
     injectedText?: string;
@@ -585,8 +494,6 @@ const props = withDefaults(
     voiceActive: false,
     showQueueOption: false,
     canQueue: false,
-    autoQueue: false,
-    compactSendLevel: "",
     disabled: false,
     autoFocus: false,
     initialRows: 1,
@@ -608,10 +515,6 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const hasQueueHandler = computed(() => props.onQueue !== undefined);
-// The "Compact and send" option is available whenever a compaction handler is
-// wired and we're not already mid-compaction (autoQueue signals distilling).
-const canCompact = computed(() => props.onCompactAndQueue !== undefined && !props.autoQueue);
-const sendSelectedLevel = ref<ContextUsageLevel>("");
 
 const message = ref(props.draftSeed?.value ?? "");
 type RecordingSubmission = {
@@ -856,9 +759,9 @@ watch(showQueueMenu, (open) => {
 
 // Close queue menu when queueing becomes unavailable
 watch(
-  () => [props.canQueue, props.autoQueue] as const,
-  ([cq, aq]) => {
-    if (!cq && !aq) showQueueMenu.value = false;
+  () => props.canQueue,
+  (cq) => {
+    if (!cq) showQueueMenu.value = false;
   },
 );
 
@@ -1052,35 +955,9 @@ const canSubmit = computed(
 );
 const isDraggingOver = computed(() => dragCounter.value > 0);
 const isShellMode = computed(() => message.value.trimStart().startsWith("!"));
-const isCommand = computed(() => /^[!/]/.test(message.value.trimStart()));
-// Compact-and-send never applies to commands.
-const canCompactAndSend = computed(() => canCompact.value && !isCommand.value);
-const preferCompactAndSend = computed(
-  () =>
-    canCompactAndSend.value &&
-    props.compactSendLevel !== "" &&
-    sendSelectedLevel.value !== props.compactSendLevel,
-);
-
-// Mod+Enter (⌘ on mac, Ctrl elsewhere) and mod+click on Send both compact and
-// send. While the mod is held the send button previews that, so track it from
-// every key event's modifier state (not e.key: Meta keyup reports metaKey=false
-// already, and the mod may be released while another key has focus).
-const modHeld = ref(false);
-const compactSendShortcut = isMac ? "\u2318\u21a9" : "Ctrl+Enter";
-function isModEvent(e: KeyboardEvent | MouseEvent) {
+function isModEvent(e: KeyboardEvent) {
   return e.metaKey || e.ctrlKey;
 }
-function trackMod(e: KeyboardEvent) {
-  modHeld.value = isModEvent(e);
-}
-function clearMod() {
-  modHeld.value = false;
-}
-// What the send button will do right now: threshold-driven or mod-held.
-const compactSendArmed = computed(
-  () => preferCompactAndSend.value || (modHeld.value && canCompactAndSend.value),
-);
 
 // --- @ filename autocomplete --------------------------------------------
 const fileMenuId = useId();
@@ -1331,44 +1208,11 @@ watch(composerSession, () => {
   submissionGeneration++;
   submitting.value = false;
 });
-watch([composerSession, () => props.compactSendLevel], () => {
-  sendSelectedLevel.value = "";
-});
-
-// Mod+click on the send button compacts and sends; the form submit event
-// carries no modifier state, so intercept the click.
-function handleSendClick(e: MouseEvent) {
-  if (!isModEvent(e) || !canCompactAndSend.value || !canSubmit.value) return;
-  e.preventDefault();
-  void handleCompactAndSend();
-}
 
 async function handleSubmit(e: Event) {
   e.preventDefault();
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
     if (openTerminalIfRequested(composerDispatch(message.value))) return;
-
-    if (preferCompactAndSend.value) {
-      await handleCompactAndSend();
-      return;
-    }
-
-    // Auto-queue when distilling or when explicitly requested.
-    const intent: ComposerSubmissionIntent = props.autoQueue ? "auto-queue" : "send";
-    const dispatch = composerDispatch(message.value, { intent });
-    if (dispatch.route === "queue" && props.onQueue) {
-      const messageToQueue = composeMessageWithAttachments(message.value).trim();
-      const origin = composerOrigin();
-      setMessage("");
-      clearAttachments();
-      emit("draft-cleared");
-      try {
-        await props.onQueue(messageToQueue);
-      } catch {
-        guardComposerClear(origin, composerOrigin, () => setMessage(messageToQueue));
-      }
-      return;
-    }
 
     const messageToSend = composeMessageWithAttachments(message.value);
     const attachmentSession = activeAttachmentSession;
@@ -1415,36 +1259,7 @@ async function handleQueueMessage() {
   }
 }
 
-async function handleSelectSend() {
-  sendSelectedLevel.value = props.compactSendLevel;
-  await handleSendNow();
-}
-
-/** Compact the conversation, then queue the composed message so it runs once
- * compaction completes. Kicks off compaction and queues in one gesture. */
-async function handleCompactAndSend() {
-  const dispatch = composerDispatch(message.value, { intent: "compact-and-send" });
-  if (openTerminalIfRequested(dispatch)) return;
-  if (dispatch.route === "btw") {
-    await handleSendNow();
-    return;
-  }
-  if (hasContent.value && props.onCompactAndQueue) {
-    const messageToQueue = composeMessageWithAttachments(message.value).trim();
-    const origin = composerOrigin();
-    setMessage("");
-    clearAttachments();
-    emit("draft-cleared");
-    showQueueMenu.value = false;
-    try {
-      await props.onCompactAndQueue(messageToQueue);
-    } catch {
-      guardComposerClear(origin, composerOrigin, () => setMessage(messageToQueue));
-    }
-  }
-}
-
-/** Send now (bypass auto-queue) — used from the dropdown during distill mode */
+/** Send immediately — used when a /btw is picked from the queue option. */
 async function handleSendNow() {
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
     const dispatch = composerDispatch(message.value, { intent: "send-now" });
@@ -1589,11 +1404,6 @@ function handleKeyDown(e: KeyboardEvent) {
     return;
   }
   if (e.key === "Enter" && !e.shiftKey) {
-    if (isModEvent(e) && canCompactAndSend.value) {
-      e.preventDefault();
-      if (canSubmit.value) void handleCompactAndSend();
-      return;
-    }
     // On mobile, let Enter create newlines since there's a send button.
     const isMobile = "ontouchstart" in window;
     if (isMobile && !isModEvent(e)) return;
@@ -1626,9 +1436,6 @@ function handleViewportResize() {
 
 onMounted(() => {
   window.addEventListener("resize", handleResize);
-  window.addEventListener("keydown", trackMod);
-  window.addEventListener("keyup", trackMod);
-  window.addEventListener("blur", clearMod);
   if (typeof window !== "undefined" && window.visualViewport) {
     window.visualViewport.addEventListener("resize", handleViewportResize);
   }
@@ -1641,9 +1448,6 @@ onUnmounted(() => {
   recordingSubmission.value?.preparation.release();
   recordingSubmission.value = null;
   window.removeEventListener("resize", handleResize);
-  window.removeEventListener("keydown", trackMod);
-  window.removeEventListener("keyup", trackMod);
-  window.removeEventListener("blur", clearMod);
   if (typeof window !== "undefined" && window.visualViewport) {
     window.visualViewport.removeEventListener("resize", handleViewportResize);
   }

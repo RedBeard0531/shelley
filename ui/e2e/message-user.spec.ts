@@ -4,7 +4,12 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createConversationViaAPIWithDetails, makePNG, withTempDir } from "./helpers";
+import {
+  createConversationViaAPIWithDetails,
+  makePNG,
+  seedLegacyCompaction,
+  withTempDir,
+} from "./helpers";
 
 // Send a message and wait for the predictable model's turn to end.
 async function chat(request: APIRequestContext, conversationId: string, message: string) {
@@ -139,7 +144,7 @@ test("message_user conversations show the chat", async ({ page, request }) => {
   await expect(viewOptions.getByRole("button", { name: "See Chat Only" })).toHaveCount(0);
 });
 
-// After a compaction, a fork has only the carried copies of the user's
+// After a (legacy) compaction, a fork has only the carried copies of the user's
 // messages: calls made before still find them, new calls can target them, and
 // jumping to one expands the band it is collapsed behind.
 test("message_user targets survive compaction and forks", async ({ page, request }) => {
@@ -162,23 +167,7 @@ test("message_user targets survive compaction and forks", async ({ page, request
     conversationId,
     messageUser({ text: "Looking now.", reply_to: firstSeq, reaction: "👀" }),
   );
-  const compact = await request.post("/api/conversations/distill-new-generation", {
-    data: { source_conversation_id: conversationId, model: "predictable", method: "compact" },
-  });
-  expect(compact.ok()).toBeTruthy();
-  await expect
-    .poll(
-      async () => {
-        const { messages } = await (
-          await request.get(`/api/conversation/${conversationId}`)
-        ).json();
-        return messages.some((m: { user_data?: string }) =>
-          m.user_data?.includes("compaction_carried"),
-        );
-      },
-      { timeout: 30000 },
-    )
-    .toBe(true);
+  seedLegacyCompaction(conversationId);
 
   const forkOf = async () => {
     const resp = await request.post(`/api/conversation/${conversationId}/fork`, { data: {} });

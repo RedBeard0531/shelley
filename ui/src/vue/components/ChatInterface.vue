@@ -1,6 +1,6 @@
 <!-- Vue port of components/ChatInterface.tsx. The main chat shell: message
      list (via Message.vue), streaming/tool-progress, composer, context-usage
-     bar, terminal/diff/git panels, model/thinking pickers, distill, TOC,
+     bar, terminal/diff/git panels, model/thinking pickers, compaction, TOC,
      scroll behavior. Preserves the e2e DOM/ARIA/CSS contract. -->
 <template>
   <div ref="chatRootRef" class="full-height flex flex-col" @click="onConversationLinkClick">
@@ -317,9 +317,7 @@
               v-else
               :queued="qm"
               :on-send-now="
-                conversationId && qm.id === queuedGhosts[0]?.id && !isDistilling
-                  ? sendQueuedMessageNow
-                  : undefined
+                conversationId && qm.id === queuedGhosts[0]?.id ? sendQueuedMessageNow : undefined
               "
               :send-now-pending="sendingQueuedNow === qm.id"
               :on-cancel="conversationId ? cancelQueuedMessage : undefined"
@@ -465,11 +463,8 @@
       :on-start-recording="prepareRecording"
       :recording-inline-available="!currentConversation?.archived"
       :on-queue="queueMessage"
-      :on-compact-and-queue="conversationId && onDistillNewGeneration ? compactAndQueue : undefined"
       :show-queue-option="!!conversationId"
       :can-queue="canQueue"
-      :auto-queue="autoQueue"
-      :compact-send-level="compactSendLevel"
       :disabled="sending || loading"
       :auto-focus="true"
       :injected-text="messageInputInjectedText"
@@ -666,7 +661,6 @@ import {
   type SettingsChange,
   type ConversationSettings,
   isDistillStatusMessage,
-  distillStatus,
   parseQueuedMessages,
   queuedMessageText,
   queuedMessageRestoreText,
@@ -712,7 +706,6 @@ import {
   type SettingsKnob,
 } from "../composables/profiles";
 import { useDraftAutosave } from "../composables/draftAutosave";
-import { useFeatureFlag } from "../composables/featureFlags";
 import { useVersionChecker } from "../composables/versionChecker";
 import { provideToolProgress } from "../composables/toolProgress";
 import { closeImageComment, useImageCommentTarget } from "../composables/imageComment";
@@ -743,7 +736,6 @@ import {
   subscribeCommitTourStatus,
   type CommitTourRequest,
 } from "../../services/commitTourStatus";
-import { contextUsageLevel } from "../../utils/contextUsage";
 import {
   btwAnchor,
   btwExchangesByAnchor,
@@ -845,13 +837,6 @@ const props = withDefaults(
       cwd?: string,
       conversationOptions?: ChatRequest["conversation_options"],
     ) => Promise<void>;
-    onDistillNewGeneration?: (
-      sourceConversationId: string,
-      model: string,
-      cwd?: string,
-      method?: "default" | "compact",
-      instructions?: string,
-    ) => Promise<void>;
     mostRecentCwd?: string | null;
     isDrawerCollapsed?: boolean;
     onToggleDrawerCollapse?: () => void;
@@ -936,7 +921,6 @@ watch(conversationViewMode, () => {
   expandedCarriedBands.clear();
   primeTailFirstMount();
 });
-const compactSendThresholdsEnabled = useFeatureFlag("compact-send-thresholds");
 const {
   hasUpdate,
   versionInfo,
@@ -2056,23 +2040,6 @@ function loadScroll(): number | null {
 }
 
 // ---- derived ----
-// Distilling = an in_progress distill status message exists with no later
-// terminal (complete/error) one. Status messages are immutable, so a finished
-// distillation appends a second terminal message rather than mutating the
-// in_progress one.
-const isDistilling = computed(() => {
-  let inProgress = false;
-  for (const m of messages.value) {
-    const status = distillStatus(m);
-    if (status === "in_progress") {
-      inProgress = true;
-    } else if (status === "complete" || status === "error") {
-      inProgress = false;
-    }
-  }
-  return inProgress;
-});
-
 const conversationInterrupted = computed(() => {
   const conversation = props.currentConversation;
   return (
@@ -2087,11 +2054,6 @@ const selectedModelInfo = computed(() => models.value.find((m) => m.id === selec
 // 0 when the model's context window is unknown: the readout then shows the
 // count alone rather than a made-up denominator.
 const maxContextTokens = computed(() => selectedModelInfo.value?.max_context_tokens || 0);
-const compactSendLevel = computed(() => {
-  if (!compactSendThresholdsEnabled.value) return "";
-  const level = contextUsageLevel(contextWindowSize.value, maxContextTokens.value);
-  return level === "warn" ? "" : level;
-});
 
 // Content type constants mirror llm/llm.go.
 const LLM_TYPE_TEXT = 2;
@@ -3845,13 +3807,14 @@ async function sendMessage(message: string) {
     }
     return;
   }
-  // /compact and its legacy alias /distill both run compaction.
-  for (const cmd of [SLASH_COMMANDS.COMPACT.command, SLASH_COMMANDS.DISTILL.command]) {
-    if (trimmedMessage === cmd || trimmedMessage.startsWith(`${cmd} `)) {
-      const instructions = trimmedMessage.slice(cmd.length).trim();
-      await handleDistillCompactNewGeneration(instructions || undefined);
-      return;
-    }
+  // /compact [instructions] asks the agent to compact its context in place.
+  if (
+    trimmedMessage === SLASH_COMMANDS.COMPACT.command ||
+    trimmedMessage.startsWith(`${SLASH_COMMANDS.COMPACT.command} `)
+  ) {
+    const instructions = trimmedMessage.slice(SLASH_COMMANDS.COMPACT.command.length).trim();
+    await handleCompactInPlace(instructions || undefined);
+    return;
   }
   if (
     trimmedMessage === SLASH_COMMANDS.NEW.command ||
@@ -3986,34 +3949,12 @@ async function handleCancel() {
   }
 }
 
-async function handleDistillCompactNewGeneration(instructions?: string) {
-  if (!props.conversationId || !props.onDistillNewGeneration) return;
-  await props.onDistillNewGeneration(
-    props.conversationId,
-    selectedModel.value,
-    props.currentConversation?.cwd || selectedCwd.value || undefined,
-    "compact",
-    instructions,
-  );
-}
-
-/** Compact, then queue `message` behind the compaction (queued messages drain
- * once distillation ends). The user may switch conversations while the
- * compaction request is in flight, so pin the queue to the conversation and
- * model that were active when they clicked. */
-async function compactAndQueue(message: string) {
-  const conversationId = props.conversationId;
-  if (!conversationId || !props.onDistillNewGeneration) return;
-  const model = selectedModel.value;
-  const cwd = props.currentConversation?.cwd || selectedCwd.value || undefined;
-  await props.onDistillNewGeneration(conversationId, model, cwd, "compact");
-  await queueMessageTo(conversationId, model, message);
-}
-
-/** Asks the agent to compact its context in place. A conversation started
- * without the compact_in_place tool gets it first; the server refuses that
- * mid-turn (compactInPlaceBusy keeps the button disabled then). */
-async function handleCompactInPlace() {
+/** Asks the agent to compact its context in place, with optional extra
+ * instructions (from /compact <instructions>) appended after a blank line.
+ * A conversation started without the compact_in_place tool gets it first;
+ * the server refuses that mid-turn (compactInPlaceBusy keeps the button
+ * disabled then). */
+async function handleCompactInPlace(instructions?: string) {
   const conversationId = props.conversationId;
   if (!conversationId) return;
   if (!compactInPlaceEnabled.value) {
@@ -4031,7 +3972,9 @@ async function handleCompactInPlace() {
     props.onConversationUpdate?.(enabled);
     if (props.conversationId !== conversationId) return;
   }
-  await sendMessage(COMPACT_IN_PLACE_REQUEST);
+  await sendMessage(
+    instructions ? `${COMPACT_IN_PLACE_REQUEST}\n\n${instructions}` : COMPACT_IN_PLACE_REQUEST,
+  );
 }
 
 async function handleStartNewGeneration() {
@@ -4369,7 +4312,6 @@ const messageInputInitialRows = computed(() =>
   props.conversationId && !props.currentConversation?.is_draft ? 1 : 3,
 );
 const canQueue = computed(() => agentWorking.value && !!props.conversationId);
-const autoQueue = computed(() => isDistilling.value && !!props.conversationId);
 
 const tocTargetId = useId();
 
@@ -4396,11 +4338,6 @@ const statusBarClass = computed(
     `status-bar${props.currentConversation?.archived ? " status-bar-archived" : ""}${
       conversationInterrupted.value ? " status-bar-interrupted" : ""
     }${!props.conversationId || props.currentConversation?.is_draft ? " status-bar-new" : ""}`,
-);
-
-// compact callback for the context bar (only when handler available)
-const contextBarDistill = computed(() =>
-  props.onDistillNewGeneration ? () => handleDistillCompactNewGeneration() : undefined,
 );
 
 function setDiffCommentText(text: string) {
@@ -4486,9 +4423,7 @@ const statusContentProps = computed(() => {
     onClearError: () => (error.value = null),
     onCancel: handleCancel,
     onResumeInterrupted: handleResumeInterrupted,
-    onDistillNewGeneration: contextBarDistill.value,
-    onStartNewGeneration: handleStartNewGeneration,
-    onCompactInPlace: handleCompactInPlace,
+    onCompactInPlace: () => handleCompactInPlace(),
     compactInPlaceBusy: agentWorking.value && !compactInPlaceEnabled.value,
     onSelectModel: setSelectedModel,
     onSelectCombination: setSelectedCombination,

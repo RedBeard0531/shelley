@@ -3679,10 +3679,6 @@ diffs-container {
   transition: background-color 0.2s;
 }
 
-.send-split-btn-queue {
-  background: var(--orange-500, #f97316);
-}
-
 .send-split-main {
   display: flex;
   align-items: center;
@@ -3712,10 +3708,6 @@ diffs-container {
 
 .send-split-main svg {
   transform: rotate(-90deg);
-}
-
-.send-split-main .compact-send-icon {
-  transform: none;
 }
 
 .send-split-divider {
@@ -14909,34 +14901,6 @@ kbd {
   letter-spacing: 0.01em;
 }
 
-.distillation-edit-button {
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  background: var(--bg-base);
-  color: var(--blue-text);
-  cursor: pointer;
-  font-size: var(--font-size-12);
-  font-weight: 600;
-  padding: 0.25rem 0.625rem;
-}
-
-.distillation-edit-button:hover {
-  background: var(--bg-hover);
-}
-
-.distillation-file-box-meta {
-  padding: 0 0.875rem 0.75rem;
-  color: var(--text-secondary);
-  font-size: var(--font-size-12);
-}
-
-.distillation-file-box-meta code {
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-12);
-  overflow-wrap: anywhere;
-}
-
 .distillation-file-box-content {
   max-height: 50vh;
   overflow: auto;
@@ -14971,16 +14935,6 @@ kbd {
 
   .distillation-file-box-title {
     font-size: var(--font-size-14);
-  }
-
-  .distillation-edit-button {
-    font-size: var(--font-size-13);
-    padding: 0.35rem 0.8rem;
-  }
-
-  .distillation-file-box-meta,
-  .distillation-file-box-meta code {
-    font-size: var(--font-size-13);
   }
 }
 

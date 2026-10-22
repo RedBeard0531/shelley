@@ -112,7 +112,7 @@ type ConversationManager struct {
 	// assigned to each partial stream delta broadcast to clients (see
 	// streamFlusher). It lives on the manager rather than the per-loop
 	// streamFlusher so the sequence keeps increasing across loop resets
-	// (distillation, cancellation, model changes, new generations) within
+	// (cancellation, model changes, new generations) within
 	// the same conversation. Clients use it to detect dropped or
 	// out-of-order partial updates.
 	streamDeltaSeq atomic.Int64
@@ -155,18 +155,10 @@ type ConversationManager struct {
 	cacheWarmModelID  string
 	cacheWarmRevision uint64
 
-	// distilling is true while a distillation goroutine is inserting content
-	// into this conversation. When true, queued messages should NOT be drained
-	// immediately — they must wait until distillation finishes.
-	distilling bool
 	// changingSettings holds queued messages back, from both the drain and
 	// the running turn, while ApplySettings interrupts the turn, so they go
 	// out on the new settings.
 	changingSettings bool
-	// distillSetupDone is non-nil while generation setup is creating the first
-	// status/system messages. QueueMessage waits on it so user messages cannot
-	// appear before the distillation status.
-	distillSetupDone chan struct{}
 
 	// draining is true while a drainPendingMessages owner is in flight. A
 	// concurrent caller records drainRequested and returns the owner's drainDone
@@ -458,65 +450,6 @@ func (cm *ConversationManager) IsAgentWorking() bool {
 	return cm.agentWorking
 }
 
-// SetDistilling marks the conversation as distilling. While true, queued
-// messages will not be drained immediately — they wait for distillation to
-// complete and the caller to invoke drainPendingMessages.
-func (cm *ConversationManager) SetDistilling(distilling bool) {
-	cm.mu.Lock()
-	cm.distilling = distilling
-	setupDone := cm.distillSetupDone
-	if !distilling {
-		cm.distillSetupDone = nil
-	}
-	cm.mu.Unlock()
-	if !distilling && setupDone != nil {
-		close(setupDone)
-	}
-}
-
-// BeginDistillingSetup marks the conversation as distilling and reports
-// whether it acquired the distilling state. It returns false when a
-// distillation is already in flight, so callers can reject concurrent
-// attempts (overlapping compactions would race on the generation counter).
-func (cm *ConversationManager) BeginDistillingSetup() bool {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	if cm.distilling {
-		return false
-	}
-	cm.cancelIdleCompactionLocked()
-	cm.distilling = true
-	if cm.distillSetupDone == nil {
-		cm.distillSetupDone = make(chan struct{})
-	}
-	return true
-}
-
-func (cm *ConversationManager) FinishDistillingSetup() {
-	cm.mu.Lock()
-	setupDone := cm.distillSetupDone
-	cm.distillSetupDone = nil
-	cm.mu.Unlock()
-	if setupDone != nil {
-		close(setupDone)
-	}
-}
-
-func (cm *ConversationManager) IsDistilling() bool {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	return cm.distilling
-}
-
-func (cm *ConversationManager) waitDistillingSetup() {
-	cm.mu.Lock()
-	setupDone := cm.distillSetupDone
-	cm.mu.Unlock()
-	if setupDone != nil {
-		<-setupDone
-	}
-}
-
 // GetModel returns the model ID used by this conversation.
 func (cm *ConversationManager) GetModel() string {
 	cm.mu.Lock()
@@ -527,7 +460,7 @@ func (cm *ConversationManager) GetModel() string {
 // Hydrate loads conversation metadata from the database and generates a system
 // prompt if one doesn't exist yet. It does NOT cache the message history;
 // ensureLoop reads messages fresh from the DB when creating a loop so that
-// any messages added asynchronously (e.g. distillation) are always included.
+// any messages added asynchronously are always included.
 func (cm *ConversationManager) Hydrate(ctx context.Context) error {
 	cm.mu.Lock()
 	if cm.hydrated {
@@ -755,10 +688,9 @@ func (cm *ConversationManager) rejectTurnStart(keepWorking bool) {
 	}
 	cm.SetAgentWorking(false)
 	cm.mu.Lock()
-	needsDrain := !cm.distilling
 	onRejected := cm.onTurnStartRejected
 	cm.mu.Unlock()
-	if needsDrain && onRejected != nil {
+	if onRejected != nil {
 		onRejected()
 	}
 }
@@ -1182,7 +1114,6 @@ func (cm *ConversationManager) HasQueuedMessages(ctx context.Context) (bool, err
 // it deliverable.
 func (cm *ConversationManager) QueueTranscription(ctx context.Context, s *Server, qm db.QueuedMessage) (db.QueuedMessage, error) {
 	cm.cancelIdleCompaction()
-	cm.waitDistillingSetup()
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
 	cm.waitForLoopTeardownLocked()
@@ -1196,11 +1127,11 @@ func (cm *ConversationManager) QueueTranscription(ctx context.Context, s *Server
 	return queued, nil
 }
 
-// drainQueueIfIdle starts the queue drainer unless a running turn or
-// distillation will start it when it ends.
+// drainQueueIfIdle starts the queue drainer unless a running turn will start
+// it when it ends.
 func (cm *ConversationManager) drainQueueIfIdle(s *Server) {
 	cm.mu.Lock()
-	needsDrain := !cm.agentWorking && !cm.distilling
+	needsDrain := !cm.agentWorking
 	cm.mu.Unlock()
 	if needsDrain {
 		go cm.drainPendingMessages(s)
@@ -1257,7 +1188,7 @@ func (cm *ConversationManager) recoverFailedUpgradeResume(ctx context.Context, r
 
 // QueueMessage appends a user message to the conversation's queued_messages
 // JSON array (the single source of truth for queued user input) and holds it
-// for delivery after the current agent turn (or distillation) completes. It
+// for delivery after the current agent turn completes. It
 // does NOT create a messages row — the message becomes a real, immutable row
 // only when it drains. The append bumps updated_at, which re-sorts the
 // conversation and fires the conversation-list patch + per-conversation
@@ -1274,7 +1205,6 @@ func (cm *ConversationManager) InjectMessage(ctx context.Context, s *Server, mod
 
 func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, modelID string, message llm.Message, midTurn bool) error {
 	cm.cancelIdleCompaction()
-	cm.waitDistillingSetup()
 
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
@@ -1339,17 +1269,12 @@ func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, mode
 // record fails stays queued for the turn-end drain; one the user removed from
 // the queue meanwhile is skipped.
 //
-// While distilling or cancelling, injection is skipped entirely (the
-// conversation is being rewritten / the user is taking over); distillation
-// leaves the messages queued for the post-distillation drain, cancellation
-// clears them. The distilling/cancelling check and the record below are not
-// atomic — a distillation or cancel can start in between — but that
-// check-then-act window is the same one drainPendingMessages already has.
-// Consequences: on cancel, a validly-paired notification lands moments after
-// the cutoff; on distillation, the messages may be recorded into the OLD
-// generation after the compaction snapshot was taken and thus be absent from
-// the new generation's context (visible in the transcript, not re-fed) — an
-// accepted, pre-existing loss mode of the drain path too.
+// While cancelling or changing settings, injection is skipped entirely (the
+// user is taking over); cancellation clears the messages, a settings change
+// leaves them queued for its drain. The check and the record below are not
+// atomic — a cancel can start in between — but that check-then-act window is
+// the same one drainPendingMessages already has: a validly-paired
+// notification may land moments after the cutoff.
 func (cm *ConversationManager) takeInjectable(ctx context.Context, generation uint64, nudger *contextNudger) (loop.Injection, error) {
 	// This callback runs inside a loop goroutine. Never wait for an in-progress
 	// teardown here: cancellation is waiting for this goroutine to exit. Taking
@@ -1361,7 +1286,7 @@ func (cm *ConversationManager) takeInjectable(ctx context.Context, generation ui
 
 	cm.mu.Lock()
 	stale := cm.loopTearingDown || cm.loop == nil || cm.loopGeneration != generation ||
-		cm.distilling || cm.cancelling || cm.changingSettings
+		cm.cancelling || cm.changingSettings
 	compacted := !stale && cm.compactedGeneration == generation
 	if compacted {
 		cm.compactedGeneration = 0
@@ -1529,7 +1454,7 @@ func (s *Server) generateSlugAsync(conversationID, source, modelID string) {
 
 // drainPendingMessages feeds the conversation's durable queued_messages to
 // the loop in FIFO order. Must be called when agentWorking transitions to false
-// (and after SetDistilling(false), via runDistillNewGeneration's defer).
+// (and after a settings change releases changingSettings).
 func (cm *ConversationManager) drainPendingMessages(s *Server) <-chan struct{} {
 	owner, done := cm.beginPendingDrain()
 	if !owner {
@@ -1598,11 +1523,10 @@ func (cm *ConversationManager) drainPendingMessagesOwned(s *Server) {
 	cm.waitForLoopTeardownLocked()
 
 	for {
-		// Never feed the loop while distillation rewrites the conversation;
-		// runDistillNewGeneration drains again once SetDistilling(false)
-		// returns.
+		// Never feed the loop while ApplySettings holds the queue; it drains
+		// again when it is done.
 		cm.mu.Lock()
-		held := cm.distilling || cm.changingSettings
+		held := cm.changingSettings
 		cm.mu.Unlock()
 		if held {
 			return
@@ -2085,7 +2009,7 @@ func (cm *ConversationManager) contextItems(messages []generated.Message) ([]con
 }
 
 func (cm *ConversationManager) applyDistillationContentOverride(llmMsg *llm.Message, msg generated.Message) {
-	content, ok := resolveDistilledContent(cm.logger, msg)
+	content, ok := resolveDistilledContent(msg)
 	if !ok {
 		return
 	}
@@ -2282,7 +2206,7 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 	// Load conversation history fresh from the database. This is the canonical
 	// read — Hydrate only handles metadata and system prompt generation.
 	// Reading here ensures we always see messages added asynchronously
-	// (e.g. distillation results).
+	// (e.g. in-place compactions).
 	var dbMessages []generated.Message
 	err := database.Queries(context.Background(), func(q *generated.Queries) error {
 		var err error
@@ -2593,12 +2517,6 @@ func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
 // SendQueuedNow interrupts the active turn without clearing its durable queue,
 // then starts draining from the FIFO head.
 func (cm *ConversationManager) SendQueuedNow(ctx context.Context, s *Server, queuedID string) error {
-	cm.mu.Lock()
-	distilling := cm.distilling
-	cm.mu.Unlock()
-	if distilling {
-		return fmt.Errorf("cannot send queued message while compacting")
-	}
 	if err := cm.cancelConversation(ctx, false, queuedID); err != nil {
 		return err
 	}

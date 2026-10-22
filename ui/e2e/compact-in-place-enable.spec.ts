@@ -68,3 +68,20 @@ test("Compact in Place with the tool asks the agent", async ({ page, request }) 
   expect(enabled).toEqual([]);
   await expect(page.getByTestId("message-modelchange")).toHaveCount(0);
 });
+
+// /compact runs the same in-place request, with any instructions appended
+// after a blank line.
+test("/compact asks the agent with instructions", async ({ page, request }) => {
+  const { slug } = await createConversationViaAPIWithDetails(request, "echo: slash compact");
+  await page.goto(`/c/${slug}`);
+  const chat = page.waitForRequest(
+    (r) => r.method() === "POST" && /\/api\/conversation\/[^/]+\/chat$/.test(r.url()),
+  );
+  const input = page.getByTestId("message-input");
+  await input.fill("/compact keep the API notes");
+  await input.press("Enter");
+  expect((await chat).postDataJSON().message).toBe(
+    "Compact your context in place.\n\nkeep the API notes",
+  );
+  await expect(page.getByText("keep the API notes")).toBeVisible();
+});

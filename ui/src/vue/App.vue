@@ -70,7 +70,6 @@
           :on-message-sent="handleMessageSent"
           :on-first-message="handleFirstMessage"
           :on-draft-created="onDraftCreated"
-          :on-distill-new-generation="handleDistillNewGeneration"
           :most-recent-cwd="mostRecentCwd"
           :is-drawer-collapsed="drawerCollapsed"
           :on-toggle-drawer-collapse="toggleDrawerCollapsed"
@@ -875,24 +874,6 @@ async function handleFirstMessage(
   } catch (err) {
     console.error("Failed to send first message:", err);
     error.value = err instanceof Error ? err.message : "Failed to send message";
-    throw err;
-  }
-}
-
-async function handleDistillNewGeneration(
-  sourceConversationId: string,
-  model: string,
-  cwd?: string,
-  method?: "default" | "compact",
-  instructions?: string,
-) {
-  try {
-    // Compaction happens in place; don't touch currentConversationId here or
-    // a user who navigated away mid-request gets pulled back.
-    await api.distillNewGeneration(sourceConversationId, model, cwd, method, instructions);
-  } catch (err) {
-    console.error("Failed to compact into new generation:", err);
-    error.value = "Failed to compact conversation";
     throw err;
   }
 }

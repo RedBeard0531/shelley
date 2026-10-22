@@ -6,13 +6,7 @@ import {
   type ComposerSubmissionIntent,
 } from "./composerDispatch";
 
-const intents: ComposerSubmissionIntent[] = [
-  "send",
-  "send-now",
-  "queue",
-  "compact-and-send",
-  "auto-queue",
-];
+const intents: ComposerSubmissionIntent[] = ["send", "send-now", "queue"];
 for (const intent of intents) {
   for (const command of ["!", "/shell", " \n!\t", " /shell \n"]) {
     assert.deepEqual(
@@ -39,8 +33,6 @@ const routeCases: Array<
   ["ordinary", { intent: "send" }, "send"],
   ["ordinary", { intent: "send-now" }, "send"],
   ["ordinary", { intent: "queue" }, "queue"],
-  ["ordinary", { intent: "auto-queue" }, "queue"],
-  ["ordinary", { intent: "compact-and-send" }, "compact-and-send"],
   ["ordinary", {}, "send"],
   ["/clear", {}, "send"],
   ["!git status", {}, "send"],

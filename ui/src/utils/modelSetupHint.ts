@@ -169,7 +169,7 @@ const MODEL_FREE_PREFIX = ["/rename"];
 
 // needsModel reports whether sending this composer text requires a model.
 // Shell escapes ("!cmd") and the model-free commands above do not; everything
-// else — plain prompts, /new, /compact, /distill, /model — does.
+// else — plain prompts, /new, /compact, /model — does.
 export function needsModel(message: string): boolean {
   const trimmed = message.trim();
   if (trimmed.startsWith("!")) return false;

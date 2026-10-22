@@ -63,7 +63,7 @@ func (cm *ConversationManager) idleCompactionEnabledLocked() bool {
 }
 
 func (cm *ConversationManager) idleWorkBlockedLocked() bool {
-	return cm.agentWorking || cm.distilling || cm.cancelling || cm.loopTearingDown || cm.changingSettings
+	return cm.agentWorking || cm.cancelling || cm.loopTearingDown || cm.changingSettings
 }
 
 // scheduleIdleWork arms the idle policies after a successful turn: one

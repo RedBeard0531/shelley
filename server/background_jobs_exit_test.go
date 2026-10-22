@@ -89,15 +89,15 @@ func TestBackgroundJobExitDoesNotWaitForConversation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				gate := make(chan struct{})
+				// Hold the queue, as ApplySettings does, so delivery waits.
 				cm.mu.Lock()
-				cm.distillSetupDone = gate
+				cm.changingSettings = true
 				cm.mu.Unlock()
 				release := func() {
 					cm.mu.Lock()
-					cm.distillSetupDone = nil
+					cm.changingSettings = false
 					cm.mu.Unlock()
-					close(gate)
+					cm.drainQueueIfIdle(s)
 				}
 				defer func() {
 					if release != nil {

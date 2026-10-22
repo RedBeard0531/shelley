@@ -1,13 +1,8 @@
-export type ComposerSubmissionIntent =
-  | "send"
-  | "send-now"
-  | "queue"
-  | "compact-and-send"
-  | "auto-queue";
+export type ComposerSubmissionIntent = "send" | "send-now" | "queue";
 
 export type ComposerDispatch =
   | { route: "btw"; question: string }
-  | { route: "send" | "queue" | "compact-and-send" | "btw-blocked" | "terminal" };
+  | { route: "send" | "queue" | "btw-blocked" | "terminal" };
 
 interface ComposerDispatchOptions {
   intent?: ComposerSubmissionIntent;
@@ -32,8 +27,7 @@ export function composerDispatch(
   }
 
   const intent = options.intent ?? "send";
-  if (intent === "queue" || intent === "auto-queue") return { route: "queue" };
-  if (intent === "compact-and-send") return { route: "compact-and-send" };
+  if (intent === "queue") return { route: "queue" };
   return { route: "send" };
 }
 

@@ -223,7 +223,7 @@ async function openQueuedConversation(
   page: Page,
   request: APIRequestContext,
   queued: QueuedMessageFixture[],
-  distilling = false,
+  legacyCompacting = false,
 ): Promise<string> {
   const { conversationId, slug } = await createConversationViaAPIWithDetails(
     request,
@@ -253,7 +253,8 @@ async function openQueuedConversation(
       messages?: Array<Record<string, unknown>>;
     };
     if (body.conversation) body.conversation.queued_messages = JSON.stringify(queued);
-    if (distilling) {
+    if (legacyCompacting) {
+      // A distill_status row left by the old generation-based compaction.
       body.messages = [
         ...(body.messages ?? []),
         {
@@ -2416,7 +2417,7 @@ test.describe("media recording composer", () => {
     await expect(items.nth(3)).toContainText("failed.webm");
   });
 
-  test("hides Send now on queued messages while compaction is in progress", async ({
+  test("legacy compaction status rows render without blocking queued messages", async ({
     page,
     request,
   }) => {
@@ -2429,7 +2430,7 @@ test.describe("media recording composer", () => {
 
     await expect(page.getByTestId("distill-in-progress")).toContainText("Compacting");
     await expect(page.getByTestId("queued-badge")).toBeVisible();
-    await expect(page.getByTestId("send-queued-now")).toHaveCount(0);
+    await expect(page.getByTestId("send-queued-now")).toHaveCount(1);
     await expect(page.getByTestId("cancel-queued")).toBeVisible();
   });
 

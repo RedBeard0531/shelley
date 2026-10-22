@@ -265,7 +265,7 @@ func extractEndOfTurn(raw string) (bool, bool) {
 // Messages without usage data (user messages, tool messages, etc.) are skipped.
 //
 // Only messages from the latest generation are considered: when a conversation
-// starts a new generation (e.g. via distill-new-generation), older generations'
+// starts a new generation (e.g. via /clear), older generations'
 // usage no longer reflects what will be sent to the LLM.
 func calculateContextWindowSize(messages []APIMessage) uint64 {
 	// Determine the latest generation present in the messages.
@@ -421,11 +421,10 @@ type Server struct {
 	// that invoke hooks via the server.
 	hooksDir string
 
-	// piDistillKeepRecentTokens overrides the recent-token budget (see
-	// keepRecentTokens). Zero means use defaultPiDistillSettings. Tests set it
-	// to force summarization, or a collapsible compact_in_place index, without
-	// a giant transcript.
-	piDistillKeepRecentTokens int
+	// keepRecentTokensOverride overrides the recent-token budget (see
+	// keepRecentTokens). Zero means defaultKeepRecentTokens. Tests set it to
+	// get a collapsible compact_in_place index without a giant transcript.
+	keepRecentTokensOverride int
 
 	// idleCompactionMinTokens overrides the context size below which idle
 	// compaction is not worth a turn (see idleCompactionMinTokens). Zero
@@ -552,9 +551,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.HandleFunc("GET /api/stream2", s.handleStream)
 	api.HandleFunc("POST /api/disk-space/dismiss", s.handleDismissDiskSpace)
 	api.Handle("GET /api/conversations/archived", compressionHandler(http.HandlerFunc(s.handleArchivedConversations)))
-	api.HandleFunc("POST /api/conversations/new", s.handleNewConversation)                         // Small response
-	api.HandleFunc("POST /api/conversations/draft", s.handleCreateDraft)                           // Small response
-	api.HandleFunc("POST /api/conversations/distill-new-generation", s.handleDistillNewGeneration) // Small response
+	api.HandleFunc("POST /api/conversations/new", s.handleNewConversation)                   // Small response
+	api.HandleFunc("POST /api/conversations/draft", s.handleCreateDraft)                     // Small response
+	api.HandleFunc("POST /api/conversations/distill-new-generation", s.handleCompactRequest) // Small response
 	s.registerConversationRoutes(api)
 	api.Handle("GET /api/conversation-by-slug/", compressionHandler(http.HandlerFunc(s.handleConversationBySlug)))
 	api.HandleFunc("GET /api/validate-cwd", s.handleValidateCwd) // Small response
@@ -1798,7 +1797,7 @@ func (s *Server) Cleanup() {
 		// turn. Queued work lives in the DB, so it does not pin a manager.
 		manager.mu.Lock()
 		lastActivity := manager.lastActivity
-		busy := manager.agentWorking || manager.distilling || manager.draining
+		busy := manager.agentWorking || manager.draining
 		manager.mu.Unlock()
 		if !busy && now.Sub(lastActivity) > 30*time.Minute {
 			toCleanup = append(toCleanup, manager)

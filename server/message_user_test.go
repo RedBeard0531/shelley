@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"testing/synctest"
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
@@ -247,94 +246,4 @@ func TestFindUserMessageBySequence(t *testing.T) {
 	if m, ok, err := f.FindUserMessageBySequence(ctx, 1<<62); err != nil || ok {
 		t.Fatalf("unknown sequence matched %q: %v", m.ID, err)
 	}
-}
-
-// After a compaction and a fork, which copies only the compacted generation,
-// FindUserMessageBySequence finds the copy of a typed message, under its original's
-// sequence_id, and not the carried squish summary nor a carried notice.
-func TestFindUserMessageAcrossCompactionAndFork(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		h := NewTestHarness(t)
-		defer stopActiveConversationLoops(h.server)
-		h.NewConversation("echo: ALPHA_TURN", "")
-		h.WaitResponse()
-		synctest.Wait()
-		h.Chat("echo: BETA_TURN")
-		h.WaitResponse()
-		synctest.Wait()
-		squishFirstTurn(t, h.server, h.db, h.convID, "SQUISHED_ALPHA")
-		ctx := t.Context()
-		if _, err := h.db.CreateMessage(ctx, db.CreateMessageParams{
-			ConversationID: h.convID,
-			Type:           db.MessageTypeUser,
-			LLMData:        llm.UserStringMessage("JOB_DONE"),
-			UserData:       map[string]any{"background_job_id": "job1", "command": "true"},
-		}); err != nil {
-			t.Fatal(err)
-		}
-		rows := compactGeneration(t, h)
-		if !strings.Contains(llmDataText(rows), "JOB_DONE") {
-			t.Fatal("the notice was not carried")
-		}
-
-		f := userMessageFinder{db: h.db, conversationID: h.convID}
-		var betaSeq int64
-		typed, err := h.db.ListTypedUserMessages(ctx, h.convID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, m := range typed {
-			if m.LlmData != nil && strings.Contains(*m.LlmData, "BETA_TURN") && m.UserData == nil {
-				betaSeq = m.SequenceID
-			}
-		}
-		if betaSeq == 0 {
-			t.Fatal("missing BETA user message")
-		}
-		beta, ok, err := f.FindUserMessageBySequence(ctx, betaSeq)
-		if err != nil || !ok {
-			t.Fatalf("FindUserMessageBySequence(BETA) = %v, %v", ok, err)
-		}
-		var note string
-		for _, m := range rows {
-			if m.UserData != nil && strings.Contains(*m.UserData, `"squish_note"`) {
-				msg, err := parseLLMData(m.LlmData)
-				if err != nil {
-					t.Fatal(err)
-				}
-				note = userMessageText(*msg)
-			}
-		}
-		if !strings.Contains(note, "SQUISHED_ALPHA") {
-			t.Fatal("no carried squish note")
-		}
-
-		latest, err := h.db.GetLatestActionableMessage(ctx, h.convID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fork, err := h.db.ForkConversation(ctx, h.convID, latest.SequenceID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, convID := range []string{h.convID, fork.ConversationID} {
-			f := userMessageFinder{db: h.db, conversationID: convID}
-			for _, row := range listMessages(t, h.db, convID) {
-				if row.UserData == nil || (!strings.Contains(*row.UserData, `"squish_note"`) && !strings.Contains(*row.UserData, `"background_job_id"`)) {
-					continue
-				}
-				if m, ok, err := f.FindUserMessageBySequence(ctx, row.SequenceID); ok || err != nil {
-					t.Errorf("%s: machine notice %d matched %s (err %v)", convID, row.SequenceID, m.ID, err)
-				}
-			}
-			m, ok, err := f.FindUserMessageBySequence(ctx, beta.SequenceID)
-			if err != nil || !ok {
-				t.Fatalf("%s: FindUserMessageBySequence(BETA) = %v, %v", convID, ok, err)
-			}
-			if m.SequenceID != beta.SequenceID || (convID == fork.ConversationID) == (m.ID == beta.ID) {
-				t.Errorf("%s: found %s at %d; original %s at %d", convID, m.ID, m.SequenceID, beta.ID, beta.SequenceID)
-			}
-		}
-	})
 }

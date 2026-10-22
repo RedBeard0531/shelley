@@ -20,7 +20,6 @@ func TestGenerateLoremConversation(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	ctx := t.Context()
 
-	// Use enough turns to trigger at least two compactions (compactEvery=40).
 	convID, err := server.generateLoremConversation(ctx, 100, "claude-opus-4-5")
 	if err != nil {
 		t.Fatalf("generateLoremConversation: %v", err)
@@ -89,54 +88,6 @@ func TestGenerateLoremConversation(t *testing.T) {
 	}
 	if toolUses == 0 {
 		t.Fatal("expected tool_use content blocks, found none")
-	}
-
-	// Compaction must have advanced the generation and produced compaction
-	// summaries + carried-forward messages spanning multiple generations.
-	conv, err := database.GetConversationByID(ctx, convID)
-	if err != nil {
-		t.Fatalf("GetConversationByID: %v", err)
-	}
-	if conv.CurrentGeneration < 3 {
-		t.Errorf("expected current_generation >= 3 after compactions, got %d", conv.CurrentGeneration)
-	}
-
-	msgs, err := database.ListMessages(ctx, convID)
-	if err != nil {
-		t.Fatalf("ListMessages: %v", err)
-	}
-	var distilled, carried, statusMsgs int
-	seenGenerations := map[int64]bool{}
-	for _, m := range msgs {
-		seenGenerations[m.Generation] = true
-		if m.UserData == nil {
-			continue
-		}
-		var ud map[string]string
-		if err := json.Unmarshal([]byte(*m.UserData), &ud); err != nil {
-			continue
-		}
-		if ud["distilled"] == "true" {
-			distilled++
-		}
-		if ud["compaction_carried"] == "true" {
-			carried++
-		}
-		if ud["distill_status"] != "" {
-			statusMsgs++
-		}
-	}
-	if distilled == 0 {
-		t.Error("expected compaction summary messages (distilled=true), found none")
-	}
-	if carried == 0 {
-		t.Error("expected carried-forward messages (compaction_carried=true), found none")
-	}
-	if statusMsgs == 0 {
-		t.Error("expected distill status messages, found none")
-	}
-	if len(seenGenerations) < 3 {
-		t.Errorf("expected messages spanning >=3 generations, saw %d", len(seenGenerations))
 	}
 }
 

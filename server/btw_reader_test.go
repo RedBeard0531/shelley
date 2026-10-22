@@ -347,41 +347,6 @@ func TestBtwClearSurvivesEvictionAndRemainsUsable(t *testing.T) {
 	releaseAndWaitIdle(t, server, reader.ConversationID, call)
 }
 
-func TestBtwCompactRecreatesPromptAndRemainsChattable(t *testing.T) {
-	server, database, held, parent := newBtwTest(t)
-	reader := postBtw(t, server, parent.ConversationID, "echo: before compact", false)
-	releaseAndWaitIdle(t, server, reader.ConversationID, held.waitCall(t, "echo: before compact"))
-	initialPrompt := btwSystemData(t, database, reader.ConversationID, 1)
-
-	body, err := json.Marshal(DistillNewGenerationRequest{
-		SourceConversationID: reader.ConversationID,
-		Model:                "predictable",
-		Method:               distillMethodCompact,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := httptest.NewRecorder()
-	server.handleDistillNewGeneration(w, httptest.NewRequest(
-		http.MethodPost, "/api/conversations/distill-new-generation", strings.NewReader(string(body)),
-	))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("compact status=%d body=%s", w.Code, w.Body.String())
-	}
-	if got := btwSystemData(t, database, reader.ConversationID, 2); got != initialPrompt {
-		t.Fatalf("compact changed reader system prompt:\nold=%s\nnew=%s", initialPrompt, got)
-	}
-
-	requireBtwStatus(t, postBtwChat(t, server, reader.ConversationID,
-		ChatRequest{Message: "echo: after compact", Model: "predictable"}), http.StatusAccepted)
-	call := held.waitCall(t, "echo: after compact")
-	if !requestHasText(call.request, btwReaderRestrictionPrompt) ||
-		!requestHasText(call.request, btwFrozenReferenceBegin) {
-		t.Fatalf("compacted request lost BTW restrictions: %#v", call.request)
-	}
-	releaseAndWaitIdle(t, server, reader.ConversationID, call)
-}
-
 func TestWedgedBtwReaderRecoversAfterServerReload(t *testing.T) {
 	server, database, held, parent := newBtwTest(t)
 	reader := postBtw(t, server, parent.ConversationID, "echo: before reload", false)

@@ -1,8 +1,10 @@
 import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { deflateSync } from "node:zlib";
 import { hermeticGitEnvironment } from "../scripts/git-test-env";
 
@@ -142,26 +144,6 @@ async function renameConversationForTest(
   expect(renameResp.ok()).toBeTruthy();
   const renamedConversation = await renameResp.json();
   return renamedConversation.slug || desiredSlug;
-}
-
-/**
- * Poll a conversation until it has a slug. This is used for distillation flows
- * where there is no end_of_turn marker to wait on.
- */
-export async function waitForConversationSlug(
-  request: APIRequestContext,
-  conversationId: string,
-  timeout = 30000,
-): Promise<string> {
-  let slug = "";
-  await expect(async () => {
-    const resp = await request.get(`/api/conversation/${conversationId}`);
-    expect(resp.ok()).toBeTruthy();
-    const body = await resp.json();
-    slug = body.conversation?.slug || "";
-    expect(slug).toBeTruthy();
-  }).toPass({ timeout });
-  return slug;
 }
 
 /**
@@ -391,4 +373,80 @@ export async function installServerLinks(page: Page, includeVM = true) {
     });
   }, links);
   return links;
+}
+
+/** Rewrites a conversation as the removed distill-into-new-generation flow
+ * left it: generation 2 holds status rows, the system prompt, a summary, and
+ * copies of generation 1's messages stamped compaction_carried. No API makes
+ * these rows any more, but existing databases still have them. The
+ * conversation's turn must have ended. */
+export function seedLegacyCompaction(conversationId: string): void {
+  const dbPath = process.env.TEST_SERVER_DB;
+  if (!dbPath) throw new Error("TEST_SERVER_DB is unset; needs global-setup's server");
+  const db = new DatabaseSync(dbPath, { timeout: 10000 });
+  try {
+    type Row = { message_id: string; sequence_id: number; type: string } & Record<string, unknown>;
+    const rows = db
+      .prepare(
+        "SELECT * FROM messages WHERE conversation_id = ? AND generation = 1 ORDER BY sequence_id",
+      )
+      .all(conversationId) as Row[];
+    let seq = rows[rows.length - 1].sequence_id;
+    const insert = db.prepare(
+      `INSERT INTO messages (message_id, conversation_id, sequence_id, type, llm_data, user_data,
+         display_data, usage_data, excluded_from_context, generation, model_name, user_email)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?, ?)`,
+    );
+    const add = (r: Partial<Row> & { type: string }, userData: object | null, excluded = 0) =>
+      insert.run(
+        randomUUID(),
+        conversationId,
+        ++seq,
+        r.type,
+        (r.llm_data as string) ?? null,
+        userData && JSON.stringify(userData),
+        (r.display_data as string) ?? null,
+        (r.usage_data as string) ?? null,
+        excluded,
+        (r.model_name as string) ?? null,
+        (r.user_email as string) ?? null,
+      );
+    const agentText = (text: string) =>
+      JSON.stringify({ Role: 1, Content: [{ Type: 2, Text: text }] });
+    const status = (s: string) => ({
+      distill_method: "compact",
+      distill_status: s,
+      new_generation: "true",
+    });
+    const summary = "Earlier, the user asked for a build check.";
+    db.exec("BEGIN");
+    add(
+      { type: "agent", llm_data: agentText("Distilling conversation…") },
+      status("in_progress"),
+      1,
+    );
+    for (const r of rows.filter((r) => r.type === "system")) add(r, null);
+    add(
+      {
+        type: "user",
+        llm_data: JSON.stringify({ Role: 0, Content: [{ Type: 2, Text: summary }] }),
+      },
+      { distilled: "true", distill_method: "compact", distillation_content: summary },
+    );
+    for (const r of rows.filter((r) => r.type !== "system")) {
+      const ud = r.user_data ? JSON.parse(r.user_data as string) : {};
+      add(r, {
+        ...ud,
+        carried_from_sequence_id: String(r.sequence_id),
+        compaction_carried: "true",
+      });
+    }
+    add({ type: "agent", llm_data: agentText("Distillation complete") }, status("complete"), 1);
+    db.prepare("UPDATE conversations SET current_generation = 2 WHERE conversation_id = ?").run(
+      conversationId,
+    );
+    db.exec("COMMIT");
+  } finally {
+    db.close();
+  }
 }

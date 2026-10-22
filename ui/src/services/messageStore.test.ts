@@ -1099,9 +1099,9 @@ async function main(): Promise<void> {
     // Sequence ids are NOT guaranteed consecutive. db.CopyMessagesForFork
     // copies only the fork point's generation and PRESERVES the source
     // sequence_ids, so forking a conversation whose sequence space has
-    // messages from an abandoned generation in the middle (e.g. after a
-    // rolled-back compaction — see server/distill_pi.go
-    // rollbackCompactionFailure) yields a complete history with real holes.
+    // messages from an abandoned generation in the middle (e.g. legacy
+    // rolled-back generation compactions) yields a complete history with
+    // real holes.
     // The REST snapshot is authoritative: a hole in it must not be mistaken
     // for cache damage, or such conversations would re-download forever.
     const { factory, dbName, keyId, rawKey } = freshFactory();

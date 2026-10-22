@@ -90,10 +90,10 @@ Unless noted, results exclude **archived** conversations.
   below). A non-empty `model` overrides the profile's, as do the
   `thinking_level`, `tool_overrides`, `compact_nudge_tokens`, and
   `system_prompt` options where present, even as `""`, `{}`, or `0`.
-- `POST /api/conversations/distill-new-generation` — compact the current
-  conversation into the next generation of the same conversation. The
-  optional `method` field (`default` or `compact`) is accepted for
-  compatibility but is ignored: compaction is always used.
+- `POST /api/conversations/distill-new-generation` — ask the agent of
+  `source_conversation_id` to compact its context in place, enabling the
+  `compact_in_place` tool if needed. Optional `instructions` are appended to
+  the request. The request is queued behind a running turn.
 
 `ConversationWithState` row shape:
 

@@ -36,7 +36,7 @@ stdout: same top-level shape. Only `prompt`/`model`/`cwd`/`slug` are read; empty
 Applied when non-empty and changed:
 - `cwd` → conversation's working directory
 - `model` → re-resolves LLM service; falls back to original if unsupported
-- `prompt` → first user message (ignored on distillation paths)
+- `prompt` → first user message
 - `slug` → sanitized to a slug-safe form; falls back to async slug on collision
 
 ## `chat-message`

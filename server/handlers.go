@@ -113,21 +113,7 @@ func isReadableUIFile(path string) bool {
 		strings.HasPrefix(path, browse.UploadDir+"/") ||
 		strings.HasPrefix(path, browse.ConsoleLogsDir+"/") ||
 		strings.HasPrefix(path, browse.ScreencastDir+"/") ||
-		strings.HasPrefix(path, claudetool.OneShotImageDir+"/") ||
-		isDistillationTempFile(path)
-}
-
-func isDistillationTempFile(path string) bool {
-	dir := filepath.Join(os.TempDir(), "shelley-distillations")
-	resolvedDir, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return false
-	}
-	resolvedPath, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return false
-	}
-	return strings.HasPrefix(resolvedPath, resolvedDir+string(os.PathSeparator))
+		strings.HasPrefix(path, claudetool.OneShotImageDir+"/")
 }
 
 // handleUserAgentsMd returns the current content of the user's AGENTS.md.
@@ -1393,7 +1379,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		s.internalError(w, "Failed to read queued messages", err, "conversationID", conversationID)
 		return
 	}
-	willQueue := req.Queue || manager.IsDistilling() || hasQueued
+	willQueue := req.Queue || hasQueued
 
 	// Run chat-message hook; the hook may rewrite the message text. Hook
 	// failures abort the request — the user's message is not delivered.
@@ -1422,9 +1408,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Queue mode: record the message to DB but don't interrupt the agent.
-	// The message will be sent when the agent finishes its current turn or
-	// current distillation. Force queueing during distillation even if the
-	// client has not seen the distill status update yet.
+	// The message will be sent when the agent finishes its current turn.
 	//
 	// Use the willQueue snapshot computed before the chat-message hook so
 	// the hook's view ("queued" in its readonly context) is authoritative

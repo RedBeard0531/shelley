@@ -14,11 +14,3 @@ var FlagPerformanceHUD = featureflags.Register(featureflags.Flag{
 	Description: "Show a heads-up display of UI recomputation counters (also available via __shelleyPerf in the console).",
 	Default:     false,
 })
-
-// FlagCompactSendThresholds defaults the composer to Compact and send once
-// the context reaches 200k tokens.
-var FlagCompactSendThresholds = featureflags.Register(featureflags.Flag{
-	Name:        "compact-send-thresholds",
-	Description: "Default the composer to Compact and send once the context reaches 200k tokens.",
-	Default:     false,
-})

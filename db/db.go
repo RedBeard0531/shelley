@@ -641,7 +641,7 @@ type QueuedTranscription struct {
 }
 
 // QueuedMessage is one user message held in a conversation's queued_messages
-// JSON array while the agent is busy or distilling. The array is the single
+// JSON array while the agent is busy. The array is the single
 // source of truth for queued user input (there is no `messages` row until the
 // item drains). On drain the Llm payload is fed to the loop verbatim and a
 // normal, immutable user message is inserted with a fresh sequence_id.

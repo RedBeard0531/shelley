@@ -36,23 +36,9 @@
         <br />
         Compact it or start a new conversation.
       </div>
-      <div
-        v-if="
-          conversationId && (onDistillNewGeneration || onStartNewGeneration || onCompactInPlace)
-        "
-        class="chat-distill-container"
-      >
+      <div v-if="conversationId" class="chat-distill-container">
         <button
-          v-if="onDistillNewGeneration"
-          :disabled="distilling"
-          class="chat-distill-button chat-distill-generation-button"
-          @click="handleDistillNewGeneration"
-        >
-          {{ distilling ? "Compacting..." : "Compact Conversation" }}
-        </button>
-        <button
-          v-if="onCompactInPlace"
-          :disabled="distilling || compactInPlaceBusy"
+          :disabled="actionPending || compactInPlaceBusy"
           class="chat-distill-button chat-distill-generation-button"
           data-testid="compact-in-place-button"
           :aria-describedby="compactInPlaceBusy ? compactInPlaceHintId : undefined"
@@ -61,20 +47,12 @@
           Compact in Place
         </button>
         <span
-          v-if="onCompactInPlace && compactInPlaceBusy"
+          v-if="compactInPlaceBusy"
           :id="compactInPlaceHintId"
           class="token-cost-graph-note"
         >
           Finish or stop the current turn to compact in place.
         </span>
-        <button
-          v-if="onStartNewGeneration"
-          :disabled="distilling"
-          class="chat-distill-button chat-distill-generation-button"
-          @click="handleStartNewGeneration"
-        >
-          Start New Generation
-        </button>
       </div>
     </Popover>
     <button
@@ -117,11 +95,9 @@ const props = defineProps<{
   models: Model[];
   otherUsageRows?: OtherUsageRow[];
   messages?: Message[];
-  onDistillNewGeneration?: () => Promise<void> | void;
-  onStartNewGeneration?: () => Promise<void> | void;
   /** Asks the agent to use compact_in_place, enabling the tool first if the
    *  conversation was started without it. */
-  onCompactInPlace?: () => Promise<void> | void;
+  onCompactInPlace: () => Promise<void> | void;
   /** The tool still has to be enabled, which waits for the turn to end. */
   compactInPlaceBusy?: boolean;
   /** Called just before the popup opens. The parent computes usageEntries /
@@ -131,7 +107,7 @@ const props = defineProps<{
   onUsageNeeded?: () => void;
 }>();
 
-const distilling = ref(false);
+const actionPending = ref(false);
 // Which graphs the popup stacks; remembered across page loads.
 const { panes } = useUsagePanesPreference();
 const popupOpen = ref(false);
@@ -190,36 +166,14 @@ watch(
   },
 );
 
-async function handleDistillNewGeneration() {
-  if (distilling.value || !props.onDistillNewGeneration) return;
-  distilling.value = true;
-  try {
-    await props.onDistillNewGeneration();
-    popoverRef.value?.hide();
-  } finally {
-    distilling.value = false;
-  }
-}
-
 async function handleCompactInPlace() {
-  if (distilling.value || !props.onCompactInPlace) return;
-  distilling.value = true;
+  if (actionPending.value) return;
+  actionPending.value = true;
   try {
     await props.onCompactInPlace();
     popoverRef.value?.hide();
   } finally {
-    distilling.value = false;
-  }
-}
-
-async function handleStartNewGeneration() {
-  if (distilling.value || !props.onStartNewGeneration) return;
-  distilling.value = true;
-  try {
-    await props.onStartNewGeneration();
-    popoverRef.value?.hide();
-  } finally {
-    distilling.value = false;
+    actionPending.value = false;
   }
 }
 </script>

@@ -45,7 +45,7 @@ test.describe('Queue Messages', () => {
     await expect(chevron).toBeVisible({ timeout: 5000 });
   });
 
-  test('chevron stays active for compact-and-send when agent finishes', async ({ page, request }) => {
+  test('chevron goes inactive when agent finishes', async ({ page, request }) => {
     await openConversation(page, request);
 
     // Use a short delay so it finishes quickly
@@ -60,14 +60,10 @@ test.describe('Queue Messages', () => {
     const input = page.getByTestId('message-input');
     await input.fill('test');
 
-    // The split button should still be there and, because a conversation is
-    // open, remain enabled: "Compact and send" is available even when the
-    // agent is idle. Queueing, however, is not (the agent isn't working).
+    // The split button stays (a conversation is open), but with the agent
+    // idle there is nothing to queue behind, so the chevron is disabled.
     await expect(chevron).toBeVisible();
-    await expect(chevron).toBeEnabled({ timeout: 10000 });
-    await chevron.tap();
-    await expect(page.getByTestId('compact-and-send-option')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByTestId('queue-option')).toHaveCount(0);
+    await expect(chevron).toBeDisabled({ timeout: 10000 });
 
     // Send button should still be present and enabled
     const sendButton = page.getByTestId('send-button');

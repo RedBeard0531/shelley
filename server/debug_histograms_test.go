@@ -15,12 +15,16 @@ func TestDebugHistograms(t *testing.T) {
 	server, _, _ := newTestServer(t)
 	ctx := t.Context()
 
-	// Seed two conversations of different sizes (the second compacts).
+	// Seed two conversations of different sizes; the second is cleared.
 	if _, err := server.generateLoremConversation(ctx, 5, "claude-opus-4-5"); err != nil {
 		t.Fatalf("generate small: %v", err)
 	}
-	if _, err := server.generateLoremConversation(ctx, 100, "claude-opus-4-5"); err != nil {
+	large, err := server.generateLoremConversation(ctx, 100, "claude-opus-4-5")
+	if err != nil {
 		t.Fatalf("generate large: %v", err)
+	}
+	if _, err := server.startNewGeneration(ctx, large); err != nil {
+		t.Fatalf("clear large: %v", err)
 	}
 
 	// JSON output.
@@ -46,8 +50,7 @@ func TestDebugHistograms(t *testing.T) {
 	if st.MessagesPercentiles.Max < st.MessagesPercentiles.P50 {
 		t.Errorf("max %d < p50 %d", st.MessagesPercentiles.Max, st.MessagesPercentiles.P50)
 	}
-	// The 100-turn conversation compacts, so at least one conversation must
-	// have generation > 1. Generation labels are numeric strings.
+	// The cleared conversation is past generation 1. Generation labels are numeric strings.
 	sawHigherGen := false
 	var genConvs int64
 	for _, g := range st.GenerationCounts {

@@ -896,53 +896,6 @@ func TestLockChannelChat(t *testing.T) {
 	}
 }
 
-// During distillation, a message waits in the queue for the new generation.
-func TestChannelMessageWaitsForDistillation(t *testing.T) {
-	t.Parallel()
-	server, database, h := channelTestServer(t, nil)
-	deliver := func(id, text string) {
-		t.Helper()
-		if w := postJSON(t, h, "/api/channels/messages", channelEvent{Type: "message", ID: id, ChatID: "chat-1", Text: text}); w.Code != http.StatusNoContent {
-			t.Fatalf("deliver %s: status %d: %s", id, w.Code, w.Body.String())
-		}
-	}
-	idle := func(conversationID string) {
-		t.Helper()
-		waitFor(t, 5*time.Second, func() bool {
-			c, err := database.GetConversationByID(t.Context(), conversationID)
-			return err == nil && !c.AgentWorking && c.QueuedMessages == "[]"
-		})
-	}
-	deliver("m1", "first")
-	conv, err := conversationByExternalID(t, database, "chat-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	idle(conv.ConversationID)
-	manager, err := server.getOrCreateConversationManager(t.Context(), conv.ConversationID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !manager.BeginDistillingSetup() {
-		t.Fatal("distillation already running")
-	}
-	manager.FinishDistillingSetup()
-	deliver("m2", "second")
-	queued, err := database.GetQueuedMessages(t.Context(), conv.ConversationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(queued) != 1 || queued[0].ExternalMessageID != "m2" {
-		t.Fatalf("queue during distillation = %+v", queued)
-	}
-	manager.SetDistilling(false)
-	manager.drainQueueIfIdle(server)
-	idle(conv.ConversationID)
-	if got := strings.Join(channelUserMessages(t, database, conv.ConversationID), "\n"); got != "m1: first\nm2: second" {
-		t.Fatalf("user messages:\n%s", got)
-	}
-}
-
 // unavailableLLM serves no model.
 type unavailableLLM struct{ testLLMManager }
 

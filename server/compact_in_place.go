@@ -72,7 +72,7 @@ func (cm *ConversationManager) compactMidTurn(ctx context.Context, generation ui
 	// the record or the record is never made.
 	cm.loopLifecycleMu.Lock()
 	cm.mu.Lock()
-	stale := cm.loopTearingDown || cm.loop == nil || cm.loopGeneration != generation || cm.distilling || cm.cancelling
+	stale := cm.loopTearingDown || cm.loop == nil || cm.loopGeneration != generation || cm.cancelling
 	cm.mu.Unlock()
 	if stale {
 		cm.loopLifecycleMu.Unlock()
@@ -848,4 +848,101 @@ func lastContextWindowSize(rows []generated.Message) uint64 {
 		}
 	}
 	return 0
+}
+
+// compactInPlaceRequest is the user message that asks the agent to compact,
+// as the web UI's Compact in Place button sends it.
+const compactInPlaceRequest = "Compact your context in place."
+
+// CompactRequest is the body of POST /api/conversations/distill-new-generation.
+type CompactRequest struct {
+	SourceConversationID string `json:"source_conversation_id"`
+	// Instructions is optional guidance on what to keep.
+	Instructions string `json:"instructions,omitempty"`
+}
+
+// handleCompactRequest handles POST /api/conversations/distill-new-generation,
+// which the mobile apps call to compact. It asks the agent to compact in
+// place, as the web UI's Compact in Place button does: it enables
+// compact_in_place if needed and sends compactInPlaceRequest, queued behind a
+// running turn. The endpoint once compacted into a new generation; its other
+// fields (model, cwd, method) are ignored.
+func (s *Server) handleCompactRequest(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req CompactRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	conversation, err := s.db.GetConversationByID(ctx, req.SourceConversationID)
+	if err != nil {
+		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+	if conversation.Archived || conversation.IsDraft {
+		http.Error(w, "conversation is archived or a draft", http.StatusConflict)
+		return
+	}
+	userEmail := r.Header.Get("X-ExeDev-Email")
+	ctx = contextWithUserEmail(ctx, userEmail)
+	manager, err := s.getOrCreateConversationManager(ctx, conversation.ConversationID, userEmail)
+	if err != nil {
+		s.internalError(w, "Failed to get conversation manager", err, "conversationID", conversation.ConversationID)
+		return
+	}
+	manager.mu.Lock()
+	opts := manager.conversationOptions
+	manager.mu.Unlock()
+	if !claudetool.IsToolEnabled(claudetool.CompactInPlaceName, opts.ToolOverrides, opts.DisableAllTools) {
+		if err := manager.EnableCompactInPlace(ctx); err != nil {
+			switch {
+			case errors.Is(err, errAgentWorking):
+				http.Error(w, "Finish or stop the current turn to compact in place", http.StatusConflict)
+			case errors.Is(err, errCompactInPlaceUnavailable):
+				http.Error(w, err.Error(), http.StatusConflict)
+			default:
+				s.internalError(w, "Failed to enable compact_in_place", err, "conversationID", conversation.ConversationID)
+			}
+			return
+		}
+	}
+
+	text := compactInPlaceRequest
+	if instructions := strings.TrimSpace(req.Instructions); instructions != "" {
+		text += "\n\n" + instructions
+	}
+	message := llm.UserStringMessage(text)
+	modelID := derefString(conversation.Model)
+	if modelID == "" {
+		modelID = s.effectiveDefaultModel(s.getModelList())
+	}
+	service, err := s.llmManager.GetService(modelID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("unknown model %q: %v", modelID, err), http.StatusBadRequest)
+		return
+	}
+	hasQueued, err := manager.HasQueuedMessages(ctx)
+	if err != nil {
+		s.internalError(w, "Failed to read queued messages", err, "conversationID", conversation.ConversationID)
+		return
+	}
+	queue := hasQueued || manager.IsAgentWorking()
+	if !queue {
+		_, err = manager.AcceptUserMessage(ctx, service, modelID, message)
+		queue = errors.Is(err, errQueuedMessagesPending)
+	}
+	if queue {
+		err = manager.QueueMessage(ctx, s, modelID, message)
+	}
+	if err != nil {
+		s.internalError(w, "Failed to send the compaction request", err, "conversationID", conversation.ConversationID)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":             "created",
+		"conversation_id":    conversation.ConversationID,
+		"current_generation": conversation.CurrentGeneration,
+	})
 }

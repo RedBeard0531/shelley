@@ -41,7 +41,7 @@ func newCompactTestConversation(t *testing.T, opts db.ConversationOptions) *comp
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		false, "model-a", "")
 	srv.hooksDir = t.TempDir()
-	srv.piDistillKeepRecentTokens = 1
+	srv.keepRecentTokensOverride = 1
 	modelA := "model-a"
 	conv, err := database.CreateConversation(t.Context(), nil, true, nil, &modelA, opts)
 	if err != nil {
@@ -1227,5 +1227,30 @@ func TestCompactionRefreshesSystemPrompt(t *testing.T) {
 	c.turn("echo: LAST")
 	if !strings.Contains(system(), "NEWER_GUIDANCE") || systemRows() != 3 {
 		t.Fatalf("compaction between turns did not refresh the system prompt (%d rows):\n%s", systemRows(), system())
+	}
+}
+
+// TestCompactRequestEndpoint: the endpoint the mobile apps call to compact
+// enables compact_in_place and asks the agent to use it, with the user's
+// instructions.
+func TestCompactRequestEndpoint(t *testing.T) {
+	t.Parallel()
+	c := newCompactTestConversation(t, compactInPlaceOff)
+	c.turn("hello")
+	before := c.endTurns()
+	body := `{"source_conversation_id":"` + c.id + `","model":"ignored","method":"compact","instructions":"keep the plan"}`
+	w := httptest.NewRecorder()
+	c.srv.handleCompactRequest(w, httptest.NewRequest(http.MethodPost, "/api/conversations/distill-new-generation", strings.NewReader(body)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	opts := c.options()
+	if !claudetool.IsToolEnabled(claudetool.CompactInPlaceName, opts.ToolOverrides, opts.DisableAllTools) {
+		t.Fatalf("compact_in_place not enabled: %+v", opts)
+	}
+	waitFor(t, 10*time.Second, func() bool { return c.endTurns() > before })
+	c.seqWith(`Compact your context in place.\n\nkeep the plan`)
+	if !hasTool(c.agentRequest(), claudetool.CompactInPlaceName) {
+		t.Fatal("compact_in_place not offered to the agent")
 	}
 }

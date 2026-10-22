@@ -368,7 +368,10 @@ func TestQueuedChatCapturesRawSenderProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.SetDistilling(true)
+	// Hold the drain, as ApplySettings does, so the message stays queued.
+	manager.mu.Lock()
+	manager.changingSettings = true
+	manager.mu.Unlock()
 
 	rawText := "queued raw <progress>"
 	w := httptest.NewRecorder()
@@ -702,33 +705,6 @@ func TestSenderProvenanceWrapsCurrentTextAcrossContentBlocks(t *testing.T) {
 	}
 	if strings.Contains(messageText(wrapped), "stale search text") {
 		t.Fatal("wrapper used FTS duplicate instead of current model text")
-	}
-}
-
-func TestSenderMessageUserDataSurvivesCompactionCopyAndWrap(t *testing.T) {
-	data := senderMessageUserData{
-		SenderConversationID: `child<&"'id`,
-		SenderSlug:           `back<end & "'`,
-		SenderRelationship:   senderRelationshipSubagent,
-		Text:                 "line one\nprogress <done> & \"'",
-	}
-	rawBytes, err := json.Marshal(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw := string(rawBytes)
-	got := userDataForCopy(generated.Message{UserData: &raw})
-	if got["sender_conversation_id"] != `child<&"'id` || got["sender_slug"] != `back<end & "'` || got["sender_relationship"] != "subagent" || got["Text"] != "line one\nprogress <done> & \"'" {
-		t.Fatalf("copied user_data = %#v", got)
-	}
-	message, err := messageWithSenderProvenance(llm.UserStringMessage("line one\nprogress <done> & \"'"), rawBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `<subagent_message conversation_id="child&lt;&amp;&#34;&#39;id" slug="back&lt;end &amp; &#34;&#39;">` +
-		"\nline one\nprogress &lt;done&gt; &amp; \"'\n</subagent_message>"
-	if got := messageText(message); got != want {
-		t.Fatalf("wrapped compaction message = %q, want %q", got, want)
 	}
 }
 

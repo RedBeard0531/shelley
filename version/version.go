@@ -35,8 +35,8 @@ func RegisterBuildInfoFS(fsys fs.FS) {
 func Capabilities() []string {
 	return []string{
 		// The server accepts a per-request thinking_level override
-		// (off, minimal, low, medium, high, xhigh) on converse and
-		// distill endpoints. Clients can expose a picker; older
+		// (off, minimal, low, medium, high, xhigh) on converse
+		// endpoints. Clients can expose a picker; older
 		// servers without this capability silently ignore the field.
 		"thinking-levels",
 		// Queued transcription commands are persisted as specialized queued

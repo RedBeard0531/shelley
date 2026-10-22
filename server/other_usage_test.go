@@ -2,20 +2,11 @@ package server
 
 import (
 	"encoding/json"
-	"log/slog"
-	"net/http"
 	"net/http/httptest"
-	"os"
-	"strings"
 	"testing"
-	"testing/synctest"
-	"time"
 
-	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/llm/predictable"
-	"shelley.exe.dev/models"
 )
 
 func TestSubagentUsageIncludesOtherUsage(t *testing.T) {
@@ -97,85 +88,4 @@ func TestSubagentUsageIncludesOtherUsage(t *testing.T) {
 	if res.UnpricedCalls != 0 {
 		t.Errorf("unpriced_calls = %d, want 0", res.UnpricedCalls)
 	}
-}
-
-// TestCompactionRecordsUsage runs a real compaction through a real
-// models.Manager (so GetService returns a loggingService, which feeds the
-// usage collector installed by performPiDistillation) and verifies the
-// summarization call's usage lands on the summary message's
-// other_usage_data.
-func TestCompactionRecordsUsage(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		database, cleanup := setupTestDB(t)
-		t.Cleanup(cleanup)
-		ps := predictable.NewService()
-		logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-		mgr := NewLLMServiceManager(&LLMConfig{
-			Models: []models.Built{{ID: "predictable", Provider: models.ProviderBuiltIn, Source: "test", Service: ps}},
-			DB:     database,
-			Logger: logger,
-		})
-		srv := NewServer(database, mgr, claudetool.ToolSetConfig{EnableBrowser: false}, logger, true, "predictable", "")
-		srv.hooksDir = t.TempDir()
-		if srv.terminals != nil {
-			srv.terminals.SetSpawner(InProcessSpawner)
-		}
-		defer stopActiveConversationLoops(srv)
-		// Force a tiny recent budget so something is always summarized.
-		srv.piDistillKeepRecentTokens = 1
-
-		h := &TestHarness{t: t, db: database, server: srv, llm: ps, timeout: 5 * time.Second}
-		h.NewConversation("echo: alpha", "")
-		h.WaitResponse()
-		synctest.Wait()
-		h.Chat("echo: beta")
-		h.WaitResponse()
-		synctest.Wait()
-		convID := h.convID
-
-		reqBody := DistillNewGenerationRequest{
-			SourceConversationID: convID,
-			Model:                "predictable",
-			Method:               distillMethodCompact,
-		}
-		body, _ := json.Marshal(reqBody)
-		req := httptest.NewRequest("POST", "/api/conversations/distill-new-generation", strings.NewReader(string(body)))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		srv.handleDistillNewGeneration(w, req)
-		if w.Code != http.StatusCreated {
-			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
-		}
-		waitForConversationDistillingToClear(t, srv, convID)
-		synctest.Wait()
-
-		messages, err := database.ListMessages(t.Context(), convID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var entries []llm.PurposedUsage
-		for _, m := range messages {
-			if m.UserData == nil || !strings.Contains(*m.UserData, `"distilled":"true"`) {
-				continue
-			}
-			if m.OtherUsageData == nil {
-				t.Fatalf("summary message %s has no other_usage_data", m.MessageID)
-			}
-			if err := json.Unmarshal([]byte(*m.OtherUsageData), &entries); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if len(entries) == 0 {
-			t.Fatal("no compaction usage found on the summary message")
-		}
-		for _, e := range entries {
-			if e.Purpose != "compaction" {
-				t.Errorf("entry purpose = %q, want compaction", e.Purpose)
-			}
-			if e.OutputTokens == 0 {
-				t.Errorf("entry has no output tokens: %+v", e)
-			}
-		}
-	})
 }

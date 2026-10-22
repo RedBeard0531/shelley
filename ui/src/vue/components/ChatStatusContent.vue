@@ -177,9 +177,7 @@ const props = defineProps<{
   onClearError: () => void;
   onCancel: () => void;
   onResumeInterrupted: () => void;
-  onDistillNewGeneration?: () => Promise<void> | void;
-  onStartNewGeneration: () => Promise<void> | void;
-  onCompactInPlace?: () => Promise<void> | void;
+  onCompactInPlace: () => Promise<void> | void;
   compactInPlaceBusy?: boolean;
   onSelectModel: (model: string) => void;
   onSelectCombination: (model: string, level: Exclude<ThinkingLevel, "default"> | null) => void;
@@ -220,8 +218,6 @@ const readoutProps = computed(() => ({
   selectedModel: props.selectedModel,
   thinkingLevel: props.thinkingLevel,
   refreshingModels: props.refreshingModels,
-  onDistillNewGeneration: props.onDistillNewGeneration,
-  onStartNewGeneration: props.onStartNewGeneration,
   onCompactInPlace: props.onCompactInPlace,
   compactInPlaceBusy: props.compactInPlaceBusy,
   onUsageNeeded: props.onUsageNeeded,

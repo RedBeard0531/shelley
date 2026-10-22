@@ -192,28 +192,10 @@
             data-testid="distillation-file-box"
           >
             <div class="distillation-file-box-header">
-              <div class="distillation-file-box-title">
-                {{ distillationEditable ? "Editable distillation" : "Compacted summary" }}
-              </div>
-              <button
-                v-if="distillationEditable"
-                type="button"
-                class="distillation-edit-button"
-                v-tooltip.top="'Edit distillation in modal'"
-                @click="openDistillationEditor"
-              >
-                Edit
-              </button>
-            </div>
-            <div v-if="distillationEditable" class="distillation-file-box-meta">
-              Shown from editable file <code>{{ distillationFile }}</code
-              >.
+              <div class="distillation-file-box-title">Compacted summary</div>
             </div>
             <div class="distillation-file-box-content">
-              <MarkdownContent
-                v-if="displayedDistillationContent"
-                :text="displayedDistillationContent"
-              />
+              <MarkdownContent v-if="distillationContent" :text="distillationContent" />
               <span v-else class="distillation-empty">Empty distillation</span>
             </div>
           </div>
@@ -256,15 +238,6 @@
       @close="showUsageModal = false"
     />
     <MessageInfoModal v-if="showInfoModal" :message="message" @close="showInfoModal = false" />
-    <EditableFileModal
-      v-if="distillationFile"
-      :key="distillationFile"
-      :is-open="showDistillationEditor"
-      :path="distillationFile"
-      title="Edit distillation"
-      @close="showDistillationEditor = false"
-      @saved="(c: string) => (distillationContentOverride = c)"
-    />
   </template>
 </template>
 
@@ -287,7 +260,6 @@ import MarkdownContent from "./MarkdownContent.vue";
 import MessageActionBar from "./MessageActionBar.vue";
 import UsageDetailModal from "./UsageDetailModal.vue";
 import MessageInfoModal from "./MessageInfoModal.vue";
-import EditableFileModal from "./EditableFileModal.vue";
 import GitInfoMessage from "./GitInfoMessage.vue";
 import WarningMessage from "./WarningMessage.vue";
 import ModelChangeMessage from "./ModelChangeMessage.vue";
@@ -452,43 +424,23 @@ const authorEmail = computed(() =>
     : null,
 );
 
-// ---- Distillation ----
+// ---- Legacy compaction summary ----
+// A summary written by the removed distill-into-new-generation flow; read-only.
 const distillation = computed(() => {
-  let distillationFile = "";
-  let distillationContent = "";
-  let distillationEditable = false;
-  let isDistilledUser = false;
-  if (isUser.value && props.message.user_data) {
-    try {
-      const ud =
-        typeof props.message.user_data === "string"
-          ? JSON.parse(props.message.user_data)
-          : props.message.user_data;
-      if (ud?.distilled === "true") {
-        distillationFile = ud.distillation_file || "";
-        distillationContent = ud.distillation_content || "";
-        // "compact" summaries are generated checkpoints paired with a verbatim
-        // recent tail; they are not editable. Only the default distillation
-        // (which writes an editable temp file) is.
-        distillationEditable = ud.distillation_editable === "true" && !!distillationFile;
-        isDistilledUser = true;
-      }
-    } catch {
-      // ignore
-    }
+  if (!isUser.value || !props.message.user_data) return null;
+  try {
+    const ud =
+      typeof props.message.user_data === "string"
+        ? JSON.parse(props.message.user_data)
+        : props.message.user_data;
+    return ud?.distilled === "true" ? (ud.distillation_content as string) || "" : null;
+  } catch {
+    return null;
   }
-  return { distillationFile, distillationContent, distillationEditable, isDistilledUser };
 });
 
-const isDistilledUser = computed(() => distillation.value.isDistilledUser);
-const distillationFile = computed(() => distillation.value.distillationFile);
-const distillationEditable = computed(() => distillation.value.distillationEditable);
-
-const showDistillationEditor = ref(false);
-const distillationContentOverride = ref<string | null>(null);
-const displayedDistillationContent = computed(
-  () => distillationContentOverride.value ?? distillation.value.distillationContent,
-);
+const isDistilledUser = computed(() => distillation.value !== null);
+const distillationContent = computed(() => distillation.value || "");
 
 // ---- Text extraction for copy ----
 function getMessageText(): string {
@@ -638,7 +590,7 @@ const contentEntities = computed(() =>
           key: "distillation",
           kind: "content" as const,
           items: [],
-          copyText: displayedDistillationContent.value || messageText.value,
+          copyText: distillationContent.value || messageText.value,
         },
       ]
     : splitContentEntities(coalescedContent.value),
@@ -725,11 +677,6 @@ function handleShowUsage() {
 function handleFork() {
   if (props.onFork) props.onFork(props.message.message_id);
   pinnedActionKey.value = null;
-}
-
-function openDistillationEditor(e: MouseEvent) {
-  e.stopPropagation();
-  showDistillationEditor.value = true;
 }
 
 // Close a pinned action bar when clicking outside the message.

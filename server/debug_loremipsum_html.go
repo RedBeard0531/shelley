@@ -56,7 +56,7 @@ code { background: var(--bg-secondary, rgba(127,127,127,0.12)); padding: 0.1rem 
 <h1>Synthetic conversation generator</h1>
 <div class="subtitle">Creates a throwaway conversation containing every message and tool-call shape the UI renders, for load/render performance testing.</div>
 __BANNER__
-<p class="note" style="margin-bottom:1.5rem">Generating writes a new conversation to the database. A &ldquo;turn&rdquo; is one user prompt plus the agent&rsquo;s reply and tool calls (~4 messages). Larger sizes can take a while and periodically compact (creating generation changes and distillation summaries).</p>
+<p class="note" style="margin-bottom:1.5rem">Generating writes a new conversation to the database. A &ldquo;turn&rdquo; is one user prompt plus the agent&rsquo;s reply and tool calls (~4 messages). Larger sizes can take a while.</p>
 
 <table>
 <thead><tr><th>Preset</th><th>Size</th><th>Approx.</th><th></th></tr></thead>

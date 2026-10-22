@@ -152,6 +152,8 @@ async function startTestEnvironment(cleanup: () => void, originalEnvironment: No
   const portFile = path.join(tempDir, 'port');
   const socketPath = path.join(tempDir, 'client.sock');
   process.env.TEST_SERVER_SOCKET = socketPath;
+  // Specs that seed rows no API can produce write here (see helpers.ts).
+  process.env.TEST_SERVER_DB = testDb;
 
   const liveSessionURL = await startLiveProvider();
   console.log(`Starting shelley (db=${testDb}, port-file=${portFile})`);

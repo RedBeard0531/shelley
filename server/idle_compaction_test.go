@@ -33,7 +33,7 @@ func newIdlePolicyHarness(t *testing.T, opts db.ConversationOptions) (*TestHarne
 	opts.DisableNotifications = true
 	opts.ToolOverrides = map[string]string{claudetool.CompactInPlaceName: "on"}
 	h.convOpts = &opts
-	h.server.piDistillKeepRecentTokens = 1
+	h.server.keepRecentTokensOverride = 1
 	h.server.idleCompactionMinTokens = 1
 	h.NewConversation("echo: keep the garden plan", "")
 	synctest.Wait()
@@ -187,16 +187,19 @@ func TestIdleCompactionActivityAndSettingsInvalidateCallback(t *testing.T) {
 						t.Fatal(err)
 					}
 				case "queued message":
-					// Hold draining without BeginDistillingSetup, which would
-					// itself invalidate the callback and mask a queue bug.
-					cm.SetDistilling(true)
+					// Hold draining, as ApplySettings does.
+					cm.mu.Lock()
+					cm.changingSettings = true
+					cm.mu.Unlock()
 					if err := cm.QueueMessage(t.Context(), h.server, "predictable", llm.UserStringMessage("echo: queued")); err != nil {
 						t.Fatal(err)
 					}
 					if _, err := h.db.ClearQueuedMessages(t.Context(), h.convID); err != nil {
 						t.Fatal(err)
 					}
-					cm.SetDistilling(false)
+					cm.mu.Lock()
+					cm.changingSettings = false
+					cm.mu.Unlock()
 				case "transcription":
 					if _, err := cm.QueueTranscription(t.Context(), h.server, db.QueuedMessage{
 						ID: "audio", Kind: db.QueuedMessageKindTranscription, State: db.QueuedMessageStateWorking,
@@ -229,7 +232,7 @@ func TestIdleCompactionNothingToCompactIsOneShotNoOp(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			h, cm := newIdleCompactionHarness(t)
 			defer stopActiveConversationLoops(h.server)
-			cm.keepRecentTokens = defaultPiDistillSettings.keepRecentTokens
+			cm.keepRecentTokens = defaultKeepRecentTokens
 			compactions := idleCompactions(t, h)
 			before := len(listMessages(t, h.db, h.convID))
 			<-time.After(3 * time.Minute)
@@ -275,7 +278,7 @@ func TestIdleCompactionRequiresEnabledPolicyAndTopLevel(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := NewTestHarness(t)
 				defer stopActiveConversationLoops(h.server)
-				h.server.piDistillKeepRecentTokens = 1
+				h.server.keepRecentTokensOverride = 1
 				h.server.idleCompactionMinTokens = 1
 				opts := db.ConversationOptions{DisableNotifications: true, ToolOverrides: map[string]string{claudetool.CompactInPlaceName: "on"}}
 				conv, err := h.db.CreateConversation(t.Context(), nil, true, nil, nil, opts)

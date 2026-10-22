@@ -4,12 +4,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/claudetool"
@@ -112,7 +110,7 @@ func TestCompactDebugEndToEnd(t *testing.T) {
 		false, "model-a", "")
 	srv.hooksDir = t.TempDir()
 	// The listing leaves out the recent part; keep it to the last message.
-	srv.piDistillKeepRecentTokens = 1
+	srv.keepRecentTokensOverride = 1
 	ctx := t.Context()
 
 	modelA := "model-a"
@@ -250,117 +248,6 @@ func squishFirstTurn(t *testing.T, srv *Server, database *db.DB, convID, summary
 	if w := postChat(t, srv, convID, cmd); w.Code != http.StatusAccepted {
 		t.Fatalf("%s: got %d: %s", cmd, w.Code, w.Body.String())
 	}
-}
-
-// compactGeneration runs pi compaction ("compact") on the conversation and
-// returns the new generation's context rows.
-func compactGeneration(t *testing.T, h *TestHarness) []generated.Message {
-	t.Helper()
-	body, _ := json.Marshal(DistillNewGenerationRequest{SourceConversationID: h.convID, Model: "predictable", Method: distillMethodCompact})
-	req := httptest.NewRequest("POST", "/api/conversations/distill-new-generation", strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.server.handleDistillNewGeneration(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("distill: got %d: %s", w.Code, w.Body.String())
-	}
-	waitForConversationDistillingToClear(t, h.server, h.convID)
-	synctest.Wait()
-	rows, err := h.db.ListMessagesForContext(t.Context(), h.convID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return rows
-}
-
-// addContextNudge records a context nudge like recordContextNudge's.
-func addContextNudge(t *testing.T, h *TestHarness) {
-	t.Helper()
-	if _, err := h.db.CreateMessage(t.Context(), db.CreateMessageParams{
-		ConversationID: h.convID,
-		Type:           db.MessageTypeUser,
-		LLMData: llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{
-			{Type: llm.ContentTypeText, Text: "Context is 50k."},
-			{Type: llm.ContentTypeText, Text: "## Index NUDGE_INDEX"},
-		}},
-		UserData: map[string]any{"context_nudge": true},
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func llmDataText(rows []generated.Message) string {
-	var b strings.Builder
-	for _, m := range rows {
-		if m.LlmData != nil {
-			b.WriteString(*m.LlmData)
-		}
-	}
-	return b.String()
-}
-
-// TestPiCompactionCarriesInPlaceCompactedTail: with a budget large enough to
-// keep everything, generation compaction copies the compacted view forward,
-// so the squish summary replaces the squished turn in the new generation.
-// Context nudges are left behind: their sizes and indexes are of the old
-// generation.
-func TestPiCompactionCarriesInPlaceCompactedTail(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		h := NewTestHarness(t)
-		defer stopActiveConversationLoops(h.server)
-		h.NewConversation("echo: ALPHA_TURN", "")
-		h.WaitResponse()
-		synctest.Wait()
-		h.Chat("echo: BETA_TURN")
-		h.WaitResponse()
-		synctest.Wait()
-		squishFirstTurn(t, h.server, h.db, h.convID, "SQUISHED_ALPHA")
-		addContextNudge(t, h)
-
-		got := llmDataText(compactGeneration(t, h))
-		if !strings.Contains(got, "SQUISHED_ALPHA") || !strings.Contains(got, "BETA_TURN") || strings.Contains(got, "ALPHA_TURN") ||
-			strings.Contains(got, "NUDGE_INDEX") {
-			t.Fatalf("new generation should carry the compacted view:\n%s", got)
-		}
-	})
-}
-
-// TestPiCompactionSummarizesInPlaceCompactedView: when older history is
-// summarized, the summarizer sees the squish summary, not the squished turn,
-// and not context nudges.
-func TestPiCompactionSummarizesInPlaceCompactedView(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		h := NewTestHarness(t)
-		defer stopActiveConversationLoops(h.server)
-		h.server.piDistillKeepRecentTokens = 1
-		h.NewConversation("echo: ALPHA_TURN", "")
-		h.WaitResponse()
-		synctest.Wait()
-		addContextNudge(t, h)
-		h.Chat("echo: BETA_TURN")
-		h.WaitResponse()
-		synctest.Wait()
-		squishFirstTurn(t, h.server, h.db, h.convID, "SQUISHED_ALPHA")
-		h.llm.ClearRequests()
-
-		compactGeneration(t, h)
-		var prompt string
-		for _, req := range h.llm.GetRecentRequests() {
-			for _, m := range req.Messages {
-				for _, c := range m.Content {
-					if strings.Contains(c.Text, "<conversation>") {
-						prompt = c.Text
-					}
-				}
-			}
-		}
-		if !strings.Contains(prompt, "SQUISHED_ALPHA") || !strings.Contains(prompt, "BETA_TURN") || strings.Contains(prompt, "ALPHA_TURN") ||
-			strings.Contains(prompt, "NUDGE_INDEX") {
-			t.Fatalf("summarizer prompt should see the compacted view:\n%s", prompt)
-		}
-	})
 }
 
 // TestBtwFrozenReferenceUsesInPlaceCompactedView: a /btw reader sees the
