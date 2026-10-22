@@ -227,11 +227,14 @@ func TestNewPageShortRecordingUploadsFinalEncodedData(t *testing.T) {
 // Regression test for the mobile "double UI" bug: on the Pixel 5 mobile
 // viewport the harness uses, typing into the composer promotes the new
 // conversation into a draft (the URL gains a "/c/" segment) while the
-// model/effort/dir status block stays present. The block must render exactly
+// model/effort/dir status block stays in the DOM. The block must render exactly
 // once. A bug caused it to render twice for drafts on mobile — once in the
-// standalone status bar and again inline in the composer's status slot.
+// standalone status bar and again inline in the composer's status slot. On
+// phones that status bar is hidden by CSS (the model and directory moved into
+// the overflow menu), so the test counts the block rather than waiting for it
+// to be visible.
 func TestNewPageDraftStatusBarNotDuplicated(t *testing.T) {
-	lazyTest(t, `Navigate to /new. There should be exactly one new-conversation status block (selector ".status-bar-new-conversation" should match exactly 1 element). Type "hello draft" into the message input (data-testid "message-input"). Typing promotes the conversation to a draft, so wait for the URL to contain "/c/". After that, add a short sleep (about 1 second) to let the UI settle, then confirm the new-conversation status block is NOT duplicated: selector ".status-bar-new-conversation" should still match exactly 1 element.`)
+	lazyTest(t, `Navigate to /new and wait for the message input (data-testid "message-input") to be visible. There should be exactly one new-conversation status block: selector ".status-bar-new-conversation" should match exactly 1 element. On this phone-sized viewport that block is deliberately hidden by CSS (the model and directory live in the overflow menu instead), so only count it; never wait for it or any of its ancestors to be visible. Type "hello draft" into the message input. Typing promotes the conversation to a draft, so wait for the URL to contain "/c/". After that, add a short sleep (about 1 second) to let the UI settle, then confirm the new-conversation status block is NOT duplicated: selector ".status-bar-new-conversation" should still match exactly 1 element.`)
 }
 
 // Regression test for the iOS "keyboard closes after the first character" bug.
