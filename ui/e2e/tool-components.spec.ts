@@ -96,6 +96,9 @@ test.describe('Tool Component Verification', () => {
     await expectEmoji(toolCard(/^tree$/), '🌳');
     await expectEmoji(toolCard(/^metrics$/), '📊');
 
+    // Summary lines carry no native title tooltip; expanding shows the full text.
+    await expect(page.locator('.tool-command[title], .bash-tool-command[title]')).toHaveCount(0);
+
     // No tool falls back to GenericTool's gear.
     await expect(page.locator('.tool-emoji').filter({ hasText: '⚙️' })).toHaveCount(0);
   });

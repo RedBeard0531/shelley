@@ -4,7 +4,7 @@
     <div class="tool-header keyword-search-tool-header" @click="isExpanded = !isExpanded">
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">🔍</span>
-        <span class="tool-command" :title="fullText">{{ displayText }}</span>
+        <span class="tool-command">{{ displayText }}</span>
       </div>
       <button
         class="tool-toggle"
@@ -89,7 +89,6 @@ const truncateSearchTerms = (terms: string[], maxLen = 300) => {
   return joined.substring(0, maxLen) + "...";
 };
 
-const fullText = computed(() => query.value || searchTerms.value.join(", "));
 const displayText = computed(() => query.value || truncateSearchTerms(searchTerms.value));
 const isComplete = computed(() => !props.isRunning && props.toolResult !== undefined);
 </script>

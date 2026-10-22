@@ -20,7 +20,6 @@
           class="bash-tool-command"
           :source="displayCommand"
           language="shellscript"
-          :title="command"
         />
         <span v-else class="bash-tool-command">Output</span>
         <span

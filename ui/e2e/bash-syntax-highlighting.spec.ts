@@ -13,7 +13,9 @@ test("Bash commands are Shiki-tokenized without changing output rendering", asyn
   const bashTool = page.locator(".bash-tool").filter({ hasText: command }).first();
   const summary = bashTool.locator(".bash-tool-command");
   await expect(summary).toHaveText(command, { timeout: 30000 });
-  await expect(summary).toHaveAttribute("title", command);
+  // No native title tooltip: the browser renders it in a system font, and
+  // expanding the card already shows the full command.
+  await expect(summary).not.toHaveAttribute("title");
   await expect(summary.locator(".shelley-code-token").first()).toBeAttached();
 
   const summaryTokens = summary.locator(".shelley-code-token");
