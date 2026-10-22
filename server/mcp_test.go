@@ -140,12 +140,13 @@ func TestMCPIntegrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	discover := func(status int, body string) ([]mcpServerJSON, error) {
-		return mcpIntegrationsIn(t.Context(), env, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		integrations, err := listIntegrationsIn(t.Context(), env, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			if req.URL.String() != env.ReflectionURL()+"/integrations" {
 				t.Fatalf("unexpected reflection request: %s", req.URL)
 			}
 			return testHTTPResponse(status, body), nil
 		})})
+		return mcpIntegrationsOf(env, integrations), err
 	}
 	integrations, err := discover(200, `{"integrations":[
 		{"name":"kagi-mcp","type":"catalog","attributes":["type:mcp"]},

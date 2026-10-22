@@ -48,6 +48,9 @@ When a task matches a skill's description, run its activation command to read th
 {{if .MCPServers}}
 {{.MCPServersXML}}
 {{end}}
+{{if .ExeDevIntegrations}}
+{{.ExeDevIntegrationsXML}}
+{{end}}
 
 To offer the user a file to download, link it as [name](sandbox:/absolute/path).
 

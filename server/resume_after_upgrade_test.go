@@ -442,6 +442,7 @@ func TestPreclaimFailureBecomesManualInterruption(t *testing.T) {
 		srv.logger,
 		srv.toolSetConfig,
 		srv.integrationSkills,
+		srv.listIntegrations,
 		nil,
 		nil,
 		nil,

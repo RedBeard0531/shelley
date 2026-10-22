@@ -358,6 +358,7 @@ type Server struct {
 	conversationListStream   *conversationListStream
 	conversationListGitCache *conversationListGitCache
 	integrationSkills        *integrationSkillCache
+	listIntegrations         integrationLister
 	// fileListCache memoizes working-directory file listings for the fuzzy
 	// file finder (/api/find-files) so a burst of queries lists the tree once.
 	fileListCache *fileListCache
@@ -481,6 +482,7 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 	s.conversationListGitCache = newConversationListGitCache()
 	s.fileListCache = newFileListCache()
 	s.integrationSkills = newIntegrationSkillCache(logger, currentIntegrationSkillDiscoverer(logger))
+	s.listIntegrations = listCurrentIntegrations
 
 	// Persistent terminal sessions live alongside the database so that they
 	// survive shelley restarts. In tests DBPath is empty; use a unique dir so
@@ -1063,7 +1065,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		if role != roleSubagent {
 			config.ParentMessenger = nil
 		}
-		manager := NewConversationManager(conversationID, s.db, s.logger, config, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
+		manager := NewConversationManager(conversationID, s.db, s.logger, config, s.integrationSkills, s.listIntegrations, recordMessage, recordTurnStart, onStateChange, s.streamPub)
 		if snapshots, ok := s.llmManager.(interface {
 			GetServiceSnapshot(string) (llm.Service, string, uint64, error)
 		}); ok {

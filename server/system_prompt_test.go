@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -9,7 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"shelley.exe.dev/db"
 	"shelley.exe.dev/exeenv"
+	"shelley.exe.dev/llm"
 	"shelley.exe.dev/skills"
 )
 
@@ -854,7 +858,7 @@ func TestSubagentSystemPromptKeepsStableSkillsFirst(t *testing.T) {
 	prompt, _, err := generateSubagentSystemPromptWithIntegrationSkills(t.TempDir(), true, []skills.Skill{{
 		Name:        "stable-prefix",
 		Description: "Keep reusable guidance first.",
-	}}, nil)
+	}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1208,7 +1212,7 @@ func TestIntegrationSkillSnapshotIncludedInTopLevelAndSubagentPrompts(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	subagent, subSkills, err := generateSubagentSystemPromptWithIntegrationSkills(workingDir, true, integrationSkills, nil)
+	subagent, subSkills, err := generateSubagentSystemPromptWithIntegrationSkills(workingDir, true, integrationSkills, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1252,5 +1256,102 @@ func TestSystemPromptListsMCPServers(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+// TestSystemPromptListsExeDevIntegrations verifies that new top-level,
+// Assistant, and subagent conversations list the attached exe-dev
+// integrations, and only when there are some, alongside the MCP
+// integrations from the same listing.
+func TestSystemPromptListsExeDevIntegrations(t *testing.T) {
+	t.Parallel()
+	e := newProfileEnv(t)
+	env, err := exeenv.New("https", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attached []reflectionIntegration
+	e.srv.listIntegrations = func(context.Context) (exeenv.Environment, []reflectionIntegration, error) {
+		return env, attached, nil
+	}
+	// prompts starts a Default, an Assistant, and a subagent conversation and
+	// returns their system prompts.
+	prompts := func() map[string]string {
+		out := map[string]string{}
+		for _, profile := range []string{"Default", "Assistant"} {
+			var created struct {
+				ConversationID string `json:"conversation_id"`
+			}
+			body := e.want(201, "POST", "/api/conversations/new", `{"message":"hello","cwd":"`+t.TempDir()+`","conversation_options":{"profile":"`+profile+`"}}`)
+			if err := json.Unmarshal([]byte(body), &created); err != nil {
+				t.Fatal(err)
+			}
+			e.waitTurn(created.ConversationID, 0)
+			out[profile] = systemText(e.lastTurnRequest())
+		}
+		parent, err := e.database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		child, err := e.database.CreateSubagentConversation(t.Context(), "subagent-"+parent.ConversationID, parent.ConversationID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.srv.getOrCreateConversationManager(t.Context(), child.ConversationID, ""); err != nil {
+			t.Fatal(err)
+		}
+		msgs := listMessages(t, e.database, child.ConversationID)
+		if len(msgs) == 0 || msgs[0].Type != string(db.MessageTypeSystem) || msgs[0].LlmData == nil {
+			t.Fatalf("subagent has no system prompt: %+v", msgs)
+		}
+		var system llm.Message
+		if err := json.Unmarshal([]byte(*msgs[0].LlmData), &system); err != nil {
+			t.Fatal(err)
+		}
+		out["subagent"] = system.Content[0].Text
+		return out
+	}
+
+	attached = []reflectionIntegration{
+		{Name: "kagi", Type: "catalog", Attributes: []string{"type:mcp"}},
+		{Name: "proxy", Type: "http-proxy"},
+	}
+	for name, prompt := range prompts() {
+		if strings.Contains(prompt, "exe_dev_integrations") {
+			t.Fatalf("%s: exe_dev_integrations block with none attached:\n%s", name, prompt)
+		}
+	}
+
+	attached = append(
+		attached,
+		reflectionIntegration{Name: "exe-dev", Type: "exe-dev"},
+		reflectionIntegration{Name: "ops", Type: "exe-dev", Comment: "ops VMs only"},
+	)
+	for name, prompt := range prompts() {
+		start, end := strings.Index(prompt, "<exe_dev_integrations>\n"), strings.Index(prompt, "</exe_dev_integrations>")
+		if start < 0 || end < start {
+			t.Fatalf("%s: no exe_dev_integrations block:\n%s", name, prompt)
+		}
+		block := prompt[start:end]
+		for _, want := range []string{"curl <url>/", "- exe-dev: https://exe-dev.int.example.test\n", "- ops: https://ops.int.example.test (ops VMs only)\n"} {
+			if !strings.Contains(block, want) {
+				t.Fatalf("%s: block missing %q:\n%s", name, want, block)
+			}
+		}
+		if strings.Contains(block, "kagi.int") || strings.Contains(block, "proxy.int") {
+			t.Fatalf("%s: block lists other integrations:\n%s", name, block)
+		}
+		if !strings.Contains(prompt, "- kagi\n</mcp_servers>") {
+			t.Fatalf("%s: MCP integration missing:\n%s", name, prompt)
+		}
+	}
+
+	// The MCP API reads the same listing.
+	var servers []mcpServerJSON
+	if err := json.Unmarshal([]byte(e.want(200, "GET", "/api/mcp/servers", "")), &servers); err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 || servers[0].Name != "kagi" || servers[0].Integration != "kagi" || servers[0].URL != "https://kagi.int.example.test/mcp" {
+		t.Fatalf("MCP servers: %+v", servers)
 	}
 }

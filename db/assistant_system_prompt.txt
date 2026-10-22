@@ -36,5 +36,8 @@ When a task matches a skill's description, run its activation command to read th
 {{if .MCPServers}}
 {{.MCPServersXML}}
 {{end}}
+{{if .ExeDevIntegrations}}
+{{.ExeDevIntegrationsXML}}
+{{end}}
 
 Prefer fewer, richer tool calls.

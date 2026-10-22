@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"testing"
 	"time"
 
 	"shelley.exe.dev/db/generated"
@@ -161,7 +160,7 @@ func (s *Server) getMCPServer(ctx context.Context, name string) (mcp.Server, err
 		}
 		return mcpServerFromRow(row)
 	}
-	integrations, err := mcpIntegrations(ctx)
+	integrations, err := s.mcpIntegrations(ctx)
 	if err != nil {
 		return mcp.Server{}, err
 	}
@@ -206,7 +205,7 @@ func (s *Server) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
-	integrations, err := mcpIntegrations(r.Context())
+	integrations, err := s.mcpIntegrations(r.Context())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("discovering MCP integrations: %v", err), http.StatusBadGateway)
 		return
@@ -216,27 +215,13 @@ func (s *Server) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
 
 // mcpIntegrations returns the MCP integrations attached to this VM. They are
 // looked up each time, not stored; exe.dev's proxy adds their credentials.
-func mcpIntegrations(ctx context.Context) ([]mcpServerJSON, error) {
-	if !isExeDev() || testing.Testing() {
-		return nil, nil
-	}
-	env, err := exeenv.Current()
-	if err != nil {
-		return nil, err
-	}
-	return mcpIntegrationsIn(ctx, env, reflectionHTTPClient())
+func (s *Server) mcpIntegrations(ctx context.Context) ([]mcpServerJSON, error) {
+	env, integrations, err := s.listIntegrations(ctx)
+	return mcpIntegrationsOf(env, integrations), err
 }
 
-func mcpIntegrationsIn(ctx context.Context, env exeenv.Environment, client *http.Client) ([]mcpServerJSON, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	integrations, status, err := listAttachedIntegrations(ctx, client, env)
-	if status == http.StatusForbidden {
-		return nil, nil // reflection isn't attached
-	}
-	if err != nil {
-		return nil, err
-	}
+// mcpIntegrationsOf returns the MCP integrations among integrations.
+func mcpIntegrationsOf(env exeenv.Environment, integrations []reflectionIntegration) []mcpServerJSON {
 	var out []mcpServerJSON
 	for _, ig := range integrations {
 		if slices.Contains(ig.Attributes, "type:mcp") {
@@ -246,7 +231,7 @@ func mcpIntegrationsIn(ctx context.Context, env exeenv.Environment, client *http
 			})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // mergeMCPIntegrations adds integrations to servers. A registered server an

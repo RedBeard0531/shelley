@@ -43,6 +43,8 @@ type SystemPromptData struct {
 	Skills           []skills.Skill
 	UserEmail        string          // The exe.dev auth email of the user, if known
 	MCPServers       []MCPServerInfo // Registered MCP servers, for the mcp skill
+	// ExeDevIntegrations are the attached exe-dev integrations.
+	ExeDevIntegrations []ExeDevIntegrationInfo
 
 	template string // the template to render, "" for the built-in one
 }
@@ -69,6 +71,7 @@ var systemPromptVariables = []SystemPromptVariable{
 	{".SkillsXML", "The available skills, as an XML block."},
 	{".Skills", "The available skills: .Name, .Description, .Activate, …"},
 	{".MCPServersXML", "The registered MCP servers, as an XML block."},
+	{".ExeDevIntegrationsXML", "On exe.dev, the attached exe-dev integrations, which use the user's exe.dev account, as an XML block."},
 }
 
 // validateSystemPromptTemplate reports why tmpl can't be rendered, by
@@ -83,15 +86,16 @@ func validateSystemPromptTemplate(tmpl string) *TemplateProblem {
 			InjectFileContents:  map[string]string{"/home/user/project/AGENTS.md": "guidance"},
 			SubdirGuidanceFiles: []string{"/home/user/project/ui/AGENTS.md"},
 		},
-		IsExeDev:        true,
-		IsSudoAvailable: true,
-		Hostname:        "vm.exe.xyz",
-		DefaultPort:     8000,
-		SkillsXML:       "<available_skills></available_skills>",
-		Skills:          []skills.Skill{{Name: "skill", Description: "A skill."}},
-		UserEmail:       "user@example.com",
-		MCPServers:      []MCPServerInfo{{Name: "server", Description: "An MCP server."}},
-		template:        tmpl,
+		IsExeDev:           true,
+		IsSudoAvailable:    true,
+		Hostname:           "vm.exe.xyz",
+		DefaultPort:        8000,
+		SkillsXML:          "<available_skills></available_skills>",
+		Skills:             []skills.Skill{{Name: "skill", Description: "A skill."}},
+		UserEmail:          "user@example.com",
+		MCPServers:         []MCPServerInfo{{Name: "server", Description: "An MCP server."}},
+		ExeDevIntegrations: []ExeDevIntegrationInfo{{Name: "exe-dev", URL: "https://exe-dev.int.exe.xyz"}},
+		template:           tmpl,
 	}} {
 		if _, err := renderSystemPrompt(data); err != nil {
 			return err.(*TemplateProblem)
@@ -206,6 +210,40 @@ func mcpServersXML(servers []MCPServerInfo) string {
 	return b.String()
 }
 
+// ExeDevIntegrationInfo is an attached exe-dev integration, named in the
+// system prompt so the model knows it can use the user's exe.dev account.
+type ExeDevIntegrationInfo struct {
+	Name    string
+	URL     string
+	Comment string
+}
+
+// ExeDevIntegrationsXML renders the attached exe-dev integrations as a block
+// for the system prompt, or "" when none are attached.
+func (d *SystemPromptData) ExeDevIntegrationsXML() string {
+	return exeDevIntegrationsXML(d.ExeDevIntegrations)
+}
+
+// exeDevIntegrationsXML renders integrations as an <exe_dev_integrations>
+// block, or "" when empty.
+func exeDevIntegrationsXML(integrations []ExeDevIntegrationInfo) string {
+	if len(integrations) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<exe_dev_integrations>\n")
+	b.WriteString("These integrations act as the user on exe.dev, with no credentials needed. `curl <url>/` says how to use one and what it may do; `curl -X POST <url>/exec -d whoami` runs an exe.dev CLI command. Ask the user before deleting VMs, sharing, or other hard-to-undo account changes.\n")
+	for _, ig := range integrations {
+		if comment := strings.TrimSpace(ig.Comment); comment != "" {
+			fmt.Fprintf(&b, "- %s: %s (%s)\n", ig.Name, ig.URL, comment)
+		} else {
+			fmt.Fprintf(&b, "- %s: %s\n", ig.Name, ig.URL)
+		}
+	}
+	b.WriteString("</exe_dev_integrations>")
+	return b.String()
+}
+
 // DBPath is the path to the shelley database, set at startup
 var DBPath string
 
@@ -263,6 +301,14 @@ func WithTemplate(tmpl string) SystemPromptOption {
 func WithMCPServers(servers []MCPServerInfo) SystemPromptOption {
 	return func(d *SystemPromptData) {
 		d.MCPServers = servers
+	}
+}
+
+// WithExeDevIntegrations lists the attached exe-dev integrations in the
+// system prompt.
+func WithExeDevIntegrations(integrations []ExeDevIntegrationInfo) SystemPromptOption {
+	return func(d *SystemPromptData) {
+		d.ExeDevIntegrations = integrations
 	}
 }
 
@@ -1129,22 +1175,30 @@ type SubagentSystemPromptData struct {
 	SkillsXML     string // XML block for available skills
 	Skills        []skills.Skill
 	MCPServers    []MCPServerInfo // Registered MCP servers, for the mcp skill
+	// ExeDevIntegrations are the attached exe-dev integrations.
+	ExeDevIntegrations []ExeDevIntegrationInfo
 }
 
 // MCPServersXML renders the registered MCP servers for the subagent prompt.
 func (d *SubagentSystemPromptData) MCPServersXML() string { return mcpServersXML(d.MCPServers) }
 
+// ExeDevIntegrationsXML renders the attached exe-dev integrations for the
+// subagent prompt.
+func (d *SubagentSystemPromptData) ExeDevIntegrationsXML() string {
+	return exeDevIntegrationsXML(d.ExeDevIntegrations)
+}
+
 // GenerateSubagentSystemPrompt generates a minimal system prompt for subagent conversations.
 func GenerateSubagentSystemPrompt(workingDir, parentConversationID string) (string, error) {
-	prompt, _, err := generateSubagentSystemPromptData(workingDir, parentConversationID, true, nil, nil)
+	prompt, _, err := generateSubagentSystemPromptData(workingDir, parentConversationID, true, nil, nil, nil)
 	return prompt, err
 }
 
-func generateSubagentSystemPromptWithIntegrationSkills(workingDir string, messageParent bool, integrationSkills []skills.Skill, mcpServers []MCPServerInfo) (string, []skills.Skill, error) {
-	return generateSubagentSystemPromptData(workingDir, "", messageParent, integrationSkills, mcpServers)
+func generateSubagentSystemPromptWithIntegrationSkills(workingDir string, messageParent bool, integrationSkills []skills.Skill, mcpServers []MCPServerInfo, exeDev []ExeDevIntegrationInfo) (string, []skills.Skill, error) {
+	return generateSubagentSystemPromptData(workingDir, "", messageParent, integrationSkills, mcpServers, exeDev)
 }
 
-func generateSubagentSystemPromptData(workingDir, parentConversationID string, messageParent bool, integrationSkills []skills.Skill, mcpServers []MCPServerInfo) (string, []skills.Skill, error) {
+func generateSubagentSystemPromptData(workingDir, parentConversationID string, messageParent bool, integrationSkills []skills.Skill, mcpServers []MCPServerInfo, exeDev []ExeDevIntegrationInfo) (string, []skills.Skill, error) {
 	wd := workingDir
 	if wd == "" {
 		var err error
@@ -1155,11 +1209,12 @@ func generateSubagentSystemPromptData(workingDir, parentConversationID string, m
 	}
 
 	data := &SubagentSystemPromptData{
-		WorkingDirectory: wd,
-		ShelleyDBPath:    DBPath,
-		ConversationID:   parentConversationID,
-		MessageParent:    messageParent,
-		MCPServers:       mcpServers,
+		WorkingDirectory:   wd,
+		ShelleyDBPath:      DBPath,
+		ConversationID:     parentConversationID,
+		MessageParent:      messageParent,
+		MCPServers:         mcpServers,
+		ExeDevIntegrations: exeDev,
 	}
 
 	// Try to collect git info

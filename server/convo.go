@@ -100,6 +100,7 @@ type ConversationManager struct {
 	logger                 *slog.Logger
 	toolSetConfig          claudetool.ToolSetConfig
 	integrationSkills      *integrationSkillCache
+	listIntegrations       integrationLister
 	toolSet                *claudetool.ToolSet // created per-conversation when loop starts
 
 	subpub *subpub.SubPub[StreamResponse]
@@ -230,7 +231,7 @@ type ConversationManager struct {
 // NewConversationManager constructs a manager with dependencies but defers hydration until needed.
 type turnStartRecordFunc func(context.Context, llm.Message, llm.Usage, []llm.PurposedUsage) (*generated.Message, error)
 
-func NewConversationManager(conversationID string, database *db.DB, baseLogger *slog.Logger, toolSetConfig claudetool.ToolSetConfig, integrationSkills *integrationSkillCache, recordMessage loop.MessageRecordFunc, recordTurnStartMessage turnStartRecordFunc, onStateChange func(ConversationState), streamPub *subpub.SubPub[StreamResponse]) *ConversationManager {
+func NewConversationManager(conversationID string, database *db.DB, baseLogger *slog.Logger, toolSetConfig claudetool.ToolSetConfig, integrationSkills *integrationSkillCache, listIntegrations integrationLister, recordMessage loop.MessageRecordFunc, recordTurnStartMessage turnStartRecordFunc, onStateChange func(ConversationState), streamPub *subpub.SubPub[StreamResponse]) *ConversationManager {
 	logger := baseLogger
 	if logger == nil {
 		logger = slog.Default()
@@ -246,6 +247,7 @@ func NewConversationManager(conversationID string, database *db.DB, baseLogger *
 		logger:                 logger,
 		toolSetConfig:          toolSetConfig,
 		integrationSkills:      integrationSkills,
+		listIntegrations:       listIntegrations,
 		subpub:                 subpub.New[StreamResponse](),
 		streamPub:              streamPub,
 		onStateChange:          onStateChange,
@@ -1725,9 +1727,24 @@ func (cm *ConversationManager) recreateBtwReaderSystemPrompt(ctx context.Context
 	return created, nil
 }
 
-// mcpServerInfos lists the registered MCP servers and attached MCP
+// promptIntegrations lists, for the system prompt, the registered MCP servers
+// with the attached MCP integrations, and the attached exe-dev integrations.
+// Failures are logged: the prompt goes on without what failed.
+func (cm *ConversationManager) promptIntegrations(ctx context.Context) ([]MCPServerInfo, []ExeDevIntegrationInfo) {
+	env, integrations, err := cm.listIntegrations(ctx)
+	if err != nil {
+		cm.logger.Warn("failed to list integrations for system prompt", "error", err)
+	}
+	servers, err := cm.mcpServerInfos(ctx, mcpIntegrationsOf(env, integrations))
+	if err != nil {
+		cm.logger.Warn("failed to list MCP servers for system prompt", "error", err)
+	}
+	return servers, exeDevIntegrationsOf(env, integrations)
+}
+
+// mcpServerInfos lists the registered MCP servers and the attached MCP
 // integrations for the system prompt.
-func (cm *ConversationManager) mcpServerInfos(ctx context.Context) ([]MCPServerInfo, error) {
+func (cm *ConversationManager) mcpServerInfos(ctx context.Context, integrations []mcpServerJSON) ([]MCPServerInfo, error) {
 	var rows []generated.McpServer
 	err := cm.db.Queries(ctx, func(q *generated.Queries) (err error) {
 		rows, err = q.ListMCPServers(ctx)
@@ -1739,10 +1756,6 @@ func (cm *ConversationManager) mcpServerInfos(ctx context.Context) ([]MCPServerI
 	all := make([]mcpServerJSON, len(rows))
 	for i, row := range rows {
 		all[i].Server = mcp.Server{Name: row.Name, URL: row.Url, Description: row.Description}
-	}
-	integrations, err := mcpIntegrations(ctx)
-	if err != nil {
-		cm.logger.Warn("failed to discover MCP integrations for system prompt", "error", err)
 	}
 	all = mergeMCPIntegrations(all, integrations)
 	servers := make([]MCPServerInfo, len(all))
@@ -1780,12 +1793,8 @@ func (cm *ConversationManager) renderSystemPrompt(ctx context.Context, opts db.C
 	if cm.userEmail != "" {
 		promptOpts = append(promptOpts, WithUserEmail(cm.userEmail))
 	}
-	if servers, err := cm.mcpServerInfos(ctx); err != nil {
-		cm.logger.Warn("failed to list MCP servers for system prompt", "error", err)
-	} else if len(servers) > 0 {
-		promptOpts = append(promptOpts, WithMCPServers(servers))
-	}
-	promptOpts = append(promptOpts, WithTemplate(opts.SystemPrompt))
+	servers, exeDev := cm.promptIntegrations(ctx)
+	promptOpts = append(promptOpts, WithMCPServers(servers), WithExeDevIntegrations(exeDev), WithTemplate(opts.SystemPrompt))
 	text, promptSkills, err := generateSystemPromptWithIntegrationSkills(cm.cwd, cm.integrationSkills.Skills(ctx), promptOpts...)
 	if err != nil {
 		return renderedSystemPrompt{}, fmt.Errorf("failed to generate system prompt: %w", err)
@@ -1924,17 +1933,15 @@ func (cm *ConversationManager) systemPromptDisplayData(opts db.ConversationOptio
 // renderSubagentSystemPrompt is renderSystemPrompt for subagents and
 // internal workers.
 func (cm *ConversationManager) renderSubagentSystemPrompt(ctx context.Context, opts db.ConversationOptions) (renderedSystemPrompt, error) {
-	// Only subagents use MCP tools; internal workers (commit tours,
-	// transcriptions) don't, and notifyMCPServersChanged skips them too.
+	// Only subagents use MCP tools and exe-dev integrations; internal
+	// workers (commit tours, transcriptions) don't, and
+	// notifyMCPServersChanged skips them too.
 	var mcpServers []MCPServerInfo
+	var exeDev []ExeDevIntegrationInfo
 	if cm.role == roleSubagent {
-		if servers, err := cm.mcpServerInfos(ctx); err != nil {
-			cm.logger.Warn("failed to list MCP servers for subagent system prompt", "error", err)
-		} else {
-			mcpServers = servers
-		}
+		mcpServers, exeDev = cm.promptIntegrations(ctx)
 	}
-	text, promptSkills, err := generateSubagentSystemPromptWithIntegrationSkills(cm.cwd, cm.role == roleSubagent, cm.integrationSkills.Skills(ctx), mcpServers)
+	text, promptSkills, err := generateSubagentSystemPromptWithIntegrationSkills(cm.cwd, cm.role == roleSubagent, cm.integrationSkills.Skills(ctx), mcpServers, exeDev)
 	if err != nil {
 		return renderedSystemPrompt{}, fmt.Errorf("failed to generate subagent system prompt: %w", err)
 	}

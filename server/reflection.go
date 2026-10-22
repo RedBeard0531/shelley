@@ -268,6 +268,49 @@ func listAttachedIntegrations(ctx context.Context, client *http.Client, env exee
 	return body.Integrations, resp.StatusCode, nil
 }
 
+// integrationLister lists the integrations attached to this VM, with the
+// environment their URLs are in.
+type integrationLister func(context.Context) (exeenv.Environment, []reflectionIntegration, error)
+
+// listCurrentIntegrations is the integrationLister for this VM. It lists none
+// off exe.dev and under `go test`, which must not probe the real reflection
+// endpoint.
+func listCurrentIntegrations(ctx context.Context) (exeenv.Environment, []reflectionIntegration, error) {
+	if !isExeDev() || testing.Testing() {
+		return exeenv.Environment{}, nil, nil
+	}
+	env, err := exeenv.Current()
+	if err != nil {
+		return env, nil, err
+	}
+	integrations, err := listIntegrationsIn(ctx, env, reflectionHTTPClient())
+	return env, integrations, err
+}
+
+// listIntegrationsIn lists the integrations attached in env, or none when
+// reflection isn't attached.
+func listIntegrationsIn(ctx context.Context, env exeenv.Environment, client *http.Client) ([]reflectionIntegration, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	integrations, status, err := listAttachedIntegrations(ctx, client, env)
+	if status == http.StatusForbidden {
+		return nil, nil // reflection isn't attached
+	}
+	return integrations, err
+}
+
+// exeDevIntegrationsOf returns the exe-dev integrations among integrations:
+// they use the exe.dev API as the user.
+func exeDevIntegrationsOf(env exeenv.Environment, integrations []reflectionIntegration) []ExeDevIntegrationInfo {
+	var out []ExeDevIntegrationInfo
+	for _, ig := range integrations {
+		if ig.Type == "exe-dev" {
+			out = append(out, ExeDevIntegrationInfo{Name: ig.Name, URL: env.IntegrationURL(ig.Name, ig.Team), Comment: ig.Comment})
+		}
+	}
+	return out
+}
+
 // handleIntegrations exposes attached integration metadata from reflection.
 // Creating, attaching, and configuring integrations stays with exe.dev.
 func handleIntegrations(w http.ResponseWriter, r *http.Request) {
