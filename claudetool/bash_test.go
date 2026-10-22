@@ -3,11 +3,15 @@ package claudetool
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/josharian/sockpath"
+	"shelley.exe.dev/gitstate"
 )
 
 func TestBashToolExitCode(t *testing.T) {
@@ -186,6 +190,69 @@ func TestChainedCdLeavesDir(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBashTouchesGitDirs checks that the bash tool tells its git tracker
+// where commands run git, resolving ~ and paths relative to its directory.
+func TestBashTouchesGitDirs(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	wd := filepath.Join(root, "wd")
+	relative, tilde := filepath.Join(wd, "relative"), filepath.Join(root, "home", "tilde")
+	for _, dir := range []string{relative, tilde} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "T"}, {"commit", "-q", "--no-verify", "--allow-empty", "-m", "initial"}} {
+			if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v: %s", args, err, out)
+			}
+		}
+	}
+	mwd := NewMutableWorkingDir(wd)
+	tracker := gitstate.NewTracker(mwd.Get)
+	jobs := make(recordingJobs, 1)
+	tool := (&BashTool{WorkingDir: mwd, GitTracker: tracker, Jobs: jobs}).Tool()
+	run := func(req bashInput) {
+		t.Helper()
+		input, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out := tool.Run(t.Context(), input); out.Error != nil {
+			t.Fatalf("run bash tool: %v", out.Error)
+		}
+	}
+	wantChanges := func(want ...string) {
+		t.Helper()
+		var got []string
+		for _, state := range tracker.Changes() {
+			got = append(got, state.Worktree+" "+state.Subject)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("changes = %q, want %q", got, want)
+		}
+	}
+
+	run(bashInput{Command: "cd relative && git commit -q --no-verify --allow-empty -m one && git -C ~/tilde commit -q --no-verify --allow-empty -m two"})
+	wantChanges(tilde+" two", relative+" one")
+	// Once its commands have exited, others' commits are not reported.
+	if out, err := exec.Command("git", "-C", relative, "commit", "-q", "--no-verify", "--allow-empty", "-m", "external").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	wantChanges()
+
+	// A background command's repositories are watched until it exits.
+	g := newGate(t)
+	run(bashInput{Command: "cd relative && " + g.wait() + " && git commit -q --no-verify --allow-empty -m later", Background: true})
+	bg := <-jobs
+	wantChanges()
+	g.release(t)
+	waitClosed(t, bg.exited, "background commit")
+	wantChanges(relative + " later")
 }
 
 func TestBashChainedCdHint(t *testing.T) {

@@ -484,6 +484,55 @@ func TestChainedCdPaths(t *testing.T) {
 	}
 }
 
+func TestGitDirs(t *testing.T) {
+	tests := []struct {
+		script string
+		want   []string
+	}{
+		{"git commit -m x", []string{"/wd"}},
+		{"cd /repo && git commit -m x", []string{"/repo"}},
+		{"cd /repo; make; git status", []string{"/repo"}},
+		{"cd ~/repo && git log", []string{"/home/u/repo"}},
+		{"cd && git log", []string{"/home/u"}},
+		{"cd sub && cd ../other && git add a && git commit -m x", []string{"/wd/other"}},
+		{"cd /a && git log && cd /b && git log", []string{"/a", "/b"}},
+		{"git -C /repo commit && git -C sub -C deeper log", []string{"/repo", "/wd/sub/deeper"}},
+		{"cd /repo && git -c core.pager=cat -C sub log", []string{"/repo/sub"}},
+		{"GIT_EDITOR=true git rebase --continue", []string{"/wd"}},
+		{"if git diff --quiet; then cd /repo; git pull; fi", []string{"/wd", "/repo"}},
+		{`cd '/my repo' && git -C "sub dir" log`, []string{"/my repo/sub dir"}},
+		{`cd /my\ repo && git log`, []string{"/my repo"}},
+		{"cd -P -- /repo && git log", []string{"/repo"}},
+		// Only an unquoted ~ means home.
+		{`cd "~/x" && git -C \~/y log`, []string{"/wd/~/x/~/y"}},
+		// Subshells, substitutions, pipelines, functions and background
+		// commands scope their cds.
+		{"(cd /repo && git log) && git status", []string{"/repo", "/wd"}},
+		{"echo $(cd /repo && git rev-parse HEAD) && git log", []string{"/repo", "/wd"}},
+		{"cd /a; cat <(cd /b && git status); git commit", []string{"/b", "/a"}},
+		{"cd /a | git log; git status", []string{"/wd"}},
+		{"f() { cd /a; git log; }; git status", []string{"/a", "/wd"}},
+		{"cd /a && git fetch &\ngit status", []string{"/a", "/wd"}},
+		// Directories reached through non-constant paths are unknown.
+		{`cd "$DIR" && git commit`, nil},
+		{`cd "/repo/$sub" && git commit`, nil},
+		{`cd $'/repo' && git commit`, nil},
+		{`cd /repo && git -C "$sub" log && git log`, []string{"/repo"}},
+		{`cd "$DIR" && cd /repo && git log`, []string{"/repo"}},
+		{"cd - && git log", nil},
+		{"cd ~other && git log", nil},
+		{"cd /repo && make", nil},
+		{"cd /repo &&", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.script, func(t *testing.T) {
+			if got := GitDirs(tc.script, "/wd", "/home/u"); !slices.Equal(got, tc.want) {
+				t.Errorf("GitDirs(%q) = %q, want %q", tc.script, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAddCoauthorTrailer(t *testing.T) {
 	const trailer = "Co-authored-by: Shelley <shelley@exe.dev>"
 	tests := []struct {

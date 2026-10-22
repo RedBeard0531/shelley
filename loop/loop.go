@@ -41,15 +41,18 @@ type GitStateChangeFunc func(ctx context.Context, state *gitstate.GitState)
 
 // Config contains all configuration needed to create a Loop.
 type Config struct {
-	LLM              llm.Service
-	ModelID          string
-	History          []llm.Message
-	Tools            []*llm.Tool
-	RecordMessage    MessageRecordFunc
-	RecordWarning    WarningRecordFunc
-	Logger           *slog.Logger
-	System           []llm.SystemContent
-	WorkingDir       string // working directory for tools
+	LLM           llm.Service
+	ModelID       string
+	History       []llm.Message
+	Tools         []*llm.Tool
+	RecordMessage MessageRecordFunc
+	RecordWarning WarningRecordFunc
+	Logger        *slog.Logger
+	System        []llm.SystemContent
+	WorkingDir    string // working directory for tools
+	// GitTracker, if set, is checked for git state changes at the end of
+	// each turn, and OnGitStateChange is called with each change.
+	GitTracker       *gitstate.Tracker
 	OnGitStateChange GitStateChangeFunc
 	// ThinkingLevel, when non-default, is sent on every llm.Request the loop
 	// issues. Per-conversation override; ThinkingLevelDefault means "use the
@@ -58,10 +61,6 @@ type Config struct {
 	// PromptCacheKey overrides provider cache affinity for the loop's main LLM
 	// requests. Tool-initiated LLM calls retain conversation-local affinity.
 	PromptCacheKey string
-	// GetWorkingDir returns the current working directory for tools.
-	// If set, this is called at end of turn to check for git state changes.
-	// If nil, Config.WorkingDir is used as a static value.
-	GetWorkingDir func() string
 	// OnToolProgress is called when a tool reports progress (partial output).
 	// It may be called concurrently by sibling tools.
 	OnToolProgress llm.ToolProgressFunc
@@ -114,9 +113,8 @@ type Loop struct {
 	logger           *slog.Logger
 	system           []llm.SystemContent
 	workingDir       string
+	gitTracker       *gitstate.Tracker
 	onGitStateChange GitStateChangeFunc
-	getWorkingDir    func() string
-	lastGitState     *gitstate.GitState
 	onToolProgress   llm.ToolProgressFunc
 	onStreamDelta    func(llm.StreamDelta)
 	onStreamDone     func()
@@ -136,13 +134,6 @@ func NewLoop(config Config) *Loop {
 		logger = slog.Default()
 	}
 
-	// Get initial git state
-	workingDir := config.WorkingDir
-	if config.GetWorkingDir != nil {
-		workingDir = config.GetWorkingDir()
-	}
-	initialGitState := gitstate.GetGitState(workingDir)
-
 	return &Loop{
 		llm:              config.LLM,
 		modelID:          config.ModelID,
@@ -154,9 +145,8 @@ func NewLoop(config Config) *Loop {
 		logger:           logger,
 		system:           config.System,
 		workingDir:       config.WorkingDir,
+		gitTracker:       config.GitTracker,
 		onGitStateChange: config.OnGitStateChange,
-		getWorkingDir:    config.GetWorkingDir,
-		lastGitState:     initialGitState,
 		onToolProgress:   config.OnToolProgress,
 		onStreamDelta:    config.OnStreamDelta,
 		onStreamDone:     config.OnStreamDone,
@@ -457,37 +447,15 @@ func (l *Loop) hooks() Hooks {
 }
 
 func (l *Loop) checkGitStateChange(ctx context.Context) {
-	if l.onGitStateChange == nil {
+	if l.gitTracker == nil || l.onGitStateChange == nil {
 		return
 	}
-
-	// Get current working directory
-	workingDir := l.workingDir
-	if l.getWorkingDir != nil {
-		workingDir = l.getWorkingDir()
-	}
-
-	// Get current git state
-	currentState := gitstate.GetGitState(workingDir)
-
-	// Compare with last known state
-	l.mu.Lock()
-	lastState := l.lastGitState
-	l.mu.Unlock()
-
-	// Check if state changed
-	if !currentState.Equal(lastState) {
-		l.mu.Lock()
-		l.lastGitState = currentState
-		l.mu.Unlock()
-
-		if currentState.IsRepo {
-			l.logger.Debug("git state changed",
-				"worktree", currentState.Worktree,
-				"branch", currentState.Branch,
-				"commit", currentState.Commit)
-			l.onGitStateChange(ctx, currentState)
-		}
+	for _, state := range l.gitTracker.Changes() {
+		l.logger.Debug("git state changed",
+			"worktree", state.Worktree,
+			"branch", state.Branch,
+			"commit", state.Commit)
+		l.onGitStateChange(ctx, state)
 	}
 }
 

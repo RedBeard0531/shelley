@@ -3,6 +3,8 @@ package bashkit
 import (
 	"bytes"
 	"fmt"
+	"path"
+	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -166,6 +168,166 @@ func ChainedCdPaths(bashScript string) []string {
 	}
 	checkStmts(file.Stmts)
 	return paths
+}
+
+// GitDirs reports the directories bashScript runs git commands in when
+// started in workingDir, in order of first use, following cd commands and
+// git's -C option. Both workingDir and home must be absolute, as are the
+// results. Directories reached through non-constant paths are omitted. A cd
+// in a conditional or loop counts as run.
+func GitDirs(bashScript, workingDir, home string) []string {
+	file, err := syntax.NewParser().Parse(strings.NewReader(bashScript), "")
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	dir := workingDir // where the next command runs; "" if unknown
+	var visit func(syntax.Node) bool
+	// scoped visits nodes that run in a subshell, or in a function body
+	// that may never be called, so a cd there does not outlive them.
+	scoped := func(nodes ...syntax.Node) bool {
+		for _, n := range nodes {
+			saved := dir
+			syntax.Walk(n, visit)
+			dir = saved
+		}
+		return false
+	}
+	visit = func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.Stmt:
+			if n.Background || n.Coprocess {
+				return scoped(n.Cmd)
+			}
+		case *syntax.Subshell:
+			return scoped(&syntax.Block{Stmts: n.Stmts})
+		case *syntax.CmdSubst:
+			return scoped(&syntax.Block{Stmts: n.Stmts})
+		case *syntax.ProcSubst:
+			return scoped(&syntax.Block{Stmts: n.Stmts})
+		case *syntax.FuncDecl:
+			return scoped(n.Body)
+		case *syntax.BinaryCmd:
+			if n.Op == syntax.Pipe || n.Op == syntax.PipeAll {
+				return scoped(n.X, n.Y)
+			}
+		case *syntax.CallExpr:
+			if len(n.Args) == 0 {
+				return true
+			}
+			switch n.Args[0].Lit() {
+			case "cd":
+				dir = joinPath(dir, cdTarget(n.Args[1:], home))
+			case "git":
+				if d := gitDir(dir, n.Args[1:], home); d != "" && !slices.Contains(dirs, d) {
+					dirs = append(dirs, d)
+				}
+			}
+		}
+		return true
+	}
+	syntax.Walk(file, visit)
+	return dirs
+}
+
+// cdTarget returns the directory operand of a cd command with args, home if
+// there is none, or "" if it is not constant.
+func cdTarget(args []*syntax.Word, home string) string {
+	for i, arg := range args {
+		switch a := arg.Lit(); {
+		case a == "--":
+			if i+1 < len(args) {
+				return constPath(args[i+1], home)
+			}
+			return home
+		case a == "-":
+			return "" // the previous directory
+		case len(a) < 2 || a[0] != '-':
+			return constPath(arg, home)
+		}
+	}
+	return home
+}
+
+// gitDir returns the directory a git command with args runs in when started
+// in dir, applying any -C options.
+func gitDir(dir string, args []*syntax.Word, home string) string {
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i].Lit(); {
+		case arg == "-C" && i+1 < len(args):
+			i++
+			dir = joinPath(dir, constPath(args[i], home))
+		case arg == "-c":
+			i++
+		case !strings.HasPrefix(arg, "-"):
+			return dir // the subcommand
+		}
+	}
+	return dir
+}
+
+// joinPath resolves target against dir, as cd and git -C do. A relative
+// target against an unknown dir, or an unknown target, is unknown ("").
+func joinPath(dir, target string) string {
+	switch {
+	case path.IsAbs(target):
+		return path.Clean(target)
+	case target == "" || dir == "":
+		return ""
+	}
+	return path.Join(dir, target)
+}
+
+// constPath returns the value of w after tilde expansion, for a ~ or ~/
+// prefix, and quote removal. It returns "" if w has other expansions.
+func constPath(w *syntax.Word, home string) string {
+	var b strings.Builder
+	for i, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			value := p.Value
+			if i == 0 && strings.HasPrefix(value, "~") {
+				if home == "" || !strings.HasPrefix(value, "~/") && (value != "~" || len(w.Parts) > 1) {
+					return "" // ~user, or quotes in the tilde prefix
+				}
+				b.WriteString(home)
+				value = value[1:]
+			}
+			b.WriteString(unescape(value, ""))
+		case *syntax.SglQuoted:
+			if p.Dollar {
+				return ""
+			}
+			b.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			if p.Dollar {
+				return ""
+			}
+			for _, q := range p.Parts {
+				lit, ok := q.(*syntax.Lit)
+				if !ok {
+					return ""
+				}
+				b.WriteString(unescape(lit.Value, "$`\"\\"))
+			}
+		default:
+			return ""
+		}
+	}
+	return b.String()
+}
+
+// unescape removes the backslashes that escape characters in s: any
+// character if only is empty, else only those in only.
+func unescape(s, only string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && (only == "" || strings.IndexByte(only, s[i+1]) >= 0) {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // noDangerousRmRf checks for rm -rf commands that could delete critical directories.

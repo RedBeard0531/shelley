@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"shelley.exe.dev/claudetool/browse"
+	"shelley.exe.dev/gitstate"
 	"shelley.exe.dev/llm"
 )
 
@@ -123,9 +124,10 @@ type ToolSetConfig struct {
 // ToolSet holds a set of tools for a single conversation.
 // Each conversation should have its own ToolSet.
 type ToolSet struct {
-	tools   []*llm.Tool
-	cleanup func()
-	wd      *MutableWorkingDir
+	tools      []*llm.Tool
+	cleanup    func()
+	wd         *MutableWorkingDir
+	gitTracker *gitstate.Tracker
 }
 
 // Tools returns the tools in this set.
@@ -143,6 +145,12 @@ func (ts *ToolSet) Cleanup() {
 // WorkingDir returns the shared working directory.
 func (ts *ToolSet) WorkingDir() *MutableWorkingDir {
 	return ts.wd
+}
+
+// GitTracker returns the tracker for git state changes in the repositories
+// the tools work in.
+func (ts *ToolSet) GitTracker() *gitstate.Tracker {
+	return ts.gitTracker
 }
 
 // ServerSideWebSearchCapable is implemented by services that support
@@ -196,12 +204,14 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		}
 	}
 	wd := NewMutableWorkingDir(workingDir)
+	gitTracker := gitstate.NewTracker(wd.Get)
 
 	env := cfg.Env
 	env.ConversationID = cfg.ConversationID
 
 	bashTool := &BashTool{
 		WorkingDir:       wd,
+		GitTracker:       gitTracker,
 		LLMProvider:      cfg.LLMProvider,
 		ModelID:          cfg.ModelID,
 		EnableJITInstall: cfg.EnableJITInstall,
@@ -325,8 +335,9 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 
 	tools = FilterTools(tools, cfg.ToolOverrides, cfg.DisableAllTools)
 	return &ToolSet{
-		tools:   tools,
-		cleanup: cleanup,
-		wd:      wd,
+		tools:      tools,
+		cleanup:    cleanup,
+		wd:         wd,
+		gitTracker: gitTracker,
 	}
 }

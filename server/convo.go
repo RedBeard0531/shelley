@@ -2346,10 +2346,10 @@ func (cm *ConversationManager) ensureLoopLocked(service llm.Service, modelID str
 		RecordWarning: func(ctx context.Context, text string) error {
 			return cm.recordWarning(ctx, text)
 		},
-		Logger:        logger,
-		System:        system,
-		WorkingDir:    cwd,
-		GetWorkingDir: toolSet.WorkingDir().Get,
+		Logger:     logger,
+		System:     system,
+		WorkingDir: cwd,
+		GitTracker: toolSet.GitTracker(),
 		OnGitStateChange: func(ctx context.Context, state *gitstate.GitState) {
 			cm.recordGitStateChange(ctx, state)
 		},

@@ -81,9 +81,10 @@ func writeJobExitFile(path string, state *os.ProcessState) error {
 }
 
 // waitBashJob waits for cmd, a started job wrapper, ensures its exit file
-// exists, and closes exited.
-func waitBashJob(cmd *exec.Cmd, exitPath string, exited chan<- struct{}) {
+// exists, calls release, and closes exited.
+func waitBashJob(cmd *exec.Cmd, exitPath string, release func(), exited chan<- struct{}) {
 	defer close(exited)
+	defer release()
 	cmd.Wait()
 	if _, err := os.Stat(exitPath); errors.Is(err, os.ErrNotExist) {
 		writeJobExitFile(exitPath, cmd.ProcessState)

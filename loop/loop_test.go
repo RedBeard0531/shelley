@@ -821,10 +821,10 @@ func TestGitStateTracking(t *testing.T) {
 	var gitStateChanges []*gitstate.GitState
 
 	loop := NewLoop(Config{
-		LLM:           predictable.NewService(),
-		History:       []llm.Message{},
-		WorkingDir:    tmpDir,
-		GetWorkingDir: func() string { return tmpDir },
+		LLM:        predictable.NewService(),
+		History:    []llm.Message{},
+		WorkingDir: tmpDir,
+		GitTracker: gitstate.NewTracker(func() string { return tmpDir }),
 		OnGitStateChange: func(ctx context.Context, state *gitstate.GitState) {
 			mu.Lock()
 			gitStateChanges = append(gitStateChanges, state)
@@ -834,14 +834,6 @@ func TestGitStateTracking(t *testing.T) {
 			return nil
 		},
 	})
-
-	// Verify initial state was captured
-	if loop.lastGitState == nil {
-		t.Fatal("expected initial git state to be captured")
-	}
-	if !loop.lastGitState.IsRepo {
-		t.Error("expected IsRepo to be true")
-	}
 
 	// Process a turn (no state change should occur)
 	loop.QueueUserMessage(llm.Message{
@@ -924,10 +916,10 @@ func TestGitStateTrackingWorktree(t *testing.T) {
 	var gitStateChanges []*gitstate.GitState
 
 	loop := NewLoop(Config{
-		LLM:           predictable.NewService(),
-		History:       []llm.Message{},
-		WorkingDir:    worktreeDir,
-		GetWorkingDir: func() string { return worktreeDir },
+		LLM:        predictable.NewService(),
+		History:    []llm.Message{},
+		WorkingDir: worktreeDir,
+		GitTracker: gitstate.NewTracker(func() string { return worktreeDir }),
 		OnGitStateChange: func(ctx context.Context, state *gitstate.GitState) {
 			mu.Lock()
 			gitStateChanges = append(gitStateChanges, state)
@@ -937,17 +929,6 @@ func TestGitStateTrackingWorktree(t *testing.T) {
 			return nil
 		},
 	})
-
-	// Verify initial state
-	if loop.lastGitState == nil {
-		t.Fatal("expected initial git state to be captured")
-	}
-	if loop.lastGitState.Branch != "feature" {
-		t.Errorf("expected branch 'feature', got %q", loop.lastGitState.Branch)
-	}
-	if loop.lastGitState.Worktree != worktreeDir {
-		t.Errorf("expected worktree %q, got %q", worktreeDir, loop.lastGitState.Worktree)
-	}
 
 	// Make a commit in the worktree
 	worktreeFile := filepath.Join(worktreeDir, "feature.txt")
@@ -972,11 +953,12 @@ func TestGitStateTrackingWorktree(t *testing.T) {
 	}
 
 	mu.Lock()
-	numChanges := len(gitStateChanges)
-	mu.Unlock()
-
-	if numChanges != 1 {
-		t.Errorf("expected 1 git state change in worktree, got %d", numChanges)
+	defer mu.Unlock()
+	if len(gitStateChanges) != 1 {
+		t.Fatalf("expected 1 git state change in worktree, got %d", len(gitStateChanges))
+	}
+	if got := gitStateChanges[0]; got.Branch != "feature" || got.Worktree != worktreeDir {
+		t.Errorf("got change in %q on %q, want %q on feature", got.Worktree, got.Branch, worktreeDir)
 	}
 }
 
@@ -1645,10 +1627,10 @@ func TestCheckGitStateChange(t *testing.T) {
 
 	// Test with nil OnGitStateChange - should not panic
 	loop := NewLoop(Config{
-		LLM:           predictable.NewService(),
-		History:       []llm.Message{},
-		WorkingDir:    tmpDir,
-		GetWorkingDir: func() string { return tmpDir },
+		LLM:        predictable.NewService(),
+		History:    []llm.Message{},
+		WorkingDir: tmpDir,
+		GitTracker: gitstate.NewTracker(func() string { return tmpDir }),
 		// OnGitStateChange is nil
 		RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
 			return nil
@@ -1661,10 +1643,10 @@ func TestCheckGitStateChange(t *testing.T) {
 	// Test with actual callback
 	var gitStateChanges []*gitstate.GitState
 	loop = NewLoop(Config{
-		LLM:           predictable.NewService(),
-		History:       []llm.Message{},
-		WorkingDir:    tmpDir,
-		GetWorkingDir: func() string { return tmpDir },
+		LLM:        predictable.NewService(),
+		History:    []llm.Message{},
+		WorkingDir: tmpDir,
+		GitTracker: gitstate.NewTracker(func() string { return tmpDir }),
 		OnGitStateChange: func(ctx context.Context, state *gitstate.GitState) {
 			gitStateChanges = append(gitStateChanges, state)
 		},

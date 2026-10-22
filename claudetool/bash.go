@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"shelley.exe.dev/claudetool/bashkit"
+	"shelley.exe.dev/gitstate"
 	"shelley.exe.dev/llm"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -37,6 +38,8 @@ type BashTool struct {
 	BackgroundAfter time.Duration
 	// WorkingDir is the shared mutable working directory.
 	WorkingDir *MutableWorkingDir
+	// GitTracker, if set, is told about the directories commands run git in.
+	GitTracker *gitstate.Tracker
 	// LLMProvider provides access to LLM services for tool validation
 	LLMProvider LLMServiceProvider
 	// ModelID is the conversation's model, used to pick a workhorse model
@@ -220,6 +223,24 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 	return llm.ToolOut{LLMContent: llm.TextContent(out), Display: display}
 }
 
+// touchGitDirs tells the git tracker about the directories command runs git
+// in, starting from workingDir. Call release once the command exits.
+func (b *BashTool) touchGitDirs(command, workingDir string) (release func()) {
+	if b.GitTracker == nil {
+		return func() {}
+	}
+	home, _ := os.UserHomeDir() // without one, ~ paths are unknown
+	var releases []func()
+	for _, dir := range bashkit.GitDirs(command, workingDir, home) {
+		releases = append(releases, b.GitTracker.Touch(dir))
+	}
+	return func() {
+		for _, release := range releases {
+			release()
+		}
+	}
+}
+
 // chainedCdLeavesDir reports whether any chained `cd <path>` in a command
 // (see bashkit.ChainedCdPaths) targets a directory other than workingDir.
 // A `cd` to the current directory is a harmless no-op and gets no hint.
@@ -308,10 +329,14 @@ func (b *BashTool) executeBashInDir(ctx context.Context, req bashInput, wd strin
 		return bashResult{}, fmt.Errorf("create job log: %w", err)
 	}
 	cmd := b.makeBashCommand(req.Command, wd, log, job.ExitPath)
+	// The git tracker watches where the command runs git until it exits,
+	// even if that is after it moves to the background.
+	releaseGitDirs := b.touchGitDirs(req.Command, wd)
 	job.StartedAt = time.Now()
 	err = cmd.Start()
 	log.Close() // the job holds its own descriptor
 	if err != nil {
+		releaseGitDirs()
 		os.Remove(job.LogPath)
 		return bashResult{}, fmt.Errorf("command failed: %w", err)
 	}
@@ -322,10 +347,11 @@ func (b *BashTool) executeBashInDir(ctx context.Context, req bashInput, wd strin
 	if err != nil {
 		syscall.Kill(-job.PID, syscall.SIGKILL)
 		cmd.Wait()
+		releaseGitDirs()
 		return bashResult{}, fmt.Errorf("job %s (PGID %d): %w", job.ID, job.PID, err)
 	}
 	exited := make(chan struct{})
-	go waitBashJob(cmd, job.ExitPath, exited)
+	go waitBashJob(cmd, job.ExitPath, releaseGitDirs, exited)
 	if req.Background {
 		return b.background(ctx, job, exited, "Started as")
 	}
