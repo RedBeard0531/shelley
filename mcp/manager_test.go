@@ -2,11 +2,15 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -72,4 +76,71 @@ func TestReconfiguredSessionReconnects(t *testing.T) {
 	if *connects != 2 {
 		t.Fatalf("%d connections, want 2", *connects)
 	}
+}
+
+// A request to a server that forgot its session says so, even when it
+// learns only that the session closed: go-sdk fails the connection along
+// with the request, and the session closing as a result can cancel the
+// request before go-sdk reports why it failed.
+func TestForgottenSessionReported(t *testing.T) {
+	m, connects := newTestManager(t)
+	inMemory := m.transport
+	var forgot atomic.Bool
+	m.transport = func(cfg Server, h auth.OAuthHandler) sdk.Transport {
+		return forgetfulTransport{inMemory(cfg, h), &forgot}
+	}
+	cfg := Server{Name: "s"}
+	use(t, m, cfg)
+	forgot.Store(true)
+	_, err := m.CallTool(t.Context(), cfg, "c", "t", nil, 0)
+	if !errors.Is(err, sdk.ErrSessionMissing) {
+		t.Fatalf("forgotten session: %v", err)
+	}
+	forgot.Store(false)
+	use(t, m, cfg)
+	if *connects != 2 {
+		t.Fatalf("%d connections, want 2", *connects)
+	}
+}
+
+// forgetfulTransport's connections fail, once forgot is set, as go-sdk's
+// Streamable HTTP client does when the server answers 404: the connection
+// fails, then the write, and later writes fail at once. That first write
+// returns only once its request is canceled, as the session closes, which
+// makes the race deterministic.
+type forgetfulTransport struct {
+	sdk.Transport
+	forgot *atomic.Bool
+}
+
+func (t forgetfulTransport) Connect(ctx context.Context) (sdk.Connection, error) {
+	c, err := t.Transport.Connect(ctx)
+	return &forgetfulConn{Connection: c, forgot: t.forgot}, err
+}
+
+type forgetfulConn struct {
+	sdk.Connection
+	forgot *atomic.Bool
+	failed atomic.Bool
+}
+
+var errForgotten = fmt.Errorf("sending: %w", sdk.ErrSessionMissing)
+
+func (c *forgetfulConn) Read(ctx context.Context) (jsonrpc.Message, error) {
+	msg, err := c.Connection.Read(ctx)
+	if err != nil && c.forgot.Load() {
+		err = errForgotten
+	}
+	return msg, err
+}
+
+func (c *forgetfulConn) Write(ctx context.Context, msg jsonrpc.Message) error {
+	if !c.forgot.Load() {
+		return c.Connection.Write(ctx, msg)
+	}
+	if c.failed.CompareAndSwap(false, true) {
+		c.Connection.Close() // fails Read
+		<-ctx.Done()
+	}
+	return errForgotten
 }

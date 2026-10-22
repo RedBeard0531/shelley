@@ -154,10 +154,13 @@ func (m *Manager) CallTool(ctx context.Context, cfg Server, scope, tool string, 
 func (m *Manager) failed(s *session, ctx context.Context, err error) error {
 	if errors.Is(err, sdk.ErrSessionMissing) {
 		// The server forgot the session (it restarted, say): the next
-		// request connects anew.
-		m.dropSession(s, "the server ended it")
+		// request connects anew. Requests it closes under say so too.
+		m.dropSession(s, fmt.Errorf("the server ended it (%w)", sdk.ErrSessionMissing))
 	} else if ctx.Err() != nil && s.ctx.Err() != nil {
-		err = fmt.Errorf("the session was closed (%v)", context.Cause(s.ctx))
+		// The session closed under the request. When its connection
+		// failed, which also fails the request, the request may see
+		// only the closing; the cause still says why.
+		err = fmt.Errorf("the session was closed (%w)", context.Cause(s.ctx))
 	}
 	return err
 }
@@ -188,7 +191,7 @@ func (m *Manager) closeWhere(match func(key) bool, why string) {
 	for k, s := range m.sessions {
 		if match(k) {
 			m.removeLocked(s)
-			wg.Go(func() { m.close(s, why) })
+			wg.Go(func() { m.close(s, errors.New(why)) })
 		}
 	}
 	m.mu.Unlock()
@@ -208,7 +211,7 @@ func (m *Manager) acquire(ctx context.Context, cfg Server, scope string) (*sessi
 	s := m.sessions[k]
 	if s != nil && !s.cfg.sameConnection(cfg) {
 		m.removeLocked(s)
-		go m.close(s, "the server was edited")
+		go m.close(s, errors.New("the server was edited"))
 		s = nil
 	}
 	if s == nil {
@@ -255,20 +258,23 @@ func (m *Manager) connect(s *session) {
 		s.err = fmt.Errorf("connecting to MCP server %q: %w", s.cfg.Name, s.err)
 		m.events.add(s.key.server, s.key.scope, "connect_failed", s.err.Error())
 		close(s.ready)
-		m.dropSession(s, "")
+		m.dropSession(s, s.err)
 		return
 	}
 	s.id = s.cs.ID()
 	m.events.add(s.key.server, s.key.scope, "connected", s.id)
 	close(s.ready)
 	go func() {
-		s.cs.Wait()
-		m.dropSession(s, "the connection ended")
+		why := errors.New("the connection ended")
+		if err := s.cs.Wait(); err != nil {
+			why = fmt.Errorf("the connection ended: %w", err)
+		}
+		m.dropSession(s, why)
 	}()
 }
 
 // dropSession removes s, if current, and closes it.
-func (m *Manager) dropSession(s *session, why string) {
+func (m *Manager) dropSession(s *session, why error) {
 	m.mu.Lock()
 	m.removeLocked(s)
 	m.mu.Unlock()
@@ -307,19 +313,19 @@ func (m *Manager) expire(s *session) {
 	}
 	m.mu.Unlock()
 	if idle {
-		m.close(s, "idle")
+		m.close(s, errors.New("idle"))
 	}
 }
 
 // close ends s, which has been removed, failing its requests, once it has
 // finished connecting.
-func (m *Manager) close(s *session, why string) {
+func (m *Manager) close(s *session, why error) {
 	s.once.Do(func() {
-		s.cancel(errors.New(why))
+		s.cancel(why)
 		<-s.ready
 		if s.cs != nil {
 			s.cs.Close()
-			m.events.add(s.key.server, s.key.scope, "session_closed", why)
+			m.events.add(s.key.server, s.key.scope, "session_closed", why.Error())
 		}
 		m.wg.Done()
 	})
