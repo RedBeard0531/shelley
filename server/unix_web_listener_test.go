@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// A launcher can hand Shelley a Unix socket in place of the TCP listener (via
-// systemd-style activation) so the web UI is reachable only through that
-// socket. That listener must still get the browser-facing middleware.
+// With -listen-unix, the web UI is reachable only through a Unix socket (say,
+// behind a launcher's authenticating proxy). That listener must still get the
+// browser-facing middleware.
 func TestStartWithUnixWebListener(t *testing.T) {
 	t.Parallel()
 	s, _, _ := newTestServer(t)
@@ -24,7 +24,7 @@ func TestStartWithUnixWebListener(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	path := filepath.Join(dir, "web.sock")
-	listener, err := net.Listen("unix", path)
+	listener, err := ListenWebUnix(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,4 +75,81 @@ func TestStartWithUnixWebListener(t *testing.T) {
 	if s.listenPort != 0 {
 		t.Fatalf("listenPort = %d, want 0 for a Unix listener", s.listenPort)
 	}
+}
+
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+func TestListenWebUnix(t *testing.T) {
+	t.Parallel()
+	dir := shortTempDir(t)
+	path := filepath.Join(dir, "web.sock")
+
+	ln, err := ListenWebUnix(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("socket mode = %v, %v; want 0600", fi.Mode().Perm(), err)
+	}
+	// A live socket is not ours to take.
+	if _, err := ListenWebUnix(path); err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("second listen err = %v, want in use", err)
+	}
+	ln.Close()
+
+	// A stale socket file (nobody listening) is replaced.
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(path)
+	stale, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.(*net.UnixListener).SetUnlinkOnClose(false)
+	stale.Close()
+	ln, err = ListenWebUnix(path)
+	if err != nil {
+		t.Fatalf("stale socket: %v", err)
+	}
+	ln.Close()
+
+	// A regular file is never removed.
+	file := filepath.Join(dir, "file")
+	os.WriteFile(file, []byte("x"), 0o600)
+	if _, err := ListenWebUnix(file); err == nil {
+		t.Fatal("listened over a regular file")
+	}
+	if b, _ := os.ReadFile(file); string(b) != "x" {
+		t.Fatal("regular file clobbered")
+	}
+}
+
+// sun_path is 104 bytes on macOS and 108 on Linux, NUL included. Say so
+// instead of failing with bind's EINVAL.
+func TestListenWebUnixPathTooLong(t *testing.T) {
+	t.Parallel()
+	dir := shortTempDir(t)
+	path := filepath.Join(dir, strings.Repeat("x", maxUnixSocketPath)+".sock")
+	_, err := ListenWebUnix(path)
+	if err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Fatalf("err = %v, want too long", err)
+	}
+	fits := filepath.Join(dir, strings.Repeat("y", maxUnixSocketPath-len(dir)-1))
+	if len(fits) != maxUnixSocketPath {
+		t.Fatalf("test setup: len %d", len(fits))
+	}
+	ln, err := ListenWebUnix(fits)
+	if err != nil {
+		t.Fatalf("path of exactly %d bytes: %v", maxUnixSocketPath, err)
+	}
+	ln.Close()
 }

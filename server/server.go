@@ -1837,8 +1837,8 @@ func (s *Server) tcpHandler(mux http.Handler) http.Handler {
 	return h
 }
 
-// StartWithListeners starts the HTTP server on the given web listener (usually
-// TCP, possibly a socket-activated Unix socket) and optionally
+// StartWithListeners starts the HTTP server on the given web listener (TCP, or
+// a Unix socket with -listen-unix) and optionally
 // also on a Unix socket. The TCP listener gets full middleware (CSRF, requireHeader, logger).
 // The Unix socket listener gets only the logger middleware (no CSRF, no requireHeader)
 // since it is local and trusted.
@@ -1893,9 +1893,9 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 	// Start auto-upgrade routine
 	go s.autoUpgradeRoutine()
 
-	// Get actual port from listener. A launcher may hand us a Unix socket
-	// instead (via socket activation) so the web UI is reachable only through
-	// it; there is no port then, and SHELLEY_PORT/SHELLEY_URL go unset.
+	// Get actual port from listener. With -listen-unix the web UI is reachable
+	// only through a Unix socket; there is no port then, and
+	// SHELLEY_PORT/SHELLEY_URL go unset.
 	var actualPort int
 	listenURL := "unix:" + tcpListener.Addr().String()
 	if addr, ok := tcpListener.Addr().(*net.TCPAddr); ok {
