@@ -192,11 +192,7 @@ func (s *Server) receiveChannelEvent(ctx context.Context, endpoint string, ev ch
 	// A busy turn takes channel messages at its next model request, after
 	// the current tool round finishes, even with UI messages queued for later.
 	message := llm.UserStringMessage(ev.Text)
-	hasQueued, err := manager.HasQueuedMessages(ctx)
-	if err != nil {
-		return err
-	}
-	if hasQueued || manager.IsAgentWorking() {
+	if manager.IsAgentWorking() {
 		return manager.InjectMessage(ctx, s, modelID, message)
 	}
 	if ev.FirstReaction != "" || ev.FirstReply != "" {
@@ -209,9 +205,6 @@ func (s *Server) receiveChannelEvent(ctx context.Context, endpoint string, ev ch
 		}
 	}
 	first, err := manager.AcceptUserMessage(ctx, service, modelID, message)
-	if errors.Is(err, errQueuedMessagesPending) {
-		return manager.InjectMessage(ctx, s, modelID, message)
-	}
 	if err != nil {
 		return err
 	}

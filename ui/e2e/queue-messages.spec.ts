@@ -268,11 +268,12 @@ test.describe('Queue Messages', () => {
     await sendAndWaitForWorking(page, 'delay: 15');
     await queueMessage(page, 'echo: first queued');
     await expect(page.getByTestId('queued-badge')).toHaveCount(1);
-    // A plain send joins the existing queue rather than starting a turn.
+    // A plain send is delivered now; the queued message stays queued.
     const messageInput = page.getByTestId('message-input');
-    await messageInput.fill('echo: second queued');
+    await messageInput.fill('echo: sent now');
     await page.getByTestId('send-button').tap();
-    await expect(page.getByTestId('queued-badge')).toHaveCount(2);
+    await page.waitForFunction(() => document.body.textContent?.includes('echo: sent now') ?? false, undefined, { timeout: 10000 });
+    await expect(page.getByTestId('queued-badge')).toHaveCount(1);
     await expect(page.getByTestId('agent-thinking')).toBeVisible();
   });
 

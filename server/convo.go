@@ -28,10 +28,7 @@ import (
 	"shelley.exe.dev/subpub"
 )
 
-var (
-	errConversationModelMismatch = errors.New("conversation model mismatch")
-	errQueuedMessagesPending     = errors.New("queued messages pending")
-)
+var errConversationModelMismatch = errors.New("conversation model mismatch")
 
 // conversationRole is what a conversation is for, as recorded on its row.
 type conversationRole int
@@ -596,16 +593,6 @@ func (cm *ConversationManager) acceptUserMessage(ctx context.Context, service ll
 		return false, "", err
 	}
 
-	if cm.role == roleTopLevel {
-		queued, err := cm.HasQueuedMessages(ctx)
-		if err != nil {
-			return false, "", err
-		}
-		if queued {
-			return false, "", errQueuedMessagesPending
-		}
-	}
-
 	cm.mu.Lock()
 	hadLoop := cm.loop != nil
 	cm.mu.Unlock()
@@ -1103,11 +1090,11 @@ func (cm *ConversationManager) recordInterruptedToolResults(ctx context.Context)
 	return result, nil
 }
 
-// HasQueuedMessages reports whether durable queued user work already reserves
-// a position ahead of a new immediate send.
-func (cm *ConversationManager) HasQueuedMessages(ctx context.Context) (bool, error) {
+// HasQueuedTranscription reports whether a transcription, sent for immediate
+// delivery but still processing (or failed), is queued.
+func (cm *ConversationManager) HasQueuedTranscription(ctx context.Context) (bool, error) {
 	queued, err := cm.db.GetQueuedMessages(ctx, cm.conversationID)
-	return len(queued) > 0, err
+	return slices.ContainsFunc(queued, func(qm db.QueuedMessage) bool { return qm.Kind == db.QueuedMessageKindTranscription }), err
 }
 
 // QueueTranscription persists a transcription item. Unlike QueueMessage it
@@ -1261,7 +1248,7 @@ func (cm *ConversationManager) queueMessage(ctx context.Context, s *Server, mode
 }
 
 // takeInjectable records the queued messages a running turn accepts — those
-// queued by InjectMessage — and returns them, in queue order, for mid-turn
+// queued by InjectMessage and ready transcriptions — and returns them, in queue order, for mid-turn
 // splicing into the running loop (see loop.Config.InjectMessages). Returning
 // nil leaves the turn untouched.
 //
@@ -1328,7 +1315,13 @@ func (cm *ConversationManager) takeInjectable(ctx context.Context, generation ui
 		queued = nil
 	}
 	for _, qm := range queued {
-		if !qm.Inject {
+		// A transcription is delivered as soon as it is ready. Until then it
+		// holds everything sent after it, as the turn-end drain does.
+		if qm.Kind == db.QueuedMessageKindTranscription {
+			if qm.State != db.QueuedMessageStateReady {
+				break
+			}
+		} else if !qm.Inject {
 			continue
 		}
 		_, fed, err := cm.recordQueued(ctx, qm)

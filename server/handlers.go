@@ -1374,12 +1374,16 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// Decide whether this message will be queued or accepted immediately.
 	// The chat-message hook is told which path it will take so it can react
 	// accordingly.
-	hasQueued, err := manager.HasQueuedMessages(ctx)
+	// Queued messages wait for the turn to end; anything else is delivered
+	// now. A transcription was sent for immediate delivery too but is still
+	// processing, so a message sent after it follows it in as soon as it is
+	// ready.
+	transcribing, err := manager.HasQueuedTranscription(ctx)
 	if err != nil {
 		s.internalError(w, "Failed to read queued messages", err, "conversationID", conversationID)
 		return
 	}
-	willQueue := req.Queue || hasQueued
+	willQueue := req.Queue || transcribing
 
 	// Run chat-message hook; the hook may rewrite the message text. Hook
 	// failures abort the request — the user's message is not delivered.
@@ -1414,7 +1418,11 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// the hook's view ("queued" in its readonly context) is authoritative
 	// and stays consistent with what actually happens here.
 	if willQueue {
-		if err := manager.QueueMessage(ctx, s, modelID, userMessage); err != nil {
+		queue := manager.QueueMessage
+		if !req.Queue {
+			queue = manager.InjectMessage
+		}
+		if err := queue(ctx, s, modelID, userMessage); err != nil {
 			s.internalError(w, "Failed to queue user message", err, "conversationID", conversationID)
 			return
 		}
@@ -1424,15 +1432,6 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	}
 
 	firstMessage, err := manager.AcceptUserMessage(ctx, llmService, modelID, userMessage)
-	if errors.Is(err, errQueuedMessagesPending) {
-		if err := manager.QueueMessage(ctx, s, modelID, userMessage); err != nil {
-			s.internalError(w, "Failed to queue user message after concurrent queue reservation", err, "conversationID", conversationID)
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "queued", "message": req.Message})
-		return
-	}
 	if errors.Is(err, errConversationModelMismatch) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

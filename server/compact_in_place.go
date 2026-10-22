@@ -921,18 +921,10 @@ func (s *Server) handleCompactRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("unknown model %q: %v", modelID, err), http.StatusBadRequest)
 		return
 	}
-	hasQueued, err := manager.HasQueuedMessages(ctx)
-	if err != nil {
-		s.internalError(w, "Failed to read queued messages", err, "conversationID", conversation.ConversationID)
-		return
-	}
-	queue := hasQueued || manager.IsAgentWorking()
-	if !queue {
-		_, err = manager.AcceptUserMessage(ctx, service, modelID, message)
-		queue = errors.Is(err, errQueuedMessagesPending)
-	}
-	if queue {
+	if manager.IsAgentWorking() {
 		err = manager.QueueMessage(ctx, s, modelID, message)
+	} else {
+		_, err = manager.AcceptUserMessage(ctx, service, modelID, message)
 	}
 	if err != nil {
 		s.internalError(w, "Failed to send the compaction request", err, "conversationID", conversation.ConversationID)
