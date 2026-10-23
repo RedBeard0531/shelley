@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sahilm/fuzzy"
+	"tailscale.com/util/singleflight"
 )
 
 const (
@@ -84,7 +86,10 @@ type fileListCache struct {
 	// files is the total len(entry.files) across entries, kept in step with
 	// the map so eviction doesn't have to re-count.
 	files int
+	loads singleflight.Group[string, fileListCacheEntry]
 }
+
+var errFileListLoadCanceled = errors.New("all file listing callers canceled")
 
 type fileListCacheEntry struct {
 	files     []string
@@ -105,36 +110,68 @@ func findFilesCacheKey(dir string, includeDirs bool) string {
 }
 
 // get returns the cached file list for dir, computing it via load when the
-// entry is missing or stale. Failed or cancelled loads are never cached.
+// entry is missing or stale. Concurrent misses share one load, whose result
+// (including failure) every waiter receives. The load is canceled when all
+// callers leave. Failed or cancelled loads are never cached.
 func (c *fileListCache) get(ctx context.Context, dir string, load func(context.Context) (files []string, truncated bool, err error)) ([]string, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
-	c.mu.Lock()
-	if e, ok := c.entries[dir]; ok && time.Since(e.computed) < fileListCacheTTL {
-		c.mu.Unlock()
+	for {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		return e.files, e.truncated, nil
-	}
-	c.mu.Unlock()
+		if e, ok := c.cached(dir); ok {
+			if err := ctx.Err(); err != nil {
+				return nil, false, err
+			}
+			return e.files, e.truncated, nil
+		}
 
-	files, truncated, err := load(ctx)
-	if err != nil {
-		return nil, truncated, err
+		done := c.loads.DoChanContext(ctx, dir, func(loadCtx context.Context) (fileListCacheEntry, error) {
+			// Another flight may have filled the cache since our first lookup.
+			if e, ok := c.cached(dir); ok {
+				return e, nil
+			}
+			files, truncated, err := load(loadCtx)
+			if loadCtx.Err() != nil {
+				return fileListCacheEntry{}, errFileListLoadCanceled
+			}
+			if err != nil {
+				return fileListCacheEntry{truncated: truncated}, err
+			}
+			e := fileListCacheEntry{files: files, truncated: truncated, computed: time.Now()}
+			c.mu.Lock()
+			c.deleteLocked(dir)
+			c.entries[dir] = e
+			c.files += len(files)
+			c.evictLocked(dir)
+			c.mu.Unlock()
+			return e, nil
+		})
+		var result singleflight.Result[fileListCacheEntry]
+		// The library waits for cleanup before notifying its last canceled
+		// waiter; the HTTP request must be able to return immediately.
+		select {
+		case result = <-done:
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		if result.Err == errFileListLoadCanceled {
+			// We joined after the last waiter canceled but before that flight
+			// finished cleaning up. Only this abandoned flight is retried,
+			// never a listing error (including its own internal deadline).
+			continue
+		}
+		return result.Val.files, result.Val.truncated, result.Err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, truncated, err
-	}
+}
 
+func (c *fileListCache) cached(dir string) (fileListCacheEntry, bool) {
 	c.mu.Lock()
-	c.deleteLocked(dir)
-	c.entries[dir] = fileListCacheEntry{files: files, truncated: truncated, computed: time.Now()}
-	c.files += len(files)
-	c.evictLocked(dir)
-	c.mu.Unlock()
-	return files, truncated, nil
+	defer c.mu.Unlock()
+	e, ok := c.entries[dir]
+	return e, ok && time.Since(e.computed) < fileListCacheTTL
 }
 
 // deleteLocked removes one entry, keeping the file count in step.
@@ -350,6 +387,7 @@ func (s *Server) handleFindFiles(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			if ctx.Err() == nil {
+				s.logger.WarnContext(ctx, "find-files: listing failed", "dir", searchDir, "error", err)
 				http.Error(w, "failed to list directory", http.StatusInternalServerError)
 			}
 			return

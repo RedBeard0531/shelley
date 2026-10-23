@@ -353,10 +353,12 @@ func TestFileListCacheCancellationDoesNotCache(t *testing.T) {
 	c := newFileListCache()
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
+	finished := make(chan struct{})
 	done := make(chan error, 1)
 
 	go func() {
 		_, _, err := c.get(ctx, "/cancelled", func(ctx context.Context) ([]string, bool, error) {
+			defer close(finished)
 			close(started)
 			<-ctx.Done()
 			return []string{"partial.txt"}, true, nil
@@ -368,21 +370,21 @@ func TestFileListCacheCancellationDoesNotCache(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v, want context cancellation", err)
 	}
-	if _, ok := c.entries["/cancelled"]; ok {
-		t.Fatal("cancelled partial listing was cached")
-	}
+	<-finished
 
-	// Cancellation wins over an otherwise valid cache hit too: superseded HTTP
-	// requests must stop rather than continue fuzzy matching stale work.
-	_, _, err := c.get(context.Background(), "/cached", func(context.Context) ([]string, bool, error) {
+	// The canceled flight may still be finishing; a new request must load
+	// afresh rather than receive or cache its partial result.
+	files, truncated, err := c.get(t.Context(), "/cancelled", func(context.Context) ([]string, bool, error) {
 		return []string{"complete.txt"}, false, nil
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || truncated || !slices.Equal(files, []string{"complete.txt"}) {
+		t.Fatalf("after cancellation: files=%v truncated=%v err=%v", files, truncated, err)
 	}
+	// Cancellation wins over an otherwise valid cache hit too: superseded HTTP
+	// requests must stop rather than continue fuzzy matching stale work.
 	cancelled, stop := context.WithCancel(context.Background())
 	stop()
-	files, _, err := c.get(cancelled, "/cached", func(context.Context) ([]string, bool, error) {
+	files, _, err = c.get(cancelled, "/cancelled", func(context.Context) ([]string, bool, error) {
 		t.Fatal("cache hit unexpectedly loaded")
 		return nil, false, nil
 	})
