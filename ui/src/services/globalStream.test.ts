@@ -584,40 +584,60 @@ await run("close() removes listeners and stops reconnecting", () => {
   assert(FakeEventSource.instances.length === count, "no reconnects after close()");
 });
 
-await run("disk_space_status frames reach onDiskSpaceStatus (no conversation_id)", () => {
+await run("resource_status frames: a snapshot per connection, then transitions", () => {
   reset();
-  const seen: unknown[] = [];
+  const snapshots: { kind: string; episode_id: number }[][] = [];
+  const transitions: { kind: string; revision: number }[] = [];
   const handle = connectGlobalStream({
     getHash: () => "hash0",
     onListPatch: () => {},
-    onDiskSpaceStatus: (status, snapshot) => seen.push({ status, snapshot }),
+    onResourceSnapshot: (statuses) => snapshots.push(statuses),
+    onResourceStatus: (status) => transitions.push(status),
   });
-  latest().emitOpen();
-  latest().emitMessage({ heartbeat: true });
-  assert(seen.length === 0, "frames without disk_space_status are ignored");
-  const status = {
+  const disk = {
+    kind: "disk",
     episode_id: 1,
     revision: 1,
     active: true,
     dismissed: false,
     available_bytes: 1_600_000_000,
   };
-  latest().emitMessage({ disk_space_status: status });
-  latest().emitMessage({ disk_space_status: { ...status, revision: 2 } });
-  type Seen = { status: typeof status; snapshot: boolean };
-  const got = seen as Seen[];
-  assert(got.length === 2, "disk_space_status delivered");
-  assert(got[0].status.episode_id === 1, "payload passed through");
-  assert(got[0].snapshot, "first status on a connection is its snapshot");
-  assert(!got[1].snapshot, "later statuses are transitions");
-  // A restarted server may resend an older revision (an unpersisted
-  // transition was lost), so each new connection's first status is again a
-  // snapshot.
+  const memory = { ...disk, kind: "memory", episode_id: 3 };
+  latest().emitOpen();
+  latest().emitMessage({
+    conversation_list_patch: { old_hash: "hash0", new_hash: "h1", patch: [] },
+  });
+  latest().emitMessage({ resource_status: disk });
+  latest().emitMessage({ resource_status: memory });
+  assert(snapshots.length === 0, "list replay and statuses open the connection");
+  latest().emitMessage({ heartbeat: true });
+  assert(snapshots.length === 1, "the next frame delivers the snapshot");
+  assert(
+    snapshots[0].map((s) => `${s.kind}:${s.episode_id}`).join() === "disk:1,memory:3",
+    "snapshot carries every status in order",
+  );
+  latest().emitMessage({ resource_status: { ...memory, revision: 2 } });
+  latest().emitMessage({ heartbeat: true });
+  assert(
+    snapshots.length === 1 && transitions.length === 1 && transitions[0].revision === 2,
+    "later statuses are transitions",
+  );
+  // A restarted server may resend older revisions or monitor fewer kinds:
+  // each connection delivers its own snapshot, even an empty one.
   latest().emitError();
   advance(1000);
   latest().emitOpen();
-  latest().emitMessage({ disk_space_status: status });
-  assert(got.length === 3 && got[2].snapshot, "first status after reconnect is a snapshot");
+  latest().emitMessage({ resource_status: disk });
+  latest().emitMessage({ models_changed: true });
+  assert(
+    snapshots.length === 2 && snapshots[1].length === 1 && snapshots[1][0].kind === "disk",
+    "reconnect delivers a fresh snapshot",
+  );
+  latest().emitError();
+  advance(2000);
+  latest().emitOpen();
+  latest().emitMessage({ heartbeat: true });
+  assert(snapshots.length === 3 && snapshots[2].length === 0, "no statuses is an empty snapshot");
   handle.close();
 });
 

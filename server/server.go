@@ -32,8 +32,8 @@ import (
 	"shelley.exe.dev/mcp"
 	"shelley.exe.dev/modelproviders"
 	"shelley.exe.dev/models"
-	"shelley.exe.dev/server/diskspace"
 	"shelley.exe.dev/server/notifications"
+	"shelley.exe.dev/server/resource"
 	"shelley.exe.dev/subpub"
 	"shelley.exe.dev/ui"
 )
@@ -115,8 +115,8 @@ type StreamResponse struct {
 	Heartbeat bool `json:"heartbeat,omitempty"`
 	// NotificationEvent is set when a notification-worthy event occurs (e.g. agent finished).
 	NotificationEvent *notifications.Event `json:"notification_event,omitempty"`
-	// DiskSpaceStatus is global, including an immediate snapshot on reconnect.
-	DiskSpaceStatus *diskspace.DiskSpaceStatus `json:"disk_space_status,omitempty"`
+	// ResourceStatus is global, including an immediate snapshot of each kind on reconnect.
+	ResourceStatus *resource.Status `json:"resource_status,omitempty"`
 	// ToolProgress is set when a running tool reports partial output.
 	ToolProgress *llm.ToolProgress `json:"tool_progress,omitempty"`
 	// StreamDelta is set when the LLM streams partial text content.
@@ -370,8 +370,13 @@ type Server struct {
 	// events to every /api/stream2 subscriber. Events are tagged with their
 	// ConversationID so clients can route them.
 	streamPub  *subpub.SubPub[StreamResponse]
-	diskSpace  atomic.Pointer[diskSpaceMonitor]
+	diskSpace  atomic.Pointer[resourceMonitor]
+	memory     atomic.Pointer[resourceMonitor]
 	shutdownCh chan struct{} // Signals background routines to stop
+
+	// resourceRecheckEvery is copied into each resource monitor at init;
+	// zero (tests) disables re-checks of active notices.
+	resourceRecheckEvery time.Duration
 	// channelChatLocks serializes deliveries per chat; see
 	// lockChannelChat. Guarded by mu.
 	channelChatLocks map[string]*channelChatLock
@@ -557,7 +562,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.Handle("GET /api/conversations/search", compressionHandler(http.HandlerFunc(s.handleSearchConversations)))
 	api.HandleFunc("POST /api/conversations/search/enhance", s.handleEnhanceSearch)
 	api.HandleFunc("GET /api/stream2", s.handleStream)
-	api.HandleFunc("POST /api/disk-space/dismiss", s.handleDismissDiskSpace)
+	api.HandleFunc("POST /api/resources/{kind}/dismiss", s.handleDismissResource)
 	api.Handle("GET /api/conversations/archived", compressionHandler(http.HandlerFunc(s.handleArchivedConversations)))
 	api.HandleFunc("POST /api/conversations/new", s.handleNewConversation)                   // Small response
 	api.HandleFunc("POST /api/conversations/draft", s.handleCreateDraft)                     // Small response
@@ -1057,7 +1062,12 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		}
 
 		recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
-			return s.recordMessage(ctx, conversationID, message, usage, otherUsage)
+			if err := s.recordMessage(ctx, conversationID, message, usage, otherUsage); err != nil {
+				return err
+			}
+			// Tool results follow the work that fills disks and memory.
+			s.refreshResources(context.WithoutCancel(ctx))
+			return nil
 		}
 		recordTurnStart := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) (*generated.Message, error) {
 			return s.recordTurnStartMessage(ctx, conversationID, message, usage, otherUsage)
@@ -1685,7 +1695,6 @@ func (s *Server) publishConversationState(state ConversationState) {
 			Timestamp:      time.Now(),
 			Payload:        payload,
 		}
-		s.refreshDiskSpace(context.Background())
 		if !suppressNotify {
 			s.notifDispatcher.Dispatch(context.Background(), event)
 			for _, hook := range hooks {
@@ -1850,8 +1859,8 @@ func (s *Server) tcpHandler(mux http.Handler) http.Handler {
 // The Unix socket listener gets only the logger middleware (no CSRF, no requireHeader)
 // since it is local and trusted.
 func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string) error {
-	if err := s.initDiskSpace(context.Background(), diskBytes); err != nil {
-		return fmt.Errorf("initialize disk space monitor: %w", err)
+	if err := s.initResourceMonitors(context.Background()); err != nil {
+		return err
 	}
 
 	// agent_working is runtime-only state. Decide what to do with the values the

@@ -16,8 +16,8 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
-	"shelley.exe.dev/server/diskspace"
 	"shelley.exe.dev/server/notifications"
+	"shelley.exe.dev/server/resource"
 )
 
 func main() {
@@ -71,12 +71,15 @@ func TS() *go2ts.Go2TS {
 		db.InPlaceCompaction{},
 	)
 
+	// Named before first use, or they render as the bare Kind and Status.
+	generator.AddUnionWithName(resource.Kinds, "ResourceKind")
+	generator.AddWithName(resource.Status{}, "ResourceStatus")
+
 	generator.AddMultiple(
 		apiMessageForTS{},
 		streamResponseForTS{},
 		conversationWithStateForTS{},
 		notificationEventForTS{},
-		diskspace.DiskSpaceStatus{},
 	)
 
 	// Generate clean nominal types
@@ -147,14 +150,14 @@ type conversationWithStateForTS struct {
 }
 
 type streamResponseForTS struct {
-	ConversationID    string                     `json:"conversation_id,omitempty"`
-	Messages          []apiMessageForTS          `json:"messages,omitempty"`
-	Conversation      *generated.Conversation    `json:"conversation,omitempty"`
-	ConversationState *conversationStateForTS    `json:"conversation_state,omitempty"`
-	Heartbeat         bool                       `json:"heartbeat,omitempty"`
-	NotificationEvent *notificationEventForTS    `json:"notification_event,omitempty"`
-	DiskSpaceStatus   *diskspace.DiskSpaceStatus `json:"disk_space_status,omitempty"`
-	MaxSequenceID     int64                      `json:"max_sequence_id,omitempty"`
+	ConversationID    string                  `json:"conversation_id,omitempty"`
+	Messages          []apiMessageForTS       `json:"messages,omitempty"`
+	Conversation      *generated.Conversation `json:"conversation,omitempty"`
+	ConversationState *conversationStateForTS `json:"conversation_state,omitempty"`
+	Heartbeat         bool                    `json:"heartbeat,omitempty"`
+	NotificationEvent *notificationEventForTS `json:"notification_event,omitempty"`
+	ResourceStatus    *resource.Status        `json:"resource_status,omitempty"`
+	MaxSequenceID     int64                   `json:"max_sequence_id,omitempty"`
 }
 
 type notificationEventForTS struct {

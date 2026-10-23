@@ -17,25 +17,22 @@ import (
 	"time"
 
 	"shelley.exe.dev/db"
-	"shelley.exe.dev/server/diskspace"
+	"shelley.exe.dev/server/resource"
 )
 
 func initTestDiskSpace(t *testing.T, s *Server, available *uint64) *atomic.Int32 {
 	t.Helper()
 	calls := new(atomic.Int32)
-	if err := s.initDiskSpace(t.Context(), func(path string) (uint64, uint64, error) {
+	if err := s.initResourceMonitor(t.Context(), resource.Disk, func() (resourceReading, error) {
 		calls.Add(1)
-		if path != s.db.Path() {
-			t.Errorf("probe path = %q, want %q", path, s.db.Path())
-		}
-		return *available, 100_000_000_000, nil
+		return resourceReading{available: *available, total: 100_000_000_000}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return calls
 }
 
-func checkDiskSpace(t *testing.T, m *diskSpaceMonitor) diskspace.DiskSpaceStatus {
+func checkDiskSpace(t *testing.T, m *resourceMonitor) resource.Status {
 	t.Helper()
 	if err := m.check(t.Context()); err != nil {
 		t.Fatal(err)
@@ -48,7 +45,7 @@ func TestDiskSpaceBoundaryAndEpisodes(t *testing.T) {
 	s, database, _ := newTestServer(t)
 	var writes atomic.Int32
 	database.Pool().OnCommit(func() { writes.Add(1) })
-	available := diskspace.Threshold
+	available := resource.DiskThreshold
 	calls := initTestDiskSpace(t, s, &available)
 	m := s.diskSpace.Load()
 	if got := m.snapshot(); got.Active || got.AvailableBytes != available || got.EpisodeID != 0 || calls.Load() != 1 || writes.Load() != 0 {
@@ -84,7 +81,7 @@ func TestDiskSpaceBoundaryAndEpisodes(t *testing.T) {
 		t.Fatalf("idempotent dismissal: %+v, err=%v, writes=%d", again, err, writes.Load())
 	}
 
-	available = diskspace.Threshold
+	available = resource.DiskThreshold
 	recovered := checkDiskSpace(t, m)
 	if recovered.Active || recovered.Dismissed || recovered.EpisodeID != low.EpisodeID || recovered.Revision != 3 || writes.Load() != 3 {
 		t.Fatalf("recovery at exact boundary: %+v, writes=%d", recovered, writes.Load())
@@ -109,7 +106,7 @@ func TestDiskSpaceBoundaryAndEpisodes(t *testing.T) {
 func TestDiskSpaceDismissalPersistence(t *testing.T) {
 	t.Parallel()
 	s, database, _ := newTestServer(t)
-	available := diskspace.Threshold - 1
+	available := resource.DiskThreshold - 1
 	initTestDiskSpace(t, s, &available)
 	dismissed, err := s.diskSpace.Load().dismiss(t.Context(), s.diskSpace.Load().snapshot().EpisodeID)
 	if err != nil {
@@ -132,7 +129,7 @@ func TestDiskSpaceDismissalPersistence(t *testing.T) {
 		t.Fatalf("restart lost dismissal: %+v, want %+v; writes=%d", got, dismissed, writes.Load())
 	}
 	// A startup observation of recovery also rearms the next episode.
-	available = diskspace.Threshold
+	available = resource.DiskThreshold
 	initTestDiskSpace(t, restarted, &available)
 	if got := restarted.diskSpace.Load().snapshot(); got.Active || got.Dismissed || got.EpisodeID != dismissed.EpisodeID {
 		t.Fatalf("startup recovery: %+v", got)
@@ -148,33 +145,33 @@ func TestDiskSpaceProbeErrors(t *testing.T) {
 	t.Parallel()
 	s, _, _ := newTestServer(t)
 	probeErr := errors.New("probe failed")
-	if err := s.initDiskSpace(t.Context(), func(string) (uint64, uint64, error) { return 0, 0, probeErr }); !errors.Is(err, probeErr) || s.diskSpace.Load() != nil {
+	if err := s.initResourceMonitor(t.Context(), resource.Disk, func() (resourceReading, error) { return resourceReading{}, probeErr }); !errors.Is(err, probeErr) || s.diskSpace.Load() != nil {
 		t.Fatalf("startup must fail, not report healthy: monitor=%v, err=%v", s.diskSpace.Load(), err)
 	}
-	available := diskspace.Threshold - 1
+	available := resource.DiskThreshold - 1
 	initTestDiskSpace(t, s, &available)
 	before := s.diskSpace.Load().snapshot()
-	s.diskSpace.Load().probe = func(string) (uint64, uint64, error) { return 0, 0, probeErr }
+	s.diskSpace.Load().probe = func() (resourceReading, error) { return resourceReading{}, probeErr }
 	if err := s.diskSpace.Load().check(t.Context()); !errors.Is(err, probeErr) || s.diskSpace.Load().snapshot() != before {
 		t.Fatalf("probe error changed status: %+v, err=%v", s.diskSpace.Load().snapshot(), err)
 	}
-	if _, _, err := diskBytes(filepath.Join(t.TempDir(), "missing.db")); err == nil {
+	if _, err := readDisk(filepath.Join(t.TempDir(), "missing.db")); err == nil {
 		t.Fatal("statfs on missing path succeeded")
 	}
-	if _, _, err := diskBytes(s.db.Path()); err != nil {
-		t.Fatalf("statfs on actual SQLite path: %v", err)
+	if r, err := readDisk(s.db.Path()); err != nil || r.total == 0 || r.available > r.total {
+		t.Fatalf("statfs on actual SQLite path: %+v, %v", r, err)
 	}
 }
 
-func dismissDiskSpaceHTTP(t *testing.T, handler http.Handler, id uint64) diskspace.DiskSpaceStatus {
+func dismissResourceHTTP(t *testing.T, handler http.Handler, kind resource.Kind, id uint64) resource.Status {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/disk-space/dismiss", strings.NewReader(fmt.Sprintf(`{"episode_id":%d}`, id)))
+	req := httptest.NewRequest(http.MethodPost, "/api/resources/"+string(kind)+"/dismiss", strings.NewReader(fmt.Sprintf(`{"episode_id":%d}`, id)))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("dismiss: HTTP %d: %s", w.Code, w.Body.String())
 	}
-	var status diskspace.DiskSpaceStatus
+	var status resource.Status
 	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
@@ -184,39 +181,47 @@ func dismissDiskSpaceHTTP(t *testing.T, handler http.Handler, id uint64) diskspa
 func TestDiskSpaceDismissRoute(t *testing.T) {
 	t.Parallel()
 	s, database, _ := newTestServer(t)
-	available := diskspace.Threshold - 1
+	available := resource.DiskThreshold - 1
 	initTestDiskSpace(t, s, &available)
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 	initial := s.diskSpace.Load().snapshot()
-	if stale := dismissDiskSpaceHTTP(t, mux, initial.EpisodeID+1); stale != initial {
+	if stale := dismissResourceHTTP(t, mux, resource.Disk, initial.EpisodeID+1); stale != initial {
 		t.Fatalf("unknown ID changed status: %+v", stale)
 	}
-	dismissed := dismissDiskSpaceHTTP(t, mux, initial.EpisodeID)
+	dismissed := dismissResourceHTTP(t, mux, resource.Disk, initial.EpisodeID)
 	if !dismissed.Dismissed || dismissed != s.diskSpace.Load().snapshot() {
 		t.Fatalf("response is not authoritative: %+v", dismissed)
 	}
-	if got := dismissDiskSpaceHTTP(t, mux, initial.EpisodeID); got != dismissed {
+	if got := dismissResourceHTTP(t, mux, resource.Disk, initial.EpisodeID); got != dismissed {
 		t.Fatalf("repeat dismissal: %+v", got)
 	}
-	available = diskspace.Threshold
+	available = resource.DiskThreshold
 	checkDiskSpace(t, s.diskSpace.Load())
 	available--
 	later := checkDiskSpace(t, s.diskSpace.Load())
-	if got := dismissDiskSpaceHTTP(t, mux, initial.EpisodeID); got != later {
+	if got := dismissResourceHTTP(t, mux, resource.Disk, initial.EpisodeID); got != later {
 		t.Fatalf("stale route dismissal changed later episode: %+v", got)
 	}
 	for _, body := range []string{`{`, `{}`, `{"episode_id":0}`, `{"episode_id":-1}`, `{"episode_id":"1"}`} {
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/disk-space/dismiss", strings.NewReader(body)))
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/resources/disk/dismiss", strings.NewReader(body)))
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("invalid body %s: HTTP %d", body, w.Code)
 		}
 	}
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/disk-space/dismiss", nil))
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/resources/disk/dismiss", nil))
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET dismissal: HTTP %d", w.Code)
+	}
+	// Unknown kinds, and kinds without a monitor (memory off Linux), are 404s.
+	for _, kind := range []string{"cpu", "memory"} {
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/resources/"+kind+"/dismiss", strings.NewReader(`{"episode_id":1}`)))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("dismiss %s: HTTP %d", kind, w.Code)
+		}
 	}
 
 	before, err := database.GetSetting(t.Context(), diskSpaceSettingKey)
@@ -237,7 +242,7 @@ func TestDiskSpaceDismissRoute(t *testing.T) {
 func TestDiskSpaceDismissWriteError(t *testing.T) {
 	t.Parallel()
 	s, database, _ := newTestServer(t)
-	available := diskspace.Threshold - 1
+	available := resource.DiskThreshold - 1
 	initTestDiskSpace(t, s, &available)
 	before := s.diskSpace.Load().snapshot()
 	// Fail at COMMIT, not in the settings statement itself.
@@ -252,7 +257,7 @@ func TestDiskSpaceDismissWriteError(t *testing.T) {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/disk-space/dismiss", strings.NewReader(`{"episode_id":1}`)))
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/resources/disk/dismiss", strings.NewReader(`{"episode_id":1}`)))
 	if w.Code != http.StatusInternalServerError || s.diskSpace.Load().snapshot() != before {
 		t.Fatalf("failed commit reported a saved dismissal: HTTP %d, status=%+v", w.Code, s.diskSpace.Load().snapshot())
 	}
@@ -264,7 +269,7 @@ func TestDiskSpaceDismissWriteError(t *testing.T) {
 
 // Read complete SSE frames rather than polling or sleeping. Each HTTP request
 // has a deadline so a missing snapshot/update fails instead of hanging.
-func openDiskSpaceStream(t *testing.T, url string) (*bufio.Scanner, context.CancelFunc) {
+func openResourceStream(t *testing.T, url string) (*bufio.Scanner, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -287,7 +292,16 @@ func openDiskSpaceStream(t *testing.T, url string) (*bufio.Scanner, context.Canc
 	return bufio.NewScanner(resp.Body), closeStream
 }
 
-func readDiskSpaceFrame(t *testing.T, scanner *bufio.Scanner) diskspace.DiskSpaceStatus {
+func readDiskSpaceFrame(t *testing.T, scanner *bufio.Scanner) resource.Status {
+	t.Helper()
+	status := readResourceFrame(t, scanner)
+	if status.Kind != resource.Disk {
+		t.Fatalf("not a disk frame: %+v", status)
+	}
+	return status
+}
+
+func readResourceFrame(t *testing.T, scanner *bufio.Scanner) resource.Status {
 	t.Helper()
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -298,21 +312,21 @@ func readDiskSpaceFrame(t *testing.T, scanner *bufio.Scanner) diskspace.DiskSpac
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame); err != nil {
 			t.Fatal(err)
 		}
-		if frame.DiskSpaceStatus != nil {
+		if frame.ResourceStatus != nil {
 			if frame.ConversationID != "" {
-				t.Fatalf("disk event is not global: %+v", frame)
+				t.Fatalf("resource event is not global: %+v", frame)
 			}
-			return *frame.DiskSpaceStatus
+			return *frame.ResourceStatus
 		}
 	}
-	t.Fatalf("missing disk frame: %v", scanner.Err())
-	return diskspace.DiskSpaceStatus{}
+	t.Fatalf("missing resource frame: %v", scanner.Err())
+	return resource.Status{}
 }
 
 func TestDiskSpaceStreamSnapshotAndGlobalDelivery(t *testing.T) {
 	t.Parallel()
 	s, _, _ := newTestServer(t)
-	available := diskspace.Threshold
+	available := resource.DiskThreshold
 	calls := initTestDiskSpace(t, s, &available)
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
@@ -322,7 +336,7 @@ func TestDiskSpaceStreamSnapshotAndGlobalDelivery(t *testing.T) {
 	// Each new stream samples once (probe count +1) so an idle Shelley shows
 	// the current state on page load, and the snapshot reflects that sample.
 	available++
-	a, closeA := openDiskSpaceStream(t, httpServer.URL+"/api/stream2")
+	a, closeA := openResourceStream(t, httpServer.URL+"/api/stream2")
 	defer closeA()
 	initial := readDiskSpaceFrame(t, a)
 	if initial != s.diskSpace.Load().snapshot() || initial.AvailableBytes != available || calls.Load() != 2 {
@@ -333,13 +347,13 @@ func TestDiskSpaceStreamSnapshotAndGlobalDelivery(t *testing.T) {
 	hash := s.conversationListStream.currentHash
 	s.conversationListStream.mu.Unlock()
 	available--
-	b, closeB := openDiskSpaceStream(t, httpServer.URL+"/api/stream2?conversation_list_hash="+hash)
+	b, closeB := openResourceStream(t, httpServer.URL+"/api/stream2?conversation_list_hash="+hash)
 	defer closeB()
 	if got := readDiskSpaceFrame(t, b); got.AvailableBytes != available || calls.Load() != 3 {
 		t.Fatalf("reconnect snapshot: %+v, probes=%d", got, calls.Load())
 	}
 	// A healthy sample on connect is not broadcast to existing subscribers.
-	assertBoth := func(want diskspace.DiskSpaceStatus) {
+	assertBoth := func(want resource.Status) {
 		t.Helper()
 		for _, scanner := range []*bufio.Scanner{a, b} {
 			if got := readDiskSpaceFrame(t, scanner); got != want {
@@ -357,17 +371,17 @@ func TestDiskSpaceStreamSnapshotAndGlobalDelivery(t *testing.T) {
 		t.Fatalf("refresh: %+v", refreshed)
 	}
 	assertBoth(refreshed)
-	dismissed := dismissDiskSpaceHTTP(t, mux, low.EpisodeID)
+	dismissed := dismissResourceHTTP(t, mux, resource.Disk, low.EpisodeID)
 	assertBoth(dismissed)
 	closeB()
-	b, closeB = openDiskSpaceStream(t, httpServer.URL+"/api/stream2?conversation_list_hash="+hash)
+	b, closeB = openResourceStream(t, httpServer.URL+"/api/stream2?conversation_list_hash="+hash)
 	defer closeB()
 	// Dismissed: the connect sample refreshes bytes silently; the snapshot
 	// carries the dismissed episode and no frame reaches the other stream.
 	if got := readDiskSpaceFrame(t, b); !got.Dismissed || got.EpisodeID != dismissed.EpisodeID || got.Revision != dismissed.Revision || calls.Load() != 6 {
 		t.Fatalf("dismissed reconnect: %+v, probes=%d", got, calls.Load())
 	}
-	available = diskspace.Threshold
+	available = resource.DiskThreshold
 	assertBoth(checkDiskSpace(t, s.diskSpace.Load()))
 	available--
 	assertBoth(checkDiskSpace(t, s.diskSpace.Load()))
@@ -380,25 +394,25 @@ func (w diskSpaceLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// refreshDiskSpace is the end-of-turn hook: it samples once, logs probe
-// errors without clearing a live warning, and is a no-op before init.
-func TestDiskSpaceRefreshAtTurnEnd(t *testing.T) {
+// refreshResources samples every monitor once, logs probe errors without
+// clearing a live warning, and is a no-op before init.
+func TestResourceRefresh(t *testing.T) {
 	t.Parallel()
 	s, _, _ := newTestServer(t)
-	s.refreshDiskSpace(t.Context()) // uninitialized: must not panic
-	available := diskspace.Threshold
+	s.refreshResources(t.Context()) // uninitialized: must not panic
+	available := resource.DiskThreshold
 	calls := initTestDiskSpace(t, s, &available)
 	available--
-	s.refreshDiskSpace(t.Context())
+	s.refreshResources(t.Context())
 	if got := s.diskSpace.Load().snapshot(); !got.Active || calls.Load() != 2 {
-		t.Fatalf("turn-end refresh did not sample: %+v, probes=%d", got, calls.Load())
+		t.Fatalf("refresh did not sample: %+v, probes=%d", got, calls.Load())
 	}
 	before := s.diskSpace.Load().snapshot()
-	s.diskSpace.Load().probe = func(string) (uint64, uint64, error) { return 0, 0, errors.New("turn-end probe failed") }
+	s.diskSpace.Load().probe = func() (resourceReading, error) { return resourceReading{}, errors.New("refresh probe failed") }
 	lines := make(chan string, 1)
 	s.logger = slog.New(slog.NewTextHandler(diskSpaceLogWriter{lines}, nil))
-	s.refreshDiskSpace(t.Context())
-	if line := <-lines; !strings.Contains(line, "turn-end probe failed") {
+	s.refreshResources(t.Context())
+	if line := <-lines; !strings.Contains(line, "refresh probe failed") || !strings.Contains(line, "kind=disk") {
 		t.Fatalf("missing error log: %s", line)
 	}
 	if s.diskSpace.Load().snapshot() != before {
@@ -407,26 +421,71 @@ func TestDiskSpaceRefreshAtTurnEnd(t *testing.T) {
 
 	// Dismissed: sustained-low samples are silent; the next event is recovery.
 	next, _ := s.streamPub.SubscribeWithStatus(t.Context(), -1)
-	s.diskSpace.Load().probe = func(string) (uint64, uint64, error) { return available, 100_000_000_000, nil }
+	s.diskSpace.Load().probe = func() (resourceReading, error) {
+		return resourceReading{available: available, total: 100_000_000_000}, nil
+	}
 	if _, err := s.diskSpace.Load().dismiss(t.Context(), before.EpisodeID); err != nil {
 		t.Fatal(err)
 	}
-	if ev, ok := next(); !ok || ev.DiskSpaceStatus == nil || !ev.DiskSpaceStatus.Dismissed {
+	if ev, ok := next(); !ok || ev.ResourceStatus == nil || !ev.ResourceStatus.Dismissed {
 		t.Fatalf("expected dismissal event, got %+v", ev)
 	}
 	available--
-	s.refreshDiskSpace(t.Context())
-	available = diskspace.Threshold
-	s.refreshDiskSpace(t.Context())
-	if ev, ok := next(); !ok || ev.DiskSpaceStatus == nil || ev.DiskSpaceStatus.Active {
+	s.refreshResources(t.Context())
+	available = resource.DiskThreshold
+	s.refreshResources(t.Context())
+	if ev, ok := next(); !ok || ev.ResourceStatus == nil || ev.ResourceStatus.Active {
 		t.Fatalf("expected recovery event with no refresh leak before it, got %+v", ev)
+	}
+}
+
+// Every message an agent loop records samples the resources, so pressure from
+// a tool shows up while the turn is still running rather than at its end.
+func TestRecordedMessagesSampleResources(t *testing.T) {
+	t.Parallel()
+	s, database, _ := newTestServer(t)
+	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := s.getOrCreateConversationManager(t.Context(), conversation.ConversationID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each probe after the startup one reports whether the turn was running.
+	working := make(chan bool, 10)
+	started := false
+	if err := s.initResourceMonitor(t.Context(), resource.Memory, func() (resourceReading, error) {
+		if started {
+			working <- manager.IsAgentWorking()
+		}
+		started = true
+		return resourceReading{available: 1, total: 100}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	postChatMessage(t, s, conversation.ConversationID, "bash: echo hi")
+	// The tool call and its result mid-turn, then the closing reply.
+	for i, want := range []bool{true, true, false} {
+		select {
+		case got := <-working:
+			if got != want {
+				t.Fatalf("probe %d: agent working = %v, want %v", i, got, want)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("probe %d never ran", i)
+		}
+	}
+	waitForIdle(t, s, conversation.ConversationID)
+	if len(working) != 0 {
+		t.Fatalf("%d extra probes", len(working))
 	}
 }
 
 func TestDiskSpaceCriticalEscalation(t *testing.T) {
 	t.Parallel()
 	s, database, _ := newTestServer(t)
-	available := diskspace.Threshold - 1
+	available := resource.DiskThreshold - 1
 	initTestDiskSpace(t, s, &available)
 	m := s.diskSpace.Load()
 	low := m.snapshot()
@@ -438,7 +497,7 @@ func TestDiskSpaceCriticalEscalation(t *testing.T) {
 	}
 
 	// Exactly the critical boundary is still just low: dismissed stays.
-	available = diskspace.CriticalThreshold
+	available = resource.DiskCriticalThreshold
 	if got := checkDiskSpace(t, m); got.Critical || !got.Dismissed || got.Revision != 2 {
 		t.Fatalf("at critical boundary: %+v", got)
 	}
@@ -456,7 +515,7 @@ func TestDiskSpaceCriticalEscalation(t *testing.T) {
 	if _, err := m.dismiss(t.Context(), crit.EpisodeID); err != nil {
 		t.Fatal(err)
 	}
-	available = diskspace.Threshold - 1
+	available = resource.DiskThreshold - 1
 	if got := checkDiskSpace(t, m); !got.Critical || !got.Dismissed || got.Revision != 4 {
 		t.Fatalf("critical must latch within the episode: %+v", got)
 	}
@@ -466,16 +525,16 @@ func TestDiskSpaceCriticalEscalation(t *testing.T) {
 		t.Fatalf("critical escalated twice: %+v", got)
 	}
 	// Recovery clears everything; a fresh low episode starts non-critical.
-	available = diskspace.Threshold
+	available = resource.DiskThreshold
 	if got := checkDiskSpace(t, m); got.Active || got.Critical || got.Dismissed || got.Revision != 5 {
 		t.Fatalf("recovery: %+v", got)
 	}
-	available = diskspace.Threshold - 1
+	available = resource.DiskThreshold - 1
 	if got := checkDiskSpace(t, m); !got.Active || got.Critical || got.EpisodeID != low.EpisodeID+1 {
 		t.Fatalf("new episode: %+v", got)
 	}
 	// Straight from healthy to critical: one transition, critical from the start.
-	available = diskspace.Threshold
+	available = resource.DiskThreshold
 	checkDiskSpace(t, m)
 	available = 0
 	if got := checkDiskSpace(t, m); !got.Active || !got.Critical || got.Dismissed || got.EpisodeID != low.EpisodeID+2 {
@@ -537,7 +596,7 @@ func TestDiskFullWriteReportsAndRaisesNotice(t *testing.T) {
 	t.Parallel()
 	s, database, _ := newTestServer(t)
 	fillTestDB(t, database) // before init, so filling raises nothing
-	available := diskspace.Threshold
+	available := resource.DiskThreshold
 	initTestDiskSpace(t, s, &available)
 	m := s.diskSpace.Load()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -554,13 +613,13 @@ func TestDiskFullWriteReportsAndRaisesNotice(t *testing.T) {
 		t.Fatalf("got HTTP %d %q, want 507 with the sqlite error", w.Code, w.Body.String())
 	}
 
-	var raised *diskspace.DiskSpaceStatus
+	var raised *resource.Status
 	for raised == nil {
 		ev, ok := next()
 		if !ok {
 			t.Fatal("disk-full write did not raise the notice")
 		}
-		raised = ev.DiskSpaceStatus
+		raised = ev.ResourceStatus
 	}
 	if !raised.Active || !raised.Critical || raised.Dismissed || raised.AvailableBytes != 0 {
 		t.Fatalf("raised notice: %+v", raised)
@@ -580,7 +639,7 @@ func TestDiskFullWriteReportsAndRaisesNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var saved diskSpaceEpisode
+	var saved resourceEpisode
 	if err := json.Unmarshal([]byte(value), &saved); err != nil {
 		t.Fatal(err)
 	}
@@ -644,5 +703,53 @@ func TestStartOnFullDiskWithWorkingConversation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// The UI takes a connection's resource statuses as one snapshot, completed by
+// the first frame that is neither a list patch nor a status: pin that order.
+func TestStreamOpensWithListReplayThenResourceSnapshot(t *testing.T) {
+	t.Parallel()
+	s, database, _ := newTestServer(t)
+	if _, err := database.CreateConversation(t.Context(), strPtr("replayed"), true, nil, nil, db.ConversationOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	available := resource.DiskThreshold - 1
+	initTestDiskSpace(t, s, &available)
+	memory := func() (resourceReading, error) { return resourceReading{available: 500, total: 1000}, nil }
+	if err := s.initResourceMonitor(t.Context(), resource.Memory, memory); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	httpServer := httptest.NewServer(mux)
+	defer httpServer.Close()
+
+	stream, closeStream := openResourceStream(t, httpServer.URL+"/api/stream2")
+	defer closeStream()
+	var order []string
+	for stream.Scan() {
+		line, ok := strings.CutPrefix(stream.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var frame StreamResponse
+		if err := json.Unmarshal([]byte(line), &frame); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case frame.ConversationListPatch != nil:
+			order = append(order, "list")
+		case frame.ResourceStatus != nil:
+			order = append(order, string(frame.ResourceStatus.Kind))
+		default:
+			order = append(order, "other")
+		}
+		if order[len(order)-1] == "other" {
+			break
+		}
+	}
+	if got := strings.Join(order, ","); got != "list,disk,memory,other" {
+		t.Fatalf("opening frames: %s", got)
 	}
 }

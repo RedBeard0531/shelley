@@ -417,41 +417,12 @@
       @new-terminal="openInAppTerminal"
     />
 
-    <!-- Low disk space notice: server-wide, shown once per episode until dismissed. -->
-    <div
-      v-if="diskSpaceStatus?.active && !diskSpaceStatus.dismissed"
-      class="disk-space-notice"
-      :class="{ 'disk-space-notice-critical': diskSpaceStatus.critical }"
-      :role="diskSpaceStatus.critical ? 'alert' : 'status'"
-      data-testid="disk-space-notice"
-    >
-      <span class="disk-space-notice-icon" aria-hidden="true">!</span>
-      <span class="disk-space-notice-text">
-        <strong>{{ t(diskSpaceStatus.critical ? "diskSpaceCritical" : "diskSpaceLow") }}</strong>
-        <span class="disk-space-notice-detail"
-          >{{ formatDiskBytes(diskSpaceStatus.available_bytes) }}
-          {{ t("diskSpaceRemaining") }}</span
-        >
-      </span>
-      <a
-        v-if="diskResizeSuggestUrl"
-        :href="diskResizeSuggestUrl"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="disk-space-notice-link"
-        data-testid="disk-space-notice-link"
-        >{{ t("diskSpaceResize") }}</a
-      >
-      <button
-        type="button"
-        class="btn-icon disk-space-notice-dismiss"
-        :aria-label="t('dismiss')"
-        data-testid="disk-space-notice-dismiss"
-        @click="dismissDiskSpaceNotice"
-      >
-        ×
-      </button>
-    </div>
+    <ResourceNotice
+      v-for="status in visibleResourceNotices"
+      :key="status.kind"
+      :status="status"
+      @dismiss="dismissResourceNotice"
+    />
 
     <StatusHookRow :status="hookStatus" :stale="hookStatusStale" />
 
@@ -670,7 +641,7 @@ import {
   type ToolProgress,
   type Usage,
   type LLMContent,
-  type DiskSpaceStatus,
+  type ResourceStatus,
   type Profile,
   type Settings,
   type SettingsChange,
@@ -829,6 +800,7 @@ import StatusHookRow from "./StatusHookRow.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import InlineText from "./InlineText.vue";
 import ThinkingContent from "./tools/ThinkingContent.vue";
+import ResourceNotice from "./ResourceNotice.vue";
 
 // Props mirror ChatInterfaceProps in the React source. Callbacks that
 // ChatInterface awaits or simply invokes are passed as function props
@@ -838,8 +810,8 @@ const props = withDefaults(
     conversationId: string | null;
     streamStatus?: "connected" | "reconnecting" | "disconnected";
     reconnectNonce?: number;
-    diskSpaceStatus?: DiskSpaceStatus | null;
-    onDiskSpaceStatus?: (status: DiskSpaceStatus) => void;
+    resourceStatuses?: ResourceStatus[];
+    onResourceStatus?: (status: ResourceStatus) => void;
     onOpenDrawer: () => void;
     onNewConversation: () => Promise<boolean>;
     onSelectConversation?: (conversation: Conversation) => void;
@@ -1056,26 +1028,13 @@ const loadingProgress = ref<{
 const sending = ref(false);
 const error = ref<string | null>(null);
 
-function formatDiskBytes(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  return `${Math.round(bytes / 1e6)} MB`;
-}
+const visibleResourceNotices = computed(() =>
+  (props.resourceStatuses ?? []).filter((status) => status.active && !status.dismissed),
+);
 
-// exe.dev VMs can grow their disk via the control plane; suggest the current
-// size rounded up to the next 10 GB plus 10 GB so the form opens pre-filled.
-const diskResizeSuggestUrl = computed(() => {
-  const total = props.diskSpaceStatus?.total_bytes;
-  if (!isExeDev || !total) return null;
-  const gb = Math.ceil(total / 1e9 / 10) * 10 + 10;
-  const vm = (window.__SHELLEY_INIT__?.hostname ?? "").split(".")[0];
-  return `https://exe.dev/suggest?command=${encodeURIComponent(`resize ${vm} --disk=${gb}GB`)}`;
-});
-
-async function dismissDiskSpaceNotice() {
-  const status = props.diskSpaceStatus;
-  if (!status) return;
+async function dismissResourceNotice(status: ResourceStatus) {
   try {
-    props.onDiskSpaceStatus?.(await api.dismissDiskSpaceNotice(status.episode_id));
+    props.onResourceStatus?.(await api.dismissResourceNotice(status.kind, status.episode_id));
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   }

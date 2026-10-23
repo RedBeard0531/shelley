@@ -4742,10 +4742,11 @@ select:disabled {
   text-align: center;
 }
 
-/* Low disk space notice. A server-wide, dismissible heads-up shown above the
-   status bar (a sibling, so it survives the mobile layout that folds the
-   status bar into the composer). Pairs with disk_space_status on the stream. */
-.disk-space-notice {
+/* Low disk space and memory pressure notices. Server-wide, dismissible
+   heads-ups shown above the status bar (siblings, so they survive the mobile
+   layout that folds the status bar into the composer). Pair with
+   resource_status on the stream. */
+.resource-notice {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -4760,17 +4761,17 @@ select:disabled {
   font-size: 0.8rem;
 }
 
-.disk-space-notice-critical {
+.resource-notice-critical {
   background: var(--error-bg);
   border-top-color: var(--error-border);
   color: var(--error-text);
 }
 
-.disk-space-notice-critical .disk-space-notice-icon {
+.resource-notice-critical .resource-notice-icon {
   border-color: var(--error-border);
 }
 
-.disk-space-notice-icon {
+.resource-notice-icon {
   flex: none;
   display: grid;
   place-items: center;
@@ -4783,14 +4784,15 @@ select:disabled {
   font-weight: 700;
 }
 
-.disk-space-notice-text {
+.resource-notice-text {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.45rem;
+  gap: 0 0.45rem;
   min-width: 0;
 }
 
-.disk-space-notice-link {
+.resource-notice-link {
   margin-left: auto;
   flex: none;
   color: inherit;
@@ -4799,17 +4801,18 @@ select:disabled {
   text-decoration: underline;
 }
 
-.disk-space-notice-link + .disk-space-notice-dismiss {
+.resource-notice-link + .resource-notice-dismiss {
   margin-left: 0;
 }
 
-.disk-space-notice-detail {
+.resource-notice-detail {
+  white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   opacity: 0.9;
 }
 
-.disk-space-notice-dismiss {
+.resource-notice-dismiss {
   margin-left: auto;
   color: var(--warning-text);
   font-size: 1.1rem;

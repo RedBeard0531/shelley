@@ -5,7 +5,8 @@ import {
   ApiMessageForTS,
   StreamResponseForTS,
   NotificationEventForTS,
-  DiskSpaceStatus,
+  ResourceKind,
+  ResourceStatus,
   Usage as GeneratedUsage,
   MessageType as GeneratedMessageType,
 } from "./generated-types";
@@ -19,7 +20,7 @@ export type ConversationWithParticipants = Conversation & {
 };
 export type Usage = GeneratedUsage;
 export type MessageType = GeneratedMessageType;
-export type { DiskSpaceStatus };
+export type { ResourceKind, ResourceStatus };
 
 export interface BtwReaderDescriptor {
   readonly conversation_id: string;
@@ -229,7 +230,7 @@ export interface StreamResponse extends Omit<StreamResponseForTS, "messages"> {
   conversation_list_patch?: ConversationListPatchEvent;
   heartbeat?: boolean;
   notification_event?: NotificationEvent;
-  disk_space_status?: DiskSpaceStatus;
+  resource_status?: ResourceStatus;
   models_changed?: boolean;
   tool_progress?: ToolProgress;
   stream_delta?: StreamDelta;

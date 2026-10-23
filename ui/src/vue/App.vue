@@ -60,8 +60,8 @@
           :conversation-id="currentConversationId"
           :stream-status="streamStatus"
           :reconnect-nonce="reconnectNonce"
-          :disk-space-status="diskSpaceStatus"
-          :on-disk-space-status="applyDiskSpaceStatus"
+          :resource-statuses="Object.values(resourceStatuses)"
+          :on-resource-status="applyResourceStatus"
           :on-open-drawer="() => (drawerOpen = true)"
           :on-new-conversation="startNewConversation"
           :on-select-conversation="selectConversation"
@@ -315,7 +315,8 @@ import {
   type Conversation,
   type ConversationWithState,
   type ConversationListPatchEvent,
-  type DiskSpaceStatus,
+  type ResourceKind,
+  type ResourceStatus,
   type ChatRequest,
 } from "../types";
 import { api, ApiError } from "../services/api";
@@ -458,16 +459,20 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 const ephemeralTerminals = ref<EphemeralTerminal[]>([]);
 const streamStatus = ref<StreamStatus>("connected");
-// Server-wide low-disk notice; the server sends a snapshot on every (re)connect.
-// Revisions only order statuses from one server process: a transition that
-// could not be persisted (e.g. the disk was full) is lost on restart, so a
-// snapshot is accepted even when its revision is older.
-const diskSpaceStatus = ref<DiskSpaceStatus | null>(null);
-function applyDiskSpaceStatus(status: DiskSpaceStatus, snapshot = false) {
-  if (!snapshot && diskSpaceStatus.value && status.revision < diskSpaceStatus.value.revision) {
-    return;
-  }
-  diskSpaceStatus.value = status;
+// Server-wide low disk and memory notices. Each (re)connect's snapshot
+// replaces them all, disk first, which also fixes the display order. It drops
+// kinds the server no longer monitors and is accepted even with older
+// revisions: those only order statuses of one kind from one server process,
+// and a transition that could not be persisted (e.g. the disk was full) is
+// lost on restart.
+const resourceStatuses = ref<Partial<Record<ResourceKind, ResourceStatus>>>({});
+function replaceResourceStatuses(statuses: ResourceStatus[]) {
+  resourceStatuses.value = Object.fromEntries(statuses.map((status) => [status.kind, status]));
+}
+function applyResourceStatus(status: ResourceStatus) {
+  const current = resourceStatuses.value[status.kind];
+  if (current && status.revision < current.revision) return;
+  resourceStatuses.value = { ...resourceStatuses.value, [status.kind]: status };
 }
 const reconnectNonce = ref(0);
 const showActiveTrigger = ref(0);
@@ -1202,7 +1207,8 @@ onMounted(() => {
     onNotificationEvent: handleNotificationEvent,
     onModelsChanged: () => modelsRefreshTrigger.value++,
     onStatusChange: (status) => (streamStatus.value = status),
-    onDiskSpaceStatus: applyDiskSpaceStatus,
+    onResourceSnapshot: replaceResourceStatuses,
+    onResourceStatus: applyResourceStatus,
     onReconnect: () => {
       reconnectNonce.value++;
     },

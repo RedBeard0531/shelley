@@ -17,7 +17,7 @@
 
 import type {
   ConversationListPatchEvent,
-  DiskSpaceStatus,
+  ResourceStatus,
   NotificationEvent,
   StreamResponse,
   Message,
@@ -77,10 +77,14 @@ export interface GlobalStreamOptions {
    */
   onReconnect?: () => void;
   /**
-   * Server-wide disk space status: a snapshot after every (re)connect, then
-   * transitions. snapshot is true for the first status on each connection.
+   * Server-wide resource (disk, memory) statuses. Each (re)connect opens
+   * with the conversation list replay and one status per monitored kind,
+   * then a heartbeat or models_changed frame; the statuses reach
+   * onResourceSnapshot together at that frame, so a kind the server no
+   * longer monitors drops out. Later statuses are transitions.
    */
-  onDiskSpaceStatus?: (status: DiskSpaceStatus, snapshot: boolean) => void;
+  onResourceSnapshot?: (statuses: ResourceStatus[]) => void;
+  onResourceStatus?: (status: ResourceStatus) => void;
 }
 
 export interface GlobalStreamHandle {
@@ -113,7 +117,8 @@ export function connectGlobalStream({
   onModelsChanged,
   onStatusChange,
   onReconnect,
-  onDiskSpaceStatus,
+  onResourceSnapshot,
+  onResourceStatus,
 }: GlobalStreamOptions): GlobalStreamHandle {
   let closed = false;
   let eventSource: EventSource | null = null;
@@ -129,8 +134,8 @@ export function connectGlobalStream({
   // accepting: only the former earns a backoff reset. See
   // STABLE_CONNECTION_MS.
   let connectionOpenedAt = 0;
-  // Whether the current connection has delivered its disk space snapshot.
-  let diskSnapshotSeen = false;
+  // The current connection's resource snapshot until its opening frames end.
+  let resourceSnapshot: ResourceStatus[] | null = [];
   // Wall-clock timestamp of the last frame (open or any message, incl.
   // heartbeat) received on the current connection. This is the source of
   // truth for connection liveness: unlike setTimeout-based watchdogs, it is
@@ -225,9 +230,14 @@ export function connectGlobalStream({
     if (data.models_changed) {
       onModelsChanged?.();
     }
-    if (data.disk_space_status && onDiskSpaceStatus) {
-      onDiskSpaceStatus(data.disk_space_status, !diskSnapshotSeen);
-      diskSnapshotSeen = true;
+    const resource = data.resource_status;
+    if (resourceSnapshot && resource) {
+      resourceSnapshot.push(resource);
+    } else if (resourceSnapshot && !data.conversation_list_patch) {
+      onResourceSnapshot?.(resourceSnapshot);
+      resourceSnapshot = null;
+    } else if (resource) {
+      onResourceStatus?.(resource);
     }
 
     const convId = data.conversation_id;
@@ -308,7 +318,7 @@ export function connectGlobalStream({
     // lastFrameAt and tear down the freshly-opened one.
     lastFrameAt = Date.now();
     connectionOpenedAt = 0;
-    diskSnapshotSeen = false;
+    resourceSnapshot = [];
     const source = api.createStream({ conversationListHash: getHash() ?? undefined });
     eventSource = source;
 

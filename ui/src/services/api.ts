@@ -2,7 +2,8 @@ import {
   Conversation,
   ConversationWithParticipants,
   ConversationWithState,
-  DiskSpaceStatus,
+  ResourceKind,
+  ResourceStatus,
   StreamResponse,
   ChatRequest,
   BtwReaderDescriptor,
@@ -1188,8 +1189,8 @@ class ApiService {
     return response.json();
   }
 
-  async dismissDiskSpaceNotice(episodeId: number): Promise<DiskSpaceStatus> {
-    const response = await fetch("/api/disk-space/dismiss", {
+  async dismissResourceNotice(kind: ResourceKind, episodeId: number): Promise<ResourceStatus> {
+    const response = await fetch(`/api/resources/${kind}/dismiss`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

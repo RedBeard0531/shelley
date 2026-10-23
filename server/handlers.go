@@ -2260,7 +2260,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 	}
 
 	if includeConversationListPatches && s.streamPub != nil {
-		next, status, diskSpace := s.subscribeStream(ctx)
+		next, status, resources := s.subscribeStream(ctx)
 		watchSubscription(status, "global")
 		go func() {
 			for {
@@ -2273,8 +2273,10 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 				}
 			}
 		}()
-		if diskSpace != nil && !writeStreamData(StreamResponse{DiskSpaceStatus: diskSpace}) {
-			return
+		for _, status := range resources {
+			if !writeStreamData(StreamResponse{ResourceStatus: &status}) {
+				return
+			}
 		}
 	}
 
