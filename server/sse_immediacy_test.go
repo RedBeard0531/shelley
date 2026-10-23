@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"shelley.exe.dev/db"
@@ -296,7 +297,12 @@ func TestSSEUserMessageWithRealHTTPServer(t *testing.T) {
 // message recording and notification without the SSE complexity
 func TestSSEUserMessageWithExistingConnection(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, testSSEUserMessageWithExistingConnection)
+}
+
+func testSSEUserMessageWithExistingConnection(t *testing.T) {
 	server, database, _ := newTestServer(t)
+	defer stopActiveConversationLoops(server)
 
 	// Create conversation and get a manager (simulating an established SSE connection)
 	conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
@@ -316,18 +322,6 @@ func TestSSEUserMessageWithExistingConnection(t *testing.T) {
 	defer subCancel()
 	next := manager.subpub.Subscribe(subCtx, -1)
 
-	// Channel to receive updates
-	updates := make(chan StreamResponse, 10)
-	go func() {
-		for {
-			data, ok := next()
-			if !ok {
-				return
-			}
-			updates <- data
-		}
-	}()
-
 	// Now send a user message with slow LLM response
 	chatReq := ChatRequest{
 		Message: "delay: 5",
@@ -339,44 +333,42 @@ func TestSSEUserMessageWithExistingConnection(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
+	start := time.Now()
 	server.handleChatConversation(w, req, conversationID)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("expected status 202, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// We should receive an update with the user message within 500ms
-	// (well before the 5 second LLM delay)
-	// Note: We may receive other updates first (e.g., conversation updates for slug changes),
-	// so we need to keep checking until we find the user message or timeout.
-	deadline := time.Now().Add(500 * time.Millisecond)
+	// Settle the asynchronous notifications without advancing the fake clock:
+	// the LLM is still blocked on its five-second delay. Wall-clock deadlines
+	// here measured CI scheduling latency, not whether we publish before the LLM.
+	synctest.Wait()
+	if elapsed := time.Since(start); elapsed != 0 {
+		t.Fatalf("fake time advanced by %v before checking the user notification", elapsed)
+	}
+
+	// Canceling lets next drain the buffered updates and then return false,
+	// rather than waiting for the model's response to make the test pass.
+	subCancel()
 	foundUserMsg := false
 
-	for time.Now().Before(deadline) && !foundUserMsg {
-		select {
-		case update := <-updates:
-			// Check if this update contains the user message
-			for _, msg := range update.Messages {
-				if msg.Type == string(db.MessageTypeUser) && msg.LlmData != nil {
-					var llmMsg llm.Message
-					if err := json.Unmarshal([]byte(*msg.LlmData), &llmMsg); err == nil {
-						for _, content := range llmMsg.Content {
-							if content.Type == llm.ContentTypeText && strings.Contains(content.Text, "delay: 5") {
-								foundUserMsg = true
-								break
-							}
+	for update, ok := next(); ok; update, ok = next() {
+		for _, msg := range update.Messages {
+			if msg.Type == string(db.MessageTypeUser) && msg.LlmData != nil {
+				var llmMsg llm.Message
+				if err := json.Unmarshal([]byte(*msg.LlmData), &llmMsg); err == nil {
+					for _, content := range llmMsg.Content {
+						if content.Type == llm.ContentTypeText && strings.Contains(content.Text, "delay: 5") {
+							foundUserMsg = true
+							break
 						}
 					}
 				}
 			}
-		case <-time.After(50 * time.Millisecond):
-			// Keep waiting
 		}
 	}
 
 	if !foundUserMsg {
-		t.Error("BUG: did not receive subpub update with user message within 500ms")
-		t.Log("This means notifySubscribers is failing or not being called after user message is recorded")
-	} else {
-		t.Log("SUCCESS: received user message via subpub immediately")
+		t.Fatal("did not receive subpub update with user message before the LLM responded")
 	}
 }
