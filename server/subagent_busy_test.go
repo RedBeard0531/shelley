@@ -172,6 +172,20 @@ func testSubagentBusy_DeliversMidTurn(t *testing.T) {
 		t.Fatalf("expected a mid-turn delivery status, got %q", res)
 	}
 	requireSteeredMidTurn(t, f)
+	// The steering message is the parent's, like a prompt to an idle subagent.
+	steered := 0
+	for _, m := range listMessages(t, f.database, f.subagentID) {
+		if m.Type != string(db.MessageTypeUser) || m.LlmData == nil || !strings.Contains(*m.LlmData, "echo: steered") {
+			continue
+		}
+		steered++
+		if !fromParent(m) {
+			t.Fatalf("steering message user_data = %v, want the parent's provenance", derefString(m.UserData))
+		}
+	}
+	if steered != 1 {
+		t.Fatalf("found %d steering messages, want 1", steered)
+	}
 }
 
 // A steering message is injectable because the durable queue says so, not

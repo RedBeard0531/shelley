@@ -81,7 +81,7 @@ func TestSearchChatReusesConversation(t *testing.T) {
 	if _, err := NewSubagentRunner(srv).RunSubagent(ctx, child.ConversationID, "previous search task", "predictable", ""); err != nil {
 		t.Fatal(err)
 	}
-	held.waitCall(t, "previous search task")
+	held.waitCall(t, parentMessage(first, "previous search task"))
 	if _, err := database.ArchiveConversation(ctx, first.ConversationID); err != nil {
 		t.Fatal(err)
 	}

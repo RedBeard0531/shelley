@@ -31,7 +31,7 @@ func TestMessageParentTool(t *testing.T) {
 	if _, err := NewSubagentRunner(server).RunSubagent(t.Context(), child.ConversationID, prompt, "predictable", ""); err != nil {
 		t.Fatal(err)
 	}
-	call := held.waitCall(t, prompt)
+	call := held.waitCall(t, parentMessage(parent, prompt))
 	if !requestHasTool(call.request, "message_parent") {
 		t.Fatal("subagent request lacks message_parent tool")
 	}
@@ -73,7 +73,7 @@ func TestMessageParentFinalEndsSubagentTurn(t *testing.T) {
 	if _, err := NewSubagentRunner(server).RunSubagent(t.Context(), child.ConversationID, prompt, "predictable", ""); err != nil {
 		t.Fatal(err)
 	}
-	call := held.waitCall(t, prompt)
+	call := held.waitCall(t, parentMessage(parent, prompt))
 	if !requestHasTool(call.request, "message_parent") {
 		t.Fatal("child lacks message_parent")
 	}
@@ -129,7 +129,7 @@ func TestNewDelegationAfterStopCanNotifyParent(t *testing.T) {
 	if _, err := NewSubagentRunner(server).RunSubagent(t.Context(), child.ConversationID, prompt, "predictable", ""); err != nil {
 		t.Fatal(err)
 	}
-	held.waitCall(t, prompt).Release()
+	held.waitCall(t, parentMessage(parent, prompt)).Release()
 	held.waitCall(t, `<subagent_message conversation_id="`+child.ConversationID+`" slug="new-task">`+"\nnew work done\n</subagent_message>").Release()
 }
 
@@ -220,7 +220,7 @@ func TestDelegationDuringStopCannotReopenParentFence(t *testing.T) {
 	if !stillStopped {
 		t.Fatal("in-flight delegation reopened the parent completion fence")
 	}
-	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, "echo: late work"))
+	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, parentMessage(parent, "echo: late work")))
 	conv, err := database.GetConversationByID(t.Context(), parent.ConversationID)
 	if err != nil {
 		t.Fatal(err)

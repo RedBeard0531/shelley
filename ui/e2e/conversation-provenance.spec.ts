@@ -26,12 +26,17 @@ async function sendFrom(sender: string, target: string, text: string) {
   );
 }
 
-async function expectToolCard(message: Locator, headline: string, background: string) {
+async function expectToolCard(
+  message: Locator,
+  headline: string,
+  background: string,
+  tag = "message",
+) {
   await expect(message).toHaveClass(/message-tool/);
   await expect(message).not.toHaveClass(/message-user|message-agent/);
   await expect(message).not.toContainText(/<(?:parent|subagent)_message/);
   const card = message.getByTestId("conversation-message-card");
-  await expect(card.locator(".tool-tag")).toHaveText("message");
+  await expect(card.locator(".tool-tag")).toHaveText(tag);
   await expect(card.getByTestId("conversation-message-card-headline")).toHaveText(headline);
   await expect(card).toHaveCSS("background-color", background);
   await expect(card).toHaveCSS("border-radius", "8px");
@@ -90,11 +95,31 @@ for (const viewport of [
       await childLink.click();
       await expect(page.locator(".header-title")).toHaveText(child.slug);
 
+      // The parent's delegated prompt shows where it came from.
+      message = page.getByTestId("message").filter({ hasText: "echo: Ready." });
+      card = await expectToolCard(message, "echo: Ready.", background, "from parent");
+      await expect(card.getByRole("link", { name: parent.slug, exact: true })).toBeVisible();
+      // A short message is one line: beside the sender on desktop, under it
+      // on a phone, never a narrow column squeezed in beside the sender.
+      const headline = await card
+        .getByTestId("conversation-message-card-headline")
+        .evaluate((el) => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          const slug = el.parentElement!.querySelector("a")!.getBoundingClientRect();
+          return {
+            lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size,
+            below: el.getBoundingClientRect().top >= slug.bottom,
+            clipped: el.scrollWidth > el.clientWidth,
+          };
+        });
+      expect(headline).toEqual({ lines: 1, below: viewport.width < 640, clipped: false });
+
       // A short single-line message shows in full with nothing to expand.
       const instruction = "Please finish the API tests before the database changes.";
       await sendFrom(parent.conversationId, child.conversation_id, instruction);
       message = page.getByTestId("message").filter({ hasText: instruction });
-      card = await expectToolCard(message, instruction, background);
+      card = await expectToolCard(message, instruction, background, "from parent");
       await expect(card.getByRole("button", { name: "Expand" })).toHaveCount(0);
       await expect(card.getByRole("link", { name: parent.slug, exact: true })).toBeVisible();
       // The label follows renames; the stable ID keeps the link unambiguous.

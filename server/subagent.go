@@ -121,9 +121,22 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		Role:    llm.MessageRoleUser,
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: prompt}},
 	}
-	// New delegated work after Stop can report back to its parent again.
 	if convErr == nil && isDelegatedSubagent(*conv) {
+		// New delegated work after Stop can report back to its parent again.
 		s.resumeParentCompletions(*conv.ParentConversationID)
+		// Mark the prompt as the parent's, so it is told apart from what the
+		// user types into the subagent: the model sees it in <parent_message>,
+		// the UI shows where it came from, and owesReport counts it.
+		parentSlug := ""
+		if parent, err := s.db.GetConversationByID(ctx, *conv.ParentConversationID); err == nil {
+			parentSlug = derefString(parent.Slug)
+		}
+		ctx = contextWithTurnUserData(ctx, senderMessageUserData{
+			SenderConversationID: *conv.ParentConversationID,
+			SenderSlug:           parentSlug,
+			SenderRelationship:   senderRelationshipParent,
+			Text:                 prompt,
+		})
 	}
 
 	// A busy subagent receives the message at its current turn's next LLM
@@ -290,18 +303,21 @@ func (s *Server) reportUnreportedReply(ctx context.Context, cm *ConversationMana
 	return report, true
 }
 
-// fromParent reports whether a user row is the parent's: a delegated prompt,
-// which carries no user_data, or a message the parent sent.
+// fromParent reports whether a user row is the parent's: a delegated prompt
+// or a message the parent sent. A row without user_data is the user typing
+// into the subagent directly. Prompts from before RunSubagent marked them
+// read the same way.
 func fromParent(msg generated.Message) bool {
 	if msg.UserData == nil {
-		return true
+		return false
 	}
 	data, ok, _ := parseSenderMessageUserData([]byte(*msg.UserData))
 	return ok && data.SenderRelationship == senderRelationshipParent
 }
 
-// owesReport reports whether no message_parent(end_turn=true) has reached
-// the parent since its last prompt in msgs.
+// owesReport reports whether the parent has sent something in msgs that no
+// successful message_parent(end_turn=true) has answered yet. Messages the
+// user types into the subagent are owed nothing.
 func owesReport(msgs []generated.Message) bool {
 	failed := make(map[string]bool) // tool_use IDs whose results are errors
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -329,7 +345,7 @@ func owesReport(msgs []generated.Message) bool {
 			}
 		}
 	}
-	return true
+	return false
 }
 
 // Ensure SubagentRunner implements claudetool.SubagentRunner.

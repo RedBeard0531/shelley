@@ -106,7 +106,7 @@ func TestSubagentUnreportedReplyReachesParent(t *testing.T) {
 	if _, err := NewSubagentRunner(server).RunSubagent(ctx, child.ConversationID, "echo: waiting for the tests", "predictable", ""); err != nil {
 		t.Fatal(err)
 	}
-	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, "echo: waiting for the tests"))
+	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, parentMessage(parent, "echo: waiting for the tests")))
 
 	// The job's notice wakes the child, which forgets message_parent.
 	if err := server.reportBackgroundJobExit(ctx, job); err != nil {
@@ -160,7 +160,9 @@ func TestOwesReport(t *testing.T) {
 		}
 		return row
 	}
-	prompt := row(db.MessageTypeUser, llm.UserStringMessage("go"), "")
+	prompt := row(db.MessageTypeUser, llm.UserStringMessage("go"), `{"sender_conversation_id":"p","sender_relationship":"parent"}`)
+	typed := row(db.MessageTypeUser, llm.UserStringMessage("and you?"), "")
+	legacyPrompt := row(db.MessageTypeUser, llm.UserStringMessage("go"), "")
 	notice := row(db.MessageTypeUser, llm.UserStringMessage("job done"), `{"background_job_id":"j"}`)
 	parentMessage := row(db.MessageTypeUser, llm.UserStringMessage("also this"), `{"sender_conversation_id":"p","sender_relationship":"parent"}`)
 	reply := row(db.MessageTypeAgent, llm.Message{Role: llm.MessageRoleAssistant, Content: []llm.Content{llm.StringContent("ok")}, EndOfTurn: true}, "")
@@ -184,9 +186,44 @@ func TestOwesReport(t *testing.T) {
 		{"report before this prompt", []generated.Message{prompt, report("a", true), result("a", false), marker, prompt}, true},
 		{"job notice after a reply", []generated.Message{prompt, reply, notice}, true},
 		{"parent message after a report", []generated.Message{prompt, report("a", true), result("a", false), marker, parentMessage}, true},
+		{"user message after a report", []generated.Message{prompt, report("a", true), result("a", false), marker, typed}, false},
+		{"user message before a report", []generated.Message{prompt, typed}, true},
+		// Prompts sent before RunSubagent marked them read as the user's.
+		{"unmarked prompt", []generated.Message{legacyPrompt, reply, typed}, false},
 	} {
 		if got := owesReport(tc.msgs); got != tc.want {
 			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The parent's prompts carry its provenance, so the child's model and UI can
+// tell them from what the user types into the child directly. A reply to the
+// user stays in the child once the parent has its report.
+func TestSubagentReplyToUserStaysPut(t *testing.T) {
+	server, database, held, parent := newBtwTest(t)
+	ctx := t.Context()
+	child, err := database.CreateSubagentConversation(ctx, "quiet-child", parent.ConversationID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prompt = "message_parent_final: done"
+	if _, err := NewSubagentRunner(server).RunSubagent(ctx, child.ConversationID, prompt, "predictable", ""); err != nil {
+		t.Fatal(err)
+	}
+	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, parentMessage(parent, prompt)))
+	releaseAndWaitIdle(t, server, parent.ConversationID, held.waitCall(t, subagentMessage(child, "done")))
+
+	response := postBtwChat(t, server, child.ConversationID, ChatRequest{Message: "echo: and the time?", Model: "predictable"})
+	requireBtwStatus(t, response, 202)
+	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, "echo: and the time?"))
+
+	if got := subagentTexts(t, database, parent.ConversationID); !slices.Equal(got, []string{"done"}) {
+		t.Fatalf("parent heard %q, want only the report", got)
+	}
+	for _, m := range listMessages(t, database, child.ConversationID) {
+		if m.Type == string(db.MessageTypeWarning) {
+			t.Fatalf("child warned %q; the reply to the user was reported", derefString(m.UserData))
 		}
 	}
 }
@@ -207,7 +244,7 @@ func TestSubagentReplyAfterFinalReportStaysPut(t *testing.T) {
 		if _, err := runner.RunSubagent(ctx, child.ConversationID, prompt, "predictable", ""); err != nil {
 			t.Fatal(err)
 		}
-		releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, prompt))
+		releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, parentMessage(parent, prompt)))
 		releaseAndWaitIdle(t, server, parent.ConversationID, held.waitCall(t, subagentMessage(child, text)))
 	}
 	report("all done")
@@ -250,7 +287,7 @@ func TestSubagentErrorReachesParent(t *testing.T) {
 			if _, err := NewSubagentRunner(server).RunSubagent(ctx, child.ConversationID, tc.prompt, "predictable", ""); err != nil {
 				t.Fatal(err)
 			}
-			held.waitCall(t, tc.prompt).Release()
+			held.waitCall(t, parentMessage(parent, tc.prompt)).Release()
 			errorRow := waitForErrorRow(t, database, child.ConversationID)
 			if errorRow.ErrorType != tc.errorType {
 				t.Fatalf("child error row = %+v, want %s", errorRow, tc.errorType)
@@ -292,7 +329,7 @@ func TestSubagentErrorAfterFinalReportStaysPut(t *testing.T) {
 		if _, err := runner.RunSubagent(ctx, child.ConversationID, prompt, "predictable", ""); err != nil {
 			t.Fatal(err)
 		}
-		releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, prompt))
+		releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, parentMessage(parent, prompt)))
 		releaseAndWaitIdle(t, server, parent.ConversationID, held.waitCall(t, subagentMessage(child, text)))
 	}
 	report("all done")
@@ -331,7 +368,7 @@ func TestSubagentErrorWithStoppedParentStaysPut(t *testing.T) {
 	if _, err := runner.RunSubagent(ctx, child.ConversationID, "error: boom", "predictable", ""); err != nil {
 		t.Fatal(err)
 	}
-	call := held.waitCall(t, "error: boom")
+	call := held.waitCall(t, parentMessage(parent, "error: boom"))
 	server.mu.Lock()
 	server.stoppedParents[parent.ConversationID] = true
 	server.mu.Unlock()
@@ -349,7 +386,7 @@ func TestSubagentErrorWithStoppedParentStaysPut(t *testing.T) {
 	if _, err := runner.RunSubagent(ctx, child.ConversationID, "message_parent_final: later", "predictable", ""); err != nil {
 		t.Fatal(err)
 	}
-	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, "message_parent_final: later"))
+	releaseAndWaitIdle(t, server, child.ConversationID, held.waitCall(t, parentMessage(parent, "message_parent_final: later")))
 	releaseAndWaitIdle(t, server, parent.ConversationID, held.waitCall(t, subagentMessage(child, "later")))
 	if got := subagentTexts(t, database, parent.ConversationID); !slices.Equal(got, []string{"later"}) {
 		t.Fatalf("parent heard %q, want only the later report", got)
@@ -445,6 +482,11 @@ func testBackgroundJob(t *testing.T, conversationID string) claudetool.Backgroun
 
 func backgroundJobNotice(job claudetool.BackgroundJob) string {
 	return `<background_job id="` + job.ID + `">` + "\n" + xmlProvenanceText(job.Outcome().Notice()) + "\n</background_job>"
+}
+
+func parentMessage(parent *generated.Conversation, text string) string {
+	return `<parent_message conversation_id="` + parent.ConversationID + `" slug="` + derefString(parent.Slug) + `">` +
+		"\n" + xmlProvenanceText(text) + "\n</parent_message>"
 }
 
 func subagentMessage(child *generated.Conversation, text string) string {
@@ -566,8 +608,9 @@ func TestSubagentLoadedOutsideSubagentToolKeepsItsRole(t *testing.T) {
 	}
 }
 
-// Delegated subagents are told to report with message_parent; workers, which
-// lack that tool, are not.
+// Delegated subagents are told to report with message_parent, and how the
+// parent's messages differ from the user's; workers, which lack that tool,
+// are not.
 func TestSubagentSystemPromptAsksForMessageParent(t *testing.T) {
 	t.Parallel()
 	server, database, ps := newTestServer(t)
@@ -586,7 +629,6 @@ func TestSubagentSystemPromptAsksForMessageParent(t *testing.T) {
 	}
 	defer stopActiveConversationLoops(server)
 
-	const instruction = "message_parent(end_turn=true)"
 	for _, tc := range []struct {
 		id, prompt string
 		want       bool
@@ -604,8 +646,10 @@ func TestSubagentSystemPromptAsksForMessageParent(t *testing.T) {
 		for _, s := range requestWithText(t, ps, tc.prompt).System {
 			system.WriteString(s.Text)
 		}
-		if got := strings.Contains(system.String(), instruction); got != tc.want {
-			t.Errorf("%s: system prompt has %q = %v, want %v:\n%s", tc.prompt, instruction, got, tc.want, system.String())
+		for _, instruction := range []string{"message_parent(end_turn=true)", "<parent_message>"} {
+			if got := strings.Contains(system.String(), instruction); got != tc.want {
+				t.Errorf("%s: system prompt has %q = %v, want %v:\n%s", tc.prompt, instruction, got, tc.want, system.String())
+			}
 		}
 	}
 }

@@ -172,9 +172,10 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 			}
 		}
 	}
-	// The real LLM sees the sequence marker; for this test fixture, unwrap
-	// the user text so its deterministic commands still work in channel chats.
-	if strings.HasPrefix(inputText, "<external_message ") || strings.HasPrefix(inputText, "<user_message ") {
+	// The real LLM sees the sequence marker or the parent's provenance; for
+	// this test fixture, unwrap the text so its deterministic commands still
+	// work in channel chats and subagents.
+	if strings.HasPrefix(inputText, "<external_message ") || strings.HasPrefix(inputText, "<user_message ") || strings.HasPrefix(inputText, "<parent_message ") {
 		var external struct {
 			SequenceID int64  `xml:"sequence_id,attr"`
 			Text       string `xml:",chardata"`

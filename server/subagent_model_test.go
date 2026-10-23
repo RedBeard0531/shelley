@@ -27,13 +27,13 @@ func TestRunSubagentKeepsItsOwnModel(t *testing.T) {
 	if _, err := runner.RunSubagent(t.Context(), child.ConversationID, "first", "model-b", ""); err != nil {
 		t.Fatal(err)
 	}
-	held.waitCall(t, "first").Release()
+	held.waitCall(t, parentMessage(parent, "first")).Release()
 	waitFor(t, 5*time.Second, func() bool { return !server.IsAgentWorking(child.ConversationID) })
 
 	if _, err := runner.RunSubagent(t.Context(), child.ConversationID, "second", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	held.waitCall(t, "second").Release()
+	held.waitCall(t, parentMessage(parent, "second")).Release()
 	if got := conversationModel(t, database, child.ConversationID); got != "model-b" {
 		t.Fatalf("resumed subagent model = %q, want model-b", got)
 	}
@@ -45,7 +45,7 @@ func TestRunSubagentKeepsItsOwnModel(t *testing.T) {
 	if _, err := runner.RunSubagent(t.Context(), fresh.ConversationID, "third", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	held.waitCall(t, "third").Release()
+	held.waitCall(t, parentMessage(parent, "third")).Release()
 	if got := conversationModel(t, database, fresh.ConversationID); got != "model-a" {
 		t.Fatalf("new subagent model = %q, want parent's model-a", got)
 	}

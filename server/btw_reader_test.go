@@ -768,7 +768,7 @@ func TestBtwLeavesOrdinaryChatBehaviorUnchanged(t *testing.T) {
 	if err != nil || !strings.Contains(status, "message sent") {
 		t.Fatalf("ordinary subagent status=%q err=%v", status, err)
 	}
-	if call := held.waitCall(t, "echo: ordinary child"); requestHasText(call.request, btwFrozenReferenceBegin) {
+	if call := held.waitCall(t, parentMessage(parent, "echo: ordinary child")); requestHasText(call.request, btwFrozenReferenceBegin) {
 		t.Fatal("ordinary subagent received BTW decoration")
 	}
 }

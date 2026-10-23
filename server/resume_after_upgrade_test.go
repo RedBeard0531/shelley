@@ -615,6 +615,11 @@ func TestResumeAfterUpgradeResumesSubagent(t *testing.T) {
 		ConversationID: sub.ConversationID,
 		Type:           db.MessageTypeUser,
 		LLMData:        llm.UserStringMessage("echo: subagent result"),
+		UserData: senderMessageUserData{
+			SenderConversationID: parent.ConversationID,
+			SenderRelationship:   senderRelationshipParent,
+			Text:                 "echo: subagent result",
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
