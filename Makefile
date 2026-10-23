@@ -80,7 +80,7 @@ build-linux-x86: ui templates
 
 # Build UI
 ui:
-	@$(PNPM) install --frozen-lockfile --silent && $(PNPM) run --silent build
+	@$(PNPM) install --frozen-lockfile --loglevel=error && $(PNPM) run --silent build
 
 # Run Go tests
 test-go: exe-scroll ui templates
