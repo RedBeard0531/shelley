@@ -262,10 +262,14 @@ func runServe(global GlobalConfig, args []string) {
 			logger.Error("Failed to get systemd listener", "error", listenerErr)
 			os.Exit(1)
 		}
-		web, cli, listenerErr := splitActivatedListeners(listeners, effectiveSocket)
+		web, cli, extra, listenerErr := splitActivatedListeners(listeners, effectiveSocket)
 		if listenerErr != nil {
 			logger.Error("Failed to get systemd listener", "error", listenerErr)
 			os.Exit(1)
+		}
+		for _, ln := range extra {
+			logger.Warn("Ignoring socket-activated listener", "network", ln.Addr().Network(), "addr", ln.Addr().String())
+			ln.Close() // systemd keeps its own descriptor
 		}
 		logger.Info("Using systemd socket activation", "cli_socket", cli != nil)
 		svr.SocketListener = cli
@@ -802,25 +806,27 @@ func systemdListeners() ([]net.Listener, error) {
 // listener and, if systemd also holds it, the CLI's Unix socket at
 // socketPath. Holding that socket lets systemd start shelley for `shelley
 // client` and queue its connection meanwhile, rather than the client finding
-// no socket until something else has started shelley.
-func splitActivatedListeners(listeners []net.Listener, socketPath string) (web, cli net.Listener, err error) {
+// no socket until something else has started shelley. Any further listeners,
+// such as the web port's other address family, come back as extra: shelley
+// has only ever served the first.
+func splitActivatedListeners(listeners []net.Listener, socketPath string) (web, cli net.Listener, extra []net.Listener, err error) {
 	if socketPath != "" {
 		if socketPath, err = filepath.Abs(socketPath); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	for _, ln := range listeners {
 		switch addr := ln.Addr(); {
-		case socketPath != "" && addr.Network() == "unix" && addr.String() == socketPath:
+		case cli == nil && socketPath != "" && addr.Network() == "unix" && addr.String() == socketPath:
 			cli = ln
 		case web == nil:
 			web = ln
 		default:
-			return nil, nil, fmt.Errorf("unexpected socket-activated listener %s %s (CLI socket: %q)", addr.Network(), addr, socketPath)
+			extra = append(extra, ln)
 		}
 	}
 	if web == nil {
-		return nil, nil, fmt.Errorf("no web listener among socket-activated listeners")
+		return nil, nil, nil, fmt.Errorf("no web listener among socket-activated listeners")
 	}
-	return web, cli, nil
+	return web, cli, extra, nil
 }

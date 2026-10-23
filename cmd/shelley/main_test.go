@@ -762,6 +762,79 @@ func TestSystemdActivatedCLISocket(t *testing.T) {
 	}
 }
 
+// TestSystemdActivationIgnoresExtraListeners: a unit may hold more sockets
+// than shelley serves, such as the web port on both IPv4 and IPv6. shelley
+// serves the first and ignores the rest, as it always has, rather than not
+// starting at all.
+func TestSystemdActivationIgnoresExtraListeners(t *testing.T) {
+	tempDir := t.TempDir()
+	binary := filepath.Join(tempDir, "shelley")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	var files []*os.File
+	var webAddr string
+	for range 2 {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if webAddr == "" {
+			webAddr = ln.Addr().String()
+		}
+		f, err := ln.(*net.TCPListener).File()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln.Close()
+		t.Cleanup(func() { f.Close() })
+		files = append(files, f)
+	}
+
+	env := []string{"LISTEN_FDS=2"}
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "LISTEN_") {
+			env = append(env, e)
+		}
+	}
+	server := exec.Command(binary, "-db", filepath.Join(tempDir, "test.db"), "serve", "-systemd-activation", "-socket", filepath.Join(tempDir, "shelley.sock"))
+	server.Env = env
+	server.ExtraFiles = files // fds 3 and 4
+	var serverOut bytes.Buffer
+	server.Stdout = &serverOut
+	server.Stderr = &serverOut
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- server.Wait() }()
+	t.Cleanup(func() { server.Process.Kill(); <-exited })
+
+	// The listener is live before shelley starts, so the request waits in
+	// the kernel's queue until shelley serves it, unless shelley exits.
+	got := make(chan error, 1)
+	go func() {
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Get("http://" + webAddr + "/version")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				err = fmt.Errorf("status %s", resp.Status)
+			}
+		}
+		got <- err
+	}()
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Fatalf("GET /version: %v\nserver output:\n%s", err, serverOut.String())
+		}
+	case err := <-exited:
+		exited <- err
+		t.Fatalf("server exited: %v\n%s", err, serverOut.String())
+	}
+}
+
 func TestToolModelsStayWithinSavedAccount(t *testing.T) {
 	parent := models.ProviderRouteID("work", "gpt-6.1-sol")
 	sibling := models.ProviderRouteID("work", "gpt-6-luna")
