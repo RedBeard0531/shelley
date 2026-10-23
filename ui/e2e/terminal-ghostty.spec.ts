@@ -6,6 +6,7 @@ import {
   closeTerminalsIn,
   createConversationViaAPIWithDetails,
   setPageTerminalRenderer,
+  terminalIdsIn,
   testWorkingDirectory,
 } from "./helpers";
 
@@ -408,12 +409,23 @@ for (const renderer of ["ghostty", "xterm"] as const) {
     request,
   }) => {
     await setPageTerminalRenderer(page, renderer);
-    const sockets: string[] = [];
+    // The page attaches to every terminal on the server, and parallel tests
+    // share it, so count only this test's: sockets that spawn a terminal in
+    // cwd, and sockets that reattach to one.
+    const sockets: URL[] = [];
+    const ourSockets = async () => {
+      const ids = await terminalIdsIn(request, cwd);
+      return sockets.filter(
+        (url) =>
+          url.searchParams.get("cwd") === cwd || ids.includes(url.searchParams.get("term_id")!),
+      );
+    };
     let received = "";
     page.on("websocket", (socket) => {
-      if (!socket.url().includes("/api/exec-ws")) return;
-      sockets.push(socket.url());
-      if (sockets.length === 1)
+      const url = new URL(socket.url());
+      if (url.pathname !== "/api/exec-ws") return;
+      sockets.push(url);
+      if (url.searchParams.get("cwd") === cwd && url.searchParams.get("cmd") === "bash t.sh")
         socket.on("framereceived", ({ payload }) => {
           const message = JSON.parse(payload.toString());
           if (message.type === "output") received += Buffer.from(message.data, "base64").toString();
@@ -438,7 +450,7 @@ for (const renderer of ["ghostty", "xterm"] as const) {
     await expect.poll(output).toContain("COUNT-025");
     await page.getByRole("button", { name: "New terminal", exact: true }).click();
     await expect(first).toBeHidden();
-    await expect.poll(() => sockets.length).toBe(2);
+    await expect.poll(async () => (await ourSockets()).length).toBe(2);
     const secondId = await terminal.getAttribute("data-terminal-id");
     const second = page.locator(`[data-terminal-id="${secondId}"]`);
     const secondTab = page.locator(".terminal-panel-tab").last();
@@ -463,7 +475,7 @@ for (const renderer of ["ghostty", "xterm"] as const) {
     }
     await firstTab.click();
     await expect.poll(inserted(page, "visible screen")).toContain("COUNT-100");
-    expect(sockets).toHaveLength(2);
+    expect(await ourSockets()).toHaveLength(2);
   });
 
   test(`a touch drag scrolls back as far as the finger moves, without focusing (${renderer})`, async ({

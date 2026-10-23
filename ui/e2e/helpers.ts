@@ -238,13 +238,18 @@ export async function setPageFeatureFlag(page: Page, name: string, value: boolea
   );
 }
 
-/** End the terminals running in `cwd`. Every page load replays every running
- *  terminal on the shared server, so ones left running slow later tests. */
-export async function closeTerminalsIn(request: APIRequestContext, cwd: string): Promise<void> {
+/** The ids of the server's terminals running in `cwd`. */
+export async function terminalIdsIn(request: APIRequestContext, cwd: string): Promise<string[]> {
   const terminals: Array<{ id: string; cwd: string }> = await (
     await request.get("/api/terminals")
   ).json();
-  for (const { id } of terminals.filter((terminal) => terminal.cwd === cwd)) {
+  return terminals.filter((terminal) => terminal.cwd === cwd).map(({ id }) => id);
+}
+
+/** End the terminals running in `cwd`. Every page load replays every running
+ *  terminal on the shared server, so ones left running slow later tests. */
+export async function closeTerminalsIn(request: APIRequestContext, cwd: string): Promise<void> {
+  for (const id of await terminalIdsIn(request, cwd)) {
     expect((await request.delete(`/api/terminals/${id}`)).ok()).toBe(true);
   }
 }
