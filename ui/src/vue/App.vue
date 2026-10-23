@@ -36,9 +36,9 @@
       <ConversationDrawer
         :is-open="drawerOpen"
         :is-collapsed="drawerCollapsed"
-        :conversations="conversations"
+        :conversations="drawerConversations"
         :ephemeral-terminals="ephemeralTerminals"
-        :current-conversation-id="currentConversationId"
+        :current-conversation-id="drawerCurrentConversationId"
         :viewed-conversation="viewedConversation"
         :show-active-trigger="showActiveTrigger"
         :message-sent-trigger="messageSentTrigger"
@@ -50,6 +50,8 @@
         @archived="handleConversationArchived"
         @unarchived="handleConversationUnarchived"
         @renamed="handleConversationRenamed"
+        @pointerenter="drawerHovered = true"
+        @pointerleave="onDrawerPointerLeave"
       />
 
       <div class="main-content">
@@ -70,6 +72,9 @@
           :on-message-sent="handleMessageSent"
           :on-first-message="handleFirstMessage"
           :on-draft-created="onDraftCreated"
+          :on-composer-input="onComposerInput"
+          :on-composer-submit="onComposerSubmit"
+          :on-composer-create="onComposerCreate"
           :most-recent-cwd="mostRecentCwd"
           :is-drawer-collapsed="drawerCollapsed"
           :on-toggle-drawer-collapse="toggleDrawerCollapsed"
@@ -327,6 +332,13 @@ import { initialDrawerCollapsed, saveDrawerCollapsedPreference } from "../utils/
 import { perfCount } from "../utils/perf";
 import { useI18n } from "./composables/i18n";
 import { ConversationsListKey, CurrentConversationIdKey } from "./composables/subagentLive";
+import {
+  COMPOSER_ROW_ID,
+  ComposerPreviewKey,
+  composerRowId,
+  withComposerRow,
+  type ComposerRow,
+} from "../utils/composerRow";
 import { provideOpenFileEditor } from "./composables/fileEditor";
 import { useFeatureFlag } from "./composables/featureFlags";
 import { useMobileDrawerSwipe } from "./composables/mobileDrawerSwipe";
@@ -371,7 +383,8 @@ function updateUrlWithSlug(conversation: Conversation | undefined) {
   let newSlug: string | null = null;
   if (conversation?.slug && !isGeneratedId(conversation.slug)) {
     newSlug = conversation.slug;
-  } else if (conversation?.is_draft) {
+  } else if (conversation) {
+    // Drafts, and new conversations until their slug arrives.
     newSlug = conversation.conversation_id;
   }
   if (currentSlug !== newSlug) {
@@ -503,6 +516,103 @@ function handleTerminalClose(id: string) {
     }
     return prev.filter((x) => x.id !== id);
   });
+}
+
+// ---- composer row ----
+// The new conversation or draft being composed here, shown in the drawer ahead
+// of the server's list (see composerRow.ts). Changes only at milestones; the
+// live text is a separate ref that just the composer's drawer row reads, so a
+// keystroke doesn't re-render the drawer.
+const composer = shallowRef<ComposerRow | null>(null);
+const composerText = ref("");
+let composerCwd: string | null = null;
+// An unused placeholder, left by opening another row, stays (unselected) while
+// the pointer is over the drawer, so rows don't shift under it mid-click.
+const lingering = shallowRef<ComposerRow | null>(null);
+let drawerHovered = false;
+function onDrawerPointerLeave() {
+  drawerHovered = false;
+  lingering.value = null;
+}
+provide(ComposerPreviewKey, {
+  rowId: computed(() =>
+    composer.value && composer.value.sent === null ? composerRowId(composer.value) : null,
+  ),
+  text: composerText,
+});
+// Ids listed when a request creating the composed conversation went out, while
+// any is pending (see withComposerRow).
+const creating = shallowRef<ReadonlySet<string> | null>(null);
+let pendingCreates = 0;
+const drawerConversations = computed(() => {
+  const list = withComposerRow(conversations.value, composer.value, creating.value);
+  return lingering.value ? withComposerRow(list, lingering.value, null) : list;
+});
+const drawerCurrentConversationId = computed(
+  () => currentConversationId.value ?? (composer.value ? COMPOSER_ROW_ID : null),
+);
+function newComposer(id: string | null, cwd: string | null): ComposerRow {
+  return { id, cwd, startedAt: new Date().toISOString(), sent: null, listed: false };
+}
+// The new-conversation view is a draft from the moment it opens; opening
+// another conversation ends the composition.
+watch(
+  [currentConversationId, loading],
+  ([id, isLoading]) => {
+    const row = composer.value;
+    if (id === null) {
+      if (isLoading || row?.id === null) return;
+      lingering.value = null;
+      composer.value = newComposer(null, composerCwd);
+    } else if (row && row.id !== id) {
+      const unused = row.id === null && row.sent === null && !composerText.value.trim();
+      if (unused && drawerHovered) lingering.value = row;
+      composer.value = null;
+    }
+  },
+  { immediate: true },
+);
+watch([conversations, composer], ([list, row]) => {
+  if (row?.id && !row.listed && list.some((c) => c.conversation_id === row.id)) {
+    composer.value = { ...row, listed: true };
+  }
+});
+
+// Returns a function to call when the create request settles.
+function onComposerCreate(): () => void {
+  if (pendingCreates++ === 0) {
+    creating.value = new Set(conversations.value.map((c) => c.conversation_id));
+  }
+  return () => {
+    if (--pendingCreates === 0) creating.value = null;
+  };
+}
+
+function onComposerInput(text: string, cwd: string | null) {
+  composerCwd = cwd;
+  const row = composer.value;
+  if (row?.sent != null) return;
+  composerText.value = text;
+  const id = currentConversationId.value;
+  if (row && row.id === id) {
+    if (row.cwd !== cwd) composer.value = { ...row, cwd };
+  } else if (id !== null) {
+    composer.value = newComposer(id, cwd); // an opened draft
+  }
+}
+
+// Returns a function that undoes the submission if the send fails.
+function onComposerSubmit(text: string, cwd: string | null): () => void {
+  const id = currentConversationId.value;
+  const row = composer.value?.id === id ? composer.value : newComposer(id, cwd);
+  const submitted = { ...row, sent: text };
+  composer.value = submitted;
+  return () => {
+    const current = composer.value;
+    if (current?.startedAt === submitted.startedAt && current.sent !== null) {
+      composer.value = { ...current, sent: null };
+    }
+  };
 }
 
 // ---- derived ----
@@ -719,13 +829,21 @@ async function startNewConversation(): Promise<boolean> {
   return true;
 }
 
-function startNewConversationWithCwd(cwd: string) {
-  localStorage.setItem("shelley_selected_cwd", cwd);
+function startNewConversationWithCwd(cwd: string | null) {
+  if (cwd) localStorage.setItem("shelley_selected_cwd", cwd);
   currentConversationId.value = null;
   viewedConversation.value = null;
   window.history.replaceState({}, "", "/new");
   drawerOpen.value = false;
   cwdSyncTrigger.value++;
+}
+
+// Back to the unused new conversation left in the drawer, as it was.
+function reopenLingering() {
+  const row = lingering.value;
+  lingering.value = null;
+  if (row) composer.value = row;
+  startNewConversationWithCwd(row?.cwd ?? null);
 }
 
 function setConversationCwd(cwd: string) {
@@ -744,6 +862,13 @@ function setConversationCwd(cwd: string) {
 }
 
 function selectConversation(conversation: Conversation) {
+  // The composer's placeholder row is the view already on screen, unless it
+  // is one left lingering.
+  if (conversation.conversation_id === COMPOSER_ROW_ID) {
+    if (composer.value?.id === null) drawerOpen.value = false;
+    else reopenLingering();
+    return;
+  }
   conversationSelectionTrigger.value++;
   currentConversationId.value = conversation.conversation_id;
   viewedConversation.value = conversation;
@@ -772,6 +897,10 @@ function handleConversationArchived(
   void messageStore.delete(conversationId);
   btwStore.clear(conversationId);
   if (currentConversationId.value === conversationId) {
+    if (nextConversation?.conversation_id === COMPOSER_ROW_ID) {
+      reopenLingering();
+      return;
+    }
     if (nextConversation && nextConversation.conversation_id !== conversationId) {
       currentConversationId.value = nextConversation.conversation_id;
       viewedConversation.value = nextConversation;
@@ -817,8 +946,12 @@ function onDraftCreated(conversation: Conversation) {
   // the returned draft as the current fallback before changing ids so
   // ChatInterface sees is_draft immediately and skips message loading without
   // fabricating an empty complete message cache.
+  const id = conversation.conversation_id;
+  const row = composer.value;
+  composer.value =
+    row && (row.id === null || row.id === id) ? { ...row, id } : newComposer(id, conversation.cwd);
   viewedConversation.value = conversation;
-  currentConversationId.value = conversation.conversation_id;
+  currentConversationId.value = id;
 }
 
 function onCommandPaletteClose() {
@@ -860,6 +993,13 @@ async function handleFirstMessage(
   cwd?: string,
   conversationOptions?: ChatRequest["conversation_options"],
 ) {
+  // The composer row stands in for the new conversation until the response
+  // names it.
+  const typed = composer.value?.id === null ? composer.value : null;
+  const row = typed ?? newComposer(null, cwd ?? null);
+  const pending: ComposerRow = { ...row, sent: row.sent ?? message };
+  composer.value = pending;
+  const settle = onComposerCreate();
   try {
     const response = await api.sendMessageWithNewConversation({
       message,
@@ -869,12 +1009,18 @@ async function handleFirstMessage(
     });
     const newConversationId = response.conversation_id;
     messageStore.setAgentWorking(newConversationId, true);
+    if (composer.value === pending) {
+      composer.value = { ...pending, id: newConversationId };
+    }
     currentConversationId.value = newConversationId;
     handleMessageSent(newConversationId);
   } catch (err) {
+    if (composer.value === pending) composer.value = typed && { ...typed, sent: null };
     console.error("Failed to send first message:", err);
     error.value = err instanceof Error ? err.message : "Failed to send message";
     throw err;
+  } finally {
+    settle();
   }
 }
 

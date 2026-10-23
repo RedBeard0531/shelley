@@ -874,6 +874,14 @@ const props = withDefaults(
     scrollToBottomTrigger?: number;
     onConversationUnarchived?: (conversation: Conversation) => void;
     onDraftCreated?: (conversation: Conversation) => void;
+    /** The composer text of a new conversation or draft changed. */
+    onComposerInput?: (text: string, cwd: string | null) => void;
+    /** A new conversation or draft is being sent; the result undoes that if
+     *  the send fails. */
+    onComposerSubmit?: (text: string, cwd: string | null) => () => void;
+    /** A request creating a new conversation's draft went out; the result
+     *  marks it settled. */
+    onComposerCreate?: () => () => void;
     /** Comment block from the standalone file editor (App-level modal) to
      *  inject into the message input. Fresh object per submit. */
     externalCommentText?: { text: string } | null;
@@ -3880,6 +3888,7 @@ async function sendMessage(message: string) {
     return;
   }
 
+  let undoSubmit: (() => void) | undefined;
   try {
     sending.value = true;
     error.value = null;
@@ -3897,6 +3906,7 @@ async function sendMessage(message: string) {
       cwd: isDraft ? selectedCwd.value || undefined : undefined,
       conversation_options: isDraft ? buildConversationOptions() : undefined,
     };
+    if (isDraft) undoSubmit = props.onComposerSubmit?.(request.message, selectedCwd.value || null);
     let effectiveId = props.conversationId || draftConvId;
     if (!effectiveId && inflightCreate) effectiveId = await inflightCreate;
     if (!effectiveId && props.onFirstMessage) {
@@ -3914,6 +3924,7 @@ async function sendMessage(message: string) {
     console.error("Failed to send message:", err);
     error.value = err instanceof Error ? err.message : "Unknown error";
     agentWorking.value = false;
+    undoSubmit?.();
     throw err;
   } finally {
     sending.value = false;
@@ -4195,6 +4206,12 @@ const draftSeed = ref<{ value: string } | null>(null);
 function seedComposer(value: string) {
   draftText = value;
   draftSeed.value = { value };
+  reportComposer(value);
+}
+// App shows the new conversation or draft being composed in the drawer.
+function reportComposer(value: string) {
+  if (props.conversationId && !props.currentConversation?.is_draft) return;
+  props.onComposerInput?.(value, selectedCwd.value || null);
 }
 function appendBtwSummaryToComposer(answer: string) {
   const value = draftText ? `${draftText}\n\n${answer}` : answer;
@@ -4238,7 +4255,8 @@ function createDraftForSession(
   sessionVersion: number,
   creation: { model: string; cwd: string | undefined },
 ): Promise<string> {
-  return api.createDraft({ draft: draft.text, ...creation }).then((conv) => {
+  const settle = props.onComposerCreate?.();
+  const created = api.createDraft({ draft: draft.text, ...creation }).then((conv) => {
     // The pending create owns its latest text even after leaving /new. Move
     // that cache to the saved id, without clearing a newer /new composer.
     saveCachedDraft(conv.conversation_id, draft.text, conv.updated_at);
@@ -4261,6 +4279,7 @@ function createDraftForSession(
     props.onDraftCreated?.(conv);
     return conv.conversation_id;
   });
+  return created.finally(() => settle?.());
 }
 
 async function saveDraft(value: string) {
@@ -4303,6 +4322,7 @@ function handleDraftChange(value: string) {
   // reconcile against; the cache is authoritative).
   saveCachedDraft(draftConvId, value, draftSyncedAt);
   draftAutosave.schedule(value);
+  reportComposer(value);
 }
 function handleDraftSendStarted() {
   draftAutosave.cancel();
@@ -4916,6 +4936,9 @@ watch(
   },
   { immediate: true },
 );
+watch([() => props.conversationId, selectedCwd], () => reportComposer(draftText), {
+  immediate: true,
+});
 
 // Reconnect nonce -> re-fetch focused conversation.
 watch(

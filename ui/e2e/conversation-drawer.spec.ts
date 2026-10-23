@@ -897,8 +897,10 @@ test.describe("conversation drawer startup and app bar", () => {
     const editor = queryEditor(page);
     const tagPanel = page.getByTestId("tag-filter-panel");
     const count = page.locator(".drawer-filter-result-count");
+    // The new conversation's draft row counts too: drafts pass the
+    // participant scope.
     await expectQuery(editor, "user:me@example.com ");
-    await expect(count).toHaveText("1");
+    await expect(count).toHaveText("2");
 
     // A trailing partial tag, then the caret moved back to sit right after
     // the user pill's separator (a pill body click lands it there).
@@ -910,7 +912,7 @@ test.describe("conversation drawer startup and app bar", () => {
     await expectQuery(editor, "user:me@example.com tag:al");
     await expect(tagPanel.locator('[data-tag="alpha"]')).toBeVisible();
     await expect(tagPanel.locator('[data-tag="alpine"]')).toHaveCount(0);
-    await expect(count).toHaveText("1");
+    await expect(count).toHaveText("2");
     await userPill.click();
 
     // Removing the pill shifts the partial left. The active edit must follow
@@ -924,7 +926,7 @@ test.describe("conversation drawer startup and app bar", () => {
     await page.keyboard.press("Escape");
     await expect(tagPanel).toHaveCount(0);
     await expectQuery(editor, " tag:al");
-    await expect(count).toHaveText("3");
+    await expect(count).toHaveText("4");
     await expect(page.locator('[data-conversation-id="other"]')).toBeVisible();
     await expect(page.locator('[data-conversation-id="alpine"]')).toBeVisible();
     expect(errors).toEqual([]);

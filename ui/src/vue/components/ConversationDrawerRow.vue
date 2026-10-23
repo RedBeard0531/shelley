@@ -33,7 +33,7 @@
             v-else
             class="conversation-title"
             :title="conversation.slug || undefined"
-            @dblclick="ctx.handleStartRename($event, conversation)"
+            @dblclick="!isPlaceholder && ctx.handleStartRename($event, conversation)"
           >
             <em v-if="!conversation.slug">untitled</em>
             <template v-else>
@@ -59,7 +59,7 @@
           aria-label="Conversation interrupted"
         />
         <div
-          v-if="!isDraft && !itemArchived"
+          v-if="!isDraft && !itemArchived && !isPlaceholder"
           class="conversation-actions drawer-actions-row drawer-actions-top"
         >
           <Button
@@ -191,12 +191,8 @@
           <template v-else>{{ seg.text }}</template>
         </template>
       </div>
-      <div
-        v-else-if="isDraft"
-        class="conversation-preview"
-        :title="conversation.draft?.trim() || undefined"
-      >
-        {{ conversation.draft?.trim() || "\u00a0" }}
+      <div v-else-if="isDraft" class="conversation-preview" :title="draftText?.trim() || undefined">
+        {{ draftText?.trim() || "\u00a0" }}
       </div>
       <div v-else class="conversation-preview" :title="convState.preview || undefined">
         {{ convState.preview || "\u00a0" }}
@@ -313,7 +309,7 @@
             />
           </svg>
         </button>
-        <div v-if="isDraft" class="conversation-actions drawer-actions-row">
+        <div v-if="isDraft && !isPlaceholder" class="conversation-actions drawer-actions-row">
           <DeleteButton :conversation-id="conversation.conversation_id" />
         </div>
       </div>
@@ -458,6 +454,7 @@ import {
 } from "./conversationDrawerShared";
 import { isTagSelected } from "../../utils/tagFilter";
 import { perfCount } from "../../utils/perf";
+import { COMPOSER_ROW_ID, ComposerPreviewKey } from "../../utils/composerRow";
 import GearIcon from "./GearIcon.vue";
 
 const props = defineProps<{
@@ -465,6 +462,7 @@ const props = defineProps<{
 }>();
 
 const ctx = inject(DrawerCtxKey)!;
+const composerPreview = inject(ComposerPreviewKey, null);
 
 const renameInput = ref<HTMLInputElement | null>(null);
 const tagInput = ref<HTMLInputElement | null>(null);
@@ -557,6 +555,14 @@ const participantTooltipHtml = computed(() => {
   return `<span class="conversation-participant-tooltip-list">${rows}</span>`;
 });
 const isDraft = computed(() => !!props.conversation.is_draft);
+// Stands in for a conversation the server has yet to create: nothing to edit.
+const isPlaceholder = computed(() => props.conversation.conversation_id === COMPOSER_ROW_ID);
+// A draft being typed here previews the composer, not the last autosave.
+const draftText = computed(() =>
+  composerPreview?.rowId.value === props.conversation.conversation_id
+    ? composerPreview.text.value
+    : props.conversation.draft,
+);
 
 const isActive = computed(
   () => props.conversation.conversation_id === ctx.currentConversationId.value,
