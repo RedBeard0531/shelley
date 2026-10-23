@@ -33,6 +33,7 @@ test("the terminal menu copies and inserts the output", async ({ page, request, 
       "Copy all output",
       "Insert visible screen into input",
       "Insert all output into input",
+      "Show key shortcuts",
       "Render with ghostty",
       "Render with xterm.js",
     ]);
