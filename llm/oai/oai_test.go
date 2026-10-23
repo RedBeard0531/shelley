@@ -3,6 +3,7 @@ package oai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/sashabaranov/go-openai"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/models/modelsdev"
 )
 
@@ -1517,17 +1519,22 @@ func TestServiceDoStreamsMalformedToolArguments(t *testing.T) {
 	}
 }
 
-func TestServiceDoRejectsIncompleteFireworksStream(t *testing.T) {
+func TestServiceDoRetriesIncompleteFireworksStream(t *testing.T) {
+	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"\"}]}\n\ndata: [DONE]\n\n"))
 	}))
 	defer server.Close()
 
-	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: "fireworks"}
+	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: "fireworks", Backoff: []time.Duration{0}}
 	_, err := svc.Do(t.Context(), &llm.Request{Messages: []llm.Message{{Role: llm.MessageRoleUser}}, OnStream: func(llm.StreamDelta) {}})
 	if err == nil || !strings.Contains(err.Error(), "no finish reason") {
 		t.Fatalf("Do() error = %v, want incomplete stream", err)
+	}
+	if attempts != 16 {
+		t.Fatalf("attempts = %d, want 16", attempts)
 	}
 }
 
@@ -2337,5 +2344,307 @@ func TestServiceReasoningEffort(t *testing.T) {
 				t.Errorf("reasoning_effort = %q, want %q", gotEffort, tt.wantEffort)
 			}
 		})
+	}
+}
+
+// newHTTP2StreamResetServer serves chat completion streams over HTTP/2. While
+// fail reports true, it aborts the handler, which the HTTP/2 server reports to
+// the client as RST_STREAM INTERNAL_ERROR: the gateway failure seen from
+// Fireworks via llm.int.exe.xyz. With partial, the reset follows a chunk.
+func newHTTP2StreamResetServer(t *testing.T, partial bool, fail func() bool) *httptest.Server {
+	t.Helper()
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fail() {
+			if partial {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\"id\":\"chatcmpl-partial\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n")
+				w.(http.Flusher).Flush()
+			}
+			panic(http.ErrAbortHandler)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-ok\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestServiceDoRetriesResetChatCompletionStream(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprintf("partial=%v", partial), func(t *testing.T) {
+			attempts := 0
+			server := newHTTP2StreamResetServer(t, partial, func() bool { attempts++; return attempts == 1 })
+
+			var retries []llm.RetryEvent
+			svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, HTTPC: server.Client(), ProviderName: "fireworks", Backoff: []time.Duration{0}}
+			resp, err := svc.Do(t.Context(), &llm.Request{
+				Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+				OnStream: func(llm.StreamDelta) {},
+				OnRetry:  func(event llm.RetryEvent) { retries = append(retries, event) },
+			})
+			if err != nil {
+				t.Fatalf("Do() error = %v, want success after retrying the reset stream", err)
+			}
+			if attempts != 2 {
+				t.Fatalf("attempts = %d, want 2", attempts)
+			}
+			if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
+				t.Fatalf("content = %#v, want the retried response only", resp.Content)
+			}
+			if len(retries) != 1 || !strings.Contains(retries[0].Err, "INTERNAL_ERROR") {
+				t.Fatalf("retries = %#v, want one retry naming the stream reset", retries)
+			}
+		})
+	}
+}
+
+func TestServiceDoExhaustedChatCompletionStreamResetsStayManuallyRetryable(t *testing.T) {
+	attempts := 0
+	server := newHTTP2StreamResetServer(t, true, func() bool { attempts++; return true })
+
+	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, HTTPC: server.Client(), ProviderName: "fireworks", Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(llm.StreamDelta) {},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want exhausted retries")
+	}
+	if attempts != 16 {
+		t.Fatalf("attempts = %d, want 16", attempts)
+	}
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || !info.Retryable || !info.NoImmediateRetry {
+		t.Fatalf("RequestErrorInfo = %+v, %v; want manually retryable without an immediate loop retry", info, ok)
+	}
+}
+
+func TestServiceDoChatCompletionStreamKeepsIdleStallMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	httpc := &http.Client{Transport: &llmhttp.Transport{Base: http.DefaultTransport, IdleTimeout: 10 * time.Millisecond}}
+	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, HTTPC: httpc, ProviderName: "fireworks", Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(llm.StreamDelta) {},
+	})
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.IdleStallDuration != 10*time.Millisecond {
+		t.Fatalf("Do() error = %v with info %+v, %v; want idle-stall metadata", err, info, ok)
+	}
+}
+
+func TestServiceDoClassifiesInBandChatCompletionStreamErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		event        string
+		wantAttempts int
+	}{
+		{"permanent", `{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`, 1},
+		{"transient", `{"error":{"message":"The server had an error","type":"server_error","code":"server_error"}}`, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attempts := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				attempts++
+				first := attempts == 1
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+				if first {
+					fmt.Fprintf(w, "data: %s\n\n", tt.event)
+					return
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: "fireworks", Backoff: []time.Duration{0}}
+			_, err := svc.Do(t.Context(), &llm.Request{
+				Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+				OnStream: func(llm.StreamDelta) {},
+			})
+			if attempts != tt.wantAttempts {
+				t.Fatalf("attempts = %d, want %d (err = %v)", attempts, tt.wantAttempts, err)
+			}
+			if tt.wantAttempts == 1 {
+				info, ok := llm.RequestErrorInfoFromError(err)
+				if !ok || info.Retryable {
+					t.Fatalf("RequestErrorInfo = %+v, %v; want terminal (err = %v)", info, ok, err)
+				}
+			} else if err != nil {
+				t.Fatalf("Do() error = %v, want success after retry", err)
+			}
+		})
+	}
+}
+
+func TestServiceDoTerminalErrorIgnoresEarlierStreamFailureMetadata(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts > 1 {
+			http.Error(w, `{"error":{"message":"bad request","type":"invalid_request_error"}}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	httpc := &http.Client{Transport: &llmhttp.Transport{Base: http.DefaultTransport, IdleTimeout: 100 * time.Millisecond}}
+	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, HTTPC: httpc, ProviderName: "fireworks", Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(llm.StreamDelta) {},
+	})
+	if attempts < 2 || err == nil || !strings.Contains(err.Error(), "status 400") {
+		t.Fatalf("attempts = %d, err = %v; want a 400 after an idle-stall retry", attempts, err)
+	}
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.Retryable || info.IdleStallDuration != 0 {
+		t.Fatalf("RequestErrorInfo = %+v, %v; want the terminal 400 to be authoritative", info, ok)
+	}
+}
+
+func TestServiceDoRejectsInvalidBaseURL(t *testing.T) {
+	for _, baseURL := range []string{"http://[::1", "localhost:8000/v1", "https:///v1"} {
+		t.Run(baseURL, func(t *testing.T) {
+			svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: baseURL, ProviderName: "fireworks", Backoff: []time.Duration{0}}
+			_, err := svc.Do(t.Context(), &llm.Request{
+				Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+				OnStream: func(llm.StreamDelta) {},
+				OnRetry:  func(event llm.RetryEvent) { t.Errorf("unexpected retry: %+v", event) },
+			})
+			info, ok := llm.RequestErrorInfoFromError(err)
+			if err == nil || !ok || info.Retryable {
+				t.Fatalf("Do() error = %v with info %+v, %v; want a terminal invalid base URL error", err, info, ok)
+			}
+		})
+	}
+}
+
+func TestServiceDoMalformedChunkAfterTransportRetryIsTerminal(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		first := attempts == 1 // read before writing; see the race note below
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		// The race detector orders handlers only through the write above, so
+		// reading attempts here would race with the next attempt's increment.
+		if first {
+			panic(http.ErrAbortHandler)
+		}
+		fmt.Fprint(w, "data: {broken}\n\n")
+	}))
+	defer server.Close()
+
+	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: "fireworks", Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(llm.StreamDelta) {},
+	})
+	if attempts != 2 || err == nil {
+		t.Fatalf("attempts = %d, err = %v; want a malformed chunk after one transport retry", attempts, err)
+	}
+	// The earlier attempt's "unexpected EOF" text must not make the
+	// malformed chunk look like a retryable transport failure.
+	info, ok := llm.RequestErrorInfoFromError(err)
+	if !ok || info.Retryable {
+		t.Fatalf("RequestErrorInfo = %+v, %v; want terminal (err = %v)", info, ok, err)
+	}
+}
+
+func TestServiceDoCancellationKeepsContextError(t *testing.T) {
+	arrived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body) // lets the server notice the client hanging up
+		close(arrived)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() { <-arrived; cancel() }()
+	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: "fireworks", Backoff: []time.Duration{0}}
+	_, err := svc.Do(ctx, &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(llm.StreamDelta) {},
+		OnRetry:  func(event llm.RetryEvent) { t.Errorf("unexpected retry: %+v", event) },
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Do() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestServiceDoRejectsInvalidHeaderValues(t *testing.T) {
+	for name, svc := range map[string]*Service{
+		"api key": {APIKey: "test-key\n"},
+		"org":     {APIKey: "test-key", Org: "org\r\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc.Model, svc.ModelURL, svc.Backoff = modelForTest("test"), "http://127.0.0.1:1", []time.Duration{0}
+			_, err := svc.Do(t.Context(), &llm.Request{
+				Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+				OnStream: func(llm.StreamDelta) {},
+				OnRetry:  func(event llm.RetryEvent) { t.Errorf("unexpected retry: %+v", event) },
+			})
+			info, ok := llm.RequestErrorInfoFromError(err)
+			if err == nil || !ok || info.Retryable {
+				t.Fatalf("Do() error = %v with info %+v, %v; want a terminal invalid header error", err, info, ok)
+			}
+		})
+	}
+}
+
+func TestServiceDoNonStreamingTruncatedBodyStaysRetryable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "1000")
+		fmt.Fprint(w, `{"id":"chatcmpl-truncated","choices":[`)
+	}))
+	defer server.Close()
+
+	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+	})
+	if err == nil {
+		t.Fatal("Do() error = nil, want truncated body error")
+	}
+	if info, ok := llm.RequestErrorInfoFromError(err); ok && !info.Retryable {
+		t.Fatalf("RequestErrorInfo = %+v; a severed non-streaming body must not be marked terminal (err = %v)", info, err)
+	}
+}
+
+func TestServiceDoDoesNotRetryNonEventStreamResponse(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "<html><body>Please sign in</body></html>\n")
+	}))
+	defer server.Close()
+
+	svc := &Service{APIKey: "test-key", Model: modelForTest("test"), ModelURL: server.URL, ProviderName: "fireworks", Backoff: []time.Duration{0}}
+	_, err := svc.Do(t.Context(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.MessageRoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hi"}}}},
+		OnStream: func(llm.StreamDelta) {},
+	})
+	if attempts != 1 || err == nil || !strings.Contains(err.Error(), "text/html") {
+		t.Fatalf("attempts = %d, err = %v; want one attempt naming the content type", attempts, err)
 	}
 }

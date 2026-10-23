@@ -251,19 +251,21 @@ type responsesError struct {
 	Code    json.RawMessage `json:"code"`
 }
 
-type responsesRequestError struct {
+// requestError carries retry metadata for Responses and Chat Completions
+// request failures.
+type requestError struct {
 	err               error
 	retryable         bool
 	noImmediateRetry  bool
 	idleStallDuration time.Duration
 }
 
-var _ llm.RequestError = (*responsesRequestError)(nil)
+var _ llm.RequestError = (*requestError)(nil)
 
-func (e *responsesRequestError) Error() string { return e.err.Error() }
-func (e *responsesRequestError) Unwrap() error { return e.err }
+func (e *requestError) Error() string { return e.err.Error() }
+func (e *requestError) Unwrap() error { return e.err }
 
-func (e *responsesRequestError) RequestErrorInfo() llm.RequestErrorInfo {
+func (e *requestError) RequestErrorInfo() llm.RequestErrorInfo {
 	return llm.RequestErrorInfo{
 		Retryable:         e.retryable,
 		NoImmediateRetry:  e.noImmediateRetry,
@@ -271,8 +273,8 @@ func (e *responsesRequestError) RequestErrorInfo() llm.RequestErrorInfo {
 	}
 }
 
-func newResponsesRequestError(err error, retryable bool) error {
-	return &responsesRequestError{err: err, retryable: retryable}
+func newRequestError(err error, retryable bool) error {
+	return &requestError{err: err, retryable: retryable}
 }
 
 func responsesErrorRetryable(apiErr *responsesError) bool {
@@ -871,7 +873,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 	var retryAfter time.Duration // hint from upstream Retry-After header, reset each attempt
 	for attempts := 0; ; attempts++ {
 		if attempts > 15 {
-			return nil, &responsesRequestError{
+			return nil, &requestError{
 				err:               fmt.Errorf("responses request failed after %d attempts (url=%s, model=%s): %w", attempts, fullURL, model.ModelName, errs),
 				retryable:         true,
 				noImmediateRetry:  true,
@@ -980,12 +982,12 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 			case httpResp.StatusCode >= 400:
 				slog.WarnContext(ctx, "responses_request_failed", "error", terminalErrMessage, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName)
 				attemptErr := fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, terminalErrMessage)
-				return nil, newResponsesRequestError(errors.Join(errs, attemptErr), false)
+				return nil, newRequestError(errors.Join(errs, attemptErr), false)
 
 			default:
 				slog.WarnContext(ctx, "responses_request_failed", "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName, "body", terminalErrMessage)
 				attemptErr := fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, terminalErrMessage)
-				return nil, newResponsesRequestError(errors.Join(errs, attemptErr), false)
+				return nil, newRequestError(errors.Join(errs, attemptErr), false)
 			}
 		}
 
@@ -1002,7 +1004,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 				info, classified := llm.RequestErrorInfoFromError(err)
 				lastRequestErrorInfo = info
 				if classified && !info.Retryable {
-					return nil, newResponsesRequestError(errors.Join(errs, attemptErr), false)
+					return nil, newRequestError(errors.Join(errs, attemptErr), false)
 				}
 				errs = errors.Join(errs, attemptErr)
 				continue
@@ -1034,7 +1036,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: decode response body (url=%s, model=%s, bytes=%d): %w", attempts+1, now, fullURL, model.ModelName, len(body), err))
 					continue
 				}
-				return nil, newResponsesRequestError(errors.Join(errs, fmt.Errorf("attempt %d at %s: failed to unmarshal response (url=%s, model=%s, bytes=%d): %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, len(body), err)), false)
+				return nil, newRequestError(errors.Join(errs, fmt.Errorf("attempt %d at %s: failed to unmarshal response (url=%s, model=%s, bytes=%d): %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, len(body), err)), false)
 			}
 		}
 
@@ -1044,7 +1046,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		if resp.Error != nil {
 			attemptErr := fmt.Errorf("attempt %d at %s (url=%s, model=%s): response contains error: %s", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, resp.Error.Message)
 			retryable, _ := classifyResponsesError(resp.Error)
-			return nil, &responsesRequestError{
+			return nil, &requestError{
 				err:              errors.Join(errs, attemptErr),
 				retryable:        retryable,
 				noImmediateRetry: retryable,
@@ -1307,12 +1309,12 @@ func parseResponsesSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*resp
 			completed.Output = mergeResponsesStreamOutput(completed.Output, outputItems)
 		case "response.failed":
 			if event.Response != nil && event.Response.Error != nil {
-				return newResponsesRequestError(
+				return newRequestError(
 					fmt.Errorf("response failed: %s", event.Response.Error.Message),
 					responsesErrorRetryable(event.Response.Error),
 				)
 			}
-			return newResponsesRequestError(errors.New("response failed"), true)
+			return newRequestError(errors.New("response failed"), true)
 		case "error":
 			apiErr := event.Error
 			if apiErr != nil {
@@ -1331,7 +1333,7 @@ func parseResponsesSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*resp
 			if apiErr != nil && apiErr.Message != "" {
 				message = apiErr.Message
 			}
-			return newResponsesRequestError(
+			return newRequestError(
 				fmt.Errorf("stream error event: %s", message),
 				responsesErrorRetryable(apiErr),
 			)

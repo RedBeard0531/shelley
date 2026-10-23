@@ -1117,12 +1117,12 @@ func TestResponsesServiceBoundsRetriedErrorBodies(t *testing.T) {
 	}
 }
 
-type responsesRequestErrorForTest struct {
+type requestErrorForTest struct {
 	info llm.RequestErrorInfo
 }
 
-func (e *responsesRequestErrorForTest) Error() string { return "request failed" }
-func (e *responsesRequestErrorForTest) RequestErrorInfo() llm.RequestErrorInfo {
+func (e *requestErrorForTest) Error() string { return "request failed" }
+func (e *requestErrorForTest) RequestErrorInfo() llm.RequestErrorInfo {
 	return e.info
 }
 
@@ -1150,7 +1150,7 @@ func TestResponsesServiceExhaustionUsesLatestRequestMetadata(t *testing.T) {
 					stall = attempts == 16
 				}
 				if stall {
-					return nil, &responsesRequestErrorForTest{info: llm.RequestErrorInfo{
+					return nil, &requestErrorForTest{info: llm.RequestErrorInfo{
 						Retryable:         true,
 						IdleStallDuration: 3 * time.Minute,
 					}}

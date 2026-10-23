@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sashabaranov/go-openai"
+	"golang.org/x/net/http/httpguts"
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/models/modelsdev"
 )
@@ -1228,6 +1229,34 @@ type chatCompletionStreamResponse struct {
 	Usage *chatCompletionUsage `json:"usage"`
 }
 
+// chatStreamInterruptedError marks an accepted chat completion stream that
+// broke (HTTP/2 stream reset, dropped connection, idle stall) or ended before
+// its finish reason: a transport fault rather than a verdict on the request.
+type chatStreamInterruptedError struct{ err error }
+
+func (e *chatStreamInterruptedError) Error() string { return e.err.Error() }
+func (e *chatStreamInterruptedError) Unwrap() error { return e.err }
+
+// isChatTransportError reports whether a chat completion attempt failed in
+// transport: before any HTTP status arrived, or while reading the stream.
+func isChatTransportError(err error) bool {
+	if _, ok := errors.AsType[*chatStreamInterruptedError](err); ok {
+		return true
+	}
+	// http.Client.Do reports transport failures as *url.Error. Do rejects
+	// base URLs that would fail this way deterministically before sending.
+	_, ok := errors.AsType[*url.Error](err)
+	return ok
+}
+
+// chatInBandErrorRetryable classifies an error event sent inside an accepted
+// stream. Such errors have no HTTP status, so use the same code and type
+// rules as the Responses client; unclassified errors stay retryable.
+func chatInBandErrorRetryable(apiErr *openai.APIError) bool {
+	code, _ := json.Marshal(apiErr.Code)
+	return responsesErrorRetryable(&responsesError{Message: apiErr.Message, Type: apiErr.Type, Code: code})
+}
+
 func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStream, onStream func(llm.StreamDelta)) (*llm.Response, error) {
 	msg := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant}
 	headers := stream.Header()
@@ -1245,8 +1274,14 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 			break
 		}
 		if err != nil {
+			// In-band provider errors keep their *openai.APIError for status
+			// classification; anything else came from reading the body.
+			var apiErr *openai.APIError
+			if !errors.As(err, &apiErr) && !errors.Is(err, openai.ErrTooManyEmptyStreamMessages) {
+				err = &chatStreamInterruptedError{err: err}
+			}
 			if started {
-				return nil, fmt.Errorf("chat completion stream failed after response started: %v", err)
+				return nil, fmt.Errorf("chat completion stream failed after response started: %w", err)
 			}
 			return nil, err
 		}
@@ -1317,7 +1352,13 @@ func (s *Service) consumeChatCompletionStream(stream *openai.ChatCompletionStrea
 	}
 
 	if finishReason == "" {
-		return nil, fmt.Errorf("incomplete chat completion stream: no finish reason")
+		// A response with no data chunks that isn't an event stream (JSON
+		// from a server ignoring stream:true, an HTML login page) won't
+		// improve on retry.
+		if contentType := headers.Get("Content-Type"); !started && !strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
+			return nil, fmt.Errorf("chat completion response is not an event stream: Content-Type %q, no data chunks", contentType)
+		}
+		return nil, &chatStreamInterruptedError{err: errors.New("incomplete chat completion stream: no finish reason")}
 	}
 	return &llm.Response{
 		ID:         id,
@@ -1460,6 +1501,15 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 	if s.Org != "" {
 		config.OrgID = s.Org
 	}
+	// Transport failures are retried for minutes, so reject configuration no
+	// request can succeed with: http.Client.Do reports both as *url.Error.
+	if u, err := url.Parse(config.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, newRequestError(fmt.Errorf("invalid base URL %q for model %s: want http(s)://host[/path]", config.BaseURL, model.ModelName), false)
+	}
+	if !httpguts.ValidHeaderFieldValue(s.APIKey) || !httpguts.ValidHeaderFieldValue(s.Org) {
+		return nil, newRequestError(fmt.Errorf("API key or organization for model %s contains characters not allowed in an HTTP header", model.ModelName), false)
+	}
+
 	// Start with system messages if provided
 	var allMessages []openai.ChatCompletionMessage
 	if len(ir.System) > 0 {
@@ -1588,13 +1638,19 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 	retryStart := time.Now()
 	var errs error            // accumulated errors across all attempts
 	var lastErrSummary string // short description of the most recent attempt failure
+	var lastRequestErrorInfo llm.RequestErrorInfo
 	for attempts := 0; ; attempts++ {
 		if attempts > 15 {
-			return nil, fmt.Errorf("openai request failed after %d attempts (url=%s, model=%s): %w", attempts, fullURL, model.ModelName, errs)
+			return nil, &requestError{
+				err:               fmt.Errorf("openai request failed after %d attempts (url=%s, model=%s): %w", attempts, fullURL, model.ModelName, errs),
+				retryable:         true,
+				noImmediateRetry:  true,
+				idleStallDuration: lastRequestErrorInfo.IdleStallDuration,
+			}
 		}
 		if attempts > 0 {
 			if ctx.Err() != nil {
-				return nil, fmt.Errorf("openai request failed after %d attempts (context cancelled): %w", attempts, errs)
+				return nil, fmt.Errorf("openai request failed after %d attempts (%w): %w", attempts, ctx.Err(), errs)
 			}
 			base := backoff[min(attempts-1, len(backoff)-1)]
 			jitter := time.Duration(rand.Int64N(max(min(int64(base), int64(time.Second)), 1)))
@@ -1606,7 +1662,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 			select {
 			case <-time.After(sleep):
 			case <-ctx.Done():
-				return nil, fmt.Errorf("openai request failed after %d attempts (context cancelled during backoff): %w", attempts, errs)
+				return nil, fmt.Errorf("openai request failed after %d attempts (%w during backoff): %w", attempts, ctx.Err(), errs)
 			}
 		}
 
@@ -1647,10 +1703,25 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		}
 
 		// Handle errors
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("openai request failed after %d attempts (%w): %w", attempts+1, ctx.Err(), errors.Join(errs, fmt.Errorf("attempt %d at %s: url=%s model=%s: %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, err)))
+		}
+		lastRequestErrorInfo, _ = llm.RequestErrorInfoFromError(err)
+
 		// Check for TLS "bad record MAC" errors and retry once
 		if strings.Contains(err.Error(), "tls: bad record MAC") && attempts == 0 {
 			slog.WarnContext(ctx, "tls bad record MAC error, retrying once", "error", err.Error())
 			errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: TLS error: %w", attempts+1, time.Now().Format(time.DateTime), err))
+			continue
+		}
+
+		// Transport failures are retried with backoff, as in the Anthropic and
+		// Responses clients. Record them with %v so an earlier attempt's
+		// metadata (e.g. an idle stall) can't classify a later terminal error.
+		if isChatTransportError(err) {
+			lastErrSummary = "transport: " + llm.Truncate(err.Error(), 160)
+			slog.WarnContext(ctx, "openai_request_transport_failed", "error", err, "url", fullURL, "model", model.ModelName)
+			errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: url=%s model=%s: %v", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, err))
 			continue
 		}
 
@@ -1667,14 +1738,26 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		case errors.As(err, &apiErr):
 			statusCode = apiErr.HTTPStatusCode
 			errMsg = apiErr.Error()
+			if statusCode == 0 && !chatInBandErrorRetryable(apiErr) {
+				return nil, newRequestError(errors.Join(errs, fmt.Errorf("attempt %d at %s: url=%s model=%s: %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, err)), false)
+			}
 		case errors.As(err, &reqErr):
 			statusCode = reqErr.HTTPStatusCode
 			// Surface the body for proxy errors so the user sees
 			// the actual upstream message (e.g., trace IDs).
 			errMsg = fmt.Sprintf("status %d: %s", reqErr.HTTPStatusCode, strings.TrimSpace(string(reqErr.Body)))
 		default:
-			// Not an OpenAI error at all (network, TLS, etc.), return immediately
-			return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: url=%s model=%s: %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, err))
+			// Neither a transport nor a provider error (e.g. request validation
+			// or a malformed stream chunk), return immediately.
+			attemptErr := errors.Join(errs, fmt.Errorf("attempt %d at %s: url=%s model=%s: %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, err))
+			if streaming {
+				// Stream read failures were classified as transport above, so
+				// this is terminal; say so, lest an earlier attempt's transport
+				// text make it look retryable. go-openai returns non-streaming
+				// body read failures unmarked, so leave those unclassified.
+				return nil, newRequestError(attemptErr, false)
+			}
+			return nil, attemptErr
 		}
 
 		now := time.Now().Format(time.DateTime)
@@ -1696,7 +1779,7 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		case statusCode >= 400 && statusCode < 500:
 			// Client error, probably unrecoverable
 			slog.WarnContext(ctx, "openai_request_failed", "error", errMsg, "status_code", statusCode, "url", fullURL, "model", model.ModelName)
-			return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, statusCode, fullURL, model.ModelName, errMsg))
+			return nil, newRequestError(errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, statusCode, fullURL, model.ModelName, errMsg)), false)
 
 		default:
 			// Other error, accumulate and retry
