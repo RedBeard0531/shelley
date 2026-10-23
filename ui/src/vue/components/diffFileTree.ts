@@ -17,6 +17,8 @@ export interface DiffFileTreeEntry {
   deletions?: number;
   decoration?: string;
   decorationTitle?: string;
+  // Number of commit highlights on this file, shown as a badge.
+  highlightCount?: number;
 }
 
 // Internal tree node. Files carry the source entry; directories carry
@@ -109,6 +111,19 @@ export function treeRealPathOrder(entries: DiffFileTreeEntry[]): string[] {
   return out;
 }
 
+// In an ordered list (commit highlights rank the files), commit messages keep
+// their folder at the top and every other file follows flat, in entry order.
+export function isCommitMessageEntry(entry: DiffFileTreeEntry): boolean {
+  return entry.treePath.length > 1 && entry.treePath[0] === COMMIT_MESSAGES_DIR;
+}
+
+export function orderedRealPathOrder(entries: DiffFileTreeEntry[]): string[] {
+  return [
+    ...treeRealPathOrder(entries.filter(isCommitMessageEntry)),
+    ...entries.filter((entry) => !isCommitMessageEntry(entry)).map((entry) => entry.realPath),
+  ];
+}
+
 // Walk into a directory, folding runs of single-child directories into a
 // compound name like `shelley / ui / src`.
 export function flatten(d: DirNode): {
@@ -154,7 +169,7 @@ export function statusLetter(s: DiffFileTreeEntry["status"]): StatusInfo | null 
 }
 
 // Lowercase and drop spaces around "/" (see matchTreePaths).
-const normalizeSearch = (s: string) => s.toLowerCase().replace(/\s*\/\s*/g, "/");
+export const normalizeSearch = (s: string) => s.toLowerCase().replace(/\s*\/\s*/g, "/");
 
 // Search: case-insensitive substring match against each file's full tree
 // path (segments joined with "/"), so a query hits directory names as well
@@ -209,10 +224,13 @@ export type RenderedRow =
       depth: number;
       isSelected: boolean;
       label: string;
+      // Shown dimmed after the label: the directory in ordered (flat) lists.
+      detail?: string;
       realPath: string;
       decoration?: string;
       decorationTitle?: string;
       statusInfo: StatusInfo | null;
       additions?: number;
       deletions?: number;
+      highlightCount?: number;
     };

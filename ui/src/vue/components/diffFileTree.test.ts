@@ -2,6 +2,8 @@ import {
   buildTree,
   COMMIT_MESSAGES_DIR,
   matchTreePaths,
+  orderedRealPathOrder,
+  treeRealPathOrder,
   type DiffFileTreeEntry,
   type DirNode,
 } from "./diffFileTree";
@@ -84,4 +86,32 @@ run("spaces around a slash match the folded-directory label", () => {
 run('a commit subject containing " / " matches however the slash is spaced', () => {
   assertEqual(matches("A / B testing"), ["commit-msg:def"], "A / B testing");
   assertEqual(matches("a/b"), ["commit-msg:def"], "a/b");
+});
+
+run("ordered lists keep commit messages first and files in entry order", () => {
+  const ranked = [
+    entries[0],
+    entries[1],
+    file("shelley/server/messages.go"),
+    file("README.md"),
+    file("exed/backup.go"),
+    file("docs/content/vm-backups.md"),
+  ];
+  assertEqual(
+    orderedRealPathOrder(ranked),
+    [
+      "commit-msg:abc",
+      "commit-msg:def",
+      "shelley/server/messages.go",
+      "README.md",
+      "exed/backup.go",
+      "docs/content/vm-backups.md",
+    ],
+    "ordered",
+  );
+  assertEqual(
+    treeRealPathOrder(ranked).slice(2),
+    ["docs/content/vm-backups.md", "exed/backup.go", "shelley/server/messages.go", "README.md"],
+    "tree order ignores entry order",
+  );
 });

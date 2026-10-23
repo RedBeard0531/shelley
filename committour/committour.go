@@ -16,7 +16,11 @@ import (
 	"time"
 )
 
-const notesRef = "shelley-tour"
+// Notes refs holding commit annotations.
+const (
+	notesRef           = "shelley-tour"
+	highlightsNotesRef = "shelley-highlights"
+)
 
 type Tour struct {
 	Version int    `json:"version"`
@@ -424,11 +428,16 @@ func validateTour(tour *Tour) ([]string, []string, error) {
 	return warnings, patches, nil
 }
 
-// ErrNoNote reports that a commit has no tour note attached.
-var ErrNoNote = errors.New("no tour note")
+// ErrNoNote reports that a commit has no note of the requested kind.
+var ErrNoNote = errors.New("no note")
 
+// ReadNote returns commit's tour note.
 func ReadNote(dir, commit string) ([]byte, error) {
-	data, err := gitOutput(dir, "", nil, "notes", "--ref="+notesRef, "show", commit)
+	return readNote(dir, notesRef, commit)
+}
+
+func readNote(dir, ref, commit string) ([]byte, error) {
+	data, err := gitOutput(dir, "", nil, "notes", "--ref="+ref, "show", commit)
 	if err != nil {
 		if strings.Contains(err.Error(), "no note found") {
 			return nil, fmt.Errorf("%w for %s", ErrNoNote, commit)
@@ -441,33 +450,38 @@ func ReadNote(dir, commit string) ([]byte, error) {
 // WriteNote stores data as commit's tour note. The given media blobs are
 // pinned in the same update of the notes ref (see pinnedIn).
 func WriteNote(dir, commit string, data []byte, media ...string) error {
-	file, err := os.CreateTemp("", "shelley-tour-*.json")
+	return writeNote(dir, notesRef, commit, data, media)
+}
+
+func writeNote(dir, ref, commit string, data []byte, media []string) error {
+	file, err := os.CreateTemp("", "shelley-note-*.json")
 	if err != nil {
-		return fmt.Errorf("create tour note file: %w", err)
+		return fmt.Errorf("create note file: %w", err)
 	}
 	name := file.Name()
 	defer os.Remove(name)
 	if _, err := file.Write(data); err != nil {
 		file.Close()
-		return fmt.Errorf("write tour note file: %w", err)
+		return fmt.Errorf("write note file: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close tour note file: %w", err)
+		return fmt.Errorf("close note file: %w", err)
 	}
-	return updateNotes(dir, commit, name, media)
+	return updateNotes(dir, ref, commit, name, media)
 }
 
-// updateNotes adds noteFile as commit's note and pins media, atomically.
+// updateNotes adds noteFile as commit's note in the notes ref named notes and
+// pins media, atomically.
 // git notes overwrites its ref without checking the old value, so
 // concurrent writers (parallel subagents annotating different commits)
 // would silently drop each other's notes. Instead the edits run against a
 // private copy of the ref, which is then compare-and-swapped in; on
 // contention the whole update is redone from the new value.
-func updateNotes(dir, commit, noteFile string, media []string) error {
+func updateNotes(dir, notes, commit, noteFile string, media []string) error {
 	deadline := time.Now().Add(15 * time.Second)
 	backoff := 10 * time.Millisecond
 	for {
-		err := tryUpdateNotes(dir, commit, noteFile, media)
+		err := tryUpdateNotes(dir, notes, commit, noteFile, media)
 		if err == nil || time.Now().After(deadline) || !strings.Contains(err.Error(), "cannot lock ref") {
 			return err
 		}
@@ -480,8 +494,8 @@ func updateNotes(dir, commit, noteFile string, media []string) error {
 // tmpNotesRefs numbers this process's private notes refs.
 var tmpNotesRefs atomic.Int64
 
-func tryUpdateNotes(dir, commit, noteFile string, media []string) error {
-	ref := "refs/notes/" + notesRef
+func tryUpdateNotes(dir, notes, commit, noteFile string, media []string) error {
+	ref := "refs/notes/" + notes
 	out, err := gitOutput(dir, "", nil, "for-each-ref", "--format=%(objectname)", ref)
 	if err != nil {
 		return err
@@ -489,7 +503,7 @@ func tryUpdateNotes(dir, commit, noteFile string, media []string) error {
 	old := strings.TrimSpace(string(out))
 	// Unique even against refs left behind by a crashed process that had
 	// this pid.
-	tmp := fmt.Sprintf("%s-tmp-%d-%d-%d", notesRef, os.Getpid(), time.Now().UnixNano(), tmpNotesRefs.Add(1))
+	tmp := fmt.Sprintf("%s-tmp-%d-%d-%d", notes, os.Getpid(), time.Now().UnixNano(), tmpNotesRefs.Add(1))
 	defer gitOutput(dir, "", nil, "update-ref", "-d", "refs/notes/"+tmp)
 	if old != "" {
 		if _, err := gitOutput(dir, "", nil, "update-ref", "refs/notes/"+tmp, old); err != nil {
@@ -528,8 +542,13 @@ func tryUpdateNotes(dir, commit, noteFile string, media []string) error {
 	return err
 }
 
+// ListNotes returns the set of commits with tour notes.
 func ListNotes(dir string) (map[string]bool, error) {
-	output, err := gitOutput(dir, "", nil, "notes", "--ref="+notesRef, "list")
+	return listNotes(dir, notesRef)
+}
+
+func listNotes(dir, ref string) (map[string]bool, error) {
+	output, err := gitOutput(dir, "", nil, "notes", "--ref="+ref, "list")
 	if err != nil {
 		return nil, err
 	}

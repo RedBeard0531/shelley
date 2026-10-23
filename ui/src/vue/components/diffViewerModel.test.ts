@@ -37,6 +37,15 @@ run("a clean working tree defaults to the top commit tour", () => {
   assertEqual(selection, { selectedDiff: "top", selectedTo: "self" }, "selection");
 });
 
+run("a clean working tree defaults to top commit highlights", () => {
+  const selection = defaultDiffSelection([
+    diff({ id: "working", message: "Working Changes", filesCount: 0, additions: 0 }),
+    diff({ id: "top", message: "Top commit", hasHighlights: true }),
+    diff({ id: "merge-base", message: "Merge base", isMergeBase: true }),
+  ]);
+  assertEqual(selection, { selectedDiff: "top", selectedTo: "self" }, "selection");
+});
+
 run("working changes keep the through-working-tree branch default", () => {
   const selection = defaultDiffSelection([
     diff({ id: "working", message: "Working Changes", filesCount: 1 }),

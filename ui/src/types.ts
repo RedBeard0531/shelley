@@ -287,10 +287,27 @@ export interface GitDiffInfo {
   statsLoaded?: boolean;
   // True when this commit has a guided tour git note.
   hasTour?: boolean;
+  // True when this commit has a highlights git note (see CommitHighlights).
+  hasHighlights?: boolean;
   // Decorating refs (branches, tags, HEAD), like git log --decorate.
   refs?: string[];
   // True if this commit is the merge-base with @{upstream}.
   isMergeBase?: boolean;
+}
+
+// An agent's reviewer guide to one commit: its changed files ordered most
+// important first, and short comments on notable lines. Lines count from 1 in
+// the file as of the commit.
+export interface CommitHighlights {
+  version: number;
+  files: string[];
+  highlights: CommitHighlight[];
+}
+
+export interface CommitHighlight {
+  file: string;
+  line: number;
+  comment: string;
 }
 
 export interface GitFileInfo {

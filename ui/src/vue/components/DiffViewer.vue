@@ -357,6 +357,9 @@
       />
       <!-- Error banner -->
       <div v-if="error && diffView === 'files'" class="diff-viewer-error">{{ error }}</div>
+      <div v-else-if="highlightsError && diffView === 'files'" class="diff-viewer-error">
+        {{ highlightsError }}
+      </div>
 
       <!-- Main content -->
       <div
@@ -403,6 +406,9 @@
                         >{{ workingChangesStatus(d).label }}</span
                       >
                       <span v-if="d.hasTour" class="commit-picker-tour-badge">tour</span>
+                      <span v-if="d.hasHighlights" class="commit-picker-highlights-badge"
+                        >highlights</span
+                      >
                     </div>
                     <div
                       v-if="d.id !== 'working' && ((d.refs ?? []).length > 0 || d.isMergeBase)"
@@ -449,7 +455,11 @@
             </template>
             <template v-else>
               <div class="diff-viewer-sidebar-label">
-                <span>Commit Messages and Files</span>
+                <span>{{
+                  highlights
+                    ? "Commit Messages and Files by Importance"
+                    : "Commit Messages and Files"
+                }}</span>
                 <span v-if="fileIndexIndicator" class="diff-viewer-file-index">{{
                   fileIndexIndicator
                 }}</span>
@@ -461,6 +471,7 @@
                     <DiffFileTree
                       :entries="treeEntries"
                       :selected-real-path="selectedFile"
+                      :ordered="!!highlights"
                       @select="selectSidebarFile"
                     />
                   </div>
@@ -605,7 +616,11 @@
         :key="commentDialogOpens"
         v-model:text="commentText"
         :where="lineCommentLabel(showCommentDialog, true)"
-        :quoted="showCommentDialog.selectedText"
+        :quoted="
+          showCommentDialog.highlight
+            ? `${showCommentDialog.selectedText}\n${highlightQuote(showCommentDialog.highlight)}`
+            : showCommentDialog.selectedText
+        "
         @submit="handleAddComment"
         @cancel="showCommentDialog = null"
       />
@@ -631,6 +646,7 @@ import { isDarkModeActive } from "../../services/theme";
 import { buildTourCommentBlock, type TourCommentTarget } from "../composables/tourComments";
 import { useVimEnabled, useMonacoVim } from "../composables/monacoVim";
 import {
+  highlightQuote,
   lineCommentLabel,
   truncateWithEllipsis,
   useMonacoComments,
@@ -660,10 +676,22 @@ import {
   useReviewRecording,
   type ReviewConversationStart,
 } from "./useReviewRecording";
-import { COMMIT_MESSAGES_DIR, treeRealPathOrder, type DiffFileTreeEntry } from "./diffFileTree";
+import {
+  COMMIT_MESSAGES_DIR,
+  orderedRealPathOrder,
+  treeRealPathOrder,
+  type DiffFileTreeEntry,
+} from "./diffFileTree";
+import { highlightsByFile, orderByHighlights, showHighlights } from "./commitHighlights";
 import { buildTourContents } from "./commitTourContents";
 import { defaultDiffSelection, workingChangesStatus } from "./diffViewerModel";
-import type { GitDiffInfo, GitFileInfo, GitFileDiff, GitCommitMessage } from "../../types";
+import type {
+  CommitHighlights,
+  GitDiffInfo,
+  GitFileInfo,
+  GitFileDiff,
+  GitCommitMessage,
+} from "../../types";
 
 const props = defineProps<{
   cwd: string;
@@ -748,6 +776,12 @@ const tourLoading = ref(false);
 const tourError = ref<string | null>(null);
 const files = ref<GitFileInfo[]>([]);
 const selectedFile = ref<string | null>(null);
+// Highlights for the selected single commit, if it has any; they order
+// `files` and annotate lines in the editor.
+const highlights = ref<CommitHighlights | null>(null);
+// Files still load, unranked, when highlights fail to.
+const highlightsError = ref<string | null>(null);
+const highlightsByPath = computed(() => highlightsByFile(highlights.value));
 let pendingInitialFile: string | undefined;
 let filesCommit: string | undefined;
 let loadDiffsRequestId = 0;
@@ -928,6 +962,7 @@ const {
   attach: attachComments,
   handleAddComment,
   openCommentFromPrompt,
+  commentOnHighlight,
   reset: resetComments,
 } = useMonacoComments({
   monaco: () => monacoMod,
@@ -1248,6 +1283,8 @@ watch(
       fileDiff.value = null;
       selectedFile.value = null;
       files.value = [];
+      highlights.value = null;
+      highlightsError.value = null;
       selectedDiff.value = null;
       tourBuildStatus.value = null;
       selectedTo.value = "working";
@@ -1368,11 +1405,14 @@ function createEditor() {
   });
 }
 let commentsCleanup: (() => void) | null = null;
+let highlightsCleanup: (() => void) | null = null;
 
 function disposeEditor() {
   if (!diffEditor) return;
   commentsCleanup?.();
   commentsCleanup = null;
+  highlightsCleanup?.();
+  highlightsCleanup = null;
   const model = diffEditor.getModel();
   diffEditor.dispose();
   model?.original.dispose();
@@ -1390,6 +1430,8 @@ watch(
     } else if (diffEditor) {
       commentsCleanup?.();
       commentsCleanup = null;
+      highlightsCleanup?.();
+      highlightsCleanup = null;
       const model = diffEditor.getModel();
       diffEditor.setModel(null);
       model?.original.dispose();
@@ -1454,6 +1496,8 @@ watch(
     const modifiedModel = monaco.editor.createModel(fd.newContent, language, modifiedUri);
 
     const prev = diffEditor.getModel();
+    highlightsCleanup?.();
+    highlightsCleanup = null;
     diffEditor.setModel({ original: originalModel, modified: modifiedModel });
     prev?.original.dispose();
     prev?.modified.dispose();
@@ -1477,11 +1521,29 @@ watch(
     });
     diffEditor.getModifiedEditor().updateOptions({ readOnly, dragAndDrop });
 
+    const fileHighlights = isCommitMsg ? [] : (highlightsByPath.value.get(fd.path) ?? []);
+    if (fileHighlights.length > 0) {
+      const editor = diffEditor.getModifiedEditor();
+      highlightsCleanup = showHighlights(monaco, editor, fileHighlights, (highlight) =>
+        commentOnHighlight(
+          highlight.line,
+          editor.getModel()?.getLineContent(highlight.line) ?? "",
+          highlight.comment,
+        ),
+      );
+    }
+    // Open at the file's first highlight, else its first change.
+    const revealLine = fileHighlights[0]?.line ?? null;
+
     let hasScrolledToFirstChange = false;
     const scrollToFirstChange = () => {
       if (hasScrolledToFirstChange || !diffEditor) return;
       const changes = diffEditor.getLineChanges();
-      if (changes && changes.length > 0) {
+      // Wait for the diff so its alignment doesn't shift the revealed line.
+      if (changes && revealLine !== null) {
+        hasScrolledToFirstChange = true;
+        revealHighlight(revealLine);
+      } else if (changes && changes.length > 0) {
         hasScrolledToFirstChange = true;
         const firstChange = changes[0];
         const targetLine = firstChange.modifiedStartLineNumber || 1;
@@ -1497,6 +1559,20 @@ watch(
   },
   { flush: "post" },
 );
+
+function revealHighlight(line: number) {
+  if (!diffEditor) return;
+  const editor = diffEditor.getModifiedEditor();
+  editor.revealLineInCenter(line);
+  editor.setPosition({ lineNumber: line, column: 1 });
+  // Change navigation continues from the highlight.
+  const changes = diffEditor.getLineChanges() ?? [];
+  let index = -1;
+  for (let i = 0; i < changes.length; i++) {
+    if ((changes[i].modifiedStartLineNumber || 1) <= line) index = i;
+  }
+  currentChangeIndex.value = index;
+}
 
 // --- Data loaders ---
 async function loadDiffs() {
@@ -1532,10 +1608,8 @@ async function loadDiffs() {
 let commitStatsRequestId: number | null = null;
 async function loadCommitStats() {
   const requestId = loadDiffsRequestId;
-  if (
-    commitStatsRequestId === requestId ||
-    !diffs.value.some((diff) => diff.statsLoaded === false)
-  ) return;
+  if (commitStatsRequestId === requestId || !diffs.value.some((diff) => diff.statsLoaded === false))
+    return;
   commitStatsRequestId = requestId;
   try {
     const response = await api.getGitDiffs(props.cwd, props.initialCommit);
@@ -1543,8 +1617,15 @@ async function loadCommitStats() {
     const byId = new Map(response.diffs.map((diff) => [diff.id, diff]));
     diffs.value = diffs.value.map((diff) => {
       const full = byId.get(diff.id);
-      return full ? { ...diff, filesCount: full.filesCount, additions: full.additions,
-        deletions: full.deletions, statsLoaded: full.statsLoaded } : diff;
+      return full
+        ? {
+            ...diff,
+            filesCount: full.filesCount,
+            additions: full.additions,
+            deletions: full.deletions,
+            statsLoaded: full.statsLoaded,
+          }
+        : diff;
     });
   } catch (err) {
     if (requestId === loadDiffsRequestId) error.value = `Failed to load commit stats: ${err}`;
@@ -1564,10 +1645,21 @@ async function loadFiles(diffId: string) {
     diffId === "working"
       ? Promise.resolve<GitCommitMessage[]>([])
       : api.getGitCommitMessages(cwd, diffId, toArg).catch(() => []);
+  // Highlights describe one commit, so they apply only to its own diff.
+  const hasHighlights =
+    toArg === "self" && !!diffs.value.find((diff) => diff.id === diffId)?.hasHighlights;
+  const highlightsPromise = hasHighlights
+    ? api.getGitHighlights(cwd, diffId).catch((err) => {
+        if (requestId === loadFilesRequestId) highlightsError.value = String(err);
+        return null;
+      })
+    : Promise.resolve(null);
 
   loadFileDiffRequestId++;
   selectedFile.value = null;
   fileDiff.value = null;
+  highlights.value = null;
+  highlightsError.value = null;
   try {
     loading.value = true;
     error.value = null;
@@ -1590,9 +1682,15 @@ async function loadFiles(diffId: string) {
       selectedFile.value = pickFrom(commitFileEntries);
     }
 
-    const realFiles = (await filesPromise) || [];
+    const [realFiles, loadedHighlights] = await Promise.all([filesPromise, highlightsPromise]);
     if (requestId !== loadFilesRequestId) return;
-    const allFiles = [...commitFileEntries, ...realFiles];
+    highlights.value = loadedHighlights;
+    const allFiles = [
+      ...commitFileEntries,
+      ...(loadedHighlights
+        ? orderByHighlights(realFiles || [], loadedHighlights.files)
+        : realFiles || []),
+    ];
     files.value = allFiles;
     if (!selectedFile.value) selectedFile.value = pickFrom(allFiles);
   } catch (err) {
@@ -1930,11 +2028,14 @@ const treeEntries = computed<DiffFileTreeEntry[]>(() => {
       status: f.status,
       additions: f.additions,
       deletions: f.deletions,
+      highlightCount: highlightsByPath.value.get(f.path)?.length,
     };
   });
 });
 
-const navOrder = computed(() => treeRealPathOrder(treeEntries.value));
+const navOrder = computed(() =>
+  highlights.value ? orderedRealPathOrder(treeEntries.value) : treeRealPathOrder(treeEntries.value),
+);
 watch(navOrder, (v) => (navOrderRef.value = v), { immediate: true });
 
 const tourContents = computed(() =>
@@ -2054,6 +2155,8 @@ function fileOptionLabel(file: GitFileInfo): string {
   if (file.additions > 0) label += ` (+${file.additions})`;
   if (file.deletions > 0) label += ` (-${file.deletions})`;
   if (file.isGenerated) label += " [generated]";
+  const count = highlightsByPath.value.get(file.path)?.length ?? 0;
+  if (count > 0) label += ` \u2605${count}`;
   return label;
 }
 

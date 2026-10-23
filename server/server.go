@@ -572,6 +572,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	api.Handle("GET /api/git/repos", compressionHandler(http.HandlerFunc(s.handleGitRepos)))
 	api.Handle("GET /api/git/diffs", compressionHandler(http.HandlerFunc(s.handleGitDiffs)))
 	api.Handle("GET /api/git/tour", compressionHandler(http.HandlerFunc(s.handleGitTour)))
+	api.Handle("GET /api/git/highlights", compressionHandler(http.HandlerFunc(s.handleGitHighlights)))
 	api.Handle("GET /api/git/tour/status", compressionHandler(http.HandlerFunc(s.handleCommitTourStatus)))
 	api.HandleFunc("GET /api/git/tour/media", s.handleGitTourMedia) // Already-compressed images and video
 	api.Handle("GET /api/git/graph", compressionHandler(http.HandlerFunc(s.handleGitGraph)))

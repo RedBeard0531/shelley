@@ -12,12 +12,19 @@
 import { ref } from "vue";
 import type * as Monaco from "monaco-editor";
 
+// How a commit highlight is quoted when a comment answers it.
+export function highlightQuote(highlight: string): string {
+  return `\u2605 ${highlight}`;
+}
+
 export interface CommentDialogInfo {
   line: number;
   side: "left" | "right";
   selectedText?: string;
   startLine?: number;
   endLine?: number;
+  /** A commit highlight's comment being answered, quoted with the line. */
+  highlight?: string;
 }
 
 /**
@@ -233,8 +240,9 @@ export function useMonacoComments(deps: MonacoCommentsDeps) {
           }
           return;
         }
-        const position = e.target.position;
-        const lineNumber = position?.lineNumber ?? -1;
+        // Mark only lines a click would comment on: view zones (callouts,
+        // inline deleted lines) report a nearby line but don't count.
+        const lineNumber = isCommentClickTarget(e) ? (e.target.position?.lineNumber ?? -1) : -1;
         if (lineNumber === lastHoveredLine) return;
         lastHoveredLine = lineNumber;
         if (lineNumber > 0) {
@@ -276,7 +284,9 @@ export function useMonacoComments(deps: MonacoCommentsDeps) {
     const line = showCommentDialog.value.line;
     const codeSnippet = showCommentDialog.value.selectedText?.split("\n")[0]?.trim() || "";
     const truncatedCode = truncateWithEllipsis(codeSnippet, 60);
-    const commentBlock = `> ${fileRef}:${line}: ${truncatedCode}\n${commentText.value}\n\n`;
+    const highlight = showCommentDialog.value.highlight;
+    const quote = highlight ? `\n> ${highlightQuote(highlight)}` : "";
+    const commentBlock = `> ${fileRef}:${line}: ${truncatedCode}${quote}\n${commentText.value}\n\n`;
     deps.onSubmit(commentBlock);
     showCommentDialog.value = null;
     commentText.value = "";
@@ -297,6 +307,19 @@ export function useMonacoComments(deps: MonacoCommentsDeps) {
     commentPrompt.value = null;
   }
 
+  // Open the dialog on a commit highlight's line, to answer the highlight.
+  function commentOnHighlight(line: number, lineText: string, highlight: string) {
+    commentPrompt.value = null;
+    pointDialogAt({
+      line,
+      side: "right",
+      selectedText: lineText,
+      startLine: line,
+      endLine: line,
+      highlight,
+    });
+  }
+
   function clearPrompt() {
     commentPrompt.value = null;
   }
@@ -315,6 +338,7 @@ export function useMonacoComments(deps: MonacoCommentsDeps) {
     attach,
     handleAddComment,
     openCommentFromPrompt,
+    commentOnHighlight,
     clearPrompt,
     reset,
   };

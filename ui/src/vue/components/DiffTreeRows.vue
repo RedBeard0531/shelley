@@ -28,16 +28,24 @@
       :ref="(el) => setFileRef(el, row.isSelected)"
       :class="`diff-tree-row${row.isSelected ? ' active' : ''}`"
       :style="{ paddingLeft: `calc(0.375rem + ${row.depth} * 0.85rem)` }"
-      :title="row.label"
+      :title="row.detail ? `${row.detail}/${row.label}` : row.label"
       role="treeitem"
       :aria-selected="row.isSelected"
       @click="emit('select', row.realPath)"
     >
       <span class="diff-tree-icon" v-html="FILE_ICON" />
-      <span class="diff-tree-label">{{ row.label }}</span>
+      <span :class="['diff-tree-label', { 'has-detail': row.detail }]">{{ row.label }}</span>
+      <span v-if="row.detail" class="diff-tree-detail">{{ row.detail }}</span>
       <span v-if="row.decoration" class="diff-tree-decoration" :title="row.decorationTitle">{{
         row.decoration
       }}</span>
+      <span
+        v-if="row.highlightCount"
+        class="diff-tree-highlight-count"
+        :title="highlightsLabel(row.highlightCount)"
+        :aria-label="highlightsLabel(row.highlightCount)"
+        >★{{ row.highlightCount }}</span
+      >
       <span
         v-if="(row.additions ?? 0) > 0 || (row.deletions ?? 0) > 0"
         class="diff-tree-changes"
@@ -86,6 +94,10 @@ const FILE_ICON =
 // one.
 function setFileRef(el: Element | ComponentPublicInstance | null, isSelected: boolean) {
   if (isSelected) emit("selected-row", (el as HTMLButtonElement) ?? null);
+}
+
+function highlightsLabel(count: number): string {
+  return `${count} highlight${count === 1 ? "" : "s"}`;
 }
 
 function changesLabel(additions?: number, deletions?: number): string {

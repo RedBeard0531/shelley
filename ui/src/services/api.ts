@@ -6,6 +6,7 @@ import {
   StreamResponse,
   ChatRequest,
   BtwReaderDescriptor,
+  CommitHighlights,
   GitDiffInfo,
   GitFileInfo,
   GitFileDiff,
@@ -830,6 +831,17 @@ class ApiService {
       throw await responseError(response, "Failed to get commit tour");
     }
     return response.json();
+  }
+
+  // Null when the commit has no highlights, or they no longer match it.
+  async getGitHighlights(cwd: string, hash: string): Promise<CommitHighlights | null> {
+    const params = new URLSearchParams({ cwd, hash });
+    const response = await fetch(`${this.baseUrl}/git/highlights?${params}`);
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw await responseError(response, "Failed to get commit highlights");
+    }
+    return (await response.json()).highlights;
   }
 
   async getGitGraph(

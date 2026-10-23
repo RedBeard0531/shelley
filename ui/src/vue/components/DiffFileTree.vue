@@ -1,8 +1,10 @@
 <!-- Vue port of components/DiffFileTree.tsx. File tree for the diff viewer
      sidebar. Preserves the diff-tree-* class contract, role="tree"/"treeitem",
      aria-label "Files"/"Filter files", and the status letters. Emits
-     "select" with the realPath (React onSelect prop). Also exports
-     COMMIT_MESSAGES_DIR and treeRealPathOrder (see ./diffFileTree.ts). -->
+     "select" with the realPath (React onSelect prop). With `ordered`, files
+     render flat in entry order (commit highlights rank them) below the
+     commit-messages folder. Also exports COMMIT_MESSAGES_DIR and
+     treeRealPathOrder (see ./diffFileTree.ts). -->
 <template>
   <div class="diff-tree">
     <div class="diff-tree-search">
@@ -33,7 +35,9 @@ import DiffTreeRows from "./DiffTreeRows.vue";
 import {
   buildTree,
   flatten,
+  isCommitMessageEntry,
   matchTreePaths,
+  normalizeSearch,
   statusLetter,
   subtreeHasMatch,
   type DiffFileTreeEntry,
@@ -44,6 +48,7 @@ import {
 const props = defineProps<{
   entries: DiffFileTreeEntry[];
   selectedRealPath: string | null;
+  ordered?: boolean;
 }>();
 const emit = defineEmits<{ (e: "select", realPath: string): void }>();
 
@@ -51,7 +56,10 @@ function onSelect(realPath: string) {
   emit("select", realPath);
 }
 
-const tree = computed<DirNode>(() => buildTree(props.entries));
+// Ordered lists only nest commit messages; other files render flat.
+const tree = computed<DirNode>(() =>
+  buildTree(props.ordered ? props.entries.filter(isCommitMessageEntry) : props.entries),
+);
 
 // Track all directory paths so we can default them open.
 const allDirPaths = computed<string[]>(() => {
@@ -145,26 +153,48 @@ const renderedRows = computed<RenderedRow[]>(() => {
         if (isOpen) walk(effective, depth + 1);
       } else {
         if (mp && !mp.has(child.path)) continue;
-        const isSelected = child.entry.realPath === props.selectedRealPath;
-        out.push({
-          kind: "file",
-          key: `f:${child.path}`,
-          depth,
-          isSelected,
-          label: child.name,
-          realPath: child.entry.realPath,
-          decoration: child.entry.decoration,
-          decorationTitle: child.entry.decorationTitle,
-          statusInfo: statusLetter(child.entry.status),
-          additions: child.entry.additions,
-          deletions: child.entry.deletions,
-        });
+        pushFile(out, child.entry, child.path, depth, child.name);
       }
     }
   };
   walk(tree.value, 0);
+  if (props.ordered) {
+    const q = normalizeSearch(query.value.trim());
+    for (const entry of props.entries) {
+      if (isCommitMessageEntry(entry)) continue;
+      const path = entry.treePath.join("/");
+      if (q && !normalizeSearch(path).includes(q)) continue;
+      const name = entry.treePath[entry.treePath.length - 1];
+      pushFile(out, entry, path, 0, name, entry.treePath.slice(0, -1).join("/"));
+    }
+  }
   return out;
 });
+
+function pushFile(
+  out: RenderedRow[],
+  entry: DiffFileTreeEntry,
+  key: string,
+  depth: number,
+  label: string,
+  detail?: string,
+) {
+  out.push({
+    kind: "file",
+    key: `f:${key}`,
+    depth,
+    isSelected: entry.realPath === props.selectedRealPath,
+    label,
+    detail,
+    realPath: entry.realPath,
+    decoration: entry.decoration,
+    decorationTitle: entry.decorationTitle,
+    statusInfo: statusLetter(entry.status),
+    additions: entry.additions,
+    deletions: entry.deletions,
+    highlightCount: entry.highlightCount,
+  });
+}
 
 // Keep the selected row in view when the parent moves the selection.
 const selectedRowEl = ref<HTMLButtonElement | null>(null);
