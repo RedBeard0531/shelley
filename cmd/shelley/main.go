@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -256,13 +257,19 @@ func runServe(global GlobalConfig, args []string) {
 		}
 		err = svr.StartWithListeners(listener, effectiveSocket)
 	} else if *systemdActivation {
-		listener, listenerErr := systemdListener()
+		listeners, listenerErr := systemdListeners()
 		if listenerErr != nil {
 			logger.Error("Failed to get systemd listener", "error", listenerErr)
 			os.Exit(1)
 		}
-		logger.Info("Using systemd socket activation")
-		err = svr.StartWithListeners(listener, effectiveSocket)
+		web, cli, listenerErr := splitActivatedListeners(listeners, effectiveSocket)
+		if listenerErr != nil {
+			logger.Error("Failed to get systemd listener", "error", listenerErr)
+			os.Exit(1)
+		}
+		logger.Info("Using systemd socket activation", "cli_socket", cli != nil)
+		svr.SocketListener = cli
+		err = svr.StartWithListeners(web, effectiveSocket)
 	} else {
 		listener, listenerErr := net.Listen("tcp", ":"+*port)
 		if listenerErr != nil {
@@ -746,9 +753,9 @@ func runModels(global GlobalConfig, args []string) {
 	tw.Flush()
 }
 
-// systemdListener returns a net.Listener from systemd socket activation.
-// Systemd passes file descriptors starting at fd 3, with LISTEN_FDS indicating the count.
-func systemdListener() (net.Listener, error) {
+// systemdListeners returns the listeners systemd passed by socket
+// activation: LISTEN_FDS of them, starting at fd 3.
+func systemdListeners() ([]net.Listener, error) {
 	// Check LISTEN_PID matches our PID (optional but recommended)
 	pidStr := os.Getenv("LISTEN_PID")
 	if pidStr != "" {
@@ -774,25 +781,46 @@ func systemdListener() (net.Listener, error) {
 		return nil, fmt.Errorf("LISTEN_FDS=%d; expected at least 1", nfds)
 	}
 
-	// Systemd passes file descriptors starting at fd 3
 	const listenFDsStart = 3
-	fd := listenFDsStart
-
-	// Create a file from the descriptor
-	f := os.NewFile(uintptr(fd), "systemd-socket")
-	if f == nil {
-		return nil, fmt.Errorf("failed to create file from fd %d", fd)
+	var listeners []net.Listener
+	for fd := listenFDsStart; fd < listenFDsStart+nfds; fd++ {
+		f := os.NewFile(uintptr(fd), "systemd-socket")
+		if f == nil {
+			return nil, fmt.Errorf("failed to create file from fd %d", fd)
+		}
+		listener, err := net.FileListener(f)
+		f.Close() // the listener has its own copy of the descriptor
+		if err != nil {
+			return nil, fmt.Errorf("failed to create listener from fd %d: %w", fd, err)
+		}
+		listeners = append(listeners, listener)
 	}
+	return listeners, nil
+}
 
-	// Create a listener from the file
-	listener, err := net.FileListener(f)
-	if err != nil {
-		f.Close()
-		return nil, fmt.Errorf("failed to create listener from fd %d: %w", fd, err)
+// splitActivatedListeners sorts socket-activated listeners into the web
+// listener and, if systemd also holds it, the CLI's Unix socket at
+// socketPath. Holding that socket lets systemd start shelley for `shelley
+// client` and queue its connection meanwhile, rather than the client finding
+// no socket until something else has started shelley.
+func splitActivatedListeners(listeners []net.Listener, socketPath string) (web, cli net.Listener, err error) {
+	if socketPath != "" {
+		if socketPath, err = filepath.Abs(socketPath); err != nil {
+			return nil, nil, err
+		}
 	}
-
-	// Close the original file; the listener now owns the descriptor
-	f.Close()
-
-	return listener, nil
+	for _, ln := range listeners {
+		switch addr := ln.Addr(); {
+		case socketPath != "" && addr.Network() == "unix" && addr.String() == socketPath:
+			cli = ln
+		case web == nil:
+			web = ln
+		default:
+			return nil, nil, fmt.Errorf("unexpected socket-activated listener %s %s (CLI socket: %q)", addr.Network(), addr, socketPath)
+		}
+	}
+	if web == nil {
+		return nil, nil, fmt.Errorf("no web listener among socket-activated listeners")
+	}
+	return web, cli, nil
 }

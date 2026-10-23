@@ -415,6 +415,12 @@ type Server struct {
 	// `serve -systemd-activation`.
 	SocketActivated bool
 
+	// SocketListener, if set, is the CLI's Unix socket, bound by the
+	// launcher (systemd socket activation). StartWithListeners serves it in
+	// place of binding one, and leaves its file alone on exit: the launcher
+	// still owns it, and queues clients there until the next start.
+	SocketListener net.Listener
+
 	// hooksDir is the directory searched for user hook scripts
 	// (end-of-turn, new-conversation). Defaults to
 	// $HOME/.config/shelley/hooks; tests override it to a per-test
@@ -1873,7 +1879,10 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 
 	// Listen on the socket before serving: conversations export it as SHELLEY_SOCKET.
 	var unixListener net.Listener
-	if socketPath != "" {
+	if s.SocketListener != nil {
+		unixListener = s.SocketListener
+		s.socketPath = unixListener.Addr().String()
+	} else if socketPath != "" {
 		if unixListener, err = s.listenSocket(socketPath); err != nil {
 			s.logger.Error("Failed to create Unix socket listener", "error", err, "path", socketPath)
 			tcpListener.Close()
@@ -1996,7 +2005,9 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 		if err := socketServer.Shutdown(ctx); err != nil {
 			s.logger.Error("Unix socket server forced to shutdown", "error", err)
 		}
-		os.Remove(s.socketPath)
+		if s.SocketListener == nil {
+			os.Remove(s.socketPath)
+		}
 	}
 
 	s.logger.Info("Server exited")

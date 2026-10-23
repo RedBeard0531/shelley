@@ -558,7 +558,7 @@ func TestSystemdListenerErrors(t *testing.T) {
 	t.Run("no LISTEN_FDS", func(t *testing.T) {
 		os.Unsetenv("LISTEN_FDS")
 		os.Unsetenv("LISTEN_PID")
-		_, err := systemdListener()
+		_, err := systemdListeners()
 		if err == nil {
 			t.Fatal("Expected error when LISTEN_FDS not set")
 		}
@@ -570,7 +570,7 @@ func TestSystemdListenerErrors(t *testing.T) {
 	t.Run("wrong LISTEN_PID", func(t *testing.T) {
 		os.Setenv("LISTEN_FDS", "1")
 		os.Setenv("LISTEN_PID", "99999999") // Unlikely to match our PID
-		_, err := systemdListener()
+		_, err := systemdListeners()
 		if err == nil {
 			t.Fatal("Expected error when LISTEN_PID doesn't match")
 		}
@@ -582,7 +582,7 @@ func TestSystemdListenerErrors(t *testing.T) {
 	t.Run("invalid LISTEN_FDS", func(t *testing.T) {
 		os.Setenv("LISTEN_FDS", "notanumber")
 		os.Unsetenv("LISTEN_PID")
-		_, err := systemdListener()
+		_, err := systemdListeners()
 		if err == nil {
 			t.Fatal("Expected error when LISTEN_FDS is invalid")
 		}
@@ -594,7 +594,7 @@ func TestSystemdListenerErrors(t *testing.T) {
 	t.Run("zero LISTEN_FDS", func(t *testing.T) {
 		os.Setenv("LISTEN_FDS", "0")
 		os.Unsetenv("LISTEN_PID")
-		_, err := systemdListener()
+		_, err := systemdListeners()
 		if err == nil {
 			t.Fatal("Expected error when LISTEN_FDS is 0")
 		}
@@ -638,7 +638,7 @@ func TestSystemdListenerIntegration(t *testing.T) {
 
 	// Spawn shelley with the file descriptor as fd 3
 	// Note: We don't set LISTEN_PID here because we don't know the child PID yet.
-	// The systemdListener function handles missing LISTEN_PID gracefully.
+	// The systemdListeners function handles missing LISTEN_PID gracefully.
 	cmd = exec.Command(binary, "-db", dbPath, "serve", "-systemd-activation")
 	// Build environment without LISTEN_PID (will be inherited from parent otherwise)
 	// and add LISTEN_FDS=1
@@ -686,6 +686,79 @@ func TestSystemdListenerIntegration(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Unexpected status code %d, body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestSystemdActivatedCLISocket passes shelley the CLI's Unix socket as well
+// as the web one, as exeuntu's shelley.socket does, so that `shelley client`
+// can reach a shelley that is not running yet: the kernel queues the
+// connection until shelley starts and accepts it. A client started alongside
+// the server must get through without retrying, and the socket must outlive
+// the server, since it belongs to systemd.
+func TestSystemdActivatedCLISocket(t *testing.T) {
+	tempDir := t.TempDir()
+	binary := filepath.Join(tempDir, "shelley")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	listenerFile := func(network, address string) *os.File {
+		t.Helper()
+		ln, err := net.Listen(network, address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u, ok := ln.(*net.UnixListener); ok {
+			u.SetUnlinkOnClose(false) // the socket is systemd's, not ours
+		}
+		f, err := ln.(interface{ File() (*os.File, error) }).File()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln.Close()
+		t.Cleanup(func() { f.Close() })
+		return f
+	}
+	web := listenerFile("tcp", "127.0.0.1:0")
+	socketPath := filepath.Join(tempDir, "shelley.sock")
+	cli := listenerFile("unix", socketPath)
+
+	env := []string{"LISTEN_FDS=2"}
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "LISTEN_") && !strings.HasPrefix(e, "SHELLEY_SOCKET=") {
+			env = append(env, e)
+		}
+	}
+	server := exec.Command(binary, "-db", filepath.Join(tempDir, "test.db"), "serve", "-systemd-activation", "-socket", socketPath)
+	server.Env = env
+	server.ExtraFiles = []*os.File{web, cli} // fds 3 and 4
+	var serverOut bytes.Buffer
+	server.Stdout = &serverOut
+	server.Stderr = &serverOut
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { server.Process.Kill(); server.Wait() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client := exec.CommandContext(ctx, binary, "client", "list")
+	client.Env = append(env, "SHELLEY_SOCKET="+socketPath)
+	if out, err := client.CombinedOutput(); err != nil {
+		t.Fatalf("shelley client list: %v\n%s\nserver output:\n%s", err, out, serverOut.String())
+	}
+
+	if err := server.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Wait(); err != nil {
+		t.Fatalf("server exit: %v\n%s", err, serverOut.String())
+	}
+	if _, err := os.Stat(socketPath); err != nil {
+		t.Errorf("activated socket after shutdown: %v", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(tempDir, "shelley-*.sock")); len(matches) > 0 {
+		t.Errorf("server made its own socket %v instead of using the activated one", matches)
 	}
 }
 
