@@ -1547,6 +1547,17 @@ body {
   color: white;
 }
 
+/* The row a right-click menu is acting on, as macOS rings it. */
+.conversation-item.context-menu-target {
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.conversation-item.active.context-menu-target {
+  box-shadow:
+    inset 0 0 0 2px var(--primary),
+    inset 0 0 0 4px white;
+}
+
 /* Pinned draft entry that represents the not-yet-created new conversation.
    Styled like a regular conversation item; the slug-like title is italicized
    to signal that it's a placeholder (no real slug yet). */
@@ -14093,7 +14104,8 @@ kbd {
   height: 1rem;
 }
 
-.drawer-actions-menu.p-menu {
+.drawer-actions-menu.p-menu,
+.drawer-actions-menu.p-contextmenu {
   min-width: 10.5rem;
   padding: 0.25rem 0;
   background: var(--bg-secondary);
@@ -14104,24 +14116,29 @@ kbd {
     0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
 
-.drawer-actions-menu .p-menu-list {
+.drawer-actions-menu .p-menu-list,
+.drawer-actions-menu .p-contextmenu-root-list {
   gap: 0;
   padding: 0;
 }
 
-.drawer-actions-menu .p-menu-item-link {
+.drawer-actions-menu .p-menu-item-link,
+.drawer-actions-menu .p-contextmenu-item-link {
   padding: 0.625rem 1rem;
   color: var(--text-primary);
   font-size: var(--font-size-14);
 }
 
-.drawer-actions-menu .p-menu-item-icon {
+.drawer-actions-menu .p-menu-item-icon,
+.drawer-actions-menu .p-contextmenu-item-icon {
   margin-right: 0.75rem;
   color: var(--text-secondary);
 }
 
 .drawer-actions-menu .p-menu-item-content:hover,
-.drawer-actions-menu .p-menu-item.p-focus > .p-menu-item-content {
+.drawer-actions-menu .p-menu-item.p-focus > .p-menu-item-content,
+.drawer-actions-menu .p-contextmenu-item-content:hover,
+.drawer-actions-menu .p-contextmenu-item.p-focus > .p-contextmenu-item-content {
   background: var(--bg-hover);
 }
 

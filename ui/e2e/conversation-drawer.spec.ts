@@ -8,6 +8,76 @@ test.use({
   hasTouch: false,
 });
 
+test("right-clicking a conversation row opens its actions at the pointer", async ({
+  page,
+  request,
+}) => {
+  const first = await createConversationViaAPIWithDetails(request, "context menu first");
+  const second = await createConversationViaAPIWithDetails(request, "context menu second");
+  await page.goto("/new");
+  const firstRow = page.locator(`[data-conversation-id="${first.conversationId}"]`);
+  const secondRow = page.locator(`[data-conversation-id="${second.conversationId}"]`);
+  const menu = page.getByTestId("conversation-context-menu");
+
+  // The menu opens where the pointer is, in place of the browser's own.
+  const box = (await secondRow.locator(".conversation-preview").boundingBox())!;
+  await page.mouse.click(box.x + 20, box.y + 5, { button: "right" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem")).toHaveText(["Archive", "Rename", "Edit tags"]);
+  const menuBox = (await menu.boundingBox())!;
+  expect(Math.abs(menuBox.x - (box.x + 20))).toBeLessThan(4);
+  expect(Math.abs(menuBox.y - (box.y + 5))).toBeLessThan(4);
+  await expect(secondRow).toHaveClass(/context-menu-target/);
+  await expect(page).not.toHaveURL(new RegExp(`/c/${second.slug}$`));
+
+  // Right-clicking another row moves the one menu there.
+  await firstRow.click({ button: "right" });
+  await expect(menu).toHaveCount(1);
+  await expect(firstRow).toHaveClass(/context-menu-target/);
+  await expect(secondRow).not.toHaveClass(/context-menu-target/);
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(firstRow).not.toHaveClass(/context-menu-target/);
+
+  // A right-click anywhere else closes it.
+  await firstRow.click({ button: "right" });
+  await expect(menu).toBeVisible();
+  await page.getByTestId("message-input").click({ button: "right" });
+  await expect(menu).toHaveCount(0);
+  await expect(firstRow).not.toHaveClass(/context-menu-target/);
+
+  // Opening it closes any row's "…" menu, so only one action menu shows.
+  await secondRow.getByRole("button", { name: "Actions" }).click();
+  const dotsMenu = page.getByTestId("conversation-actions-menu");
+  await expect(dotsMenu).toBeVisible();
+  await firstRow.click({ button: "right" });
+  await expect(menu).toBeVisible();
+  await expect(dotsMenu).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  // Archive acts on the row that was right-clicked.
+  await firstRow.click({ button: "right" });
+  await menu.getByRole("menuitem", { name: "Archive" }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(firstRow).toHaveCount(0);
+  await expect(secondRow).toBeVisible();
+  const archived = await (await request.get("/api/conversations/archived")).json();
+  expect(
+    archived.some((c: { conversation_id: string }) => c.conversation_id === first.conversationId),
+  ).toBe(true);
+
+  // Rename opens the inline editor, whose text field keeps the native menu.
+  await secondRow.click({ button: "right" });
+  await menu.getByRole("menuitem", { name: "Rename" }).click();
+  const input = secondRow.locator(".drawer-rename-input");
+  await expect(input).toBeFocused();
+  await input.click({ button: "right" });
+  await expect(menu).toHaveCount(0);
+  await input.press("Escape");
+});
+
 test("double-clicking a conversation name renames it and Escape cancels", async ({
   page,
   request,

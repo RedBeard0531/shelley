@@ -565,6 +565,14 @@
         <span>{{ showArchived ? t("backToConversations") : t("viewArchived") }}</span>
       </Button>
     </div>
+
+    <ContextMenu
+      ref="contextMenuRef"
+      :model="contextMenuItems"
+      :aria-label="t('actions')"
+      :pt="{ root: { class: 'drawer-actions-menu', 'data-testid': 'conversation-context-menu' } }"
+      @hide="onContextMenuHide"
+    />
   </div>
 </template>
 
@@ -604,6 +612,8 @@ import { handleModifiedNavClick } from "../utils/openInNewTab";
 import ConversationRow from "./ConversationDrawerRow.vue";
 import ConversationQueryEditor from "./ConversationQueryEditor.vue";
 import Button from "primevue/button";
+import ContextMenu from "primevue/contextmenu";
+import type { MenuItem } from "primevue/menuitem";
 import DatePicker from "primevue/datepicker";
 import Popover from "primevue/popover";
 import { DrawerCtxKey, type GroupBy, parseTags } from "./conversationDrawerShared";
@@ -1217,6 +1227,48 @@ async function handleRemoveTag(conversation: Conversation, tag: string) {
     conversation.conversation_id,
     current.filter((tg) => tg !== tag),
   );
+}
+
+// --- Row actions ---
+function conversationActions(conversation: Conversation): MenuItem[] {
+  const id = conversation.conversation_id;
+  return [
+    {
+      label: t("archive"),
+      icon: "pi pi-inbox",
+      command: ({ originalEvent }) => void handleArchive(originalEvent as MouseEvent, id),
+    },
+    {
+      label: t("rename"),
+      icon: "pi pi-pencil",
+      command: ({ originalEvent }) => handleStartRename(originalEvent as MouseEvent, conversation),
+    },
+    {
+      label: t("editTags"),
+      icon: "pi pi-tag",
+      command: ({ originalEvent }) => handleOpenTagEditor(originalEvent as MouseEvent, id),
+    },
+  ];
+}
+// One right-click menu serves every row; opening it on another row moves it.
+const contextMenuRef = ref<InstanceType<typeof ContextMenu> | null>(null);
+const contextMenuId = ref<string | null>(null);
+// Kept after hiding so the items don't vanish while the menu fades out.
+const contextMenuItems = shallowRef<MenuItem[]>([]);
+function openContextMenu(e: MouseEvent, conversation: Conversation) {
+  // PrimeVue closes it only on a click. A right-click elsewhere should too;
+  // one on a row never gets here, as show() stops its propagation.
+  document.addEventListener("contextmenu", hideContextMenu);
+  contextMenuItems.value = conversationActions(conversation);
+  contextMenuId.value = conversation.conversation_id;
+  contextMenuRef.value?.show(e);
+}
+function hideContextMenu() {
+  if (contextMenuId.value !== null) contextMenuRef.value?.hide();
+}
+function onContextMenuHide() {
+  contextMenuId.value = null;
+  document.removeEventListener("contextmenu", hideContextMenu);
 }
 
 // --- Rename ---
@@ -1880,6 +1932,7 @@ onUnmounted(() => {
   document.removeEventListener("mousedown", onTagMenuOutside);
   document.removeEventListener("mousedown", onPendingDeleteOutside);
   document.removeEventListener("mousedown", onTagEditorOutside);
+  document.removeEventListener("contextmenu", hideContextMenu);
 });
 
 // Share all row-relevant state + handlers with ConversationDrawerRow via inject.
@@ -1923,13 +1976,14 @@ provide(DrawerCtxKey, {
   selectConversation: (c: Conversation) => emit("select-conversation", c),
   toggleSubagents,
   handleStartRename,
+  conversationActions,
+  openContextMenu,
+  contextMenuId,
   handleRename,
   handleRenameKeyDown,
-  handleOpenTagEditor,
   handleAddTag,
   matchTagOffers,
   handleRemoveTag,
-  handleArchive,
   handleUnarchive,
   handleCopyGitHash,
   handleDeleteClick,

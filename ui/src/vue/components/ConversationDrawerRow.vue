@@ -6,11 +6,12 @@
      the DrawerCtx inject. Mirrors renderConversationItem in the React source. -->
 <template>
   <div
-    :class="`conversation-item ${isActive ? 'active' : ''}${isNew ? ' conversation-item-enter' : ''}`"
+    :class="`conversation-item ${isActive ? 'active' : ''}${isNew ? ' conversation-item-enter' : ''}${ctx.contextMenuId.value === conversation.conversation_id ? ' context-menu-target' : ''}`"
     :data-conversation-id="conversation.conversation_id"
     style="cursor: pointer"
     @click="onRowClick"
     @auxclick="ctx.handleAuxClick($event, conversation)"
+    @contextmenu="onRowContextMenu"
   >
     <div class="drawer-conversation-item-flex-container">
       <div class="drawer-conversation-header-row">
@@ -58,10 +59,7 @@
           title="Interrupted — open to continue"
           aria-label="Conversation interrupted"
         />
-        <div
-          v-if="!isDraft && !itemArchived && !isPlaceholder"
-          class="conversation-actions drawer-actions-row drawer-actions-top"
-        >
+        <div v-if="hasActions" class="conversation-actions drawer-actions-row drawer-actions-top">
           <Button
             class="btn-icon-sm drawer-actions-trigger"
             text
@@ -440,7 +438,6 @@ import {
 } from "vue";
 import Button from "primevue/button";
 import Menu from "primevue/menu";
-import type { MenuItem } from "primevue/menuitem";
 import OverflowDotsIcon from "./OverflowDotsIcon.vue";
 import WorkspaceActionIcon from "./WorkspaceActionIcon.vue";
 import type { Conversation, ConversationWithState } from "../../types";
@@ -468,26 +465,7 @@ const renameInput = ref<HTMLInputElement | null>(null);
 const tagInput = ref<HTMLInputElement | null>(null);
 const actionsMenuRef = ref<InstanceType<typeof Menu> | null>(null);
 const actionsMenuOpen = ref(false);
-const actionsMenuItems = computed<MenuItem[]>(() => [
-  {
-    label: ctx.t("archive"),
-    icon: "pi pi-inbox",
-    command: ({ originalEvent }) =>
-      void ctx.handleArchive(originalEvent as MouseEvent, props.conversation.conversation_id),
-  },
-  {
-    label: ctx.t("rename"),
-    icon: "pi pi-pencil",
-    command: ({ originalEvent }) =>
-      ctx.handleStartRename(originalEvent as MouseEvent, props.conversation),
-  },
-  {
-    label: ctx.t("editTags"),
-    icon: "pi pi-tag",
-    command: ({ originalEvent }) =>
-      ctx.handleOpenTagEditor(originalEvent as MouseEvent, props.conversation.conversation_id),
-  },
-]);
+const actionsMenuItems = computed(() => ctx.conversationActions(props.conversation));
 
 const convState = computed(() => props.conversation as ConversationWithState);
 const participantSummaries = computed(() => {
@@ -596,6 +574,7 @@ const isExpanded = computed(() =>
   ctx.expandedSubagents.value.has(props.conversation.conversation_id),
 );
 const itemArchived = computed(() => props.conversation.archived);
+const hasActions = computed(() => !isDraft.value && !itemArchived.value && !isPlaceholder.value);
 const isNew = computed(
   () =>
     !isDraft.value &&
@@ -626,6 +605,18 @@ function onSubClick(e: MouseEvent, sub: Conversation) {
   if (ctx.handleModifiedClick(e, sub)) return;
   ctx.selectConversation(sub);
 }
+
+function onRowContextMenu(e: MouseEvent) {
+  if (!hasActions.value) return;
+  // Text fields (rename, tag editor) keep the browser's menu for paste etc.
+  if ((e.target as Element).closest("input")) return;
+  ctx.openContextMenu(e, props.conversation);
+}
+
+// Only one action menu at a time: a right-click menu closes this row's "…".
+watch(ctx.contextMenuId, (id) => {
+  if (id !== null) actionsMenuRef.value?.hide();
+});
 
 function toggleActionsMenu(e: MouseEvent) {
   actionsMenuRef.value?.toggle(e);

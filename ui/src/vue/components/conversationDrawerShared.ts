@@ -2,6 +2,7 @@
 // child ConversationDrawerRow.vue. Mirrors the snippet/tags helpers from the
 // React components/ConversationDrawer.tsx.
 import type { ComputedRef, InjectionKey, Ref } from "vue";
+import type { MenuItem } from "primevue/menuitem";
 import type { Conversation, ConversationWithState } from "../../types";
 import type { TranslationKeys } from "../../i18n/types";
 import type { OfferedTag } from "../../utils/tagFilter";
@@ -94,14 +95,17 @@ export interface DrawerCtx {
   selectConversation: (c: Conversation) => void;
   toggleSubagents: (e: MouseEvent, conversationId: string) => void;
   handleStartRename: (e: MouseEvent, conversation: Conversation) => void;
+  // A row's actions, shared by its "…" menu and the drawer's right-click menu.
+  conversationActions: (conversation: Conversation) => MenuItem[];
+  openContextMenu: (e: MouseEvent, conversation: Conversation) => void;
+  // The row the right-click menu is open on, if any.
+  contextMenuId: Ref<string | null>;
   handleRename: (conversationId: string) => void;
   handleRenameKeyDown: (e: KeyboardEvent, conversationId: string) => void;
-  handleOpenTagEditor: (e: MouseEvent, conversationId: string) => void;
   handleAddTag: (conversation: Conversation, tag?: string) => Promise<void>;
   // Tag-editor dropdown: existing tags matching `typed` anywhere, best-first.
   matchTagOffers: (conversation: Conversation, typed: string) => OfferedTag[];
   handleRemoveTag: (conversation: Conversation, tag: string) => void;
-  handleArchive: (e: MouseEvent, conversationId: string) => void;
   handleUnarchive: (e: MouseEvent, conversationId: string) => void;
   handleCopyGitHash: (e: MouseEvent, hash: string, convId: string) => void;
   handleDeleteClick: (e: MouseEvent, conversationId: string) => void;
