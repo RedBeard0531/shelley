@@ -31,6 +31,7 @@ type upgradeFixture struct {
 	link      string
 	sock      string
 	base      string
+	portFile  string
 	client    *http.Client
 	cmd       *exec.Cmd
 	exited    chan struct{}
@@ -70,14 +71,9 @@ func startUpgradable(t *testing.T, release []byte, prelude string) *upgradeFixtu
 		t.Fatal(err)
 	}
 
-	// A fixed port: the restarted process must be able to bind it again.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.base = "http://" + ln.Addr().String()
-	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	// Let Shelley allocate its port, including after exec: reserving and
+	// closing one here races with other processes before Shelley binds it.
+	f.portFile = filepath.Join(f.dir, "port")
 	// Unix socket paths are limited to about 100 bytes; t.TempDir's can be longer.
 	sockDir, err := os.MkdirTemp("", "shelley-sock")
 	if err != nil {
@@ -105,7 +101,7 @@ func startUpgradable(t *testing.T, release []byte, prelude string) *upgradeFixtu
 	defer logFile.Close()
 	// sh execs Shelley, so the PID is Shelley's.
 	f.cmd = exec.Command("sh", "-c", prelude+`exec "$0" "$@"`, f.link, "--predictable-only",
-		"--db", filepath.Join(f.dir, "shelley.db"), "serve", "--port", fmt.Sprint(port), "--socket", f.sock)
+		"--db", filepath.Join(f.dir, "shelley.db"), "serve", "--port", "0", "--port-file", f.portFile, "--socket", f.sock)
 	f.cmd.Env = env
 	f.cmd.Stdout = logFile
 	f.cmd.Stderr = logFile
@@ -153,12 +149,22 @@ func (f *upgradeFixture) waitForTag(want string) {
 		var got struct {
 			Tag string `json:"tag"`
 		}
-		if resp, err := f.client.Get(f.base + "/version"); err == nil {
-			json.NewDecoder(resp.Body).Decode(&got)
-			resp.Body.Close()
+		b, err := os.ReadFile(f.portFile)
+		if err != nil && !os.IsNotExist(err) {
+			f.t.Fatal(err)
 		}
-		if got.Tag == want {
-			return
+		// WriteFile truncates before writing. Only use a complete port,
+		// and reread it each time because exec can choose a different one.
+		if port, complete := strings.CutSuffix(string(b), "\n"); complete {
+			base := "http://127.0.0.1:" + port
+			if resp, err := f.client.Get(base + "/version"); err == nil {
+				json.NewDecoder(resp.Body).Decode(&got)
+				resp.Body.Close()
+			}
+			if got.Tag == want {
+				f.base = base
+				return
+			}
 		}
 		if time.Now().After(deadline) {
 			f.t.Fatalf("timed out waiting for %s (last saw %q)\n%s", want, got.Tag, f.output())
@@ -181,7 +187,7 @@ func (f *upgradeFixture) upgrade() {
 
 // TestUpgradeRestartsInPlace upgrades a running Shelley that has no service
 // manager (as on a Mac, or in a terminal) and checks that it comes back on its
-// own, as the same process, running the new binary and serving its TCP port
+// own, as the same process, running the new binary and serving over TCP
 // and Unix socket again. The upgrade must follow the Homebrew-style symlink
 // (on Linux, /proc/self/exe already resolves it; macOS keeps the symlink). A
 // background job spans the upgrade and must not linger as a zombie once it
