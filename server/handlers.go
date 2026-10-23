@@ -895,6 +895,9 @@ func (s *Server) registerConversationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/conversation/{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
 		s.handleGetSubagents(w, r, r.PathValue("id"))
 	})
+	mux.HandleFunc("GET /api/conversation/{id}/status-bar", func(w http.ResponseWriter, r *http.Request) {
+		s.handleConversationStatusBar(w, r, r.PathValue("id"))
+	})
 	mux.HandleFunc("GET /api/conversation/{id}/background-jobs", func(w http.ResponseWriter, r *http.Request) {
 		s.handleListBackgroundJobs(w, r, r.PathValue("id"))
 	})

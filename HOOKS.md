@@ -6,7 +6,7 @@ in `$HOME/.config/shelley/hooks/<name>`.
 If a hook fails (non-zero exit, invalid output, etc.) the operation it
 belongs to is aborted. The `end-of-turn` hook is the exception: by the
 time it fires there is no operation left to abort, so failures are just
-logged.
+logged. A failed `status-bar` hook shows its error in its row.
 
 ## Available Hooks
 
@@ -16,6 +16,7 @@ logged.
 | `new-conversation` | JSON | JSON (mutable fields) |
 | `chat-message` | JSON | JSON (`message` field) |
 | `end-of-turn` | JSON | ignored |
+| `status-bar` | JSON | JSON (`body`, `bgcolor`, `color`) |
 
 ## Example payloads
 
@@ -123,3 +124,42 @@ Stdout (empty = no-op):
 ```
 
 Stdout is ignored.
+
+### `status-bar`
+
+Adds a row above the conversation's status bar (above the composer on
+phones), e.g. with the git branch. It runs in the conversation's
+directory, for each browser tab showing the conversation:
+
+- when the conversation opens;
+- after each new message: yours, the agent's, each tool result;
+- when you come back to the tab or its window.
+
+It doesn't run for a tab in the background, a draft, an archived
+conversation, or a conversation no tab shows. One run at a time per
+tab: triggers during a run make one more run after it, and switching
+conversations cancels the run. The row keeps the last output until the
+next run finishes. A conversation whose directory is gone shows nothing.
+
+It often runs alongside the agent's tools, so Shelley sets
+`GIT_OPTIONAL_LOCKS=0`; a `git status` in the hook then can't make the
+agent's `git add` fail on `index.lock`. Times out after 10s.
+
+```json
+{
+  "conversation_id": "cMT7MTV",
+  "slug": "fix-login",
+  "cwd": "/home/exedev/myapp",
+  "model": "predictable"
+}
+```
+
+Stdout is one JSON object; every field is optional, and empty stdout
+shows nothing. `body` is one line of plain text, with URLs linkified;
+`bgcolor` and `color` are CSS colors. A failure (non-zero exit, invalid
+JSON, unknown fields, over 4 KiB, a background process left holding
+its output) shows the error instead.
+
+```json
+{ "body": "main", "bgcolor": "#204a87", "color": "white" }
+```

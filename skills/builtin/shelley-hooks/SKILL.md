@@ -3,7 +3,7 @@ name: shelley-hooks
 description: Use when the user wants to customize Shelley by injecting behavior at lifecycle events. It documents Shelley's hooks.
 ---
 
-Executable files at `~/.config/shelley/hooks/<name>`. Missing or non-executable files are ignored. 30s timeout. Any hook failure (non-zero exit, invalid output, etc.) aborts the operation it belongs to — except `end-of-turn`, where the operation is already finished, so failures are just logged.
+Executable files at `~/.config/shelley/hooks/<name>`. Missing or non-executable files are ignored. 30s timeout. Any hook failure (non-zero exit, invalid output, etc.) aborts the operation it belongs to — except `end-of-turn`, where the operation is already finished, so failures are just logged, and `status-bar`, which shows its error in its row.
 
 Auth-bearing headers (`Cookie`, `Set-Cookie`, `Authorization`, `Proxy-Authorization`) are stripped from the `headers` fields before hooks see them.
 
@@ -82,6 +82,50 @@ stdin JSON:
 ```
 
 Typical uses: play a sound, post a desktop notification, ping a local script.
+
+## `status-bar`
+
+Adds a row above the conversation's status bar (above the composer on phones),
+e.g. with the git branch. Runs in the conversation's directory, for each browser
+tab showing the conversation: when it opens, after each new message (each tool
+result too), and when you come back to the tab or its window. Never for a
+background tab, a draft, an archived conversation, one no tab shows, or if the
+directory is gone. One run at a time per tab: triggers during a run make one
+more run after it, and switching conversations cancels the run. The row keeps
+the last output until the next run finishes. 10s timeout. It often runs
+alongside the agent's tools; Shelley sets `GIT_OPTIONAL_LOCKS=0` so a
+`git status` in it can't make the agent's git commands fail on `index.lock`.
+
+stdin JSON:
+```json
+{
+  "conversation_id": "cXXXXXX",
+  "slug": "my-slug",
+  "cwd": "/home/user/project",
+  "model": "claude-sonnet-4.5"
+}
+```
+
+stdout: one JSON object, all fields optional. Empty stdout shows nothing.
+```json
+{ "body": "main", "bgcolor": "#204a87", "color": "white" }
+```
+
+`body` is one line of plain text, URLs linkified. `bgcolor` and `color` are
+CSS colors. Failures (non-zero exit, invalid JSON, unknown fields, over 4 KiB,
+a background process left holding its output) show as an error in the row.
+
+Example: show the branch, red on `main`:
+```sh
+#!/bin/sh
+branch=$(git branch --show-current 2>/dev/null)
+[ -n "$branch" ] || exit 0
+if [ "$branch" = main ]; then
+  printf '{"body":"%s","bgcolor":"firebrick","color":"white"}\n' "$branch"
+else
+  printf '{"body":"%s"}\n' "$branch"
+fi
+```
 
 ## `slash/<command>`
 

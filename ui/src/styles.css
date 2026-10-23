@@ -4858,6 +4858,39 @@ select:disabled {
   text-overflow: ellipsis;
 }
 
+/* The status-bar hook's row, above the status bar. Its colors are inline
+   styles; without them it looks like the status bar. */
+.status-hook-row {
+  flex: 0 0 auto;
+  background: var(--bg-base);
+  border-top: 1px solid var(--border);
+  padding: 0.25rem 1rem;
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  font-family: var(--font-mono);
+  font-size: var(--font-size-12);
+  line-height: 1.4;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An error wraps, since a title tooltip never shows on touch, up to three
+   lines and then scrolls, or a long stderr would push the composer off the
+   screen. */
+.status-hook-row.status-hook-row-error {
+  max-height: calc(4.2em + 0.5rem);
+  overflow-y: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.status-hook-row .text-link {
+  color: inherit;
+  text-decoration-color: currentColor;
+}
+
 .status-message.status-warning {
   color: var(--blue-text);
   font-weight: 500;
@@ -4870,7 +4903,8 @@ select:disabled {
   font-weight: 500;
 }
 
-.status-message.status-error {
+.status-message.status-error,
+.status-hook-row.status-hook-row-error {
   color: var(--error-text);
   font-weight: 500;
 }

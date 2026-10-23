@@ -478,7 +478,7 @@ func TestLocalHeadlessShellVersion(t *testing.T) {
 			if err := recordHeadlessShellVersion(bin, release); err != nil {
 				t.Fatal(err)
 			}
-			writeFakeHeadlessShell(t, bin, "# unpatched\necho '"+version+"'")
+			writeShellScript(t, bin, "# unpatched\necho '"+version+"'")
 		}, version},
 		{"garbage", func(t *testing.T, bin string) {
 			if err := os.WriteFile(filepath.Join(filepath.Dir(bin), headlessShellVersionFile), []byte(release+"\n"), 0o644); err != nil {
@@ -489,14 +489,14 @@ func TestLocalHeadlessShellVersion(t *testing.T) {
 			if err := recordHeadlessShellVersion(bin, release); err != nil {
 				t.Fatal(err)
 			}
-			writeFakeHeadlessShell(t, bin, "exit 1")
+			writeShellScript(t, bin, "exit 1")
 		}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			bin := filepath.Join(t.TempDir(), "headless-shell")
-			writeFakeHeadlessShell(t, bin, "echo '"+version+"'")
+			writeShellScript(t, bin, "echo '"+version+"'")
 			tt.record(t, bin)
 			got := getLocalHeadlessShellVersion(ctx, bin)
 			if got != tt.want {
@@ -531,8 +531,8 @@ func TestIsHeadlessShellRelease(t *testing.T) {
 	}
 }
 
-// writeFakeHeadlessShell writes a shell script with body to bin.
-func writeFakeHeadlessShell(t *testing.T, bin, body string) {
+// writeShellScript writes an executable shell script with body to bin.
+func writeShellScript(t *testing.T, bin, body string) {
 	t.Helper()
 	// A process forked while bin is open for writing keeps it open until it
 	// execs, and running bin meanwhile fails with ETXTBSY

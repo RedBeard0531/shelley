@@ -359,6 +359,7 @@ const (
 	hookNewConversation = "new-conversation"
 	hookEndOfTurn       = "end-of-turn"
 	hookChatMessage     = "chat-message"
+	hookStatusBar       = "status-bar"
 )
 
 // HookHeaders converts an http.Header to a sorted list of [name, value]

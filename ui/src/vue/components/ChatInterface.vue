@@ -453,6 +453,8 @@
       </button>
     </div>
 
+    <StatusHookRow :status="hookStatus" :stale="hookStatusStale" />
+
     <!-- Status bar -->
     <div :class="statusBarClass">
       <div class="status-bar-content">
@@ -820,8 +822,10 @@ import { chunkMountKey } from "./chunkMount";
 import { collectReactions, messageUserContextKey, targetResolver } from "./messageUserContext";
 import QueuedGhostMessage from "./QueuedGhostMessage.vue";
 import { useVisibleQueuedMessages } from "../composables/visibleQueuedMessages";
+import { useStatusBar } from "../composables/statusBar";
 import TranscriptionTask from "./TranscriptionTask.vue";
 import ChatStatusContent from "./ChatStatusContent.vue";
+import StatusHookRow from "./StatusHookRow.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 import InlineText from "./InlineText.vue";
 import ThinkingContent from "./tools/ThinkingContent.vue";
@@ -1030,6 +1034,16 @@ const showUserEmails = computed(() => {
 });
 provide("showUserEmails", showUserEmails);
 const loading = ref(true);
+// Run the status-bar hook once the conversation has loaded and after every
+// message. Not for drafts or archived conversations.
+const { status: hookStatus, stale: hookStatusStale } = useStatusBar(
+  () =>
+    props.currentConversation?.is_draft || props.currentConversation?.archived
+      ? null
+      : props.conversationId,
+  () => !loading.value,
+  [() => messages.value.at(-1)?.sequence_id],
+);
 const renderingConversation = ref(false);
 const showLoadingProgressUI = ref(false);
 const loadingProgress = ref<{

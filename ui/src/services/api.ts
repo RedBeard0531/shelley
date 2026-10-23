@@ -55,6 +55,15 @@ export interface BackgroundJob {
   started_at: string;
 }
 
+// What the status-bar hook printed for a conversation (server StatusBar). All
+// empty means show nothing.
+export interface StatusBar {
+  body?: string;
+  bgcolor?: string;
+  color?: string;
+  error?: string;
+}
+
 export interface AvailableModel {
   id: string;
   display_name?: string;
@@ -1060,6 +1069,17 @@ class ApiService {
     if (!response.ok) {
       throw await responseError(response, "Failed to kill background job");
     }
+  }
+
+  async getStatusBar(conversationId: string, signal?: AbortSignal): Promise<StatusBar> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${encodeURIComponent(conversationId)}/status-bar`,
+      { signal },
+    );
+    if (!response.ok) {
+      throw await responseError(response, "Failed to get status bar");
+    }
+    return response.json();
   }
 
   // Version check APIs
