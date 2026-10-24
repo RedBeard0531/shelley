@@ -8,15 +8,17 @@ import { DatabaseSync } from "node:sqlite";
 import { deflateSync } from "node:zlib";
 import { hermeticGitEnvironment } from "../scripts/git-test-env";
 
+// Phones reach the model through the overflow menu, in every conversation.
 export async function openModelPicker(page: Page): Promise<Locator> {
   await expect(page.locator(".header")).toBeVisible();
-  if (
-    page.viewportSize()!.width < 768 &&
-    !(await page.locator(".chat-overflow-popover").isVisible())
-  ) {
-    await page.getByRole("button", { name: "More options", exact: true }).click();
+  let scope: Page | Locator = page;
+  if (page.viewportSize()!.width < 768) {
+    scope = page.locator(".chat-overflow-popover");
+    if (!(await scope.isVisible())) {
+      await page.getByRole("button", { name: "More options", exact: true }).click();
+    }
   }
-  const picker = page.locator(".model-picker.p-select:visible");
+  const picker = scope.locator(".model-picker.p-select:visible");
   await picker.click();
   return picker;
 }

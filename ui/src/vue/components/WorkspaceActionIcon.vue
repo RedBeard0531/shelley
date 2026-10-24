@@ -23,6 +23,15 @@
     <template v-else-if="action === 'terminal'">
       <path d="m4 5 7 7-7 7M14 19h6" />
     </template>
+    <template v-else-if="action === 'model'">
+      <path d="M12 3v3M3 11v6m18-6v6M9 18h6" />
+      <rect x="5" y="6" width="14" height="15" rx="3" />
+      <circle cx="9" cy="12" r="1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="12" r="1" fill="currentColor" stroke="none" />
+    </template>
+    <template v-else-if="action === 'openLink'">
+      <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+    </template>
     <template v-else>
       <path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5M13 3v6h6M13 3l6 6" />
       <path d="m14 21 1-4 5-5 3 3-5 5-4 1Z" />
@@ -30,8 +39,17 @@
   </svg>
 </template>
 
+<script lang="ts">
+export type WorkspaceAction =
+  | "commandPalette"
+  | "diffs"
+  | "gitGraph"
+  | "terminal"
+  | "editFile"
+  | "model"
+  | "openLink";
+</script>
+
 <script setup lang="ts">
-defineProps<{
-  action: "commandPalette" | "diffs" | "gitGraph" | "terminal" | "editFile";
-}>();
+defineProps<{ action: WorkspaceAction }>();
 </script>

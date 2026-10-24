@@ -1,6 +1,6 @@
 <!--
-  Desktop keeps workspace actions and the VM link in the header;
-  mobile moves them into this menu.
+  Desktop keeps workspace actions and the VM link in the header; mobile puts
+  them, with Edit File and the command menu, in a row of icons atop this menu.
   Settings live in shared composables/services; conversation actions emit
   events for ChatInterface to wire to its existing handlers.
 -->
@@ -45,14 +45,7 @@
       target="_blank"
       rel="noopener noreferrer"
     >
-      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-        />
-      </svg>
+      <WorkspaceActionIcon action="openLink" />
     </a>
   </div>
   <slot />
@@ -77,19 +70,20 @@
       @show="open = true"
       @hide="open = false"
     >
-      <button v-if="hasCwd" class="overflow-menu-item overflow-mobile-action" @click="onDiffs">
-        <WorkspaceActionIcon action="diffs" class="chat-menu-icon" />
-        {{ t("diffs") }}
-      </button>
-      <button v-if="hasCwd" class="overflow-menu-item overflow-mobile-action" @click="onGitGraph">
-        <WorkspaceActionIcon action="gitGraph" class="chat-menu-icon" />
-        {{ t("gitGraph") }}
-      </button>
-      <button class="overflow-menu-item overflow-mobile-action" @click="onTerminal">
-        <WorkspaceActionIcon action="terminal" class="chat-menu-icon" />
-        {{ t("terminal") }}
-      </button>
-      <button class="overflow-menu-item" @click="onCommandPalette">
+      <div class="overflow-menu-toolbar hide-on-desktop">
+        <button
+          v-for="action in toolbarActions"
+          :key="action.icon"
+          type="button"
+          class="overflow-toolbar-action"
+          :aria-label="action.label"
+          :title="action.label"
+          @click="action.run"
+        >
+          <WorkspaceActionIcon :action="action.icon" />
+        </button>
+      </div>
+      <button class="overflow-menu-item overflow-desktop-action" @click="onCommandPalette">
         <WorkspaceActionIcon action="commandPalette" class="chat-menu-icon" />
         {{ t("commandMenu") }}
         <span class="overflow-menu-shortcut hide-on-mobile"
@@ -97,27 +91,25 @@
         >
       </button>
       <button
-        v-for="(link, index) in links"
+        v-for="(link, index) in menuLinks"
         :key="index"
         class="overflow-menu-item"
-        :class="{ 'overflow-mobile-action': link === vmLink }"
         @click="onExternalLink(link.url)"
       >
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="chat-menu-icon">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            :stroke-width="2"
-            :d="
-              link.icon_svg ||
-              'M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14'
-            "
-          />
+        <svg
+          v-if="link.icon_svg"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          class="chat-menu-icon"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" :stroke-width="2" :d="link.icon_svg" />
         </svg>
+        <WorkspaceActionIcon v-else action="openLink" class="chat-menu-icon" />
         {{ link.title }}
       </button>
       <div class="overflow-menu-divider" />
-      <button class="overflow-menu-item" @click="onEditFile">
+      <button class="overflow-menu-item overflow-desktop-action" @click="onEditFile">
         <WorkspaceActionIcon action="editFile" class="chat-menu-icon" />
         {{ t("editFile") }}
         <span class="overflow-menu-shortcut hide-on-mobile"
@@ -128,7 +120,9 @@
       <button v-if="showDirectory" class="overflow-menu-item" @click="onDirectory">
         <i class="pi pi-folder chat-menu-icon" aria-hidden="true" />
         {{ t("directory") }}
-        <span class="overflow-menu-cwd" :title="cwd">{{ tildifyPath(cwd) }}</span>
+        <span class="overflow-menu-cwd ellipsize-start" :title="cwd"
+          ><bdi>{{ tildifyPath(cwd) }}</bdi></span
+        >
       </button>
       <button v-if="canExport" class="overflow-menu-item" @click="onExport">
         <i class="pi pi-download chat-menu-icon" aria-hidden="true" />
@@ -336,7 +330,7 @@ import Popover from "primevue/popover";
 import Button from "primevue/button";
 import Modal from "./Modal.vue";
 import OverflowDotsIcon from "./OverflowDotsIcon.vue";
-import WorkspaceActionIcon from "./WorkspaceActionIcon.vue";
+import WorkspaceActionIcon, { type WorkspaceAction } from "./WorkspaceActionIcon.vue";
 import type { Link } from "../../types";
 import type { Locale } from "../../i18n/types";
 import { useI18n } from "../composables/i18n";
@@ -418,7 +412,28 @@ function onExternalLink(url: string) {
 const vmLink = computed(() =>
   props.links.find((link) => link.title === window.__SHELLEY_INIT__?.hostname),
 );
+const menuLinks = computed(() => props.links.filter((link) => link !== vmLink.value));
 
+// Mobile's icon row: the desktop header's workspace actions, plus the menu
+// rows it can spare.
+type ToolbarAction = {
+  icon: WorkspaceAction;
+  label: string;
+  run: () => void;
+};
+const toolbarActions = computed(() => {
+  const actions: ToolbarAction[] = [];
+  if (props.hasCwd) {
+    actions.push({ icon: "diffs", label: t("diffs"), run: onDiffs });
+    actions.push({ icon: "gitGraph", label: t("gitGraph"), run: onGitGraph });
+  }
+  actions.push({ icon: "terminal", label: t("terminal"), run: onTerminal });
+  actions.push({ icon: "editFile", label: t("editFile"), run: onEditFile });
+  actions.push({ icon: "commandPalette", label: t("commandMenu"), run: onCommandPalette });
+  const vm = vmLink.value;
+  if (vm) actions.push({ icon: "openLink", label: vm.title, run: () => onExternalLink(vm.url) });
+  return actions;
+});
 
 const notificationSupported = typeof Notification !== "undefined";
 

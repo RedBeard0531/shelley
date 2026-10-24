@@ -153,17 +153,22 @@ for (const viewport of [
         : ["Diffs", "Git Graph", "Terminal", "vm.example", "New Conversation"]) {
         await expect(menu.getByRole("button", { name: new RegExp(`^${name}`) })).toHaveCount(0);
       }
+      // Phones have the workspace actions as icons atop the menu, without
+      // shortcuts; desktop has them in the header, or as rows.
+      const menuIcons = menu.locator(".overflow-menu-toolbar");
       if (mobile) {
-        for (const name of ["Diffs", "Git Graph", "Terminal", "vm.example"]) {
-          await expect(menu.getByRole("button", { name, exact: true })).toBeVisible();
+        for (const name of ["Diffs", "Git Graph", "Terminal", "Edit File…", "Command menu"]) {
+          await expect(menuIcons.getByRole("button", { name, exact: true })).toBeVisible();
         }
+        await expect(menuIcons.getByRole("button", { name: "vm.example" })).toBeVisible();
+      } else {
+        await expect(menuIcons).toBeHidden();
       }
       for (const name of ["Command menu", "Edit File…", "Archive Conversation"]) {
-        const shortcut = menu
-          .getByRole("button", { name: new RegExp(`^${name}`) })
-          .locator(".overflow-menu-shortcut");
-        if (mobile) await expect(shortcut).toBeHidden();
-        else await expect(shortcut).toBeVisible();
+        const row = menu.locator(".overflow-menu-item", { hasText: name });
+        if (mobile && name !== "Archive Conversation") await expect(row).toBeHidden();
+        else if (mobile) await expect(row.locator(".overflow-menu-shortcut")).toBeHidden();
+        else await expect(row.locator(".overflow-menu-shortcut")).toBeVisible();
       }
       const language = menu.getByRole("button", { name: /^Change Language/ });
       await language.scrollIntoViewIfNeeded();

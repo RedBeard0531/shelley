@@ -79,7 +79,9 @@
       class="status-interrupted-group"
       data-testid="conversation-interrupted"
     >
-      <span class="status-message">Conversation Interrupted</span>
+      <span class="status-message"
+        ><span class="hide-on-mobile">Conversation </span>Interrupted</span
+      >
       <button
         type="button"
         class="status-button status-interrupted-button"
@@ -102,10 +104,13 @@
     />
   </div>
 
-  <!-- New conversation or draft -->
+  <!-- New conversation or draft. Phones list the settings a row each, the
+       profile among them, like the overflow menu; desktop keeps its
+       labelled fields. -->
   <div v-else class="status-bar-new-conversation">
     <div class="status-field status-field-model">
       <ModelPicker
+        ref="modelPickerRef"
         :models="models"
         :selected-model="selectedModel"
         :thinking-level="thinkingLevel"
@@ -117,8 +122,25 @@
         @thinking-change="onThinkingChange"
         @manage-models="onManageModels"
         @refresh-models="onRefreshModels"
-      />
+      >
+        <template #prefix>
+          <WorkspaceActionIcon action="model" class="status-chip-icon hide-on-desktop" />
+          <span class="status-chip-label hide-on-desktop">{{ t("model") }}</span>
+        </template>
+      </ModelPicker>
     </div>
+    <button
+      v-if="knob.profiles.length > 0"
+      class="status-chip status-chip-profile hide-on-desktop"
+      :disabled="sending"
+      @click="modelPickerRef?.openProfiles($event.currentTarget as HTMLElement)"
+    >
+      <i class="pi pi-sliders-h status-chip-icon" aria-hidden="true" />
+      <span class="status-chip-label">{{ t("profileLabel") }}</span>
+      <span :class="['status-chip-text', { italic: knob.changes.length > 0 }]">{{
+        knob.profile || t("profileUnsaved")
+      }}</span>
+    </button>
     <div
       :class="`status-field status-field-cwd${cwdError ? ' status-field-error' : ''}`"
       v-tooltip.top="cwdError || 'Working directory for file operations'"
@@ -129,14 +151,18 @@
         :disabled="sending"
         @click="onOpenDirectoryPicker"
       >
-        {{ tildifyPath(selectedCwd) || "(no cwd)" }}
+        <i class="pi pi-folder status-chip-icon hide-on-desktop" aria-hidden="true" />
+        <span class="status-chip-label hide-on-desktop">{{ t("directory") }}</span>
+        <span class="status-chip-text ellipsize-start"
+          ><bdi>{{ tildifyPath(selectedCwd) || "(no cwd)" }}</bdi></span
+        >
       </button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { Conversation, Message, Model } from "../../types";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
 import { tildifyPath } from "../../utils/tildify";
@@ -146,6 +172,7 @@ import type { SettingsKnob } from "../composables/profiles";
 import AnimatedWorkingStatus from "./AnimatedWorkingStatus.vue";
 import ModelPicker from "./ModelPicker.vue";
 import StatusReadout from "./StatusReadout.vue";
+import WorkspaceActionIcon from "./WorkspaceActionIcon.vue";
 
 const props = defineProps<{
   currentConversation?: Conversation;
@@ -201,6 +228,7 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+const modelPickerRef = ref<InstanceType<typeof ModelPicker> | null>(null);
 
 // The conversation's cwd once saved, the picked one while it is still a draft.
 const cwd = computed(() => props.currentConversation?.cwd || props.selectedCwd);

@@ -55,7 +55,7 @@ test("TOC shares the compact status row across desktop and mobile", async ({ pag
             status: textRect,
             stop: rect(".status-stop-button"),
             row: rect(".status-bar-active"),
-            tokens: window.innerWidth >= 768 ? rect(".context-usage-label-tokens") : null,
+            tokens: rect(".context-usage-label-tokens"),
             input: rect(".message-textarea"),
             send: rect(".message-send-wrapper"),
             text: [...text.querySelectorAll('span[aria-hidden="true"]')]
@@ -67,24 +67,25 @@ test("TOC shares the compact status row across desktop and mobile", async ({ pag
         expect(geometry.toc.left).toBeGreaterThanOrEqual(
           width <= 767 ? geometry.stop.right : geometry.model!.right,
         );
-        const anchor = width <= 767 ? geometry.stop : geometry.tokens!;
+        const anchor = width <= 767 ? geometry.stop : geometry.tokens;
         expect(
           Math.abs((geometry.toc.top + geometry.toc.bottom - anchor.top - anchor.bottom) / 2),
         ).toBeLessThan(2);
         expect(geometry.toc.right).toBeLessThanOrEqual(width);
         expect(geometry.row.overflow).toBe(false);
+        expect(geometry.tokens.overflow).toBe(false);
         if (width <= 767) {
           expect(geometry.status!.right - geometry.status!.left).toBe(1);
           expect(geometry.status!.bottom - geometry.status!.top).toBe(1);
-          await expect(page.locator(".context-usage-label")).toBeHidden();
-          await expect(page.locator(".chat-context-popup")).toBeHidden();
+          // Phones keep just the token count from the readout, after Stop.
+          expect(geometry.tokens.left).toBeGreaterThanOrEqual(geometry.stop.right);
+          expect(geometry.toc.left).toBeGreaterThanOrEqual(geometry.tokens.right);
           expect(geometry.stop.right - geometry.stop.left).toBe(24);
           expect(geometry.send.bottom).toBeLessThanOrEqual(geometry.input.top);
           await expect(page.locator(".status-readout-cwd")).toBeHidden();
           await expect(page.locator(".status-readout-model")).toBeHidden();
           await expect(page.locator(".status-stop-button")).toHaveCSS("animation-name", "none");
         } else {
-          expect(geometry.tokens!.overflow).toBe(false);
           expect(geometry.status).not.toBeNull();
           expect(geometry.status!.bottom - geometry.status!.top).toBeLessThan(24);
           expect(geometry.status!.right).toBeLessThanOrEqual(geometry.stop.left);
@@ -125,7 +126,7 @@ test("TOC shares the compact status row across desktop and mobile", async ({ pag
     await page.setViewportSize({ width: 390, height: 800 });
     await expect(page.locator(".status-ready")).toBeHidden();
     await expect(page.locator(".status-stop-button")).toHaveCount(0);
-    await expect(page.locator(".context-usage-label")).toBeHidden();
+    await expect(page.locator(".context-usage-label")).toBeVisible();
     await expect(page.locator(".status-readout-cwd-leaf")).toBeHidden();
     await expect(page.locator(".status-readout-cwd-path")).toBeHidden();
     for (const dark of [false, true]) {
@@ -159,7 +160,7 @@ test("mobile composer keeps attachments and wrapped errors above the input", asy
   );
   await page.goto(`/c/${slug}`);
   await expect(page.getByTestId("message-input")).toBeVisible();
-  await expect(page.locator(".context-usage-label")).toBeHidden();
+  await expect(page.locator(".context-usage-label")).toBeVisible();
   await expect(page.locator(".status-ready")).toBeHidden();
 
   for (const count of [1, 5]) {
@@ -226,31 +227,78 @@ test("mobile composer keeps attachments and wrapped errors above the input", asy
   }
   await page.locator(".message-controls-status-slot .status-button-text").click();
   await expect(page.getByTestId("message-input")).toBeVisible();
-  await expect(page.locator(".context-usage-label")).toBeHidden();
+  await expect(page.locator(".context-usage-label")).toBeVisible();
   await expect(page.locator(".status-ready")).toBeHidden();
   await expect(page.getByTestId("message-input")).toHaveValue("keep my draft");
 });
 
-test("context count and usage graphs stay desktop-only", async ({ page, request }) => {
-  const { slug } = await createConversationViaAPIWithDetails(request, "echo desktop usage");
-  await page.setViewportSize({ width: 1280, height: 800 });
+test("context count opens the usage graphs on desktop and mobile", async ({ page, request }) => {
+  const { slug } = await createConversationViaAPIWithDetails(request, "echo usage");
   await page.goto(`/c/${slug}`);
   const count = page.locator(".context-usage-label");
-  await expect(count).toBeVisible();
-  await count.click();
   const popup = page.locator(".chat-context-popup");
-  await expect(popup).toBeVisible();
-  await expect(popup.locator(".token-cost-graph-svg")).toBeVisible();
-  for (const width of [767, 390, 320]) {
+  for (const width of [1280, 768, 767, 390, 320]) {
     await page.setViewportSize({ width, height: 800 });
-    await expect(count).toBeHidden();
+    await expect(count).toBeVisible();
+    // Phones show the count alone, without the model and directory.
+    if (width < 768) {
+      await expect(page.locator(".status-readout-model")).toBeHidden();
+      await expect(page.locator(".status-readout-cwd")).toBeHidden();
+    }
+    await count.click();
+    await expect(popup).toBeVisible();
+    await expect(popup).toBeInViewport({ ratio: 1 });
+    await expect(popup.locator(".token-cost-graph-svg")).toBeVisible();
+    await page.keyboard.press("Escape");
     await expect(popup).toBeHidden();
-    await expect(
-      page.getByRole("button", { name: "Conversation table of contents", exact: true }),
-    ).toBeVisible();
   }
-  await page.setViewportSize({ width: 768, height: 800 });
-  await expect(count).toBeVisible();
-  await count.click();
-  await expect(popup).toBeVisible();
+});
+
+test("an interrupted conversation fits Continue and the context count on phones", async ({
+  page,
+  request,
+}) => {
+  const { slug, conversationId } = await createConversationViaAPIWithDetails(request, "echo usage");
+  // Marking a turn interrupted takes a server restart, so the conversation
+  // list, from its snapshot and its stream, says so instead.
+  await page.addInitScript((id) => {
+    const interrupt = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(interrupt);
+      if (!value || typeof value !== "object") return value;
+      const object = Object.fromEntries(
+        Object.entries(value).map(([key, field]) => [key, interrupt(field)]),
+      );
+      if (object.conversation_id === id) object.turn_interrupted = true;
+      return object;
+    };
+    const fetchNative = window.fetch;
+    window.fetch = async (input, init) => {
+      const response = await fetchNative(input, init);
+      if (!String(input).endsWith("/conversations/snapshot")) return response;
+      return Response.json(interrupt(await response.json()));
+    };
+    const EventSourceNative = window.EventSource;
+    window.EventSource = class extends EventSourceNative {
+      set onmessage(handler: ((ev: MessageEvent) => void) | null) {
+        super.onmessage =
+          handler &&
+          ((ev) => {
+            const data = JSON.stringify(interrupt(JSON.parse(ev.data)));
+            handler.call(this, new MessageEvent("message", { data }));
+          });
+      }
+    };
+  }, conversationId);
+  await page.goto(`/c/${slug}`);
+  const group = page.getByTestId("conversation-interrupted");
+  const message = group.locator(".status-message");
+  for (const width of [1280, 390, 360, 320]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(message).toHaveText(width < 768 ? "Interrupted" : "Conversation Interrupted", {
+      useInnerText: true,
+    });
+    await expect(page.getByTestId("resume-interrupted-button")).toBeVisible();
+    await expect(page.locator(".context-usage-label")).toBeVisible();
+    expect(await message.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+  }
 });

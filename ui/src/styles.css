@@ -5279,8 +5279,7 @@ svg {
     display: none;
   }
 
-  .hide-on-desktop,
-  .overflow-menu-item.overflow-mobile-action {
+  .hide-on-desktop {
     display: none !important;
   }
 
@@ -5384,7 +5383,8 @@ svg {
   color: var(--text-secondary);
   transition: background 0.15s ease;
 }
-.toc-button:hover {
+.toc-button:hover,
+.overflow-toolbar-action:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
@@ -5635,6 +5635,12 @@ svg {
   flex: 1 1 auto;
   min-width: 180px;
   max-width: 400px;
+}
+
+/* Ellipsizes a path's root rather than its leaf; a <bdi> inside keeps the
+   path itself left to right. */
+.ellipsize-start {
+  direction: rtl;
 }
 
 /* Compact clickable chips for model and cwd */
@@ -6578,7 +6584,8 @@ svg {
   text-align: left;
 }
 
-.status-readout-cwd:hover:not(:disabled) {
+.status-readout-cwd:hover:not(:disabled),
+.context-usage-label:hover {
   color: var(--text-primary);
 }
 
@@ -6655,6 +6662,7 @@ svg {
 }
 
 .status-stop-button:disabled,
+.overflow-menu-panel .overflow-menu-item:disabled,
 .overflow-menu-panel .model-picker-menu.p-disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -6713,10 +6721,6 @@ svg {
   font: inherit;
   color: inherit;
   cursor: pointer;
-}
-
-.context-usage-label:hover {
-  color: var(--text-primary);
 }
 
 .context-usage-label:focus-visible {
@@ -6797,18 +6801,129 @@ svg {
   }
 
   /* Mobile uses inline controls; archived and interrupted turns need the full bar. */
-  .status-bar:not(.status-bar-archived):not(.status-bar-new):not(.status-bar-interrupted) {
-    display: none;
-  }
-
+  .status-bar:not(.status-bar-archived):not(.status-bar-new):not(.status-bar-interrupted),
   .hide-on-mobile,
   .header .chat-workspace-actions,
   .message-controls-status-slot .status-ready,
   .message-controls-status-slot .working-indicator,
-  .status-readout,
-  .chat-context-popup.p-popover,
-  .status-bar-new:has(.status-bar-new-conversation) {
+  .status-readout-sep-model,
+  .status-readout-model,
+  .overflow-menu-panel .overflow-menu-item.overflow-desktop-action,
+  .status-bar-new .status-field-label,
+  .status-bar-new .p-select.model-picker .p-select-dropdown {
     display: none;
+  }
+
+  /* Of the readout, phones keep just the token count, after Stop; the model
+     and directory are in the overflow menu. */
+  .message-controls-status-slot .status-readout {
+    order: 2;
+    margin-left: 0;
+    font-size: var(--font-size-13);
+  }
+
+  /* A full-height touch target, without moving the layout. */
+  .message-controls-status-slot .context-usage-label {
+    padding-block: 10px;
+    margin-block: -10px;
+  }
+
+  /* New conversations: model, profile and directory a row each, like the
+     overflow menu's, joining the composer below. A short viewport, as with
+     Android's keyboard up, leaves them to the menu. */
+  .status-bar-new {
+    padding-bottom: 0;
+    min-height: 0;
+  }
+
+  @media (max-height: 480px) {
+    .status-bar-new {
+      display: none;
+    }
+  }
+
+  @media (min-height: 481px) {
+    .status-bar-new + .message-input-container {
+      border-top: none;
+    }
+  }
+
+  .status-bar-new .status-bar-new-conversation {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 0;
+  }
+
+  .status-bar-new .status-field {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .status-bar-new .status-chip,
+  .status-bar-new .p-select.model-picker {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-width: 0;
+    height: 2.25rem;
+    min-height: 0;
+    padding: 0 0.5rem;
+    border: none;
+    border-radius: 0.5rem;
+    background: transparent;
+    box-shadow: none;
+    font-size: var(--font-size-13);
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  /* Without the border that marked focus, the picker marks it as the
+     chips do. */
+  .status-bar-new .p-select.model-picker:has(> .p-select-label:focus-visible) {
+    outline: auto;
+  }
+
+  .status-bar-new .status-chip:hover:not(:disabled),
+  .status-bar-new .p-select.model-picker:not(.p-disabled):hover {
+    background: var(--bg-hover);
+  }
+
+  .status-bar-new .p-select.model-picker .p-select-label {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    font-size: var(--font-size-13);
+    line-height: inherit;
+  }
+
+  .status-bar-new .model-picker .model-picker-value {
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .status-bar-new .status-chip-icon {
+    display: block;
+    flex-shrink: 0;
+    width: var(--font-size-14);
+    height: var(--font-size-14);
+    font-size: var(--font-size-14);
+    color: var(--text-secondary);
+  }
+
+  .status-bar-new .status-chip-label {
+    flex-shrink: 0;
+    min-width: 4.5rem;
+    color: var(--text-secondary);
+  }
+
+  /* Desktop's chips wrap a long directory; phones' ellipsize it. */
+  .status-bar-new .status-chip-text {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   /* Show inline status slot on mobile */
@@ -16448,9 +16563,35 @@ kbd {
 }
 /* SVG-path icons (custom server links) keep their box sizing. */
 .chat-workspace-action > svg,
+.overflow-toolbar-action > svg,
 .overflow-menu-panel svg.chat-menu-icon {
   width: 1.25rem;
   height: 1.25rem;
+}
+
+/* Phones' row of workspace icons atop the menu; desktop has them in the
+   header. */
+.overflow-menu-toolbar {
+  display: grid;
+  /* Six places, filled from the start, so the icons keep their spacing
+     when some are missing. */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  justify-items: center;
+  padding: 0.125rem 0.5rem 0.375rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.overflow-toolbar-action {
+  display: grid;
+  place-items: center;
+  width: min(2.75rem, 100%);
+  height: 2.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
 .overflow-menu-panel .overflow-menu-divider {

@@ -94,6 +94,10 @@ for (const width of [393, 1280]) {
         .map((child) => {
           if (child.classList.contains("overflow-menu-divider")) return "separator";
           if (child.classList.contains("overflow-quick-controls")) return "preferences";
+          if (child.classList.contains("overflow-menu-toolbar")) {
+            const labels = [...child.querySelectorAll("button")].map((b) => b.ariaLabel);
+            return `icons: ${labels.join(", ")}`;
+          }
           const row = child.cloneNode(true) as HTMLElement;
           row
             .querySelectorAll(
@@ -104,15 +108,15 @@ for (const width of [393, 1280]) {
         }),
     );
     expect(rows).toEqual([
-      // Phones keep workspace tools here, beside the header's New and Call controls.
-      ...(width < 768 ? ["Diffs", "Git Graph", "Terminal"] : []),
-      "Command menu",
+      // Phones keep the header's workspace tools in a row of icons here,
+      // with the menu's own that have keyboard shortcuts.
+      ...(width < 768
+        ? ["icons: Diffs, Git Graph, Terminal, Edit File…, Command menu, vm.example"]
+        : ["Command menu"]),
       "Manage on exe.dev",
-      ...(width < 768 ? ["vm.example"] : []),
       "Documentation",
       "separator",
-      "Edit File…",
-      ...(width < 768 ? ["Model", "Directory"] : []),
+      ...(width < 768 ? ["Model", "Profile", "Directory"] : ["Edit File…"]),
       "Export Conversation",
       "Archive Conversation",
       "separator",
@@ -132,6 +136,43 @@ for (const width of [393, 1280]) {
 // DOM contract (.chat-overflow-menu-wrapper / .btn-icon / .overflow-menu-item)
 // is covered by other specs (agents-md-vim).
 test.describe("Overflow menu (PrimeVue)", () => {
+  test("profile item opens the model picker at the profiles on mobile", async ({
+    page,
+    request,
+    isMobile,
+  }) => {
+    test.skip(!isMobile, "Mobile overflow menu (Pixel 5 in the chromium project)");
+    const menu = page.locator(".chat-overflow-popover");
+    const row = menu.getByRole("button", { name: /^Profile\b/ });
+    const pills = page.locator(".model-picker-panel").getByTestId("model-picker-profiles");
+    // A conversation whose profile was deleted, like one from before
+    // profiles, has none in use; focus goes to the first.
+    const gone = `E2E gone ${Date.now()}`;
+    expect((await request.post("/api/profiles", { data: { name: gone } })).ok()).toBeTruthy();
+    const goneSlug = await createConversationViaAPI(request, "Hello", {
+      conversationOptions: { profile: gone },
+    });
+    expect((await request.delete(`/api/profiles/${encodeURIComponent(gone)}`)).ok()).toBeTruthy();
+    for (const [slug, profile, focused] of [
+      [
+        await createConversationViaAPI(request, "Hello", {
+          conversationOptions: { profile: "Assistant" },
+        }),
+        "Assistant",
+        pills.getByRole("radio", { name: "Assistant", exact: true }),
+      ],
+      [goneSlug, gone, pills.getByRole("radio").first()],
+    ] as const) {
+      await page.goto(`/c/${slug}`);
+      await page.getByRole("button", { name: "More options", exact: true }).tap();
+      await expect(row.locator(".overflow-menu-cwd")).toHaveText(profile);
+      await row.tap();
+      await expect(focused).toBeFocused();
+      await expect(focused).toHaveAttribute("aria-checked", profile === gone ? "false" : "true");
+      await expect(focused).toBeInViewport({ ratio: 1 });
+    }
+  });
+
   test("directory item opens the picker and closes the popover on mobile", async ({
     page,
     request,
@@ -156,7 +197,7 @@ test.describe("Overflow menu (PrimeVue)", () => {
 
     await expect(popover).toBeVisible();
     await expect(directory).toBeVisible();
-    await expect(popover.getByRole("button", { name: /^Command menu\b/ })).toBeVisible();
+    await expect(popover.getByRole("button", { name: "Command menu", exact: true })).toBeVisible();
     await expect(popover.getByRole("button", { name: /^Terminal\b/ })).toBeVisible();
     await expect(directory.locator(".overflow-menu-cwd")).toHaveText(testWorkingDirectory());
     await expect(directory.locator(".overflow-menu-cwd")).toHaveAttribute(

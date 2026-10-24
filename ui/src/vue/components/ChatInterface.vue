@@ -74,9 +74,9 @@
           @open-mcp-servers="props.onOpenMcpServersModal?.()"
           @check-version="openVersionModal"
         >
-          <template #models="{ hide }">
+          <template v-if="isMobile" #models="{ hide }">
             <ModelPicker
-              v-if="isMobile"
+              ref="menuModelPickerRef"
               class="overflow-menu-item model-picker-menu"
               :models="models"
               :selected-model="selectedModel"
@@ -104,27 +104,23 @@
               @refresh-models="handleRefreshModels"
             >
               <template #value="{ label }">
-                <svg
-                  class="chat-menu-icon"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M12 3v3M3 11v6m18-6v6M9 18h6"
-                  />
-                  <rect x="5" y="6" width="14" height="15" rx="3" />
-                  <circle cx="9" cy="12" r="1" fill="currentColor" stroke="none" />
-                  <circle cx="15" cy="12" r="1" fill="currentColor" stroke="none" />
-                </svg>
+                <WorkspaceActionIcon action="model" class="chat-menu-icon" />
                 {{ t("model") }}
                 <span class="overflow-menu-cwd" :title="label">{{ label }}</span>
               </template>
             </ModelPicker>
+            <button
+              v-if="knob.profiles.length > 0"
+              class="overflow-menu-item"
+              :disabled="conversationWorking || sending"
+              @click="menuModelPickerRef?.openProfiles($event.currentTarget as HTMLElement)"
+            >
+              <i class="pi pi-sliders-h chat-menu-icon" aria-hidden="true" />
+              {{ t("profileLabel") }}
+              <span :class="['overflow-menu-cwd', { italic: knob.changes.length > 0 }]">{{
+                knob.profile || t("profileUnsaved")
+              }}</span>
+            </button>
           </template>
           <button
             type="button"
@@ -770,6 +766,7 @@ import type { RecordingMode, RecordingPreparation } from "./recordingDestination
 import ConversationTOC from "./ConversationTOC.vue";
 import ModelBar from "./ModelBar.vue";
 import ModelPicker from "./ModelPicker.vue";
+import WorkspaceActionIcon from "./WorkspaceActionIcon.vue";
 import SystemPromptView from "./SystemPromptView.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
 import ProfilesModal from "./ProfilesModal.vue";
@@ -930,6 +927,7 @@ const {
 // ---- core state ----
 const messageInputRef = ref<InstanceType<typeof MessageInput> | null>(null);
 const liveVoiceRef = ref<InstanceType<typeof LiveVoice> | null>(null);
+const menuModelPickerRef = ref<InstanceType<typeof ModelPicker> | null>(null);
 const voicePhase = ref<"idle" | "connecting" | "live">("idle");
 const liveExchangeTurns = computed(() => {
   const live = liveVoiceRef.value;
