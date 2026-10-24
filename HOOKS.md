@@ -143,7 +143,8 @@ next run finishes. A conversation whose directory is gone shows nothing.
 
 It often runs alongside the agent's tools, so Shelley sets
 `GIT_OPTIONAL_LOCKS=0`; a `git status` in the hook then can't make the
-agent's `git add` fail on `index.lock`. Times out after 10s.
+agent's `git add` fail on `index.lock`. Times out after 2s, so keep it
+cheap: `git branch --show-current`, not a `git status` of a big repo.
 
 ```json
 {

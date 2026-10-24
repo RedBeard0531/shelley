@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	statusBarHookTimeout   = 10 * time.Second
+	statusBarHookTimeout   = 2 * time.Second
 	statusBarHookMaxOutput = 4 << 10
 	statusBarHookGrace     = 500 * time.Millisecond
 )

@@ -23,6 +23,7 @@ func TestStatusBarHookKillsChildrenOnFailure(t *testing.T) {
 		{"failed holding stdout", "sleep 60", "exit 1", "exit status 1"},
 		{"too long", "sleep 60 >/dev/null 2>&1", "head -c 5000 /dev/zero", "output exceeds 4096 bytes"},
 		{"invalid output", "sleep 60 >/dev/null 2>&1", "echo not-json", "invalid JSON output: invalid character 'o' in literal null (expecting 'u')"},
+		{"hung", "sleep 60 >/dev/null 2>&1", "exec sleep 60", "timed out after 2s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -61,9 +62,20 @@ wait`)
 		_, err := runStatusBarHookIn(ctx, dir, StatusBarHookInput{Cwd: dir})
 		done <- err
 	}()
-	// Blocks until something writes to the FIFO.
-	if _, err := os.ReadFile(filepath.Join(dir, "started")); err != nil {
-		t.Fatal(err)
+	// Reading the FIFO blocks until something writes to it. A hook that ends
+	// first (timed out on a loaded machine, say) fails the test, not hangs it.
+	started := make(chan error, 1)
+	go func() {
+		_, err := os.ReadFile(filepath.Join(dir, "started"))
+		started <- err
+	}()
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case err := <-done:
+		t.Fatalf("hook ended before it started: %v", err)
 	}
 	cancel()
 	if err := <-done; err == nil {

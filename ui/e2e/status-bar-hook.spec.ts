@@ -1,15 +1,16 @@
 import { test, expect, type Page } from "@playwright/test";
-import { execFileSync } from "child_process";
 import { mkdirSync, renameSync, writeFileSync } from "fs";
-import { writeFile } from "fs/promises";
 import { dirname, join } from "path";
-import { createConversationViaAPI, testWorkingDirectory, withTempDir } from "./helpers";
+import {
+  createConversationViaAPI,
+  createConversationViaAPIWithDetails,
+  testWorkingDirectory,
+  withTempDir,
+} from "./helpers";
 
 // The hook prints .status-bar.json from the conversation's directory, so it
 // shows nothing for every other spec's conversations on the shared server.
-// A .status-bar.wait FIFO there holds it until the test writes to it.
 const hookScript = `#!/bin/sh
-[ ! -p .status-bar.wait ] || { read _ < .status-bar.wait; rm .status-bar.wait; }
 [ ! -f .status-bar.json ] || cat .status-bar.json
 `;
 
@@ -91,14 +92,24 @@ test("the status-bar hook shows the conversation's status and reruns after messa
     // its hook answers, so the messages don't shift twice.
     await withTempDir("status-bar-hook-other-", async (other) => {
       writeFileSync(join(other, ".status-bar.json"), JSON.stringify({ body: "other-branch" }));
-      execFileSync("mkfifo", [join(other, ".status-bar.wait")]);
-      const otherSlug = await createConversationViaAPI(request, "Hello", { cwd: other });
+      const { conversationId: otherId, slug: otherSlug } =
+        await createConversationViaAPIWithDetails(request, "Hello", { cwd: other });
+      // Hold its answer in the browser, not the hook in the server, whose
+      // timeout would be a race.
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const asked = page.waitForRequest(`**/api/conversation/${otherId}/status-bar`);
+      await page.route(`**/api/conversation/${otherId}/status-bar`, async (route) => {
+        await held;
+        await route.continue();
+      });
       await navigateWithinApp(page, otherSlug);
-      await expect(page.getByTestId("message").first()).toBeVisible();
+      await asked;
       await expect(segment).toHaveText(/^\s*$/);
       await expect(segment).not.toHaveAttribute("style", /background/);
-      await writeFile(join(other, ".status-bar.wait"), "go\n");
+      release();
       await expect(segment).toHaveText("other-branch");
+      await page.unroute(`**/api/conversation/${otherId}/status-bar`);
 
       // A conversation whose hook prints nothing has no row.
       status("");

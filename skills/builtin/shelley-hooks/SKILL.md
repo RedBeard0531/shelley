@@ -92,7 +92,8 @@ result too), and when you come back to the tab or its window. Never for a
 background tab, a draft, an archived conversation, one no tab shows, or if the
 directory is gone. One run at a time per tab: triggers during a run make one
 more run after it, and switching conversations cancels the run. The row keeps
-the last output until the next run finishes. 10s timeout. It often runs
+the last output until the next run finishes. 2s timeout: keep it cheap
+(`git branch --show-current`, not `git status` of a big repo). It often runs
 alongside the agent's tools; Shelley sets `GIT_OPTIONAL_LOCKS=0` so a
 `git status` in it can't make the agent's git commands fail on `index.lock`.
 
