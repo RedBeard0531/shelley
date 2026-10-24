@@ -10,11 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/creack/pty"
-	"golang.org/x/sys/unix"
-
 	"shelley.exe.dev/dtach"
 	"shelley.exe.dev/exescroll"
+	"shelley.exe.dev/pty"
 )
 
 type terminalMessageKind int
@@ -94,7 +92,7 @@ type exeScrollPTYClient struct {
 }
 
 func newExeScrollPTYClient(cmd *exec.Cmd, cols, rows uint16, exitFile string) (*exeScrollPTYClient, error) {
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
+	ptmx, err := pty.Start(cmd, cols, rows)
 	if err != nil {
 		return nil, fmt.Errorf("start exe-scroll: %w", err)
 	}
@@ -139,7 +137,7 @@ func (c *exeScrollPTYClient) SendInput(data []byte) error {
 }
 
 func (c *exeScrollPTYClient) SendResize(cols, rows uint16) error {
-	return pty.Setsize(c.pty, &pty.Winsize{Cols: cols, Rows: rows})
+	return pty.SetSize(c.pty, cols, rows)
 }
 
 func (c *exeScrollPTYClient) Close() error {
@@ -180,11 +178,11 @@ func startDirectPTY(command, cwd string, cols, rows uint16, extraEnv []string) (
 	cmd := exec.Command("bash", "--login", "-c", command)
 	cmd.Dir = cwd
 	cmd.Env = terminalEnvironment(extraEnv)
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
+	ptmx, err := pty.Start(cmd, cols, rows)
 	if err != nil {
 		return nil, fmt.Errorf("terminals: start %q: %w", command, err)
 	}
-	pollable, err := pollableFile(ptmx)
+	pollable, err := pty.Pollable(ptmx)
 	if err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
@@ -203,32 +201,6 @@ func startDirectPTY(command, cwd string, cols, rows uint16, extraEnv []string) (
 	}()
 	go client.writeInput()
 	return client, nil
-}
-
-// pollableFile replaces f with a non-blocking duplicate registered with the
-// runtime poller. creack/pty calls File.Fd, which leaves its files blocking:
-// a Read on them ignores Close.
-func pollableFile(f *os.File) (*os.File, error) {
-	defer f.Close()
-	raw, err := f.SyscallConn()
-	if err != nil {
-		return nil, err
-	}
-	var fd int
-	var dupErr error
-	if err := raw.Control(func(old uintptr) {
-		fd, dupErr = unix.FcntlInt(old, unix.F_DUPFD_CLOEXEC, 0)
-	}); err != nil {
-		return nil, err
-	}
-	if dupErr != nil {
-		return nil, fmt.Errorf("dup pty: %w", dupErr)
-	}
-	if err := unix.SetNonblock(fd, true); err != nil {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("pty nonblock: %w", err)
-	}
-	return os.NewFile(uintptr(fd), f.Name()), nil
 }
 
 func (c *directPTYClient) Recv() (terminalMessage, error) {
@@ -297,18 +269,7 @@ func (c *directPTYClient) writeInput() {
 }
 
 func (c *directPTYClient) SendResize(cols, rows uint16) error {
-	raw, err := c.pty.SyscallConn()
-	if err != nil {
-		return err
-	}
-	// Not pty.Setsize: it calls File.Fd, which makes the PTY blocking again.
-	var ioctlErr error
-	if err := raw.Control(func(fd uintptr) {
-		ioctlErr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols})
-	}); err != nil {
-		return err
-	}
-	return ioctlErr
+	return pty.SetSize(c.pty, cols, rows)
 }
 
 func (c *directPTYClient) Close() error {

@@ -8,11 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 
-	"github.com/creack/pty"
+	"shelley.exe.dev/pty"
 )
 
 // ServerOptions configures Serve.
@@ -76,7 +74,7 @@ func Serve(opts ServerOptions) error {
 		cmd.Env = opts.Env
 	}
 
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: opts.Cols, Rows: opts.Rows})
+	ptmx, err := pty.Start(cmd, opts.Cols, opts.Rows)
 	if err != nil {
 		return fmt.Errorf("dtach: start pty: %w", err)
 	}
@@ -271,23 +269,10 @@ func (s *session) serveClient(conn net.Conn) {
 			}
 		case MsgResize:
 			if cols, rows, ok := DecodeResize(payload); ok {
-				setWinsize(s.ptmx, cols, rows)
+				_ = pty.SetSize(s.ptmx, cols, rows)
 			}
 		default:
 			// ignore unknown
 		}
 	}
-}
-
-// setWinsize forwards a TIOCSWINSZ to the PTY.
-func setWinsize(f *os.File, cols, rows uint16) {
-	ws := struct {
-		Rows, Cols, X, Y uint16
-	}{Rows: rows, Cols: cols}
-	_, _, _ = syscall.Syscall(
-		syscall.SYS_IOCTL,
-		f.Fd(),
-		uintptr(syscall.TIOCSWINSZ),
-		uintptr(unsafe.Pointer(&ws)),
-	)
 }
