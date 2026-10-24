@@ -154,8 +154,9 @@ type ConversationManager struct {
 	cacheWarmRevision uint64
 
 	// changingSettings holds queued messages back, from both the drain and
-	// the running turn, while ApplySettings interrupts the turn, so they go
-	// out on the new settings.
+	// the running turn, while ApplySettings or StartNewGeneration interrupts
+	// the turn, so they go out on the new settings or in the new generation.
+	// It is set under modelSettingsMu.
 	changingSettings bool
 
 	// draining is true while a drainPendingMessages owner is in flight. A
@@ -168,11 +169,11 @@ type ConversationManager struct {
 	drainDone      chan struct{}
 
 	// modelSettingsMu serializes settings changes (ApplySettings,
-	// SetThinkingLevel, EnableCompactInPlace) with each other and with manual
-	// resume. Settings persist before the loop rebuild, so sharing this lock
-	// prevents resume from selecting the old model while a concurrent change
-	// is between those two steps, and keeps one change from writing back
-	// another's field.
+	// SetThinkingLevel, EnableCompactInPlace) and StartNewGeneration with
+	// each other and with manual resume. Settings persist before the loop
+	// rebuild, so sharing this lock prevents resume from selecting the old
+	// model while a concurrent change is between those two steps, and keeps
+	// one change from writing back another's field.
 	modelSettingsMu sync.Mutex
 	// retryMu serializes RetryLastLLMRequest so concurrent retry POSTs don't
 	// produce duplicate LLM calls or double-broadcast user_data updates.
@@ -2504,6 +2505,46 @@ func (cm *ConversationManager) resetLoopAfter(markUnhydrated bool, mutate func()
 	return nil
 }
 
+// StartNewGeneration has bump move the conversation to a new generation,
+// drops the loop, and hydrates the new generation, so it starts with its
+// system prompt. Like ApplySettings, it first stops a running turn the way
+// the cancel button does, so the turn ends in the old generation, and holds
+// queued messages back for the caller to drain into the new one. A turn
+// that starts after the stop fails it with errAgentWorking rather than
+// being abandoned by the reset.
+func (cm *ConversationManager) StartNewGeneration(ctx context.Context, bump func() error) error {
+	cm.modelSettingsMu.Lock()
+	defer cm.modelSettingsMu.Unlock()
+	cm.mu.Lock()
+	cm.changingSettings = true
+	cm.mu.Unlock()
+	defer func() {
+		cm.mu.Lock()
+		cm.changingSettings = false
+		cm.mu.Unlock()
+	}()
+	if cm.IsAgentWorking() {
+		if err := cm.cancelConversation(ctx, false, ""); err != nil {
+			return fmt.Errorf("stop the running turn: %w", err)
+		}
+	}
+	// Bump under the loop lifecycle lock, so a turn starts either before it
+	// (and is refused here) or after it, hydrating the new generation first.
+	err := cm.resetLoopAfter(true, func() error {
+		if cm.IsAgentWorking() {
+			return errAgentWorking
+		}
+		return bump()
+	})
+	if err != nil {
+		return err
+	}
+	if err := cm.Hydrate(ctx); err != nil {
+		return fmt.Errorf("hydrate after generation bump: %w", err)
+	}
+	return nil
+}
+
 // CancelConversation cancels the active loop, clears queued user work, and
 // synchronously ends its turn.
 func (cm *ConversationManager) CancelConversation(ctx context.Context) error {
@@ -2521,8 +2562,11 @@ func (cm *ConversationManager) SendQueuedNow(ctx context.Context, s *Server, que
 }
 
 // cancelConversation cancels the active loop and synchronously ends its turn.
-// When clearQueued is false, queued_messages survive
-// the interruption so SendQueuedNow can feed them immediately afterward.
+// When clearQueued is false, queued_messages survive the interruption so the
+// caller (SendQueuedNow, ApplySettings, StartNewGeneration) can feed them
+// afterward; and if no turn is running once it holds the lifecycle lock,
+// because the turn ended on its own since the caller looked, it does nothing,
+// rather than end that turn a second time.
 // The loop records the complete tool-result batch, including partial output from
 // cancelled tools, before this method writes the end-of-turn marker.
 func (cm *ConversationManager) cancelConversation(ctx context.Context, clearQueued bool, sendQueuedID string) error {
@@ -2551,7 +2595,7 @@ func (cm *ConversationManager) cancelConversation(ctx context.Context, clearQueu
 	}
 
 	cm.mu.Lock()
-	if sendQueuedID != "" && !cm.agentWorking {
+	if !clearQueued && !cm.agentWorking {
 		cm.mu.Unlock()
 		cm.loopLifecycleMu.Unlock()
 		return nil

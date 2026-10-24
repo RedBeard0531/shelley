@@ -4028,6 +4028,11 @@ func (s *Server) handleStartNewGeneration(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Conversation not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, errAgentWorking) {
+		// A turn started while the running one was being stopped.
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		s.internalError(w, "Failed to start new generation", err, "conversationID", conversationID)
 		return
@@ -4047,30 +4052,29 @@ func (s *Server) startNewGeneration(ctx context.Context, conversationID string) 
 	// the window, but a user navigating away is enough.
 	ctx = context.WithoutCancel(ctx)
 
-	conversation, err := db.WithTxRes(s.db, ctx, func(q *generated.Queries) (generated.Conversation, error) {
-		return q.IncrementConversationGeneration(ctx, conversationID)
+	// Report a missing conversation as sql.ErrNoRows, which loading its
+	// manager doesn't.
+	err := s.db.Pool().Rx(ctx, func(ctx context.Context, rx *db.Rx) error {
+		_, err := generated.New(rx.Conn()).GetConversation(ctx, conversationID)
+		return err
 	})
 	if err != nil {
 		return generated.Conversation{}, err
 	}
-
-	s.mu.Lock()
-	manager, ok := s.activeConversations[conversationID]
-	s.mu.Unlock()
-	if !ok {
-		manager, err = s.getOrCreateConversationManager(ctx, conversationID, "")
-		if err != nil {
-			return generated.Conversation{}, fmt.Errorf("hydrate after generation bump: %w", err)
-		}
-	} else {
-		manager.ResetLoop()
+	manager, err := s.getOrCreateConversationManager(ctx, conversationID, "")
+	if err != nil {
+		return generated.Conversation{}, err
 	}
-
-	// (Re-)hydrate so the new generation gets its system prompt created
-	// before we tell anyone about the bump. ResetLoop above cleared the
-	// hydrated flag so this re-runs system prompt creation.
-	if err := manager.Hydrate(ctx); err != nil {
-		return generated.Conversation{}, fmt.Errorf("hydrate after generation bump: %w", err)
+	var conversation generated.Conversation
+	err = manager.StartNewGeneration(ctx, func() error {
+		var err error
+		conversation, err = db.WithTxRes(s.db, ctx, func(q *generated.Queries) (generated.Conversation, error) {
+			return q.IncrementConversationGeneration(ctx, conversationID)
+		})
+		return err
+	})
+	if err != nil {
+		return generated.Conversation{}, err
 	}
 
 	// Re-fetch the conversation to pick up any timestamp changes from creating
@@ -4091,6 +4095,8 @@ func (s *Server) startNewGeneration(ctx context.Context, conversationID string) 
 	}
 
 	manager.broadcastStream(StreamResponse{Conversation: &conversation})
+	// Messages queued while it stopped the turn go out in the new generation.
+	manager.drainQueueIfIdle(s)
 
 	return conversation, nil
 }
