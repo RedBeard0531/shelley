@@ -7,8 +7,8 @@
    a thing. This is useful for interactive testing with a browser, since you don't rely on a model,
    and can fabricate some inputs and outputs. To test things, launch shelley with the relevant flag
    to only expose this model, and use shelley with a browser.
-6. Build the UI (`make ui` or `cd ui && pnpm install && pnpm run build`) before running Go tests so `ui/dist` exists for the embed. `make templates` and `make exe-scroll` supply the other embedded assets (`*.tar.gz`, the exe-scroll binary); `make build` does all of it.
-7. **Always run `cd ui && pnpm run type-check && pnpm run type-check:vue` after modifying any `.ts`, `.tsx`, or `.vue` file.** Fix all errors before committing. Run linting with `pnpm run lint`.
+6. Node.js and pnpm are pinned in `ui/mise.toml`: run them through `scripts/with-node` (the Makefile does), e.g. `scripts/with-node pnpm --dir ui run lint`, never whatever is on PATH. Build the UI (`make ui`) before running Go tests so `ui/dist` exists for the embed. `make templates` and `make exe-scroll` supply the other embedded assets (`*.tar.gz`, the exe-scroll binary); `make build` does all of it.
+7. **Always run `scripts/with-node pnpm --dir ui run type-check` and `scripts/with-node pnpm --dir ui run type-check:vue` after modifying any `.ts`, `.tsx`, or `.vue` file.** Fix all errors before committing. Run linting with `scripts/with-node pnpm --dir ui run lint`.
 8. Run Go unit tests with `go test ./server` (or narrower packages while iterating) once the UI bundle is built.
 9. To programmatically type into the message input (e.g., in browser automation), set the
    value via the native setter and dispatch an `input` event so Vue's v-model picks it up:
@@ -29,7 +29,7 @@
     ```
     Then use browser tools to navigate to http://localhost:8002/ and interact with the UI.
 13. NEVER use alert(), confirm(), or prompt(). Use proper UI components like tooltips, modals, or toasts instead.
-14. SQL migrations and frontend changes require rebuilding the binary (`make build` or `go generate ./... && cd ui && pnpm run build`). `Error: UI build is stale!` compares `ui/src` against the build info embedded in `bin/shelley`, so rebuilding `dist/` alone never clears it; rebuild the binary.
+14. SQL migrations and frontend changes require rebuilding the binary (`make build`, or `go generate ./... && make ui`). `Error: UI build is stale!` compares `ui/src` against the build info embedded in `bin/shelley`, so rebuilding `dist/` alone never clears it; rebuild the binary.
 15. Tool changes and UI tool widget updates go hand in hand. When you add, rename, remove, or
     restructure a tool (in `claudetool/`), you MUST update the UI components that render it:
     - `ui/src/vue/components/CoalescedToolCall.vue` (`TOOL_COMPONENTS` map) and the tool

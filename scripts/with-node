@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Usage: with-node [CMD [ARG...]]
+#
+# Runs CMD with the Node.js and pnpm pinned in ui/mise.toml first on PATH. With
+# no CMD, prints those directories, PATH-style, for callers to prepend.
+#
+# Installs both with mise from ui/mise.lock's checksummed URLs, then refuses to
+# continue unless the node and pnpm on PATH are the releases ui/mise.toml pins.
+# Every build, test and CI entry point that runs Node goes through here.
+set -euo pipefail
+
+ui="$(cd "$(dirname "${BASH_SOURCE[0]}")/../ui" && pwd)"
+
+# mise is pinned too, not taken from PATH: mise.lock's format moves between
+# releases, and an older mise rewrites ui/mise.lock on every run, dropping what
+# it does not understand. Like npm packages (.npmrc), take releases a week old.
+: "${HOME:?with-node: HOME must be set}"
+mise_version=2026.10.10
+mise_dir="${XDG_CACHE_HOME:-$HOME/.cache}/exe-mise/$mise_version"
+mise="$mise_dir/mise"
+if [ ! -x "$mise" ]; then
+    case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) platform=linux-x64 sum=58063fdda315c29ff7504daf8f2414462d6a52e4de2243c3ce23f849975a4ab5 ;;
+    Linux-aarch64) platform=linux-arm64 sum=b67f4ad5e35199b14362aa64d065977f8513a2046430179c2ab42262914a73b0 ;;
+    Darwin-x86_64) platform=macos-x64 sum=63f308ac41c86ab9b3fbaecf26e8825264e9731960d6c665778d64e0e9b47151 ;;
+    Darwin-arm64) platform=macos-arm64 sum=6f99b395c8d2a4364fd5cf6a73521fb7f8444831a330db6a4c7cea9a58d69930 ;;
+    *)
+        echo "with-node: no mise for $(uname -sm)" >&2
+        exit 1
+        ;;
+    esac
+    mkdir -p "$mise_dir"
+    tmp="$(mktemp -d "$mise_dir/.tmp.XXXXXX")"
+    trap 'rm -rf "$tmp"' EXIT
+    curl -fsSL --retry 3 -o "$tmp/mise.tar.gz" \
+        "https://github.com/jdx/mise/releases/download/v$mise_version/mise-v$mise_version-$platform.tar.gz"
+    if command -v sha256sum >/dev/null; then
+        got="$(sha256sum "$tmp/mise.tar.gz")"
+    else
+        got="$(shasum -a 256 "$tmp/mise.tar.gz")"
+    fi
+    if [ "${got%% *}" != "$sum" ]; then
+        echo "with-node: mise $mise_version download has sha256 ${got%% *}, want $sum" >&2
+        exit 1
+    fi
+    tar -xzf "$tmp/mise.tar.gz" -C "$tmp"
+    # rename(2), so a concurrent run sees no mise or a whole one.
+    mv -f "$tmp/mise/bin/mise" "$mise"
+    rm -rf "$tmp"
+    trap - EXIT
+fi
+
+"$mise" trust --quiet "$ui/mise.toml" >&2
+if ! "$mise" install --locked --quiet --cd "$ui" node aqua:pnpm/pnpm >&2; then
+    echo "with-node: if ui/mise.toml changed, run: $mise lock --cd $ui --platform linux-x64,linux-arm64,macos-arm64,macos-x64" >&2
+    exit 1
+fi
+# Only these two: bin-paths alone would add every tool in the global mise config.
+dirs="$("$mise" bin-paths --cd "$ui" node aqua:pnpm/pnpm | paste -sd: -)"
+export PATH="$dirs:$PATH"
+
+# Compare with the file, not `mise current`, which honors overrides such as
+# MISE_NODE_VERSION.
+want="v$(sed -n 's/^node = "\(.*\)"$/\1/p' "$ui/mise.toml")"
+got="$(node --version 2>/dev/null || true)"
+if [ "$got" != "$want" ]; then
+    echo "with-node: node on PATH is ${got:-missing}, want $want (ui/mise.toml)" >&2
+    exit 1
+fi
+want="$(sed -n 's|^"aqua:pnpm/pnpm" = "\(.*\)"$|\1|p' "$ui/mise.toml")"
+got="$(cd "$ui" && pnpm --version 2>/dev/null || true)"
+if [ "$got" != "$want" ]; then
+    echo "with-node: pnpm on PATH is ${got:-missing}, want $want (ui/mise.toml)" >&2
+    exit 1
+fi
+
+if [ $# -eq 0 ]; then
+    printf '%s\n' "$dirs"
+else
+    exec "$@"
+fi

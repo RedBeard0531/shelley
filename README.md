@@ -35,7 +35,8 @@ brew install --cask boldsoftware/tap/shelley
 
 ## Build from Source
 
-You'll need Go and Node.
+You'll need Go. `make` installs the Node.js and pnpm pinned in
+`ui/mise.toml` (see `scripts/with-node`).
 
 ```bash
 git clone https://github.com/boldsoftware/shelley.git

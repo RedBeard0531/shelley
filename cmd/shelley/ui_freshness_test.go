@@ -184,7 +184,7 @@ func assertStaleServeFails(t *testing.T, binary, fixtureDir, workDir string, env
 		"Build timestamp: fixture build",
 		srcFile,
 		"Please run 'make serve' instead of 'go run ./cmd/shelley serve'",
-		"Or rebuild the UI first: cd ui && pnpm run build",
+		"Or rebuild the UI first: make ui",
 	} {
 		if !bytes.Contains(output, []byte(want)) {
 			t.Errorf("stale serve output missing %q:\n%s", want, output)

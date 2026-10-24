@@ -32,7 +32,7 @@ make build-custom
 
 This builds `bin/shelley` stamped as a customized build: the version dialog will show that the build has diverged from mainline (rather than merely being outdated) and will offer a rebase-based upgrade instead of a binary self-update. Do not build customized binaries with plain `make build` — an unstamped binary will wrongly offer binary self-upgrades that would silently discard the customizations.
 
-Requires Go, pnpm, and make, and a full (non-shallow) clone with tags. Run `go test` on the packages you touched before offering to install.
+Requires Go and make (make installs the Node.js and pnpm pinned in `ui/mise.toml`), and a full (non-shallow) clone with tags. Run `go test` on the packages you touched before offering to install.
 
 ## Trying it out and installing
 

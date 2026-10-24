@@ -15,6 +15,7 @@ This directory contains end-to-end tests for the Shelley web interface using Pla
 ### Install Dependencies
 ```bash
 cd ui/
+export PATH="$(../scripts/with-node):$PATH" # the pinned Node.js and pnpm
 pnpm install
 pnpm exec playwright install
 ```

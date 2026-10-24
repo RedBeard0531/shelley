@@ -5,7 +5,7 @@ This document provides instructions for automated testing of the Shelley coding 
 ## Prerequisites
 
 - `ANTHROPIC_API_KEY` environment variable set
-- Node.js and pnpm installed
+- The pinned Node.js and pnpm on PATH: `export PATH="$(scripts/with-node):$PATH"`
 - Go installed
 - `headless` browser tool available (check with `which headless`)
 

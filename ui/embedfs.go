@@ -37,7 +37,7 @@ func checkStaleness() {
 		// If build-info.json doesn't exist, the build is old or incomplete.
 		fmt.Fprintf(os.Stderr, "\nError: UI build is stale!\n")
 		fmt.Fprintf(os.Stderr, "\nPlease run 'make serve' instead of 'go run ./cmd/shelley serve'\n")
-		fmt.Fprintf(os.Stderr, "Or rebuild the UI first: cd ui && pnpm run build\n\n")
+		fmt.Fprintf(os.Stderr, "Or rebuild the UI first: make ui\n\n")
 		os.Exit(1)
 		return
 	}
@@ -96,7 +96,7 @@ func checkStaleness() {
 			fmt.Fprintf(os.Stderr, "  - %s\n", f)
 		}
 		fmt.Fprintf(os.Stderr, "\nPlease run 'make serve' instead of 'go run ./cmd/shelley serve'\n")
-		fmt.Fprintf(os.Stderr, "Or rebuild the UI first: cd ui && pnpm run build\n\n")
+		fmt.Fprintf(os.Stderr, "Or rebuild the UI first: make ui\n\n")
 		os.Exit(1)
 	}
 }

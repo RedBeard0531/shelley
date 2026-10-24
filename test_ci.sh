@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+PATH="$(scripts/with-node):$PATH"
 
 echo "==> Running Shelley CI Tests"
 echo ""

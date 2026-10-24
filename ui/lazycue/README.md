@@ -33,7 +33,7 @@ and each `TestNewPage*` drives its description through a package-level
 gated behind an env var so they stay out of the default `go test ./...` path:
 
 ```bash
-cd shelley/ui && pnpm run build && cd ..   # the server embeds ui/dist
+cd shelley && make ui   # the server embeds ui/dist
 LAZYCUE_INTEGRATION=1 \
   LAZYCUE_ARTIFACT_DIR=/tmp/lazycue-artifacts \
   LAZYCUE_SUMMARY=/tmp/lazycue-summary.json \

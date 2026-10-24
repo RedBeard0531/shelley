@@ -1,6 +1,7 @@
 # Shelley Makefile
 
-PNPM = npx --yes $(shell node -p "require('./ui/package.json').packageManager") --dir ui
+# The Node.js and pnpm pinned in ui/mise.toml.
+PNPM = scripts/with-node pnpm --dir ui
 
 .PHONY: build build-custom build-linux-aarch64 build-linux-x86 test test-go test-e2e ui serve clean help templates demo exe-scroll exe-scroll-all
 
