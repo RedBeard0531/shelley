@@ -14,10 +14,27 @@ test("right-clicking a conversation row opens its actions at the pointer", async
 }) => {
   const first = await createConversationViaAPIWithDetails(request, "context menu first");
   const second = await createConversationViaAPIWithDetails(request, "context menu second");
+  // Other specs' conversations share this drawer, sit anywhere among ours
+  // (rows in a recency bucket order by random id), and keep arriving at its
+  // top. Unfiltered, our rows can start below the fold, and reaching them
+  // scrolls the list, which closes any open menu. A tag of our own keeps just
+  // these two rows on screen and still.
+  const tag = `ctx-menu-${first.conversationId}`;
+  for (const { conversationId } of [first, second]) {
+    const resp = await request.post(`/api/conversation/${conversationId}/tags`, {
+      data: { tags: [tag] },
+    });
+    expect(resp.ok()).toBeTruthy();
+  }
   await page.goto("/new");
+  await page.getByRole("button", { name: "Search conversations..." }).click();
+  await queryEditor(page).fill(`tag:${tag} `);
   const firstRow = page.locator(`[data-conversation-id="${first.conversationId}"]`);
   const secondRow = page.locator(`[data-conversation-id="${second.conversationId}"]`);
   const menu = page.getByTestId("conversation-context-menu");
+  await expect(page.locator(".conversation-item:visible")).toHaveCount(2);
+  await expect(firstRow).toBeInViewport({ ratio: 1 });
+  await expect(secondRow).toBeInViewport({ ratio: 1 });
 
   // The menu opens where the pointer is, in place of the browser's own.
   const box = (await secondRow.locator(".conversation-preview").boundingBox())!;
@@ -317,7 +334,9 @@ test.describe("conversation drawer startup and app bar", () => {
     const restingColor = await copy.evaluate((el) => getComputedStyle(el).color);
     await copy.hover();
     await expect(page.getByRole("tooltip")).toContainText("Click to copy 424904d");
-    expect(await copy.evaluate((el) => getComputedStyle(el).color)).not.toBe(restingColor);
+    // The tooltip can be in the DOM before Chromium applies :hover to the
+    // icon, so wait for the hover color rather than sampling it once.
+    await expect(copy).not.toHaveCSS("color", restingColor);
     await copy.click();
 
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("424904d");
