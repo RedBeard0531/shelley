@@ -149,16 +149,6 @@ func TestAssignTiers(t *testing.T) {
 		}
 	})
 
-	t.Run("glm 5.3 shadows glm 5.2", func(t *testing.T) {
-		tiers := AssignTiers([]string{"glm-5.3-fireworks", "glm-5.2-fireworks"})
-		if tiers["glm-5.3-fireworks"] != Tier1 {
-			t.Errorf("glm 5.3 tier = %d, want %d", tiers["glm-5.3-fireworks"], Tier1)
-		}
-		if tiers["glm-5.2-fireworks"] != Tier2 {
-			t.Errorf("glm 5.2 tier = %d, want %d", tiers["glm-5.2-fireworks"], Tier2)
-		}
-	})
-
 	t.Run("deepseek v4.1 flash 1017 shadows v4.1 flash", func(t *testing.T) {
 		tiers := AssignTiers([]string{"deepseek-v4.1-flash-1017-fireworks", "deepseek-v4.1-flash-fireworks"})
 		if tiers["deepseek-v4.1-flash-1017-fireworks"] != Tier1 {

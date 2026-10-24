@@ -629,7 +629,6 @@ func TestNewToolSetPatchStrategy(t *testing.T) {
 		simple     bool
 	}{
 		{name: "native apply_patch", service: &oai.ResponsesService{ProviderName: "openai", Model: oai.GPT6Sol}, want: "apply_patch"},
-		{name: "GLM 5.2", service: &oai.Service{Model: oai.GLM52Fireworks}, want: "patch", simple: true},
 		{name: "GLM 5.3", service: &oai.Service{Model: oai.GLM53Fireworks}, want: "patch", simple: true},
 		{name: "GLM flash", service: &oai.Service{Model: oai.GLM53FlashFireworks}, want: "patch", simple: true},
 		{name: "GLM alias", service: &oai.Service{Model: oai.GLM}, want: "patch", simple: true},
