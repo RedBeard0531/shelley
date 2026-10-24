@@ -47,7 +47,7 @@ type Hooks struct {
 	// RewriteFinalReply may turn a reply that would end the turn into tool
 	// calls, which then run as if the model had made them. It is consulted
 	// at most once per turn. A turn that ends with an error offers the
-	// error message, once it is recorded.
+	// error message before recording it.
 	RewriteFinalReply func(context.Context, llm.Message) (llm.Message, bool)
 }
 
@@ -434,24 +434,40 @@ func (l *RunConfig) retryWarningHook(ctx context.Context) func(llm.RetryEvent) {
 // failTurn records the error message that ends the turn. If
 // RewriteFinalReply turns it into tool calls, they run as the model's own: a
 // delegated subagent reports the error to its parent as it would a reply.
+//
+// The rewrite is decided first, because an end-of-turn row marks the
+// conversation idle and lets the next turn start. An error row recorded as the
+// end of a turn whose report is still to run would let a new prompt start a
+// turn that the report's own end then marks idle, and the report would be
+// decided against the new turn's state.
 func (l *RunConfig) failTurn(ctx context.Context, errorMessage llm.Message, messages *[]llm.Message, rewritten *bool) {
-	// Persist genuine failures even if the run context expired. This
-	// terminal row clears the durable agent-working state and provides the
-	// user-visible error and Retry affordance.
-	l.emitResponse(context.WithoutCancel(ctx), errorMessage, llm.Usage{}, "failed to record error message")
-	if *rewritten || l.Hooks.RewriteFinalReply == nil {
-		return
+	var report llm.Message
+	reported := false
+	if !*rewritten && l.Hooks.RewriteFinalReply != nil {
+		report, reported = l.Hooks.RewriteFinalReply(ctx, errorMessage)
 	}
-	report, ok := l.Hooks.RewriteFinalReply(ctx, errorMessage)
-	if !ok {
+	// Persist genuine failures even if the run context expired. This row
+	// provides the user-visible error and Retry affordance and, unless a
+	// report follows, ends the turn and clears the durable agent-working state.
+	errorMessage.EndOfTurn = !reported
+	l.emitResponse(context.WithoutCancel(ctx), errorMessage, llm.Usage{}, "failed to record error message")
+	if !reported {
 		return
 	}
 	*rewritten = true
-	if err := l.emitResponse(context.WithoutCancel(ctx), report, llm.Usage{}, "failed to record error report"); err != nil {
-		return
+	if err := l.emitResponse(context.WithoutCancel(ctx), report, llm.Usage{}, "failed to record error report"); err == nil {
+		*messages = append(*messages, report)
+		if errors.Is(l.executeToolCalls(ctx, report.Content, messages), errToolEndedTurn) {
+			return
+		}
 	}
-	*messages = append(*messages, report)
-	l.executeToolCalls(ctx, report.Content, messages)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return // the canceller ends a cancelled turn
+	}
+	// The report did not end the turn: the parent was stopped meanwhile, say,
+	// or the turn's deadline passed before it ran.
+	marker := llm.Message{Role: llm.MessageRoleAssistant, EndOfTurn: true, ExcludedFromContext: true}
+	l.emitResponse(context.WithoutCancel(ctx), marker, llm.Usage{}, "failed to record error end-of-turn")
 }
 
 // truncationError records a response truncated at the maximum output token
@@ -460,8 +476,11 @@ func (l *RunConfig) failTurn(ctx context.Context, errorMessage llm.Message, mess
 func (l *RunConfig) truncationError(ctx context.Context, resp *llm.Response) llm.Message {
 	// Record the truncated message for cost tracking, but mark it as excluded from context.
 	// This preserves billing information without confusing the LLM on future turns.
+	// Not the end of the turn: the error that follows ends it, or the report
+	// failTurn makes of it does.
 	truncatedMessage := resp.ToMessage()
 	truncatedMessage.ExcludedFromContext = true
+	truncatedMessage.EndOfTurn = false
 
 	l.emitResponse(ctx, truncatedMessage, resp.UsageWithMeta(), "failed to record truncated message")
 
@@ -494,8 +513,10 @@ func (l *RunConfig) refusalError(ctx context.Context, resp *llm.Response) llm.Me
 	// Record the raw refusal for cost tracking, but keep it out of context so it
 	// doesn't poison future turns (an empty/near-empty assistant turn biases the
 	// model toward refusing again, and empty content blocks can wedge replay).
+	// Like a truncated response, not the end of the turn.
 	rawMessage := resp.ToMessage()
 	rawMessage.ExcludedFromContext = true
+	rawMessage.EndOfTurn = false
 
 	l.emitResponse(ctx, rawMessage, resp.UsageWithMeta(), "failed to record refusal message")
 
