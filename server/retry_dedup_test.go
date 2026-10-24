@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -125,4 +128,98 @@ func testRetryDoubleClickDeduped(t *testing.T) {
 	// the deferred loop teardown.
 	close(gate)
 	synctest.Wait()
+}
+
+// An error recorded mid-turn, as a subagent's is before its report to the
+// parent, is neither retried nor continued past until the turn ends.
+func TestRetryWaitsForTurnEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		failure llm.Message
+		handle  func(*Server, http.ResponseWriter, *http.Request, string)
+		body    string
+	}{
+		{
+			name: "retry",
+			failure: llm.Message{
+				Role:           llm.MessageRoleAssistant,
+				Content:        []llm.Content{{Type: llm.ContentTypeText, Text: "LLM request failed: boom"}},
+				ErrorType:      llm.ErrorTypeLLMRequest,
+				ErrorRetryable: true,
+			},
+			handle: (*Server).handleRetryConversation,
+		},
+		{
+			name: "continue after refusal",
+			failure: llm.Message{
+				Role:      llm.MessageRoleAssistant,
+				Content:   []llm.Content{{Type: llm.ContentTypeText, Text: "[declined]"}},
+				ErrorType: llm.ErrorTypeRefusal,
+			},
+			handle: (*Server).handleContinueConversation,
+			body:   `{"model":"predictable"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _, held, conv := newBtwTest(t)
+			requireBtwStatus(t, postBtwChat(t, server, conv.ConversationID, ChatRequest{Message: "report", Model: "predictable"}), http.StatusAccepted)
+			call := held.waitCall(t, "report")
+			if err := server.recordMessage(t.Context(), conv.ConversationID, tc.failure, llm.Usage{}, nil); err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			tc.handle(server, w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body)), conv.ConversationID)
+			if !strings.Contains(w.Body.String(), "not_applicable") {
+				t.Fatalf("%s mid-turn: %d %s, want not_applicable", tc.name, w.Code, strings.TrimSpace(w.Body.String()))
+			}
+			releaseAndWaitIdle(t, server, conv.ConversationID, call)
+		})
+	}
+}
+
+// A turn that starts while Continue waits for the loop lifecycle lock, past
+// its first check that the agent is idle, isn't joined by a second request.
+func TestContinueAfterRefusalRacingDrain(t *testing.T) {
+	server, database, held, conv := newBtwTest(t)
+	ctx := t.Context()
+	manager, err := server.getOrCreateConversationManager(ctx, conv.ConversationID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hold the drain of a queued message where it starts its turn: holding
+	// the lifecycle lock, with the agent not yet working.
+	draining, release := make(chan struct{}), make(chan struct{})
+	releaseDrain := sync.OnceFunc(func() { close(release) })
+	defer releaseDrain()
+	record := manager.recordDrainedQueued
+	manager.recordDrainedQueued = func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) (int64, error) {
+		close(draining)
+		<-release
+		return record(ctx, qm, messages)
+	}
+	requireBtwStatus(t, postBtwChat(t, server, conv.ConversationID, ChatRequest{Message: "refusal", Model: "predictable"}), http.StatusAccepted)
+	releaseAndWaitIdle(t, server, conv.ConversationID, held.waitCall(t, "refusal"))
+	requireBtwStatus(t, postBtwChat(t, server, conv.ConversationID, ChatRequest{Message: "drained", Model: "predictable", Queue: true}), http.StatusAccepted)
+	<-draining
+
+	w := httptest.NewRecorder()
+	continued := make(chan struct{})
+	go func() {
+		defer close(continued)
+		server.handleContinueConversation(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"model":"predictable"}`)), conv.ConversationID)
+	}()
+	waitLockingIn(t, "(*ConversationManager).ContinueAfterRefusal")
+	releaseDrain()
+	<-continued
+	if !strings.Contains(w.Body.String(), "not_applicable") {
+		t.Errorf("continue while the drained turn starts: %d %s, want not_applicable", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+	releaseAndWaitIdle(t, server, conv.ConversationID, held.waitCall(t, "drained"))
+	held.mu.Lock()
+	again := len(held.calls["drained"])
+	held.mu.Unlock()
+	if again != 0 {
+		t.Errorf("%d more requests for the drained turn", again)
+	}
+	requireTurnsEndOnce(t, database, conv.ConversationID, 1)
 }

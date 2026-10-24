@@ -739,6 +739,12 @@ func (cm *ConversationManager) RetryLastLLMRequest(ctx context.Context) error {
 	if loopInstance == nil {
 		return fmt.Errorf("no active loop to retry")
 	}
+	// An error is retryable once it has ended its turn. A subagent's turn
+	// goes on to report its error to the parent, and a retry queued behind
+	// that would run after the turn ends, as if the agent were idle.
+	if cm.IsAgentWorking() {
+		return errRetryNotApplicable
+	}
 
 	latest, err := database.GetLatestActionableMessage(ctx, conversationID)
 	if err != nil {
@@ -803,6 +809,13 @@ func (cm *ConversationManager) ContinueAfterRefusal(ctx context.Context, models 
 	cm.retryMu.Lock()
 	defer cm.retryMu.Unlock()
 
+	// As with RetryLastLLMRequest, a refusal can be continued past once it
+	// has ended its turn; check before switching models, which would stop
+	// the turn.
+	if cm.IsAgentWorking() {
+		return errNotRefusal
+	}
+
 	cm.mu.Lock()
 	logger := cm.logger
 	conversationID := cm.conversationID
@@ -851,6 +864,18 @@ func (cm *ConversationManager) ContinueAfterRefusal(ctx context.Context, models 
 	cm.loopLifecycleMu.Lock()
 	defer cm.loopLifecycleMu.Unlock()
 	cm.waitForLoopTeardownLocked()
+	// Turns start under this lock, so none starts from here on, but one may
+	// have started, or even run, since the checks above (a queued message
+	// draining, say). Continuing would then re-fire a request beside it, or
+	// after it, rather than the refused one.
+	if cm.IsAgentWorking() {
+		return errNotRefusal
+	}
+	if ran, err := cm.turnRecordedSince(ctx, latest.SequenceID); err != nil {
+		return fmt.Errorf("failed to load messages since the refusal: %w", err)
+	} else if ran {
+		return errNotRefusal
+	}
 	if err := cm.Hydrate(ctx); err != nil {
 		return fmt.Errorf("failed to hydrate before continuing: %w", err)
 	}
@@ -872,6 +897,28 @@ func (cm *ConversationManager) ContinueAfterRefusal(ctx context.Context, models 
 	cm.SetAgentWorking(true)
 	loopInstance.Retry()
 	return nil
+}
+
+// turnRecordedSince reports whether a turn has recorded anything after the
+// message with the given sequence ID. Rows recorded outside turns, such as a
+// settings change's marker and system prompt, don't count.
+func (cm *ConversationManager) turnRecordedSince(ctx context.Context, sequenceID int64) (bool, error) {
+	var rows []generated.Message
+	err := cm.db.Pool().Rx(ctx, func(ctx context.Context, rx *db.Rx) error {
+		var err error
+		rows, err = generated.New(rx.Conn()).ListMessagesSince(ctx, generated.ListMessagesSinceParams{ConversationID: cm.conversationID, SequenceID: sequenceID})
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(rows, func(m generated.Message) bool {
+		switch db.MessageType(m.Type) {
+		case db.MessageTypeUser, db.MessageTypeAgent, db.MessageTypeTool, db.MessageTypeError:
+			return true
+		}
+		return false
+	}), nil
 }
 
 // ResumeInterruptedTurn re-fires the persisted request for a newly created BTW
