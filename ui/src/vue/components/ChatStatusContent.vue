@@ -206,6 +206,7 @@ const props = defineProps<{
   onResumeInterrupted: () => void;
   onCompactInPlace: () => Promise<void> | void;
   compactInPlaceBusy?: boolean;
+  contextNudges?: boolean;
   onSelectModel: (model: string) => void;
   onSelectCombination: (model: string, level: Exclude<ThinkingLevel, "default"> | null) => void;
   /** Model / reasoning-level picks from the status readout, which only renders
@@ -248,6 +249,7 @@ const readoutProps = computed(() => ({
   refreshingModels: props.refreshingModels,
   onCompactInPlace: props.onCompactInPlace,
   compactInPlaceBusy: props.compactInPlaceBusy,
+  contextNudges: props.contextNudges,
   onUsageNeeded: props.onUsageNeeded,
   // The readout's cwd segment. Same picker as the composer's cwd chip, but for
   // a conversation that already exists, where the pick has to go through the

@@ -1,4 +1,4 @@
-import { contextUsageLevel, contextUsageLevelLabel } from "./contextUsage";
+import { contextUsageLevel, contextUsageLevelLabel, longConversationAdvice } from "./contextUsage";
 
 let passed = 0;
 let failed = 0;
@@ -47,6 +47,28 @@ run("contextUsageLevel also steps on fraction of the window", () => {
 run("contextUsageLevel tolerates an unknown window", () => {
   assert(contextUsageLevel(50_000, 0) === "", "no window, under 100k: plain");
   assert(contextUsageLevel(150_000, 0) === "warn", "no window, over 100k: warn");
+});
+
+run("longConversationAdvice waits for 250k, well after the count colors", () => {
+  const max = 1_000_000;
+  assert(!longConversationAdvice(100_000, max, false), "100k colors but says nothing");
+  assert(!longConversationAdvice(249_999, max, false), "just under 250k says nothing");
+  assert(longConversationAdvice(250_000, max, false), "250k advises");
+  assert(!longConversationAdvice(0, 0, false), "empty, unknown window: nothing");
+  assert(longConversationAdvice(300_000, 0, false), "unknown window, over 250k: advises");
+});
+
+run("longConversationAdvice still comes before a small window fills", () => {
+  const max = 200_000; // 250k would never arrive
+  assert(!longConversationAdvice(170_000, max, false), "85% says nothing");
+  assert(longConversationAdvice(180_000, max, false), "90% advises");
+  assert(!longConversationAdvice(244_000, 272_000, false), "a window past 250k waits for 250k");
+});
+
+run("longConversationAdvice is silent when the agent is nudged", () => {
+  assert(!longConversationAdvice(250_000, 1_000_000, true), "250k with nudges: nothing");
+  assert(!longConversationAdvice(5_000_000, 1_000_000, true), "way over with nudges: nothing");
+  assert(!longConversationAdvice(190_000, 200_000, true), "95% with nudges: nothing");
 });
 
 if (failed > 0) {

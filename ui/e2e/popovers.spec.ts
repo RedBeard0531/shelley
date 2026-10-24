@@ -758,6 +758,39 @@ test.describe("Context usage popup", () => {
     }
   });
 
+  // The advice to compact or start over comes later than the color, and never
+  // when the agent is told its context size and compacts on its own.
+  // The predictable model's window is 200k, so its 90% floor (180k) stands in
+  // for the 250k threshold here; utils/contextUsage.test.ts covers both.
+  test("advises compacting late, and never when the agent is nudged", async ({ page, request }) => {
+    test.setTimeout(90000);
+    const label = page.locator(".context-usage-label:visible").first();
+    const tokens = label.locator(".context-usage-label-tokens");
+    const popup = page.locator(".chat-context-popup");
+    const advice = popup.getByText("This conversation is getting long.");
+    const nudgesOff = { conversationOptions: { tool_overrides: { compact_in_place: "off" } } };
+    const cases = [
+      { message: "cache: 170000 0", opts: nudgesOff, level: "high", advised: false },
+      { message: "cache: 185000 0", opts: nudgesOff, level: "critical", advised: true },
+      // compact_in_place is on by default, and with it the nudges.
+      { message: "cache: 185000 0", opts: {}, level: "critical", advised: false },
+    ];
+    for (const { message, opts, level, advised } of cases) {
+      const slug = await createConversationViaAPI(request, message, opts);
+      await page.goto(`/c/${slug}`);
+      // The count has colored, so the size the advice depends on is in.
+      await expect(tokens, message).toHaveClass(new RegExp(`context-usage-label-tokens-${level}`), {
+        timeout: 30000,
+      });
+      await label.click();
+      await expect(popup.getByTestId("compact-in-place-button")).toBeVisible();
+      if (advised) await expect(advice, message).toBeVisible();
+      else await expect(advice, message).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(popup).toBeHidden();
+    }
+  });
+
   // The status readout is "<cwd> · <tokens> · <model>" on one line, and it has
   // to survive a narrow viewport by ellipsizing the model name — not by
   // overflowing the bar or clipping the token count. This needs min-width: 0 on

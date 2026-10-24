@@ -52,6 +52,7 @@
       :messages="messages"
       :on-compact-in-place="onCompactInPlace"
       :compact-in-place-busy="compactInPlaceBusy"
+      :context-nudges="contextNudges"
       :on-usage-needed="onUsageNeeded"
     />
 
@@ -121,6 +122,7 @@ const props = defineProps<{
   agentWorking?: boolean;
   onCompactInPlace: () => Promise<void> | void;
   compactInPlaceBusy?: boolean;
+  contextNudges?: boolean;
   onUsageNeeded?: () => void;
   onChangeConversationCwd?: () => void;
   onSwitchConversationModel: (model: string) => void;

@@ -884,7 +884,12 @@ const { markdownMode } = useMarkdownMode();
 // The open conversation's options: its settings (as of the last change) and
 // the profile they came from.
 const conversationOptions = computed<
-  Partial<Settings> & { profile?: string; disable_all_tools?: boolean; kind?: string }
+  Partial<Settings> & {
+    profile?: string;
+    disable_all_tools?: boolean;
+    disable_compact_nudges?: boolean;
+    kind?: string;
+  }
 >(() => {
   try {
     return JSON.parse(props.currentConversation?.conversation_options || "{}") ?? {};
@@ -2239,6 +2244,17 @@ const compactInPlaceEnabled = computed(() =>
     availableTools.value,
     conversationOptions.value.disable_all_tools,
   ),
+);
+
+// Whether the agent is told its context size as it grows (contextNudger in
+// server/compact_in_place.go). The Compact in Place button enables the tool
+// without nudges, and /btw readers run without the tool whatever their
+// options say (ensureLoop).
+const contextNudgesOn = computed(
+  () =>
+    compactInPlaceEnabled.value &&
+    !conversationOptions.value.disable_compact_nudges &&
+    conversationOptions.value.kind !== "btw_reader",
 );
 
 const displayTitle = computed(() => {
@@ -4449,6 +4465,7 @@ const statusContentProps = computed(() => {
     onResumeInterrupted: handleResumeInterrupted,
     onCompactInPlace: () => handleCompactInPlace(),
     compactInPlaceBusy: agentWorking.value && !compactInPlaceEnabled.value,
+    contextNudges: contextNudgesOn.value,
     onSelectModel: setSelectedModel,
     onSelectCombination: setSelectedCombination,
     // The status readout's inline picker only renders for a conversation that

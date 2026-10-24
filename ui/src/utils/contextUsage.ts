@@ -46,3 +46,25 @@ export function contextUsageLevel(tokens: number, maxContextTokens: number): Con
   if (tokens >= WARN_TOKENS || fraction >= WARN_FRACTION) return "warn";
   return "";
 }
+
+// The popup's advice to compact or start over waits longer than the color:
+// a warming count is a quiet signal, the advice is a nag, and long
+// conversations are ordinary now.
+const ADVICE_TOKENS = 250_000;
+// ...or for most of a window too small to get there.
+const ADVICE_FRACTION = CRITICAL_FRACTION;
+
+/**
+ * Whether the context popup should advise compacting or starting a new
+ * conversation. Never when `nudged`: the agent is told its context size and
+ * compacts on its own (see contextNudger in server/compact_in_place.go).
+ */
+export function longConversationAdvice(
+  tokens: number,
+  maxContextTokens: number,
+  nudged: boolean,
+): boolean {
+  if (nudged) return false;
+  const fraction = maxContextTokens > 0 ? tokens / maxContextTokens : 0;
+  return tokens >= ADVICE_TOKENS || fraction >= ADVICE_FRACTION;
+}

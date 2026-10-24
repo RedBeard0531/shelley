@@ -1,6 +1,7 @@
 <!-- The token-count segment of the status readout ("15k"). Opens token/cost
      graphs and manual compaction actions. The count warms up at 100k / 200k /
-     300k tokens (or 70/80/90% of a known context window). -->
+     300k tokens (or 70/80/90% of a known context window); the popup advises
+     compacting later (see longConversationAdvice). -->
 <template>
   <div ref="barRef" class="context-usage-root">
     <Popover
@@ -78,7 +79,11 @@
 import { computed, ref, useId, watch } from "vue";
 import Popover from "primevue/popover";
 import type { Message, Model } from "../../types";
-import { contextUsageLevel, contextUsageLevelLabel } from "../../utils/contextUsage";
+import {
+  contextUsageLevel,
+  contextUsageLevelLabel,
+  longConversationAdvice,
+} from "../../utils/contextUsage";
 import { formatTokenCount } from "../../utils/tokenCostGraph";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
 import { useUsagePanesPreference } from "../composables/usagePanesPreference";
@@ -100,6 +105,8 @@ const props = defineProps<{
   onCompactInPlace: () => Promise<void> | void;
   /** The tool still has to be enabled, which waits for the turn to end. */
   compactInPlaceBusy?: boolean;
+  /** The agent is told its context size, so it compacts on its own. */
+  contextNudges?: boolean;
   /** Called just before the popup opens. The parent computes usageEntries /
    *  otherUsageRows lazily (walking every message and parsing its usage data),
    *  so it needs a beat's warning; the graph renders empty for one tick and
@@ -125,8 +132,9 @@ const usageLevel = computed(() =>
 const usageLevelClass = computed(() =>
   usageLevel.value ? `context-usage-label-tokens-${usageLevel.value}` : "",
 );
-// The popup's advice appears exactly when the count first colors.
-const showLongConversationWarning = computed(() => usageLevel.value !== "");
+const showLongConversationWarning = computed(() =>
+  longConversationAdvice(props.contextWindowSize, props.maxContextTokens, !!props.contextNudges),
+);
 
 // Spelled out for the accessible name; the level is named in words too since
 // hue alone is no signal for some readers.
