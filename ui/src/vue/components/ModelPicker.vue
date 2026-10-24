@@ -60,7 +60,8 @@
     :focus-on-hover="false"
     @update:model-value="handleSelect"
     @filter="onFilter"
-    @before-show="heldRecent = liveRecent"
+    @before-show="onBeforeShow"
+    @blur="onTriggerBlur"
     @hide="onHide"
   >
     <template #value>
@@ -544,6 +545,8 @@ const filterValue = ref("");
 
 function onFilter(event: { value: string }) {
   filterValue.value = event.value ?? "";
+  // The rows just changed under the remembered one (see onTriggerBlur).
+  keyboardRow = -1;
 }
 
 // When collapsed, only show tier-1 models — plus the currently selected model
@@ -712,8 +715,34 @@ function handleSelect(pickerValue: string) {
 // focus back on the trigger, and the option keyboard focus is on, which a
 // pick with the pointer (taken here, not by PrimeVue) has to move as well, or
 // Enter would pick the one focused before.
-type SelectInternals = { hide(focusTrigger?: boolean): void; focusedOptionIndex: number };
+type SelectInternals = {
+  hide(focusTrigger?: boolean): void;
+  focusedOptionIndex: number;
+  overlayVisible: boolean;
+};
 const select = () => selectRef.value as unknown as SelectInternals | null;
+
+// Select clears the option keyboard focus 100ms after its trigger blurs,
+// whatever happened since: the trigger blurs as the panel opens and the search
+// takes the focus, and a reopen can land inside the 100ms of an earlier blur.
+// Left alone, the selected model loses its highlight a moment after opening,
+// and the arrows start over from nowhere. So the row the keyboard was last on
+// is remembered, and handed back if the panel is still open when the clearing
+// lands. (Leaving the picker closes the panel first, so that clearing stands.)
+let keyboardRow = -1;
+watch(
+  () => select()?.focusedOptionIndex ?? -1,
+  (index) => {
+    if (index !== -1) keyboardRow = index;
+  },
+  { flush: "sync" },
+);
+function onTriggerBlur() {
+  const s = select();
+  if (s?.overlayVisible && s.focusedOptionIndex === -1 && keyboardRow !== -1) {
+    s.focusedOptionIndex = keyboardRow;
+  }
+}
 
 // A panel of settings stays open through its choices, and says so with a
 // close button; a bare list of models closes on a pick, as a select does.
@@ -754,6 +783,8 @@ function setCompactNudge(tokens: number) {
 
 function toggleMore() {
   showMore.value = !showMore.value;
+  // As with filtering, the rows change under the remembered one.
+  keyboardRow = -1;
 }
 
 // An action that opens a dialog, which takes the focus.
@@ -796,6 +827,10 @@ async function profileAction(action: () => Promise<void>) {
   (
     pills?.querySelector<HTMLElement>('[aria-checked="true"]') ?? pills?.querySelector("button")
   )?.focus();
+}
+function onBeforeShow() {
+  heldRecent.value = liveRecent.value;
+  keyboardRow = -1;
 }
 function onHide() {
   heldRecent.value = null;

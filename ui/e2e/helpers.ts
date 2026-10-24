@@ -295,6 +295,18 @@ export async function clearConversationQuery(search: Locator): Promise<void> {
   await expect(search).toHaveAttribute("data-query-value", "");
 }
 
+// Replace the query. Not locator.fill(): it selects the text through the DOM
+// and inserts in a later round trip. A filter button's focus("end") writes the
+// editor's own selection back on the next frame, so a frame that lands before
+// the editor reads the DOM select-all can make fill() append. Selecting through
+// the editor's keymap keeps its state in step.
+export async function fillConversationQuery(search: Locator, text: string): Promise<void> {
+  await search.focus();
+  await search.press("ControlOrMeta+A");
+  await search.page().keyboard.insertText(text);
+  await expect(search).toHaveAttribute("data-query-value", text);
+}
+
 /** A minimal valid RGB PNG of the given size, filled with a gradient. */
 export function makePNG(width: number, height: number): Buffer {
   const raw = Buffer.alloc(height * (1 + width * 3));

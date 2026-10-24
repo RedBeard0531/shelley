@@ -12,10 +12,6 @@ import {
 test.use({ viewport: { width: 1280, height: 720 } });
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(
-    (cwd) => localStorage.setItem("shelley_selected_cwd", cwd),
-    testWorkingDirectory(),
-  );
   // Record the event stream, to tell when the list has reported a row.
   await page.addInitScript(() => {
     const w = window as unknown as { __streamed: string[] };

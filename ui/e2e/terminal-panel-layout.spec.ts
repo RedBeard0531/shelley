@@ -107,7 +107,10 @@ test("keeps the terminal inside its padded content area", async ({ page, request
         terminal.evaluate((el) => {
           const terminalRect = el.getBoundingClientRect();
           const contentRect = el.parentElement!.getBoundingClientRect();
-          const screenRect = el.querySelector(".xterm-screen, canvas")!.getBoundingClientRect();
+          // xterm adds its screen after the container shows; poll until then.
+          const screen = el.querySelector(".xterm-screen, canvas");
+          if (!screen) return null;
+          const screenRect = screen.getBoundingClientRect();
           return {
             terminalBottom: terminalRect.bottom <= contentRect.bottom,
             terminalRight: terminalRect.right <= contentRect.right,

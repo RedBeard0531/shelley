@@ -208,7 +208,10 @@ test.describe("Narrated review recording", () => {
       );
 
       // Drag-select within the row; locator positions retry if it re-renders.
+      // The diff renders plain first and swaps in the highlighted spans when
+      // the worker returns; a drag across that swap loses its anchor, so wait.
       const row = diffRow(page, "renamedValue").last();
+      await expect(row.locator('span[style*="--diffs-token"]').first()).toBeAttached();
       await row.hover({ position: { x: 8, y: 8 } });
       await page.mouse.down();
       await row.hover({ position: { x: 120, y: 8 } });

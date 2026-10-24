@@ -185,12 +185,16 @@ test.describe("Performance HUD", () => {
         (status) => status.text.includes(expectedMessageText) && status.messageElements === 0,
       ),
     ).toBeTruthy();
-    const memoryLoads = await page.evaluate(() => window.__shelleyPerf?.loads() ?? []);
-    expect(memoryLoads.at(-1)).toMatchObject({
-      conversationId,
-      source: "memory",
-      messages: expectedMessages,
-    });
+    // The load is recorded once it has rendered, which on a busy machine can
+    // trail the first message becoming visible; until then the latest entry
+    // is still the IndexedDB load above.
+    await expect
+      .poll(() => page.evaluate(() => window.__shelleyPerf?.loads().at(-1)))
+      .toMatchObject({
+        conversationId,
+        source: "memory",
+        messages: expectedMessages,
+      });
     await hud.locator(".perf-hud-title").click();
     await expect(hud.locator(".perf-hud-load").first()).toContainText("Memory");
   });

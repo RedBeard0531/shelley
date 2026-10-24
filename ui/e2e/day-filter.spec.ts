@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { ConversationWithState } from "../src/types";
-import { createConversationViaAPIWithDetails } from "./helpers";
+import { createConversationViaAPIWithDetails, fillConversationQuery } from "./helpers";
 
 test.use({ timezoneId: "America/New_York" });
 
@@ -258,7 +258,7 @@ test("Daily grouping pages and counts last-touched chats and selects calendar da
   await expect(row(yesterday.conversationId)).toBeVisible();
   await groupBy("Daily");
   const searchResponse = page.waitForResponse("**/api/conversations/search?*");
-  await page.locator(".drawer-search-input").fill("day paging");
+  await fillConversationQuery(page.locator(".drawer-search-input"), "day paging");
   await searchResponse;
   await expect(count).toHaveText("2");
   await previous.click();

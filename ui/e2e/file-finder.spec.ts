@@ -1,7 +1,14 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { createConversationViaAPI, git, initGitRepo, withTempDir } from "./helpers";
+import {
+  createConversationViaAPI,
+  createConversationViaAPIWithDetails,
+  type CreatedConversation,
+  git,
+  initGitRepo,
+  withTempDir,
+} from "./helpers";
 
 // The fuzzy file finder (Cmd/Ctrl+P) ANDs whitespace-separated terms, so
 // a half-remembered filename typed as words finds the file: "vm storage s3"
@@ -38,6 +45,145 @@ test.describe("File finder multi-term search", () => {
       // A single term still matches every file containing it.
       await finderInput.fill("vm-storage");
       await expect(rows).toHaveCount(2, { timeout: 10000 });
+    });
+  });
+});
+
+// Rename conv until its last activity is strictly later than other's (activity
+// times have one-second resolution, and a tie leaves the order to chance).
+// Returns the final slug, which tells when an open page has caught up. Kept
+// short: slugs are truncated, so a suffix on a long one could change nothing.
+async function makeMostRecent(
+  request: APIRequestContext,
+  conv: CreatedConversation,
+  other: CreatedConversation,
+): Promise<string> {
+  let touches = 0;
+  let slug = "";
+  await expect(async () => {
+    const rename = await request.post(`/api/conversation/${conv.conversationId}/rename`, {
+      data: { slug: `recent-${conv.conversationId.toLowerCase()}-${++touches}` },
+    });
+    expect(rename.ok()).toBeTruthy();
+    slug = (await rename.json()).slug;
+    const snapshot = await request.get("/api/conversations/snapshot");
+    const { conversations } = (await snapshot.json()) as {
+      conversations: { conversation_id: string; updated_at: string }[];
+    };
+    const updatedAt = (id: string) =>
+      Date.parse(conversations.find((c) => c.conversation_id === id)!.updated_at);
+    expect(updatedAt(conv.conversationId)).toBeGreaterThan(updatedAt(other.conversationId));
+  }).toPass();
+  return slug;
+}
+
+test.describe("File finder opened while the conversation loads", () => {
+  test("follows the conversation's directory once it arrives", async ({ page, request }) => {
+    await withTempDir("shelley-finder-early-", async (dir) => {
+      writeFileSync(join(dir, "arrives-late.md"), "x\n");
+      // Something for the list to show meanwhile, in another directory.
+      await createConversationViaAPI(request, "Hello");
+      const slug = await createConversationViaAPI(request, "Hello", { cwd: dir });
+
+      // A deep link to a conversation the first list page doesn't hold (an
+      // old one, or under load a just-created one) resolves its slug with a
+      // separate request. Cmd/Ctrl+P pressed before that lands opens the
+      // finder on a fallback directory; it must move once the conversation
+      // is known.
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      // The stand-in: the directory of the list's most recent top-level
+      // conversation. Read from the list the page gets, since activity times
+      // have one-second resolution and an earlier test's conversation can tie.
+      let standIn = "";
+      type Listed = {
+        slug: string;
+        cwd?: string;
+        git_worktree_root?: string;
+        parent_conversation_id?: string;
+      };
+      await page.route("**/api/conversations/snapshot*", async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.conversations = body.conversations.filter((c: Listed) => c.slug !== slug);
+        const top = body.conversations.find((c: Listed) => !c.parent_conversation_id);
+        standIn = top?.git_worktree_root || top?.cwd || "";
+        await route.fulfill({ response, json: body });
+      });
+      await page.route("**/api/stream2*", async (route) => {
+        await held;
+        await route.continue();
+      });
+      await page.route("**/api/conversation-by-slug/**", async (route) => {
+        await held;
+        await route.continue();
+      });
+      try {
+        await page.goto(`/c/${slug}`);
+        await page.waitForLoadState("domcontentloaded");
+        await page.keyboard.press("ControlOrMeta+P");
+        const finderInput = page.locator(".grp-filter");
+        await expect(finderInput).toBeVisible({ timeout: 10000 });
+        await expect.poll(() => standIn).not.toBe("");
+        expect(standIn).not.toBe(dir);
+        await expect(page.locator(".ff-dir-path")).toHaveText(standIn);
+        await finderInput.fill("arrives-late");
+
+        release();
+        await expect(page.locator(".ff-dir-path")).toHaveText(dir);
+        await expect(page.locator(".grp-row").first()).toContainText("arrives-late.md");
+        await expect(finderInput).toHaveValue("arrives-late");
+      } finally {
+        release();
+      }
+    });
+  });
+
+  // On /new there is no conversation directory to wait for. The finder opens on
+  // the most recently active conversation's, which changes whenever another
+  // conversation does something; that must not move a finder in use.
+  test.describe("on a new conversation", () => {
+    test.use({ viewport: { width: 1280, height: 800 }, isMobile: false, hasTouch: false });
+
+    test("stays put when another conversation becomes the most recent", async ({
+      page,
+      request,
+    }) => {
+      await withTempDir("shelley-finder-new-a-", async (dirA) => {
+        await withTempDir("shelley-finder-new-b-", async (dirB) => {
+          writeFileSync(join(dirA, "only-in-a.md"), "a\n");
+          writeFileSync(join(dirB, "only-in-b.md"), "b\n");
+          const a = await createConversationViaAPIWithDetails(request, "Hello", { cwd: dirA });
+          const b = await createConversationViaAPIWithDetails(request, "Hello", { cwd: dirB });
+          await makeMostRecent(request, b, a);
+
+          await page.goto("/new");
+          await expect(page.getByTestId("message-input")).toBeVisible();
+          await page.keyboard.press("ControlOrMeta+P");
+          const finderInput = page.locator(".grp-filter");
+          await expect(finderInput).toBeVisible({ timeout: 10000 });
+          await expect(page.locator(".ff-dir-path")).toHaveText(dirB);
+          await finderInput.fill("only-in");
+          await expect(page.locator(".grp-row").first()).toContainText("only-in-b.md");
+
+          // A becomes the most recent conversation, and the page hears of it...
+          const renamed = await makeMostRecent(request, a, b);
+          await expect(
+            page.locator(`.conversation-item[data-conversation-id="${a.conversationId}"]`),
+          ).toContainText(renamed);
+
+          // ...but the open finder is still where the user is searching.
+          await expect(page.locator(".ff-dir-path")).toHaveText(dirB);
+          await expect(page.locator(".grp-row").first()).toContainText("only-in-b.md");
+          await expect(finderInput).toHaveValue("only-in");
+
+          // A fresh open does take the new most recent directory.
+          await page.keyboard.press("Escape");
+          await expect(finderInput).toBeHidden();
+          await page.keyboard.press("ControlOrMeta+P");
+          await expect(page.locator(".ff-dir-path")).toHaveText(dirA);
+        });
+      });
     });
   });
 });

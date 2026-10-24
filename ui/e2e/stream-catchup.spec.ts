@@ -7,10 +7,16 @@ import { createConversationViaAPIWithDetails } from "./helpers";
  * services/globalStream.ts.
  */
 
+// Waits for text in the conversation itself. The conversation list previews
+// each conversation's latest message, so matching anywhere on the page can pass
+// before the conversation has loaded -- and a load that lands after a test
+// starts counting requests then looks like a cache miss.
 async function waitForText(page: Page, text: string, timeout = 15000) {
-  await page.waitForFunction((t) => document.body.textContent?.includes(t) ?? false, text, {
-    timeout,
-  });
+  await page.waitForFunction(
+    (t) => document.querySelector(".messages-container")?.textContent?.includes(t) ?? false,
+    text,
+    { timeout },
+  );
 }
 
 async function selectConversation(page: Page, slug: string) {

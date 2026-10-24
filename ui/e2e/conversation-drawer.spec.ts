@@ -1,4 +1,8 @@
-import { clearConversationQuery, createConversationViaAPIWithDetails } from "./helpers";
+import {
+  clearConversationQuery,
+  createConversationViaAPIWithDetails,
+  fillConversationQuery,
+} from "./helpers";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ConversationWithState } from "../src/types";
 
@@ -28,7 +32,7 @@ test("right-clicking a conversation row opens its actions at the pointer", async
   }
   await page.goto("/new");
   await page.getByRole("button", { name: "Search conversations..." }).click();
-  await queryEditor(page).fill(`tag:${tag} `);
+  await fillConversationQuery(queryEditor(page), `tag:${tag} `);
   const firstRow = page.locator(`[data-conversation-id="${first.conversationId}"]`);
   const secondRow = page.locator(`[data-conversation-id="${second.conversationId}"]`);
   const menu = page.getByTestId("conversation-context-menu");
@@ -376,15 +380,15 @@ test.describe("conversation drawer startup and app bar", () => {
     await expect(title.locator("mark")).toHaveCount(0);
     await page.getByRole("button", { name: "Search conversations..." }).click();
     const editor = queryEditor(page);
-    await editor.fill("PELICAN tag:birds ");
+    await fillConversationQuery(editor, "PELICAN tag:birds ");
     await expect(title.locator("mark")).toHaveText(["Pelican", "pelican"]);
     await expect(title).toHaveText("Pelican-project-pelican");
     await expect(messageTitle.locator("mark")).toHaveCount(0);
     await expect(page.locator(".conversation-snippet mark")).toHaveText(["pelican"]);
 
-    await editor.fill("project");
+    await fillConversationQuery(editor, "project");
     await expect(title.locator("mark")).toHaveText(["project"]);
-    await editor.fill("");
+    await clearConversationQuery(editor);
     await expect(title.locator("mark")).toHaveCount(0);
 
     await page.keyboard.press("ControlOrMeta+k");
@@ -422,13 +426,13 @@ test.describe("conversation drawer startup and app bar", () => {
     await page.goto("/new");
     await page.getByRole("button", { name: "Search conversations..." }).click();
     const editor = queryEditor(page);
-    await editor.fill("needle");
+    await fillConversationQuery(editor, "needle");
     await expect(page.locator('[data-conversation-id="needle-match"]')).toBeVisible();
-    await editor.fill("pending");
+    await fillConversationQuery(editor, "pending");
     await expect(page.locator('[data-conversation-id="needle-match"]')).toHaveCount(0);
     await expect(page.getByText("Searching...", { exact: true })).toBeVisible();
     release();
-    await editor.fill("");
+    await clearConversationQuery(editor);
   });
 
   test("Ask Shelley waits for results and immediately closes the mobile drawer", async ({ page }) => {
@@ -459,7 +463,7 @@ test.describe("conversation drawer startup and app bar", () => {
     await page.goto("/new");
     await page.getByRole("button", { name: "Open conversations", exact: true }).click();
     await page.getByRole("button", { name: "Search conversations..." }).click();
-    await queryEditor(page).fill("needle");
+    await fillConversationQuery(queryEditor(page), "needle");
     const ask = page.getByRole("button", { name: "Ask Shelley", exact: true });
     await expect(ask).toBeDisabled();
     releaseResults();
@@ -494,7 +498,7 @@ test.describe("conversation drawer startup and app bar", () => {
     await page.getByRole("button", { name: "Search conversations..." }).click();
     const editor = queryEditor(page);
     const titles = page.locator(".drawer .conversation-title");
-    await editor.fill("needle");
+    await fillConversationQuery(editor, "needle");
     await expect(titles).toHaveText(["needle-active"]);
 
     await page.getByRole("button", { name: "View Archived", exact: true }).click();
@@ -524,20 +528,20 @@ test.describe("conversation drawer startup and app bar", () => {
     const slowRequest = page.waitForRequest(
       (request) => new URL(request.url()).searchParams.get("q") === "slow",
     );
-    await editor.fill("slow");
+    await fillConversationQuery(editor, "slow");
     const slow = await slowRequest;
     const slowCancelled = page.waitForEvent("requestfailed", (request) => request === slow);
-    await editor.fill("needle");
+    await fillConversationQuery(editor, "needle");
     await slowCancelled;
     await expect(page.locator('[data-conversation-id="needle-active"]')).toBeVisible();
 
     const pendingRequest = page.waitForRequest(
       (request) => new URL(request.url()).searchParams.get("q") === "cleared",
     );
-    await editor.fill("cleared");
+    await fillConversationQuery(editor, "cleared");
     const pending = await pendingRequest;
     const pendingCancelled = page.waitForEvent("requestfailed", (request) => request === pending);
-    await editor.fill("");
+    await clearConversationQuery(editor);
     await pendingCancelled;
     await expect(page.locator('[data-conversation-id="recent"]')).toBeVisible();
     await expect(page.locator('[data-conversation-id="needle-active"]')).toHaveCount(0);
@@ -697,7 +701,7 @@ test.describe("conversation drawer startup and app bar", () => {
     await expectQuery(editor, "user:me@example.com user:third@example.com ");
     await expect(queryToken(editor, "user")).toHaveCount(2);
     await expect(exactQueryToken(editor, "user", "user:third@example.com")).toBeVisible();
-    await editor.fill("user:me@example.com ");
+    await fillConversationQuery(editor, "user:me@example.com ");
     await expectQuery(editor, "user:me@example.com ");
     await expect.poll(visibleIds).toEqual(defaultOrder);
 
@@ -748,7 +752,7 @@ test.describe("conversation drawer startup and app bar", () => {
     await editor.pressSequentially("missing");
     await expectQuery(editor, "user:me@example.com user:missing");
     await expect(userPanel.getByText("No matching users")).toBeVisible();
-    await editor.fill("user:me@example.com ");
+    await fillConversationQuery(editor, "user:me@example.com ");
     await expectQuery(editor, "user:me@example.com ");
     await addUserFilter.click();
     await userPanel.getByRole("option", { name: /other@example\.com/ }).click();
@@ -1055,7 +1059,7 @@ test.describe("conversation drawer startup and app bar", () => {
 
     // Same rule for emails, committed with Enter: `other@example.com.au` is
     // on three conversations, `other@example.com` on one.
-    await editor.fill("user:me@example.com ");
+    await fillConversationQuery(editor, "user:me@example.com ");
     await page.getByRole("button", { name: "Add user filter" }).click();
     await expectQuery(editor, "user:me@example.com user:");
     const userPanel = page.getByTestId("user-filter-panel");
@@ -1084,11 +1088,11 @@ test.describe("conversation drawer startup and app bar", () => {
     await expectQuery(editor, "");
     await expect(page.getByRole("button", { name: "Add user filter" })).toHaveCount(0);
 
-    await editor.fill("foreign");
+    await fillConversationQuery(editor, "foreign");
     await expect(page.locator('[data-conversation-id="foreign"]')).toBeVisible();
     await expect(page.getByRole("button", { name: "Add user filter" })).toHaveCount(0);
     await expect(page.locator(".conversation-participant-badge")).toHaveCount(0);
-    await editor.fill("");
+    await clearConversationQuery(editor);
     await expectQuery(editor, "");
   });
 
@@ -1467,6 +1471,8 @@ test.describe("mobile drawer swipe", () => {
     first.cwd = "/tmp";
     await stubConversationList(page, [first]);
     await page.goto("/new");
+    // The shortcut is the app's; a key pressed before it has mounted is lost.
+    await expect(page.getByTestId("message-input")).toBeVisible();
 
     await page.keyboard.press("ControlOrMeta+Shift+D");
     await expect(page.locator(".diff-viewer-overlay")).toBeVisible();

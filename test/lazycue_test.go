@@ -138,7 +138,16 @@ func TestMain(m *testing.M) {
 	for _, h := range isolatedApps {
 		results = append(results, h.Results()...)
 	}
-	if err := lazycue.RenderVideos(appOpts.VideoDir, results); err != nil {
+	// Only runs worth debugging get a video. A clean run from cache has nothing
+	// to show, and rendering all ~70 videos added ~14s to every CI run, after
+	// which a green run's artifacts are thrown away.
+	var watch []*lazycue.TestResult
+	for _, r := range results {
+		if !r.Pass || r.Mode != lazycue.RunModeCached {
+			watch = append(watch, r)
+		}
+	}
+	if err := lazycue.RenderVideos(appOpts.VideoDir, watch); err != nil {
 		slog.Warn("lazycue: render videos", "error", err)
 	}
 

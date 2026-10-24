@@ -266,6 +266,7 @@
       <FileFinderModal
         :is-open="fileFinderOpen"
         :initial-dir="finderDir"
+        :initial-dir-provisional="!currentConversation?.cwd"
         @close="fileFinderOpen = false"
         @select="openFileInEditor"
       />

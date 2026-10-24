@@ -73,10 +73,11 @@ ls -la test-results/*/
 
 ## Screenshot Inspection
 
-Screenshots are automatically saved in `test-results/` directory:
-- Failed tests: Screenshots at failure point
-- All tests: Screenshots at key interaction points
-- Mobile-optimized: Focus on mobile viewport sizes
+Failures leave their evidence in the `test-results/` directory:
+- A screenshot at the failure point
+- A trace and video from the retry (CI retries once; locally, pass
+  `--retries 1` or `--trace on`)
+- Each worker's Shelley server log, in `test-results/servers/<n>.log`
 
 ## Predictable LLM
 
@@ -89,7 +90,7 @@ The tests use Shelley's predictable LLM model which provides:
 ## Configuration
 
 Playwright configuration is in `playwright.config.ts`:
-- Auto-starts Shelley server with predictable model
+- Auto-starts one Shelley server per worker, with the predictable model
 - Configures mobile-first viewports
 - Sets up screenshot and video capture
 - Handles test timeouts and retries

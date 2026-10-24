@@ -3,6 +3,7 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from "@
 import {
   clearConversationQuery,
   createConversationViaAPIWithDetails,
+  fillConversationQuery,
   testWorkingDirectory,
 } from "./helpers";
 
@@ -115,7 +116,7 @@ test.describe("Tag filter", () => {
 
     // Typing a run-specific substring narrows the dropdown to this test's tag;
     // retries and repeated runs share the server database.
-    await search.fill(`tag:${sharedTag.slice(3)}`);
+    await fillConversationQuery(search, `tag:${sharedTag.slice(3)}`);
     await expect(option(page, sharedTag)).toBeVisible();
     await expect(option(page, alphaTag)).toHaveCount(0);
 
@@ -171,7 +172,7 @@ test.describe("Tag filter", () => {
     await openDrawer(page);
     const search = await openSearch(page);
 
-    await search.fill("tag:kb-on");
+    await fillConversationQuery(search, "tag:kb-on");
     await expect(option(page, "kb-only")).toBeVisible();
     // Enter takes the highlighted entry.
     await page.keyboard.press("Enter");
@@ -208,27 +209,27 @@ test.describe("Tag filter", () => {
     const search = await openSearch(page);
 
     // Text and tag in one query: both must hold.
-    await search.fill("kumquat tag:sf-keep ");
+    await fillConversationQuery(search, "kumquat tag:sf-keep ");
     await expect(row(page, hit.conversationId)).toBeVisible();
     await expect(row(page, other.conversationId)).not.toBeVisible();
 
     // Order does not matter -- they are ANDed predicates, not a pipeline.
     await page.locator(".drawer-search-clear").click();
-    await search.fill("tag:sf-keep kumquat");
+    await fillConversationQuery(search, "tag:sf-keep kumquat");
     await expect(row(page, hit.conversationId)).toBeVisible();
     await expect(row(page, other.conversationId)).not.toBeVisible();
 
     // A search that matches nothing is a search miss, NOT a filter miss: the
     // filter is only to blame when clearing it would bring rows back.
     await page.locator(".drawer-search-clear").click();
-    await search.fill("zzz-no-such-conversation-zzz tag:sf-keep ");
+    await fillConversationQuery(search, "zzz-no-such-conversation-zzz tag:sf-keep ");
     await expect(page.getByTestId("tag-filter-empty")).toHaveCount(0);
     await expect(page.locator(".drawer-empty-state")).toContainText("No matching conversations");
 
     // A search that DOES match, whose hits the tag then removes, IS a filter
     // miss -- and its clear action keeps the text but drops the tags.
     await page.locator(".drawer-search-clear").click();
-    await search.fill("kumquat marker tag:sf-drop ");
+    await fillConversationQuery(search, "kumquat marker tag:sf-drop ");
     await expect(page.getByTestId("tag-filter-empty")).toBeVisible();
     await page.getByTestId("tag-filter-empty-clear").click();
     // The free text survives; only the tag terms are dropped.
@@ -247,7 +248,7 @@ test.describe("Tag filter", () => {
     await expect(page.getByTestId("message-input")).toBeVisible({ timeout: 30000 });
     await openDrawer(page);
     const search = await openSearch(page);
-    await search.fill(oldSlug);
+    await fillConversationQuery(search, oldSlug);
 
     const result = row(page, conversation.conversationId);
     await expect(result).toBeVisible();
@@ -258,7 +259,7 @@ test.describe("Tag filter", () => {
     await input.press("Enter");
 
     await expect(result).toHaveCount(0);
-    await search.fill(newSlug);
+    await fillConversationQuery(search, newSlug);
     await expect(row(page, conversation.conversationId)).toBeVisible();
   });
 
@@ -338,7 +339,7 @@ test.describe("Tag filter", () => {
     // Completing from the dropdown quotes too, and typing inside an open
     // quote — space included — keeps narrowing instead of committing.
     const search = searchBox(page);
-    await search.fill('tag:"sp t');
+    await fillConversationQuery(search, 'tag:"sp t');
     await expect(option(page, "sp tag")).toBeVisible();
     await page.keyboard.press("Enter");
     await expectQuery(search, 'tag:"sp tag" ');
@@ -377,7 +378,7 @@ test.describe("Tag filter", () => {
 
     // Offered in the dropdown alongside the tags, and completing it inserts
     // the whole `is:untagged` token.
-    await search.fill("tag:");
+    await fillConversationQuery(search, "tag:");
     await expect(page.getByTestId("tag-filter-panel")).toBeVisible();
     // Matched by test id, not by text: this very test creates a tag named
     // "untagged", so "the option reading Untagged" is genuinely ambiguous.
@@ -391,12 +392,12 @@ test.describe("Tag filter", () => {
 
     // ...and that tag stays addressable on its own terms, meaning the
     // opposite: only the conversation carrying it.
-    await search.fill("tag:untagged ");
+    await fillConversationQuery(search, "tag:untagged ");
     await expect(row(page, literal.conversationId)).toBeVisible();
     await expect(row(page, bare.conversationId)).not.toBeVisible();
 
     // Contradictory query: nothing has a tag and no tags.
-    await search.fill("is:untagged tag:ut-real ");
+    await fillConversationQuery(search, "is:untagged tag:ut-real ");
     await expect(page.getByTestId("tag-filter-empty")).toBeVisible();
     // Its clear action drops both terms.
     await page.getByTestId("tag-filter-empty-clear").click();
@@ -488,7 +489,7 @@ test.describe("Tag filter", () => {
 
     // Grouping and filtering are orthogonal: they compose.
     const search = await openSearch(page);
-    await search.fill("tag:gt-blue ");
+    await fillConversationQuery(search, "tag:gt-blue ");
     await expect(row(page, both.conversationId)).toBeVisible();
     await expect(row(page, single.conversationId)).not.toBeVisible();
     await expect(row(page, none.conversationId)).not.toBeVisible();

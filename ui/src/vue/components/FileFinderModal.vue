@@ -147,10 +147,16 @@ interface FileMatch {
 const props = defineProps<{
   isOpen: boolean;
   initialDir: string;
+  // initialDir is a stand-in (a recent or default directory) until the
+  // current conversation's own directory is known.
+  initialDirProvisional?: boolean;
 }>();
 const emit = defineEmits<{ (e: "close"): void; (e: "select", absPath: string): void }>();
 
 const dir = ref(props.initialDir);
+// Whether dir should still move to the conversation's directory when it
+// arrives (see the initialDir watcher).
+let followInitialDir = false;
 // Directory the last response's matches are relative to. Equals dir unless the
 // query named a path, in which case the server re-rooted the search there.
 const searchDir = ref(props.initialDir);
@@ -297,6 +303,7 @@ watch(
       }
       return;
     }
+    followInitialDir = !!props.initialDirProvisional;
     dir.value = props.initialDir;
     searchDir.value = props.initialDir;
     query.value = "";
@@ -311,6 +318,30 @@ watch(
   { immediate: true },
 );
 
+// The conversation's directory can arrive after the finder opened: Cmd/Ctrl+P
+// right after a deep link opens it on a stand-in while the conversation is
+// still loading. Move there once, keeping the query, unless the user has picked
+// a directory by then. Nothing else moves an open finder: on /new the stand-in
+// is the most recently active conversation's directory, which changes with
+// background activity. Rows from the old directory go at once so Enter can't
+// open one of them under the new directory's path.
+watch([() => props.initialDir, () => props.initialDirProvisional], ([next, provisional]) => {
+  if (!props.isOpen || !followInitialDir || provisional) return;
+  followInitialDir = false;
+  if (!next || next === dir.value) return;
+  if (searchTimeout) {
+    clearTimeout(searchTimeout);
+    searchTimeout = null;
+  }
+  dir.value = next;
+  searchDir.value = next;
+  matchQuery.value = "";
+  matches.value = [];
+  truncated.value = false;
+  error.value = null;
+  void runSearch();
+});
+
 function joinPath(base: string, rel: string): string {
   return base.replace(/\/+$/, "") + "/" + rel;
 }
@@ -322,6 +353,8 @@ function pick(relPath: string) {
 
 function onDirSelected(path: string) {
   showDirPicker.value = false;
+  // Picking even the directory already shown is a choice to stay there.
+  if (path) followInitialDir = false;
   if (path && path !== dir.value) {
     dir.value = path;
     searchDir.value = path;

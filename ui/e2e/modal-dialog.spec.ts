@@ -220,7 +220,12 @@ test.describe("Directory picker modal (shared Modal consumer)", () => {
     const panel = page.locator(".modal.directory-picker-modal");
     await expect(panel).toBeVisible();
     await expect(page.locator(".modal-title")).toHaveText("Select Directory");
-    await expect(page.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
+    // By name: on a phone the overflow popover the chip lives in is also a
+    // dialog, and can still be leaving when the picker has opened.
+    await expect(page.getByRole("dialog", { name: "Select Directory" })).toHaveAttribute(
+      "aria-modal",
+      "true",
+    );
 
     // Other tests seed conversations with cwd=/tmp, which can be huge on a
     // busy machine (tens of thousands of entries) and makes every re-render

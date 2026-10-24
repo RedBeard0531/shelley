@@ -1,20 +1,17 @@
-import { test, expect } from "@playwright/test";
-import { createConversationViaAPI, testWorkingDirectory } from "./helpers";
+import { test, expect, type Page } from "@playwright/test";
+import { createConversationViaAPI } from "./helpers";
 
-// / resumes the shared server's latest conversation. Always start our own,
-// and pin a real cwd rather than inheriting another spec's synthetic path.
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(
-    (cwd) => localStorage.setItem("shelley_selected_cwd", cwd),
-    testWorkingDirectory(),
-  );
-});
+// This conversation's messages, not the whole page: the drawer previews the
+// other conversations on the worker's server, which say the same things. A
+// reply that calls a tool is a .message-tool, so match anything not the user's.
+const agentReply = (page: Page, text: string) =>
+  page
+    .locator('.messages-container [data-testid="message"]:not(.message-user)')
+    .filter({ hasText: text })
+    .first();
+const userMessage = (page: Page, text: string) =>
+  page.locator(".messages-container .message-user").filter({ hasText: text }).first();
 
-// The tool-call rendering tests were split out into
-// conversation-tool-calls.spec.ts: at 47s of test time this file was one of the
-// specs gating the playwright shards, and files are the sharding unit (see
-// .buildkite/steps/shelley-playwright-shard.py), so one file cannot be spread
-// across lanes.
 test.describe("Shelley Conversation Tests", () => {
   test("can send Hello and get greeting response", async ({ page }) => {
     await page.goto("/new");
@@ -34,20 +31,12 @@ test.describe("Shelley Conversation Tests", () => {
 
     // Wait for the response from the predictable model
     // The predictable model responds to "Hello" with "Hello! I'm Shelley, your AI assistant. How can I help you today?"
-    await page.waitForFunction(
-      () => {
-        const text = "Hello! I'm Shelley, your AI assistant. How can I help you today?";
-        return document.body.textContent?.includes(text) ?? false;
-      },
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(
+      agentReply(page, "Hello! I'm Shelley, your AI assistant. How can I help you today?"),
+    ).toBeVisible({ timeout: 30000 });
 
     // Verify both the user message and assistant response are visible
-    await expect(page.locator("text=Hello").first()).toBeVisible();
-    await expect(
-      page.locator("text=Hello! I'm Shelley, your AI assistant. How can I help you today?").first(),
-    ).toBeVisible();
+    await expect(userMessage(page, "Hello")).toBeVisible();
   });
 
   test("can use echo command", async ({ page }) => {
@@ -62,14 +51,10 @@ test.describe("Shelley Conversation Tests", () => {
     await sendButton.click();
 
     // The predictable model should echo back "test message"
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("test message") ?? false,
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(agentReply(page, "test message")).toBeVisible({ timeout: 30000 });
 
     // Verify both input and output messages are visible
-    await expect(page.locator("text=echo: test message")).toBeVisible();
+    await expect(userMessage(page, "echo: test message")).toBeVisible();
   });
 
   test("responds differently to lowercase hello", async ({ page }) => {
@@ -84,14 +69,7 @@ test.describe("Shelley Conversation Tests", () => {
     await sendButton.click();
 
     // The predictable model responds to "hello" with "Well, hi there!"
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("Well, hi there!") ?? false,
-      undefined,
-      { timeout: 30000 },
-    );
-
-    // Verify the hello message and response are both visible
-    await expect(page.getByText("Well, hi there!").first()).toBeVisible();
+    await expect(agentReply(page, "Well, hi there!")).toBeVisible({ timeout: 30000 });
   });
 
   test("shows thinking indicator while awaiting response", async ({ page }) => {
@@ -108,11 +86,7 @@ test.describe("Shelley Conversation Tests", () => {
     const thinkingIndicator = page.getByTestId("agent-thinking");
     await expect(thinkingIndicator).toBeVisible({ timeout: 5000 });
 
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("Delayed for 2 seconds") ?? false,
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(agentReply(page, "Delayed for 2 seconds")).toBeVisible({ timeout: 30000 });
 
     await expect(thinkingIndicator).toBeHidden({ timeout: 10000 });
   });
@@ -127,11 +101,7 @@ test.describe("Shelley Conversation Tests", () => {
     await messageInput.fill("hello");
     await sendButton.click();
 
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("Well, hi there!") ?? false,
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(agentReply(page, "Well, hi there!")).toBeVisible({ timeout: 30000 });
 
     // Use delay command so the thinking indicator is visible long enough to test
     await messageInput.fill("delay: 2");
@@ -140,11 +110,7 @@ test.describe("Shelley Conversation Tests", () => {
     const thinkingIndicator = page.getByTestId("agent-thinking");
     await expect(thinkingIndicator).toBeVisible({ timeout: 5000 });
 
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("Delayed for 2 seconds") ?? false,
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(agentReply(page, "Delayed for 2 seconds")).toBeVisible({ timeout: 30000 });
 
     await expect(thinkingIndicator).toBeHidden({ timeout: 10000 });
   });
@@ -161,14 +127,9 @@ test.describe("Shelley Conversation Tests", () => {
     await sendButton.click();
 
     // The predictable model should use the bash tool and show the response
-    await page.waitForFunction(
-      () => {
-        const text = 'I\'ll run the command: echo "hello world"';
-        return document.body.textContent?.includes(text) ?? false;
-      },
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(agentReply(page, 'I\'ll run the command: echo "hello world"')).toBeVisible({
+      timeout: 30000,
+    });
 
     // Verify tool usage appears in the UI with coalesced tool call
     await expect(page.locator('[data-testid="tool-call-completed"]').first()).toBeVisible({
@@ -187,9 +148,9 @@ test.describe("Shelley Conversation Tests", () => {
 
     // Verify the undefined message and default response are visible
     await expect(
-      page.locator("text=edit predictable.go to add a response for that one...").first(),
+      agentReply(page, "edit predictable.go to add a response for that one..."),
     ).toBeVisible({ timeout: 30000 });
-    await expect(page.locator("text=this is an undefined message").first()).toBeVisible();
+    await expect(userMessage(page, "this is an undefined message")).toBeVisible();
   });
 
   test("conversation persists and displays correctly", async ({ page }) => {
@@ -204,58 +165,44 @@ test.describe("Shelley Conversation Tests", () => {
     await sendButton.click();
 
     // Wait for first response
-    await page.waitForFunction(
-      () => {
-        const text = "Hello! I'm Shelley, your AI assistant. How can I help you today?";
-        return document.body.textContent?.includes(text) ?? false;
-      },
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(
+      agentReply(page, "Hello! I'm Shelley, your AI assistant. How can I help you today?"),
+    ).toBeVisible({ timeout: 30000 });
 
     // Send second message
     await messageInput.fill("echo: second message");
     await sendButton.click();
 
     // Wait for second response
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("second message") ?? false,
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(agentReply(page, "second message")).toBeVisible({ timeout: 30000 });
 
     // Verify both responses are still visible (conversation persists)
     await expect(
-      page.locator("text=Hello! I'm Shelley, your AI assistant. How can I help you today?").first(),
+      agentReply(page, "Hello! I'm Shelley, your AI assistant. How can I help you today?"),
     ).toBeVisible();
-    await expect(page.locator("text=second message").first()).toBeVisible();
+    await expect(agentReply(page, "second message")).toBeVisible();
   });
 
-  test("can send message with Enter key", async ({ page }) => {
-    await page.goto("/new");
-    await page.waitForLoadState("domcontentloaded");
+  // Enter sends only where there is no touch; on a touch device it is a
+  // newline, and the send button sends (MessageInput.handleKeyDown). The
+  // project emulates a phone, so this test opts out of touch.
+  test.describe("without touch", () => {
+    test.use({ hasTouch: false });
 
-    const messageInput = page.getByTestId("message-input");
-    await expect(messageInput).toBeVisible({ timeout: 30000 });
+    test("can send message with Enter key", async ({ page }) => {
+      await page.goto("/new");
+      await page.waitForLoadState("domcontentloaded");
 
-    // Type message and press Enter
-    await messageInput.fill("Hello");
-    await messageInput.press("Enter");
+      const messageInput = page.getByTestId("message-input");
+      await expect(messageInput).toBeVisible({ timeout: 30000 });
 
-    // Verify response
-    await page.waitForFunction(
-      () => {
-        const text = "Hello! I'm Shelley, your AI assistant. How can I help you today?";
-        return document.body.textContent?.includes(text) ?? false;
-      },
-      undefined,
-      { timeout: 30000 },
-    );
+      await messageInput.fill("Hello");
+      await messageInput.press("Enter");
 
-    // Verify the Hello message and response are visible
-    await expect(
-      page.locator("text=Hello! I'm Shelley, your AI assistant. How can I help you today?").first(),
-    ).toBeVisible();
+      await expect(
+        agentReply(page, "Hello! I'm Shelley, your AI assistant. How can I help you today?"),
+      ).toBeVisible({ timeout: 30000 });
+    });
   });
 
   test("handles think tool correctly", async ({ page }) => {
@@ -270,11 +217,7 @@ test.describe("Shelley Conversation Tests", () => {
     await sendButton.click();
 
     // The predictable model should return thinking content and text response
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("I've considered my approach.") ?? false,
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(agentReply(page, "I've considered my approach.")).toBeVisible({ timeout: 30000 });
 
     // Verify thinking content appears in the UI (rendered as .thinking-content with 💭 emoji, not a tool call)
     await expect(page.locator('[data-testid="thinking-content"]').first()).toBeVisible({
@@ -295,11 +238,7 @@ test.describe("Shelley Conversation Tests", () => {
     await sendButton.click();
 
     // The predictable model should use the patch tool
-    await page.waitForFunction(
-      () => document.body.textContent?.includes("I'll patch the file: test.txt") ?? false,
-      undefined,
-      { timeout: 30000 },
-    );
+    await expect(agentReply(page, "I'll patch the file: test.txt")).toBeVisible({ timeout: 30000 });
 
     // Verify patch tool usage appears in the UI
     await expect(page.locator('[data-testid="tool-call-completed"]').first()).toBeVisible({

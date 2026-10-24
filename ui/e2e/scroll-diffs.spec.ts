@@ -46,12 +46,12 @@ test.describe("Autoscroll with pierre diffs", () => {
     // so both its existence and its size look "rendered" long before any code
     // has been laid out.
     await page.evaluate(() => {
-      const w = window as Window & { __emptyGaps?: number; __samples?: number };
+      const w = window as Window & { __emptyGaps?: number; __sampledHosts?: Set<Element> };
       w.__emptyGaps = 0;
-      w.__samples = 0;
+      w.__sampledHosts = new Set();
       const sample = () => {
         for (const host of document.querySelectorAll(".patch-tool-diff-host")) {
-          w.__samples!++;
+          w.__sampledHosts!.add(host);
           const holdingSpace = !!(host as HTMLElement).style.minHeight;
           const hasDiff = !!host.querySelector("diffs-container")?.shadowRoot?.querySelector("pre");
           if (!holdingSpace && !hasDiff) w.__emptyGaps!++;
@@ -108,13 +108,95 @@ test.describe("Autoscroll with pierre diffs", () => {
     // and without a rendered diff. The assertions above are what the user feels
     // when this breaks; this is the mechanism. Pre-fix this counts in the
     // hundreds (every diff spends ~500ms in that state).
-    const { emptyGaps, samples } = await page.evaluate(() => {
-      const w = window as Window & { __emptyGaps?: number; __samples?: number };
-      return { emptyGaps: w.__emptyGaps ?? -1, samples: w.__samples ?? 0 };
+    const { emptyGaps, sampledHosts } = await page.evaluate(() => {
+      const w = window as Window & { __emptyGaps?: number; __sampledHosts?: Set<Element> };
+      return { emptyGaps: w.__emptyGaps ?? -1, sampledHosts: w.__sampledHosts?.size ?? 0 };
     });
-    // Guard against a sampler that never ran, which would make the check vacuous.
-    expect(samples, "sampler saw no diff hosts").toBeGreaterThan(100);
+    // Guard against a sampler that never ran, which would make the check
+    // vacuous: it must have seen every turn's diff host. Not a frame count:
+    // how many frames a run lasts depends on machine speed and load.
+    expect(sampledHosts, "sampler missed diff hosts").toBeGreaterThanOrEqual(4);
     expect(emptyGaps, "diff host left with neither placeholder nor content").toBe(0);
+  });
+
+  test("keeps the bottom when a tool card replaces its placeholder", async ({ page, request }) => {
+    // A completed tool card mounts in place of a placeholder once it nears the
+    // viewport, and Vue removes the placeholder before mounting the card. A
+    // layout forced while the card set up (PatchTool read window.innerWidth)
+    // saw the transcript short by the placeholder's height and clamped the
+    // scroll offset at the bottom. The list was back to full height by the
+    // next ResizeObserver report, so nothing explained the drop; when the
+    // scroll event beat the card's growth it read as the reader scrolling
+    // away, and the diff hydrated below a transcript that no longer followed.
+    // Hold the placeholder's near-viewport report to swap it on cue.
+    await page.addInitScript(() => {
+      const Native = window.IntersectionObserver;
+      const held: Array<() => void> = [];
+      let holding = true;
+      Object.assign(window, {
+        releaseToolCards: () => {
+          holding = false;
+          for (const deliver of held.splice(0)) deliver();
+        },
+      });
+      window.IntersectionObserver = class extends Native {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          super((entries, observer) => {
+            const pass = entries.filter(
+              (e) => !holding || !e.target.matches(".tool-card-mount-placeholder"),
+            );
+            const hold = entries.filter((e) => !pass.includes(e));
+            if (hold.length) held.push(() => callback(hold, observer));
+            if (pass.length) callback(pass, observer);
+          }, options);
+        }
+      };
+    });
+    const { conversationId, slug } = await createConversationViaAPIWithDetails(
+      request,
+      "echo seed",
+    );
+    const resp = await request.post(`/api/conversation/${conversationId}/chat`, {
+      data: { message: "big patch", model: "predictable" },
+    });
+    expect(resp.ok(), `chat failed: ${resp.status()}`).toBeTruthy();
+    // Both turns done, so the page loads the patch as a completed card.
+    await expect
+      .poll(async () => {
+        const r = await request.get(`/api/conversation/${conversationId}`);
+        const { messages } = (await r.json()) as {
+          messages: { type: string; end_of_turn?: boolean }[];
+        };
+        return messages.filter((m) => m.type === "agent" && m.end_of_turn).length;
+      })
+      .toBe(2);
+
+    await page.goto(`/c/${slug}`);
+    const container = page.locator(".messages-container");
+    const placeholder = page.locator(".tool-card-mount-placeholder--patch");
+    await expect(placeholder).toBeAttached({ timeout: 30000 });
+    const gap = () => container.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+    await expect.poll(gap).toBeLessThan(2);
+    // Without the placeholder the transcript would end above the current
+    // offset: the case that clamped.
+    expect(
+      await placeholder.evaluate((el, maxGap) => (el as HTMLElement).offsetHeight > maxGap, 2),
+    ).toBe(true);
+
+    const swap = await container.evaluate(async (el) => {
+      const before = el.scrollTop;
+      (window as unknown as { releaseToolCards(): void }).releaseToolCards();
+      // Vue's scheduler flushed on a microtask queued during the release, so
+      // the card is in place before this continuation; no frame has run yet.
+      await Promise.resolve();
+      return { before, after: el.scrollTop, mounted: !!el.querySelector(".patch-tool") };
+    });
+    expect(swap).toEqual({ before: swap.before, after: swap.before, mounted: true });
+    expect(swap.before).toBeGreaterThan(0);
+
+    await expect(page.locator(".patch-tool diffs-container")).toBeAttached();
+    await expect.poll(gap, { timeout: 15000 }).toBeLessThan(120);
+    await expect(page.locator(".scroll-to-bottom-button")).toHaveCount(0);
   });
 
   test("a diff with no hunks does not strand its placeholder", async ({ page, request }) => {

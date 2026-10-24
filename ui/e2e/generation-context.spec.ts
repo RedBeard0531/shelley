@@ -240,12 +240,15 @@ test("model and system prompt items share one look", async ({ page, request }) =
   }
   await expect(rows[0]).toContainText(/Model:\s*\S.*\S, \S+$/);
 
-  // Phones hide the labels but keep the icon tiles and values identical.
+  // Phones hide the labels but keep the icon tiles and values identical. The
+  // layout switches on a media query listener, so it settles after the resize.
   await page.setViewportSize({ width: 390, height: 800 });
   await expect(rows[1]).toBeVisible();
-  for (const { label } of [model, prompt]) {
-    expect((await box(label)).width).toBeLessThanOrEqual(1);
-  }
-  expect(await look(model.value, text)).toEqual(await look(prompt.value, text));
-  expect(await look(model.icon, tile)).toEqual(await look(prompt.icon, tile));
+  await expect(async () => {
+    for (const { label } of [model, prompt]) {
+      expect((await box(label)).width).toBeLessThanOrEqual(1);
+    }
+    expect(await look(model.value, text)).toEqual(await look(prompt.value, text));
+    expect(await look(model.icon, tile)).toEqual(await look(prompt.icon, tile));
+  }).toPass();
 });

@@ -1,14 +1,4 @@
 import { test, expect } from "@playwright/test";
-import { testWorkingDirectory } from "./helpers";
-
-// / resumes the shared server's latest conversation. Always start our own,
-// and pin a real cwd rather than inheriting another spec's synthetic path.
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(
-    (cwd) => localStorage.setItem("shelley_selected_cwd", cwd),
-    testWorkingDirectory(),
-  );
-});
 
 // Split out of conversation.spec.ts (see the note there). These cover how tool
 // calls are rendered and coalesced in the transcript; they drive the UI from /new

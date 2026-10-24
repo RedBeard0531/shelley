@@ -21,17 +21,22 @@ func TestWorkingDirectoryConfiguration(t *testing.T) {
 	t.Parallel()
 	h := NewTestHarness(t)
 
-	t.Run("cwd_tmp", func(t *testing.T) {
-		h.NewConversation("bash: pwd", "/tmp")
+	// Two conversations on one server, each in its own directory, so a cwd
+	// can't leak from one into the next. Neither is /tmp: prompt hydration
+	// walks the cwd for guidance files and skills, and a shared CI host's
+	// /tmp made that walk take ~20s.
+	t.Run("cwd_first", func(t *testing.T) {
+		dir := t.TempDir()
+		h.NewConversation("bash: pwd", dir)
 		result := strings.TrimSpace(h.WaitToolResult())
-		// Resolve symlinks for comparison (on macOS, /tmp -> /private/tmp)
-		expected, _ := filepath.EvalSymlinks("/tmp")
+		// Resolve symlinks for comparison (on macOS, temp dirs may be symlinked)
+		expected, _ := filepath.EvalSymlinks(dir)
 		if result != expected {
 			t.Errorf("expected %q, got: %s", expected, result)
 		}
 	})
 
-	t.Run("cwd_other", func(t *testing.T) {
+	t.Run("cwd_second", func(t *testing.T) {
 		dir := t.TempDir()
 		h.NewConversation("bash: pwd", dir)
 		result := strings.TrimSpace(h.WaitToolResult())
@@ -577,8 +582,10 @@ func TestConversationCwdReturnedInList(t *testing.T) {
 	t.Parallel()
 	h := NewTestHarness(t)
 
-	// Create a conversation with a specific CWD
-	h.NewConversation("bash: pwd", "/tmp")
+	// Create a conversation with a specific CWD. Not /tmp: prompt hydration
+	// walks the cwd, and a shared CI host's /tmp made that walk take ~20s.
+	dir := t.TempDir()
+	h.NewConversation("bash: pwd", dir)
 	h.WaitToolResult() // Wait for the conversation to complete
 
 	// Get the conversations list
@@ -608,8 +615,8 @@ func TestConversationCwdReturnedInList(t *testing.T) {
 			if !ok {
 				t.Errorf("expected cwd to be a string, got: %T", conv["cwd"])
 			}
-			if cwd != "/tmp" {
-				t.Errorf("expected cwd '/tmp', got: %s", cwd)
+			if cwd != dir {
+				t.Errorf("expected cwd %q, got: %s", dir, cwd)
 			}
 			break
 		}

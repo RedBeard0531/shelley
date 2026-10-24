@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { createServer, type ServerResponse } from "node:http";
 import { once } from "node:events";
 import type { ConversationWithState, StreamResponse } from "../src/types";
@@ -748,6 +748,43 @@ test.describe("Scroll behavior", () => {
     expect(await page.evaluate((key) => localStorage.getItem(key), scrollKey)).not.toBe("bottom");
   });
 
+  test("leaving right after Scroll to bottom keeps the bottom, not a pixel offset", async ({
+    page,
+    request,
+  }) => {
+    const generated = await request.post("/debug/loremipsum?json=1", {
+      form: { size: "medium", model: "predictable" },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const { conversation_id: conversationId } = await generated.json();
+    const scrollKey = `shelley_scroll_${conversationId}`;
+    await page.goto(`/c/${conversationId}`);
+    const container = page.locator(".messages-container");
+    await expect(page.getByTestId("message").first()).toBeVisible({ timeout: 30000 });
+    await container.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible();
+    await expect
+      .poll(async () => {
+        await page.evaluate(() => window.dispatchEvent(new Event("beforeunload")));
+        return page.evaluate((key) => localStorage.getItem(key), scrollKey);
+      })
+      .not.toBe("bottom");
+
+    // The click and the unload share a task, so no observer report can come
+    // in between: the click alone has to establish that this is the bottom.
+    // A pixel offset would not survive the reload (lazily laid-out history
+    // changes the height), and would leave follow disarmed.
+    const saved = await page.evaluate((key) => {
+      document.querySelector<HTMLElement>(".scroll-to-bottom-button")!.click();
+      window.dispatchEvent(new Event("beforeunload"));
+      return localStorage.getItem(key);
+    }, scrollKey);
+    expect(saved).toBe("bottom");
+  });
+
   test("a scroll-up the observer has not yet reported still disarms auto-follow", async ({
     page,
     request,
@@ -1165,6 +1202,247 @@ streamingTest.describe("Mobile streaming scroll gestures", () => {
       },
     );
   }
+});
+
+// IntersectionObserver reports arrive in a task some time after the frame that
+// computed them, and are computed a frame after the scroll they describe. On a
+// busy device a touch can land in between, so a report of a return to the
+// bottom made *before* the finger came down arrives while it is down. These
+// tests produce those orders on purpose: holding reports back, or touching in
+// the same task as the scroll.
+streamingTest.describe("A late near-bottom report", () => {
+  type Held = {
+    holdIntersections(): void;
+    heldIntersections(): number;
+    releaseIntersections(batched?: boolean): void;
+    sentinelNear?: boolean;
+  };
+  const hold = (page: Page) => page.evaluate(() => (window as unknown as Held).holdIntersections());
+  // Batched, as a browser delivers reports that piled up: one callback per
+  // observer with every held entry, oldest first.
+  const release = (page: Page, batched = false) =>
+    page.evaluate((b) => (window as unknown as Held).releaseIntersections(b), batched);
+  // Whether the page has been told the bottom sentinel is near: reports held
+  // back don't count until they are released.
+  const sentinelNear = (page: Page) =>
+    page.evaluate(() => (window as unknown as Held).sentinelNear);
+  const heldSome = (page: Page) =>
+    expect
+      .poll(() => page.evaluate(() => (window as unknown as Held).heldIntersections()))
+      .toBeGreaterThan(0);
+  // A touch as the page sees one: native panning cancels the pointer, not the
+  // touch gesture.
+  const touch = (container: Locator, type: "touchstart" | "touchend") =>
+    container.evaluate((el, type) => {
+      if (type === "touchstart") {
+        el.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "touch", bubbles: true }));
+      }
+      el.dispatchEvent(new Event(type, { bubbles: true }));
+      if (type === "touchstart") {
+        el.dispatchEvent(
+          new PointerEvent("pointercancel", { pointerType: "touch", bubbles: true }),
+        );
+      }
+    }, type);
+  const scrollBy = (container: Locator, delta: number) =>
+    container.evaluate((el, delta) => {
+      el.scrollTop += delta;
+      el.dispatchEvent(new Event("scroll", { bubbles: true }));
+    }, delta);
+  const scrollTop = (container: Locator) => container.evaluate((el) => el.scrollTop);
+  const gap = (container: Locator) =>
+    container.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop);
+
+  streamingTest.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      const Native = window.IntersectionObserver;
+      type Batch = {
+        callback: IntersectionObserverCallback;
+        observer: IntersectionObserver;
+        entries: IntersectionObserverEntry[];
+      };
+      const held: Batch[] = [];
+      let holding = false;
+      let heldSentinel = 0;
+      const w = window as unknown as Record<string, unknown>;
+      const deliver = ({ callback, observer, entries }: Batch) => {
+        const sentinel = entries.findLast((e) => e.target.matches(".messages-bottom-sentinel"));
+        if (sentinel) w.sentinelNear = sentinel.isIntersecting;
+        callback(entries, observer);
+      };
+      Object.assign(window, {
+        holdIntersections: () => (holding = true),
+        heldIntersections: () => heldSentinel,
+        releaseIntersections: (batched = false) => {
+          holding = false;
+          heldSentinel = 0;
+          const batches = held.splice(0);
+          if (!batched) return batches.forEach(deliver);
+          const merged = new Map<IntersectionObserverCallback, Batch>();
+          for (const b of batches) {
+            const m = merged.get(b.callback);
+            if (m) m.entries.push(...b.entries);
+            else merged.set(b.callback, { ...b, entries: [...b.entries] });
+          }
+          merged.forEach(deliver);
+        },
+      });
+      window.IntersectionObserver = class extends Native {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          super((entries, observer) => {
+            const batch = { callback, observer, entries };
+            if (!holding) return deliver(batch);
+            if (entries.some((e) => e.target.matches(".messages-bottom-sentinel"))) heldSentinel++;
+            held.push(batch);
+          }, options);
+        }
+      };
+    });
+  });
+
+  // Scrolled away by a finished touch, and told so, so the next return
+  // crosses into the near-bottom zone and is reported.
+  const scrollAway = async (page: Page, container: Locator) => {
+    await touch(container, "touchstart");
+    await scrollBy(container, -400);
+    await touch(container, "touchend");
+    await expect(page.locator(".scroll-to-bottom-button")).toBeVisible();
+    await expect.poll(() => sentinelNear(page)).toBe(false);
+  };
+
+  streamingTest(
+    "does not end a touch that began after it was observed",
+    async ({ page, controlledStream }) => {
+      const container = page.locator(".messages-container");
+      await scrollAway(page, container);
+
+      // The reader comes back down, and before that is reported, touches again.
+      await hold(page);
+      await container.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+      });
+      await heldSome(page);
+      await touch(container, "touchstart");
+      await release(page);
+
+      // The finger is still down, so growth must not move the list under it.
+      const before = await scrollTop(container);
+      await controlledStream.chunk("text", "Held under the finger.\n\n");
+      expect(await scrollTop(container)).toBeCloseTo(before, 0);
+
+      // Lifting it at the bottom resumes following.
+      await touch(container, "touchend");
+      await controlledStream.chunk("text", "After lifting.\n\n");
+      await expect.poll(() => gap(container)).toBeLessThan(2);
+      await controlledStream.finish();
+    },
+  );
+
+  streamingTest(
+    "does not end a touch observed after it began, for a return made before it",
+    async ({ page, controlledStream }) => {
+      const container = page.locator(".messages-container");
+      await scrollAway(page, container);
+
+      // Back to the bottom and a touch in one task: no frame comes between, so
+      // the return is observed only once the finger is down.
+      const before = await container.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+        el.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "touch", bubbles: true }));
+        el.dispatchEvent(new Event("touchstart", { bubbles: true }));
+        el.dispatchEvent(
+          new PointerEvent("pointercancel", { pointerType: "touch", bubbles: true }),
+        );
+        return el.scrollTop;
+      });
+      await expect(page.locator(".scroll-to-bottom-button")).toBeHidden();
+
+      await controlledStream.chunk("text", "Held under the finger.\n\n");
+      expect(await scrollTop(container)).toBeCloseTo(before, 0);
+
+      await touch(container, "touchend");
+      await controlledStream.chunk("text", "After lifting.\n\n");
+      await expect.poll(() => gap(container)).toBeLessThan(2);
+      await controlledStream.finish();
+    },
+  );
+
+  streamingTest(
+    "ends a touch that came back to where it began, without its touchend",
+    async ({ page, controlledStream }) => {
+      const container = page.locator(".messages-container");
+      // Up and away, then back to the very offset the touch found: the touch
+      // made this return, so its report resumes following even if the end
+      // event never comes.
+      await touch(container, "touchstart");
+      const start = await scrollTop(container);
+      await scrollBy(container, -300);
+      await expect.poll(() => sentinelNear(page)).toBe(false);
+      await scrollBy(container, 300);
+      expect(await scrollTop(container)).toBe(start);
+      await expect.poll(() => sentinelNear(page)).toBe(true);
+
+      await controlledStream.chunk(
+        "text",
+        Array.from({ length: 12 }, (_, i) => `Followed paragraph ${i}.\n\n`).join(""),
+      );
+      await expect.poll(() => gap(container)).toBeLessThan(2);
+      await controlledStream.finish();
+    },
+  );
+
+  streamingTest(
+    "goes by the newest of reports delivered together",
+    async ({ page, controlledStream }) => {
+      const container = page.locator(".messages-container");
+      // Away and back within one touch, both reported late and together.
+      await hold(page);
+      await touch(container, "touchstart");
+      await scrollBy(container, -400);
+      await heldSome(page);
+      await scrollBy(container, 400);
+      await expect
+        .poll(() => page.evaluate(() => (window as unknown as Held).heldIntersections()))
+        .toBeGreaterThan(1);
+      await release(page, true);
+      await touch(container, "touchend");
+
+      await expect(page.locator(".scroll-to-bottom-button")).toBeHidden();
+      await controlledStream.chunk(
+        "text",
+        Array.from({ length: 12 }, (_, i) => `Followed paragraph ${i}.\n\n`).join(""),
+      );
+      await expect.poll(() => gap(container)).toBeLessThan(2);
+      await controlledStream.finish();
+    },
+  );
+
+  streamingTest(
+    "does not undo a scroll-up the touch made after it was observed",
+    async ({ page, controlledStream }) => {
+      const container = page.locator(".messages-container");
+      await scrollAway(page, container);
+
+      // The reader comes back down and, before that is reported, touches again
+      // and drags up and away.
+      await hold(page);
+      await container.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+      });
+      await heldSome(page);
+      await touch(container, "touchstart");
+      await scrollBy(container, -400);
+      const away = await scrollTop(container);
+      await release(page);
+
+      // Lifting the finger there leaves the list there, through more output.
+      await touch(container, "touchend");
+      await controlledStream.chunk("text", "After lifting.\n\n");
+      expect(await scrollTop(container)).toBeCloseTo(away, 0);
+      await expect(page.locator(".scroll-to-bottom-button")).toBeVisible();
+      await controlledStream.finish();
+    },
+  );
 });
 
 streamingTest.describe("Desktop streaming scroll behavior", () => {

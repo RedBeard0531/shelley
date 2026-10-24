@@ -148,6 +148,7 @@ import type {
 import { getSingularPatch, parseDiffFromFile } from "@pierre/diffs";
 import { isDarkModeActive } from "../../../services/theme";
 import { useSideBySidePreference } from "../../composables/diffViewPreference";
+import { useMobileViewport } from "../../composables/mobileViewport";
 import { useFileDiffInstance } from "../../composables/fileDiffInstance";
 import { useNearViewport } from "../../composables/nearViewport";
 import { useOpenFileEditor } from "../../composables/fileEditor";
@@ -241,7 +242,7 @@ const props = defineProps<{
 
 // State
 const isExpanded = ref(!props.hasError);
-const isMobile = ref(window.innerWidth < 768);
+const isMobile = useMobileViewport();
 const { sideBySidePreference, setSideBySidePreference } = useSideBySidePreference();
 const sideBySide = computed(() => !isMobile.value && sideBySidePreference.value);
 // Host element for the FileDiff renderer's <diffs-container>.
@@ -267,18 +268,6 @@ onMounted(() => {
 });
 onUnmounted(() => {
   themeObserver?.disconnect();
-});
-
-// Viewport resize handler
-function handleResize() {
-  isMobile.value = window.innerWidth < 768;
-}
-
-onMounted(() => {
-  window.addEventListener("resize", handleResize);
-});
-onUnmounted(() => {
-  window.removeEventListener("resize", handleResize);
 });
 
 function toggleSideBySide() {

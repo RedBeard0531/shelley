@@ -2720,6 +2720,14 @@ let followExplicitSelectionToBottom = false;
 let suppressExplicitSelectionClamp = false;
 let scrollPointerActive = false;
 let touchScrolling = false;
+// When the current touch began, the offset it found, and whether it has moved
+// the list since; and when the user last scrolled up on purpose (not
+// inferred). Times are performance.now(), comparable with an
+// IntersectionObserver entry's.
+let touchStartedAt = -Infinity;
+let touchStartScrollTop = 0;
+let touchMoved = false;
+let userScrolledUpAt = -Infinity;
 let bottomPinFrame: number | null = null;
 let bottomPinActive = false;
 
@@ -2748,6 +2756,7 @@ function markUserScrolledUp() {
   suppressExplicitSelectionClamp = false;
   stopSavedBottomRestoration();
   userScrolled = true;
+  userScrolledUpAt = performance.now();
   atBottom = false;
   showScrollToBottom.value = true;
 }
@@ -2777,10 +2786,12 @@ function handleBottomPinWheel(e: WheelEvent) {
 
 function handleBottomPinTouch() {
   touchScrolling = true;
+  touchStartedAt = performance.now();
+  touchMoved = false;
   handleScrollPointerDown();
   // Start from the actual offset, not a rounded/clamped auto-follow target.
   const container = messagesContainerRef.value;
-  if (container) lastObservedScrollTop = container.scrollTop;
+  if (container) lastObservedScrollTop = touchStartScrollTop = container.scrollTop;
 }
 
 function handleScrollPointerDown() {
@@ -2844,6 +2855,15 @@ function scrollToBottom() {
 
 function handleScrollToBottomClick() {
   replaceLocationFragment("");
+  scrollToBottomForUser();
+}
+
+// Asked for the bottom, the reader is there as far as saving goes, without
+// waiting for the observer to confirm it. Leaving in between would otherwise
+// save the pixel offset the pin is passing through, which a reload's lazy
+// layout doesn't honor, and come back with follow disarmed.
+function scrollToBottomForUser() {
+  atBottom = true;
   scrollToBottom();
 }
 
@@ -5131,6 +5151,7 @@ function handleScroll() {
   if (!container) return;
   perfCount("chat.handleScroll");
   lastScrollEventAt = performance.now();
+  if (touchScrolling && container.scrollTop !== touchStartScrollTop) touchMoved = true;
   let upwardDelta = lastObservedScrollTop - container.scrollTop;
   // Discount any scrollTop drop the ResizeObserver already attributed to a
   // list shrink (a layout clamp, not a gesture).
@@ -5222,14 +5243,33 @@ function setupScrollObservers() {
   window.addEventListener("pointerup", handleScrollPointerUp, { passive: true });
   window.addEventListener("pointercancel", handleScrollPointerUp, { passive: true });
   bottomObserver = new IntersectionObserver(
-    ([entry]) => {
+    (entries) => {
+      // Reports that pile up while delivery lags arrive together, oldest
+      // first. Only the newest says where the list is.
+      const entry = entries[entries.length - 1];
       const nearBottom = entry?.isIntersecting ?? false;
       sentinelAtBottom = nearBottom;
+      // A report is observed a frame after the scroll it describes, and
+      // delivered a while later. A return to the bottom observed before the
+      // user's latest scroll-up is stale: the scroll-up stands, and if it left
+      // the near-bottom zone a newer report says so.
+      const observedAt = entry?.time ?? Infinity;
+      if (nearBottom && observedAt < userScrolledUpAt) return;
       atBottom = nearBottom;
       showScrollToBottom.value = !nearBottom;
       if (nearBottom) {
         // Manual return resumes follow even when touchend was lost or delayed.
-        touchScrolling = false;
+        // But only a return the current touch made ends it (observed after it
+        // began, by a touch that has moved the list, even if back to where it
+        // found it), else growth would move the list under the finger. Either
+        // way, lifting the finger at the bottom then resumes follow.
+        if (
+          touchScrolling &&
+          observedAt >= touchStartedAt &&
+          (touchMoved || container.scrollTop !== touchStartScrollTop)
+        ) {
+          touchScrolling = false;
+        }
         userScrolled = false;
         if (savedBottomRestoration === "seeking") savedBottomRestoration = "following";
         clearPendingRestorationScroll();
@@ -5582,7 +5622,7 @@ function handleScrollKeyDown(e: KeyboardEvent) {
   const container = messagesContainerRef.value;
   if (!container || messageListCovered(container)) return;
   e.preventDefault();
-  scrollToBottom();
+  scrollToBottomForUser();
 }
 
 // ?diff=<hash> on mount opens the diff viewer for that commit.

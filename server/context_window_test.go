@@ -212,7 +212,9 @@ func TestContextWindowGrowsWithConversation(t *testing.T) {
 	h := NewTestHarness(t)
 
 	// Start a new conversation
-	h.NewConversation("echo: first message", "/tmp")
+	// Not /tmp: prompt hydration walks the cwd, and a shared CI host's /tmp
+	// made that walk take ~20s.
+	h.NewConversation("echo: first message", t.TempDir())
 
 	// Wait for the response
 	resp1 := h.WaitResponse()

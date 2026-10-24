@@ -5,11 +5,6 @@ import { createConversationViaAPI } from "./helpers";
 // it. This avoids the SSE subscribe-vs-publish race that occurs when the
 // browser opens a brand-new conversation while the first turn is still being
 // recorded (see helpers.ts), which otherwise flakes waitForSelector(".message-agent").
-// Split out of the original markdown.spec.ts, which at 47s of test time was
-// one of the specs gating the playwright shards (see
-// .buildkite/steps/shelley-playwright-shard.py -- files are the sharding unit,
-// so a single file cannot be spread across lanes). The two halves are
-// independent: every test creates its own conversation via the API.
 test.describe("Markdown sanitization", () => {
   test("strips script tags from agent messages", async ({ page, request }) => {
     const slug = await createConversationViaAPI(

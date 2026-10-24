@@ -204,7 +204,9 @@ test.describe("Markdown file editor preview", () => {
     await modal.getByRole("button", { name: "Preview mode" }).click();
     await page.keyboard.press("ControlOrMeta+k");
     const palette = page.locator(".command-palette-input");
-    await expect(palette).toBeVisible();
+    // The palette focuses its input a task after it opens; until then the
+    // shortcut is still the editor's.
+    await expect(palette).toBeFocused();
     await page.keyboard.press("ControlOrMeta+Alt+P");
     await expect(modal.getByRole("region", { name: "Markdown preview" })).toBeVisible();
     await expect(palette).toBeFocused();

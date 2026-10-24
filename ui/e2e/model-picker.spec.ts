@@ -91,6 +91,21 @@ test.describe("Model picker (PrimeVue)", () => {
     await expect(searchbox).not.toBeFocused();
   });
 
+  test("the selected model keeps the keyboard focus once the panel settles", async ({ page }) => {
+    // PrimeVue's Select clears the keyboard focus on a timer after its trigger
+    // blurs, which it does as the search takes focus; fire that timer instead
+    // of racing it.
+    await page.clock.install();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/new");
+    await openModelPicker(page);
+    const panel = page.locator(".model-picker-panel");
+    await expect(panel.getByRole("searchbox")).toBeFocused();
+    await page.clock.runFor(1000);
+    const focused = panel.locator(".p-select-option.p-focus");
+    await expect(focused).toHaveClass(/p-select-option-selected/);
+  });
+
   test("keyboard focus follows a pick made with the pointer", async ({ page }) => {
     // A second model, so there is a row to pick other than the selected one.
     await page.route("**/api/models", async (route) => {

@@ -284,7 +284,8 @@ test.describe('File Upload via Paste and Drag', () => {
   test('discards attachments from an abandoned new conversation', async ({ page, request }) => {
     const existing = await createConversationViaAPIWithDetails(request, 'attachment destination');
     await page.goto('/new');
-    await page.waitForLoadState('domcontentloaded');
+    // The drop below targets the composer, which has to exist by then.
+    await expect(page.locator('.message-input-container')).toBeVisible();
 
     await page.evaluate(() => {
       const dataTransfer = new DataTransfer();

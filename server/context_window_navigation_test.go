@@ -12,9 +12,12 @@ import (
 func TestContextWindowSizePreservedOnNavigation(t *testing.T) {
 	t.Parallel()
 	h := NewTestHarness(t)
+	// Not /tmp: prompt hydration walks the cwd for guidance files and skills,
+	// and a shared CI host's /tmp made that walk take ~20s.
+	dir := t.TempDir()
 
 	// Create first conversation and get a response
-	h.NewConversation("echo: first message", "/tmp")
+	h.NewConversation("echo: first message", dir)
 	resp1 := h.WaitResponse()
 	t.Logf("First conversation first response: %q", resp1)
 
@@ -27,7 +30,7 @@ func TestContextWindowSizePreservedOnNavigation(t *testing.T) {
 	}
 
 	// Create second conversation and get a response
-	h.NewConversation("echo: second message with much more text to ensure different context size", "/tmp")
+	h.NewConversation("echo: second message with much more text to ensure different context size", dir)
 	resp2 := h.WaitResponse()
 	t.Logf("Second conversation first response: %q", resp2)
 

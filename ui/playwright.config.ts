@@ -1,15 +1,19 @@
 import { defineConfig, devices } from "@playwright/test";
+import { selectWorkerServer, workerStorageState } from "./scripts/worker-server";
 
 /**
- * The test server is managed by globalSetup (scripts/global-setup.ts).
- * It starts shelley with --port 0 and exports the actual URL via
- * PLAYWRIGHT_TEST_BASE_URL, which Playwright's baseURL fixture reads
- * automatically. This eliminates hardcoded ports and port conflicts.
+ * The test servers are managed by globalSetup (scripts/global-setup.ts).
+ * It starts one shelley per worker with --port 0, and each worker points
+ * PLAYWRIGHT_TEST_BASE_URL, which Playwright's baseURL fixture reads, at its
+ * own server (scripts/worker-server.ts). This eliminates hardcoded ports and
+ * port conflicts, and workers never share a server.
  *
  * To point at an already-running server, set TEST_SERVER_URL.
  *
  * @see https://playwright.dev/docs/test-configuration
  */
+selectWorkerServer();
+
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./scripts/global-setup.ts",
@@ -27,22 +31,29 @@ export default defineConfig({
    * closed" rather than a clear timeout. 120s gives ample headroom over the
    * realistic few-seconds runtime while still bounding a genuinely hung test. */
   timeout: 120_000,
-  /* Use 2 workers in CI. All tests share a single predictable-mode server
-   * backed by a single-writer SQLite DB; 3 workers caused systemic flake
-   * from SSE/agent-working contention on ubuntu-latest. 2 keeps wall-clock
-   * low while avoiding the overload that made every run drop ~1 test. */
-  workers: process.env.CI ? 2 : 1,
+  /* Playwright's default worker count (half the cores). Every worker has
+   * its own server, so workers don't contend on one SQLite DB the way they
+   * did when the suite shared a server and was pinned to 2. Buildkite sets
+   * its own count with --workers. */
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
   reporter: process.env.CI ? [["html", { open: "never" }], ["list"]] : "list",
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* baseURL is set automatically via PLAYWRIGHT_TEST_BASE_URL from global-setup */
-    /* Collect trace on all tests, keep only on failure */
-    trace: "retain-on-failure",
-    /* Take a screenshot after every test */
-    screenshot: "on",
-    /* Record video on all tests, keep only on failure */
-    video: "retain-on-failure",
+    /* Start /new in the worker's own directory. Otherwise it falls back to the
+       most recent conversation's, which may be a directory an earlier test has
+       already deleted. */
+    storageState: workerStorageState(),
+    /* Record traces and videos only when retrying a failed test. The
+       retain-on-failure modes record every test and throw the recording away
+       when it passes, and that is not cheap: tracing snapshots the DOM at
+       every action. Recording everything made the suite ~2.4x slower
+       (32 tests: 66s without, 156s with). CI retries once, so a test that
+       fails still leaves a trace and a video from its second attempt. For a
+       local failure, rerun with --retries 1, or --trace on. */
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    video: "on-first-retry",
     /* Ask the app for reduced motion. Playwright waits for an element to stop
        moving before it clicks, so UI animations are paid for on every single
        interaction -- PrimeVue's 0.3s dialog enter/leave alone cost ~0.6s per
