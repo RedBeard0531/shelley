@@ -17,6 +17,7 @@ import (
 )
 
 func TestUIFreshnessScopedToServerAssets(t *testing.T) {
+	t.Parallel()
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
@@ -64,6 +65,9 @@ func TestUIFreshnessScopedToServerAssets(t *testing.T) {
 		t.Fatalf("write Go build overlay: %v", err)
 	}
 
+	// Compile the rest once, through the shared build: the overlay only
+	// changes the embedded UI, so this build need not compile it all again.
+	shelleyBinary(t)
 	binary := filepath.Join(fixtureDir, "shelley")
 	build := exec.Command("go", "build", "-overlay", overlayPath, "-o", binary, "./cmd/shelley")
 	build.Dir = repoRoot

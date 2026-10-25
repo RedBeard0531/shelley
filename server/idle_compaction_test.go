@@ -88,6 +88,7 @@ func requireIdleCompactions(t *testing.T, h *TestHarness, want int) {
 // compact its own context with compact_in_place. The nudge goes with the
 // compaction, and the turn's end does not start another idle cycle.
 func TestIdleCompactionCompactsInPlaceOnce(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h, _ := newIdleCompactionHarness(t)
 		defer stopActiveConversationLoops(h.server)
@@ -121,6 +122,7 @@ func TestIdleCompactionCompactsInPlaceOnce(t *testing.T) {
 }
 
 func TestIdleCompactionNewTurnRestartsDeadline(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h, cm := newIdleCompactionHarness(t)
 		defer stopActiveConversationLoops(h.server)
@@ -161,6 +163,7 @@ func TestIdleCompactionNewTurnRestartsDeadline(t *testing.T) {
 }
 
 func TestIdleCompactionActivityAndSettingsInvalidateCallback(t *testing.T) {
+	t.Parallel()
 	for _, activity := range []string{"reset", "stop", "disable policy", "queued message", "transcription"} {
 		t.Run(activity, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -228,6 +231,7 @@ func TestIdleCompactionActivityAndSettingsInvalidateCallback(t *testing.T) {
 }
 
 func TestIdleCompactionNothingToCompactIsOneShotNoOp(t *testing.T) {
+	t.Parallel()
 	t.Run("short context", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			h, cm := newIdleCompactionHarness(t)
@@ -273,6 +277,7 @@ func TestIdleCompactionNothingToCompactIsOneShotNoOp(t *testing.T) {
 }
 
 func TestIdleCompactionRequiresEnabledPolicyAndTopLevel(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"ordinary", "external chat disabled", "external chat enabled", "subagent child"} {
 		t.Run(kind, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -322,6 +327,7 @@ func TestIdleCompactionRequiresEnabledPolicyAndTopLevel(t *testing.T) {
 // TestIdleCompactionNeedsTheTool: a conversation with compact_in_place off,
 // here by -no-tools, arms no idle compaction, whatever its profile says.
 func TestIdleCompactionNeedsTheTool(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h := NewTestHarness(t)
 		defer stopActiveConversationLoops(h.server)
@@ -345,6 +351,7 @@ func TestIdleCompactionNeedsTheTool(t *testing.T) {
 // idle turn reaches the model in it, and that exchange arms the next idle
 // cycle.
 func TestIdleCompactionUserWritesDuringIdleTurn(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h, cm := newIdleCompactionHarness(t)
 		defer stopActiveConversationLoops(h.server)
@@ -376,6 +383,7 @@ func TestIdleCompactionUserWritesDuringIdleTurn(t *testing.T) {
 }
 
 func TestIdleCompactionUsesCopiedProfileDelay(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h, cm := newIdleCompactionHarness(t)
 		defer stopActiveConversationLoops(h.server)
@@ -417,6 +425,7 @@ func cacheWarmUsage(t *testing.T, h *TestHarness) []llm.PurposedUsage {
 // A typical policy: compaction at 8 minutes, warm until then. A 5-minute
 // cache needs exactly one refresh, shortly before it expires.
 func TestCacheWarmRefreshesLastRequestBeforeIdleCompaction(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h, _ := newIdlePolicyHarness(t, db.ConversationOptions{IdleCompactionMinutes: 8, CacheKeepWarmMinutes: 30})
 		defer stopActiveConversationLoops(h.server)
@@ -455,6 +464,7 @@ func TestCacheWarmRefreshesLastRequestBeforeIdleCompaction(t *testing.T) {
 }
 
 func TestCacheWarmRestartsWithNewTurnAndEndsWithWindow(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h, _ := newIdlePolicyHarness(t, db.ConversationOptions{IdleCompactionMinutes: 60, CacheKeepWarmMinutes: 20})
 		defer stopActiveConversationLoops(h.server)
@@ -487,6 +497,7 @@ func TestCacheWarmRestartsWithNewTurnAndEndsWithWindow(t *testing.T) {
 
 // A cache that outlives the window (e.g. OpenAI's 30 minutes) is never warmed.
 func TestCacheWarmSkipsCacheThatOutlivesWindow(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h, _ := newIdlePolicyHarness(t, db.ConversationOptions{IdleCompactionMinutes: 60, CacheKeepWarmMinutes: 5})
 		defer stopActiveConversationLoops(h.server)
@@ -513,6 +524,7 @@ func newCacheWarmSnapshotHarness(t *testing.T, service llm.Service) (*TestHarnes
 }
 
 func TestCacheWarmConnectionChanges(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"unchanged", "label", "other model", "rotated", "removed"} {
 		t.Run(change, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -588,6 +600,7 @@ func (s *cacheWarmBlockedService) WarmCache(ctx context.Context, req *llm.Reques
 }
 
 func TestCacheWarmConnectionChangesDuringRequests(t *testing.T) {
+	t.Parallel()
 	for _, blockDo := range []bool{true, false} {
 		t.Run(fmt.Sprintf("inference=%t", blockDo), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {

@@ -123,6 +123,7 @@ func (c *liveCallClient) expect(want ...string) {
 // A call relays Live's events; the server decides the task, delivers it
 // through chat, and tells Live what came of it and what the backend says.
 func TestLiveCallOverHTTP(t *testing.T) {
+	t.Parallel()
 	e := newLiveMessageEnv(t)
 	e.liveProvider()
 	slug := "voice-call"
@@ -210,6 +211,7 @@ func TestLiveCallOverHTTP(t *testing.T) {
 // A call in a blank draft promotes it with the composer's selection on its
 // first task, as the first typed send would.
 func TestLiveCallStartsADraft(t *testing.T) {
+	t.Parallel()
 	e := newLiveMessageEnv(t)
 	e.liveProvider()
 	if code, body := e.post("/api/profiles", `{"name":"Personal","model":"predictable","system_prompt":"Be a helpful personal assistant.","tool_overrides":{"bash":"off"}}`); code != http.StatusCreated {
@@ -232,8 +234,11 @@ func TestLiveCallStartsADraft(t *testing.T) {
 	if !strings.Contains(systemText(turn.request), "Be a helpful personal assistant.") {
 		t.Error("main backend lost the profile's system prompt")
 	}
+	// The reply can arrive while the delivery is still in flight, ahead of
+	// "activity: false", so finish the turn only once the call is idle.
+	call.expect("activity: true", "error: null", "handoff 1:", "thinking [d1]: The backend accepted this task", "activity: false")
 	e.finish(draft.ConversationID, turn)
-	call.expect("activity: true", "error: null", "handoff 1:", "thinking [d1]: The backend accepted this task", "activity: false", "commentary [d1]: Backend reply: ")
+	call.expect("commentary [d1]: Backend reply: ")
 	row, err := e.database.GetConversationByID(t.Context(), draft.ConversationID)
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +254,7 @@ func TestLiveCallStartsADraft(t *testing.T) {
 }
 
 func TestLiveCallSendsCompleteFreshExchange(t *testing.T) {
+	t.Parallel()
 	e := newLiveMessageEnv(t)
 	e.liveProvider()
 	slug := "voice-complete-exchange"
@@ -265,8 +271,9 @@ func TestLiveCallSendsCompleteFreshExchange(t *testing.T) {
 	)
 	message := "Spoken request:\nRun tests" + exchange(1, 2, "USER: Run tests\nLIVE: "+response) + liveTranscriptReference(1)
 	turn := e.held.waitCall(t, message)
+	call.expect("activity: true", "error: null", "handoff 2:", "thinking [d1]: The backend accepted this task", "activity: false")
 	e.finish(conv.ConversationID, turn)
-	call.expect("activity: true", "error: null", "handoff 2:", "thinking [d1]: The backend accepted this task", "activity: false", "commentary [d1]: Backend reply: ")
+	call.expect("commentary [d1]: Backend reply: ")
 	if code, body := e.do("DELETE", call.path, ""); code != http.StatusNoContent {
 		t.Fatal(code, body)
 	}
@@ -274,6 +281,7 @@ func TestLiveCallSendsCompleteFreshExchange(t *testing.T) {
 }
 
 func TestLiveTranscriptLateCaptionStaysForNextHandoff(t *testing.T) {
+	t.Parallel()
 	e := newLiveMessageEnv(t)
 	e.liveProvider()
 	slug := "voice-late-caption"
@@ -321,6 +329,7 @@ func TestLiveTranscriptLateCaptionStaysForNextHandoff(t *testing.T) {
 }
 
 func TestLiveDeliveryIdentitySurvivesQueueDrainAsTypedUserWork(t *testing.T) {
+	t.Parallel()
 	e := newLiveMessageEnv(t)
 	conv, err := e.database.CreateConversation(t.Context(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{})
 	if err != nil {
@@ -365,6 +374,7 @@ func TestLiveDeliveryIdentitySurvivesQueueDrainAsTypedUserWork(t *testing.T) {
 }
 
 func TestLiveDeliveryImmediateModelInputHasSequenceID(t *testing.T) {
+	t.Parallel()
 	e := newLiveMessageEnv(t)
 	conv, err := e.database.CreateConversation(t.Context(), nil, true, nil, strPtr("predictable"), db.ConversationOptions{
 		ToolOverrides: map[string]string{"message_user": "on"},

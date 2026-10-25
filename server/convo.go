@@ -1541,15 +1541,12 @@ func (cm *ConversationManager) drainPendingMessagesOwned(s *Server) {
 		if len(queued) == 0 {
 			return
 		}
-		fed, err := cm.feedQueued(ctx, s, queued)
-		// Feeding started a turn; its end drains whatever remains, including
-		// an item that failed to record here. Without a fed message, the next
-		// queued message drains again. Retrying immediately would hot-spin on
-		// a persistent failure such as a DB outage.
-		if fed {
-			cm.SetAgentWorking(true)
-		}
-		if err != nil {
+		// Recording a message marks the agent working, and the turn it starts
+		// drains whatever remains when it ends, including an item that failed
+		// to record here. Without a recorded message, the next queued message
+		// drains again. Retrying immediately would hot-spin on a persistent
+		// failure such as a DB outage.
+		if err := cm.feedQueued(ctx, s, queued); err != nil {
 			cm.logger.Error("Failed to drain queued messages", "error", err)
 			return
 		}
@@ -1558,9 +1555,8 @@ func (cm *ConversationManager) drainPendingMessagesOwned(s *Server) {
 
 // feedQueued records queued items in order and feeds them to the loop,
 // starting one from the DB if none is running. It stops at the first item that
-// fails so later items never overtake it, and reports whether anything was
-// fed. The caller holds loopLifecycleMu.
-func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued []db.QueuedMessage) (bool, error) {
+// fails so later items never overtake it. The caller holds loopLifecycleMu.
+func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued []db.QueuedMessage) error {
 	cm.mu.Lock()
 	loopInstance := cm.loop
 	warmModelID := cm.modelID
@@ -1577,16 +1573,16 @@ func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued
 		// saved source keep their existing behavior.
 		svc, err := s.llmManager.GetService(warmModelID)
 		if err != nil {
-			return false, fmt.Errorf("failed to get LLM service %q: %w", warmModelID, err)
+			return fmt.Errorf("failed to get LLM service %q: %w", warmModelID, err)
 		}
 		if err := cm.ensureLoopLocked(svc, warmModelID); err != nil {
-			return false, fmt.Errorf("failed to refresh loop: %w", err)
+			return fmt.Errorf("failed to refresh loop: %w", err)
 		}
 		cm.mu.Lock()
 		loopInstance = cm.loop
 		cm.mu.Unlock()
 		if loopInstance == nil {
-			return false, errors.New("conversation loop not initialized")
+			return errors.New("conversation loop not initialized")
 		}
 	}
 	if loopInstance == nil {
@@ -1595,7 +1591,7 @@ func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued
 		// Queued messages have no messages rows until they are recorded
 		// below, so hydrating history cannot load them twice.
 		if err := cm.Hydrate(ctx); err != nil {
-			return false, fmt.Errorf("failed to hydrate: %w", err)
+			return fmt.Errorf("failed to hydrate: %w", err)
 		}
 		// The conversation's model wins: a settings change may have
 		// replaced the one the messages were queued with.
@@ -1605,10 +1601,10 @@ func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued
 		}
 		svc, err := s.llmManager.GetService(modelID)
 		if err != nil {
-			return false, fmt.Errorf("failed to get LLM service %q: %w", modelID, err)
+			return fmt.Errorf("failed to get LLM service %q: %w", modelID, err)
 		}
 		if err := cm.ensureLoopLocked(svc, modelID); err != nil {
-			return false, fmt.Errorf("failed to start loop: %w", err)
+			return fmt.Errorf("failed to start loop: %w", err)
 		}
 		cm.mu.Lock()
 		loopInstance = cm.loop
@@ -1627,7 +1623,7 @@ func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued
 			continue
 		}
 		if err != nil {
-			return len(messages) > 0, err
+			return err
 		}
 		if qm.Kind == db.QueuedMessageKindTranscription {
 			s.generateSlugAsync(cm.conversationID, messageText(user), qm.Model)
@@ -1636,7 +1632,7 @@ func (cm *ConversationManager) feedQueued(ctx context.Context, s *Server, queued
 		// array, so the ghost clears live.
 		messages = append(messages, message)
 	}
-	return len(messages) > 0, nil
+	return nil
 }
 
 const maxConsecutiveWarnings = 3

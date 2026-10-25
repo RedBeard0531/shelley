@@ -1256,9 +1256,9 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 // insertMessages is the one way recorded rows enter a conversation. It writes
 // params in a single transaction (one commit hook, one list recompute, and a
 // timestamp bump), then syncs the active manager and publishes the rows to
-// subscribers. An end-of-turn row already wrote agent_working=false in that
-// transaction via MarkAgentDone, so the manager syncs its in-memory flag
-// without writing it again.
+// subscribers. A row that starts or ends a turn already wrote agent_working in
+// that transaction via MarkAgentStart or MarkAgentDone, so the manager syncs
+// its in-memory flag without writing it again.
 func (s *Server) insertMessages(ctx context.Context, conversationID string, params []db.CreateMessageParams) ([]generated.Message, error) {
 	created, err := s.db.CreateMessages(ctx, params)
 	if err != nil {
@@ -1268,6 +1268,9 @@ func (s *Server) insertMessages(ctx context.Context, conversationID string, para
 	mgr := s.activeConversations[conversationID]
 	s.mu.Unlock()
 	if mgr != nil {
+		if slices.ContainsFunc(params, func(p db.CreateMessageParams) bool { return p.MarkAgentStart }) {
+			mgr.syncAgentWorking(true)
+		}
 		if slices.ContainsFunc(params, func(p db.CreateMessageParams) bool { return p.MarkAgentDone }) {
 			mgr.syncAgentWorking(false)
 			// Only an actual successful turn arms the idle timer. Compaction
@@ -1289,9 +1292,11 @@ func (s *Server) insertMessages(ctx context.Context, conversationID string, para
 // immutable rows AND removes it from the conversation's queued_messages array
 // in the SAME Tx (via CreateMessageParams.RemoveQueuedID). If the Tx aborts,
 // neither the rows nor the array change persists, so the item cannot be fed
-// twice. The first row removes the queued entry; the last row carries the
-// user provenance captured at queue time (drain runs on a background
-// context). Synthetic transcription audit rows stay unattributed. Returns
+// twice. That Tx also marks the agent working, as recordTurnStartMessage does,
+// so the conversation never reads as idle with nothing queued while the item
+// waits for its answer. The first row removes the queued entry; the last row
+// carries the user provenance captured at queue time (drain runs on a
+// background context). Synthetic transcription audit rows stay unattributed. Returns
 // the user row's sequence ID for rendering its external wrapper to the LLM.
 func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID string, qm db.QueuedMessage, messages []llm.Message) (int64, error) {
 	paramsList := make([]db.CreateMessageParams, 0, len(messages))
@@ -1306,6 +1311,7 @@ func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID
 		}
 		if i == 0 {
 			params.RemoveQueuedID = qm.ID
+			params.MarkAgentStart = true
 		}
 		if i == len(messages)-1 {
 			params.UserEmail = qm.UserEmail

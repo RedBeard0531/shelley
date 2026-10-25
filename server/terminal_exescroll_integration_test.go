@@ -54,6 +54,7 @@ func newExeScrollTestSessions(t *testing.T) *TerminalSessions {
 }
 
 func TestExeScrollCloseOnExitPolicyPersists(t *testing.T) {
+	t.Parallel()
 	for _, closeOnExit := range []bool{true, false} {
 		t.Run(strconv.FormatBool(closeOnExit), func(t *testing.T) {
 			ts := newExeScrollTestSessions(t)
@@ -107,6 +108,7 @@ func TestExeScrollCloseOnExitPolicyPersists(t *testing.T) {
 }
 
 func TestExeScrollSessionReattachesWithScrollbackAndExitStatus(t *testing.T) {
+	t.Parallel()
 	ts := newExeScrollTestSessions(t)
 	command := `if [ -n "${SHELLEY_EXE_SCROLL_FD:-}" ]; then echo inherited-fd-leaked; fi; for i in $(seq 1 200); do printf 'scroll-line-%03d\n' "$i"; done; read -r answer; printf 'answer=%s\n' "$answer"`
 	sess, first, err := ts.Spawn(command, t.TempDir(), "conv-1", false, 80, 24, []string{"SHELLEY_EXE_SCROLL_HELPER=1"})
@@ -163,6 +165,7 @@ func TestExeScrollSessionReattachesWithScrollbackAndExitStatus(t *testing.T) {
 }
 
 func TestExeScrollPreservesNonzeroExitStatus(t *testing.T) {
+	t.Parallel()
 	ts := newExeScrollTestSessions(t)
 	sess, client, err := ts.Spawn("exit 42", t.TempDir(), "", false, 80, 24, []string{"SHELLEY_EXE_SCROLL_HELPER=1"})
 	if err != nil {
@@ -180,6 +183,7 @@ func TestExeScrollPreservesNonzeroExitStatus(t *testing.T) {
 }
 
 func TestExeScrollSpawnFailureTerminatesSessionServer(t *testing.T) {
+	t.Parallel()
 	ts := newExeScrollTestSessions(t)
 	var serverPID int
 	ts.waitForPID = func(path string, max time.Duration) (int, error) {
@@ -267,6 +271,7 @@ func exeScrollExecutableMapping(t *testing.T, pid int) string {
 }
 
 func TestKillExeScrollStopsSessionServer(t *testing.T) {
+	t.Parallel()
 	ts := newExeScrollTestSessions(t)
 	sess, client, err := ts.Spawn("read -r _", t.TempDir(), "", false, 80, 24, []string{"SHELLEY_EXE_SCROLL_HELPER=1"})
 	if err != nil {

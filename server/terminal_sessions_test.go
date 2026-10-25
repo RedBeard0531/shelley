@@ -35,6 +35,7 @@ func TestForgetRetainsExitStatusForConcurrentAttachments(t *testing.T) {
 }
 
 func TestKillExeScrollKeepsRecordWhenPIDValidationFails(t *testing.T) {
+	t.Parallel()
 	ts, err := NewTerminalSessions(t.TempDir(), slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	if err != nil {
 		t.Fatal(err)

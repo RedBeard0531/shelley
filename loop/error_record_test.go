@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -153,4 +154,61 @@ func TestLLMErrorRecordedDespiteExpiredContext(t *testing.T) {
 	if !found {
 		t.Fatalf("LLM failure did not record an end-of-turn error message; recorded: %d messages", len(recorded))
 	}
+}
+
+// failOnceService fails its first request and answers every later one,
+// announcing each later request on answered.
+type failOnceService struct {
+	calls    atomic.Int32
+	answered chan struct{}
+}
+
+func (s *failOnceService) Do(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	if s.calls.Add(1) == 1 {
+		return nil, errors.New("status 400: bad request")
+	}
+	s.answered <- struct{}{}
+	return &llm.Response{Role: llm.MessageRoleAssistant, StopReason: llm.StopReasonEndTurn, Content: llm.TextContent("ok")}, nil
+}
+func (s *failOnceService) Provider() string       { return "" }
+func (s *failOnceService) MaxImageDimension() int { return 0 }
+func (s *failOnceService) MaxImageBytes() int     { return 0 }
+func (s *failOnceService) SupportsImages() bool   { return false }
+
+// TestMessageAfterFailedRequestGoesOutAtOnce checks that a failed request
+// leaves the loop ready: the user's next message (or Retry) is sent right
+// away rather than after a pause.
+func TestMessageAfterFailedRequestGoesOutAtOnce(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		svc := &failOnceService{answered: make(chan struct{})}
+		l := NewLoop(Config{
+			LLM: svc,
+			RecordMessage: func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
+				return nil
+			},
+		})
+		say := func(text string) {
+			l.QueueUserMessage(llm.Message{Role: llm.MessageRoleUser, Content: llm.TextContent(text)})
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- l.Go(ctx) }()
+		defer func() {
+			cancel()
+			<-done
+		}()
+
+		say("first")
+		synctest.Wait()
+		if got := svc.calls.Load(); got != 1 {
+			t.Fatalf("requests after the first message = %d, want 1", got)
+		}
+		start := time.Now()
+		say("second")
+		<-svc.answered
+		if waited := time.Since(start); waited != 0 {
+			t.Fatalf("the message after a failed request waited %v", waited)
+		}
+	})
 }

@@ -23,10 +23,15 @@ import (
 // still fully deterministic.
 func TestComputeListPatchFuzz(t *testing.T) {
 	t.Parallel()
-	const (
-		shards         = 8
-		trialsPerShard = 125
-	)
+	const shards = 8
+	trialsPerShard := 125
+	if raceEnabled {
+		// One goroutine per shard and no shared state: the race detector has
+		// nothing to find here, but makes each trial ~12x slower (most of
+		// this package's CPU time under -race). So CI, which runs -race,
+		// checks 200 of the 1000 cases; a plain go test checks them all.
+		trialsPerShard = 25
+	}
 	for shard := 0; shard < shards; shard++ {
 		t.Run(fmt.Sprintf("shard%d", shard), func(t *testing.T) {
 			t.Parallel()

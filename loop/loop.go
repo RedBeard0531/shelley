@@ -298,8 +298,9 @@ func (l *Loop) Go(ctx context.Context) error {
 					l.logger.Info("conversation loop canceled")
 					return ctx.Err()
 				}
+				// The queue was drained for this request, so go straight back
+				// to waiting for the user's next message or Retry.
 				l.logger.Error("failed to process LLM request", "error", err)
-				time.Sleep(time.Second)
 				continue
 			}
 			l.logger.Debug("finished processing queued messages")

@@ -12,11 +12,9 @@ import (
 )
 
 func TestHighlightsCLI(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
-	binary := filepath.Join(tempDir, "shelley")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	binary := shelleyBinary(t)
 
 	repo := t.TempDir()
 	git := func(args ...string) string {

@@ -65,13 +65,19 @@ func newSubagentDoneFixture(t *testing.T, subResponse string) *subagentDoneFixtu
 	}
 
 	// Record a final assistant text message on the subagent so lastAssistantText
-	// has something to read.
+	// has something to read. Write it straight to the DB: recording it as a
+	// turn's end would also start a queue drain that could run late, in the
+	// middle of a turn the test starts.
 	assistantMsg := llm.Message{
 		Role:      llm.MessageRoleAssistant,
 		Content:   []llm.Content{{Type: llm.ContentTypeText, Text: subResponse}},
 		EndOfTurn: true,
 	}
-	if err := server.recordMessage(ctx, subConv.ConversationID, assistantMsg, llm.Usage{}, nil); err != nil {
+	if _, err := database.CreateMessage(ctx, db.CreateMessageParams{
+		ConversationID: subConv.ConversationID,
+		Type:           db.MessageTypeAgent,
+		LLMData:        assistantMsg,
+	}); err != nil {
 		t.Fatalf("record subagent assistant: %v", err)
 	}
 

@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -546,4 +548,60 @@ func testQueuedMessagesDrainIntoOneRequest(t *testing.T) {
 		}
 	}
 	t.Fatal("queued messages never reached the model")
+}
+
+// The commit that takes a queued message off the queue also marks the
+// conversation working, as a sent message's does. Otherwise anyone reading
+// the conversation in between, like a conversation list or a client waiting
+// for the agent to finish, sees it idle with nothing queued while the
+// message is still unanswered.
+func TestDrainedMessageKeepsConversationWorking(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		server, database, _ := newTestServer(t)
+		defer stopActiveConversationLoops(server)
+		conversation, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		convID := conversation.ConversationID
+		sendChat(t, server, convID, "delay: 2", false)
+		synctest.Wait()
+		sendChat(t, server, convID, "echo: queued behind", true)
+		synctest.Wait()
+
+		var mu sync.Mutex
+		var idleWhileUnanswered []string
+		database.Pool().OnCommit(func() {
+			ctx := context.Background()
+			conv, err := database.GetConversationByID(ctx, convID)
+			if err != nil {
+				return
+			}
+			msgs, err := database.ListMessages(ctx, convID)
+			if err != nil || len(msgs) == 0 {
+				return
+			}
+			last := msgs[len(msgs)-1]
+			if !conv.AgentWorking && last.Type == string(db.MessageTypeUser) && last.LlmData != nil && strings.Contains(*last.LlmData, "queued behind") {
+				mu.Lock()
+				idleWhileUnanswered = append(idleWhileUnanswered, conv.QueuedMessages)
+				mu.Unlock()
+			}
+		})
+
+		for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
+			if conv, err := database.GetConversationByID(t.Context(), convID); err == nil && !conv.AgentWorking && userMessageRowExists(t, database, convID, "queued behind") {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the queued message was never answered")
+			}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(idleWhileUnanswered) > 0 {
+			t.Fatalf("a commit showed the conversation idle (queue %s) with the drained message unanswered", idleWhileUnanswered[0])
+		}
+	})
 }

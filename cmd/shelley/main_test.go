@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,47 @@ import (
 	"shelley.exe.dev/modelsources"
 	"shelley.exe.dev/slug"
 )
+
+// testBinDir holds the shelley binary that the CLI tests share. It outlives
+// every test, so TestMain removes it rather than any one test's t.TempDir.
+// It is made only when a test first needs the binary: tests that rerun this
+// test binary as a helper process run TestMain again and may exit without
+// returning to it.
+var testBinDir string
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if testBinDir != "" {
+		os.RemoveAll(testBinDir)
+	}
+	os.Exit(code)
+}
+
+// buildTestBinary builds the shelley binary once, on first use, for every test
+// that runs it as is. Building it per test linked the same binary again each
+// time, and parallel tests building at once would compile it side by side.
+var buildTestBinary = sync.OnceValues(func() (string, error) {
+	dir, err := os.MkdirTemp("", "shelley-cmd-test-")
+	if err != nil {
+		return "", err
+	}
+	testBinDir = dir
+	binary := filepath.Join(dir, "shelley")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("build shelley: %v\n%s", err, out)
+	}
+	return binary, nil
+})
+
+// shelleyBinary returns the shared shelley binary. Tests must not modify it.
+func shelleyBinary(t *testing.T) string {
+	t.Helper()
+	binary, err := buildTestBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binary
+}
 
 type tieredModelProvider struct {
 	ids   []string
@@ -500,13 +542,8 @@ func findBuiltModelSource(built []models.Built, id string) string {
 }
 
 func TestCLICommands(t *testing.T) {
-	// Build the binary once for this test and its subtests
-	tempDir := t.TempDir()
-	binary := filepath.Join(tempDir, "shelley")
-	cmd := exec.Command("go", "build", "-o", binary, ".")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to build binary: %v", err)
-	}
+	t.Parallel()
+	binary := shelleyBinary(t)
 
 	t.Run("help message", func(t *testing.T) {
 		cmd := exec.Command(binary)
@@ -610,12 +647,9 @@ func TestSystemdListenerIntegration(t *testing.T) {
 	// Since we can't easily test in-process (fd 3 is likely already in use),
 	// we test by spawning a subprocess.
 
+	t.Parallel()
 	tempDir := t.TempDir()
-	binary := filepath.Join(tempDir, "shelley")
-	cmd := exec.Command("go", "build", "-o", binary, ".")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to build binary: %v", err)
-	}
+	binary := shelleyBinary(t)
 
 	// Create a listener on a random port
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -639,7 +673,7 @@ func TestSystemdListenerIntegration(t *testing.T) {
 	// Spawn shelley with the file descriptor as fd 3
 	// Note: We don't set LISTEN_PID here because we don't know the child PID yet.
 	// The systemdListeners function handles missing LISTEN_PID gracefully.
-	cmd = exec.Command(binary, "-db", dbPath, "serve", "-systemd-activation")
+	cmd := exec.Command(binary, "-db", dbPath, "serve", "-systemd-activation", "-socket", "none")
 	// Build environment without LISTEN_PID (will be inherited from parent otherwise)
 	// and add LISTEN_FDS=1
 	env := make([]string, 0, len(os.Environ()))
@@ -696,11 +730,9 @@ func TestSystemdListenerIntegration(t *testing.T) {
 // the server must get through without retrying, and the socket must outlive
 // the server, since it belongs to systemd.
 func TestSystemdActivatedCLISocket(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
-	binary := filepath.Join(tempDir, "shelley")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	binary := shelleyBinary(t)
 
 	listenerFile := func(network, address string) *os.File {
 		t.Helper()
@@ -767,11 +799,9 @@ func TestSystemdActivatedCLISocket(t *testing.T) {
 // serves the first and ignores the rest, as it always has, rather than not
 // starting at all.
 func TestSystemdActivationIgnoresExtraListeners(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
-	binary := filepath.Join(tempDir, "shelley")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	binary := shelleyBinary(t)
 
 	var files []*os.File
 	var webAddr string

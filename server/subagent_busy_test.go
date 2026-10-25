@@ -22,6 +22,7 @@ import (
 // behavior never interrupts: the message joins the current turn.
 
 func TestSubagentBusy(t *testing.T) {
+	t.Parallel()
 	t.Run("DeliversMidTurn", testSubagentBusy_DeliversMidTurn)
 	t.Run("DeliversDurableInjectionMidTurn", testSubagentBusy_DeliversDurableInjectionMidTurn)
 }
@@ -30,6 +31,7 @@ func TestSubagentBusy(t *testing.T) {
 // subagents with their working state and latest reply. Run it against a real
 // database so it keeps matching the schema.
 func TestSubagentToolDescriptionListsSubagents(t *testing.T) {
+	t.Parallel()
 	f := newSubagentDoneFixture(t, "Found three\nflaky tests.")
 	defer stopActiveConversationLoops(f.server)
 	ctx := t.Context()
@@ -92,6 +94,7 @@ func TestSubagentToolDescriptionListsSubagents(t *testing.T) {
 // conversation options so the loop picks it up. An empty reasoning string is a
 // no-op and must not overwrite an existing level.
 func TestSubagentRunner_PersistsReasoning(t *testing.T) {
+	t.Parallel()
 	f := newSubagentDoneFixture(t, "irrelevant")
 	ctx := t.Context()
 
@@ -150,6 +153,7 @@ func hasCancelledMessage(t *testing.T, f *subagentDoneFixture) bool {
 // the turn's next LLM round, right after the running tool's result — without
 // cancelling the turn or waiting for it to end.
 func testSubagentBusy_DeliversMidTurn(t *testing.T) {
+	t.Parallel()
 	f := newSubagentDoneFixture(t, "irrelevant")
 	defer stopActiveConversationLoops(f.server)
 	runner := NewSubagentRunner(f.server)
@@ -193,6 +197,7 @@ func testSubagentBusy_DeliversMidTurn(t *testing.T) {
 // that a fresh manager finds in queued_messages (as after a restart) still
 // reaches the running turn at its next LLM round.
 func testSubagentBusy_DeliversDurableInjectionMidTurn(t *testing.T) {
+	t.Parallel()
 	f := newSubagentDoneFixture(t, "irrelevant")
 	defer stopActiveConversationLoops(f.server)
 	runner := NewSubagentRunner(f.server)

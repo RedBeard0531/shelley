@@ -120,6 +120,9 @@ func startUpgradable(t *testing.T, release []byte, prelude string) *upgradeFixtu
 
 func buildShelley(t *testing.T, out string, ldflags ...string) {
 	t.Helper()
+	// Compile the packages once, through the shared build, so that this build
+	// and its parallel siblings only relink rather than each compile them too.
+	shelleyBinary(t)
 	cmd := exec.Command("go", "build", "-ldflags", strings.Join(ldflags, " "), "-o", out, ".")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, output)
@@ -193,6 +196,7 @@ func (f *upgradeFixture) upgrade() {
 // background job spans the upgrade and must not linger as a zombie once it
 // exits.
 func TestUpgradeRestartsInPlace(t *testing.T) {
+	t.Parallel()
 	newPath := filepath.Join(t.TempDir(), "shelley")
 	buildShelley(t, newPath, "-X shelley.exe.dev/version.Tag=v0.2.0")
 	newBinary, err := os.ReadFile(newPath)
@@ -279,6 +283,7 @@ func TestUpgradeRestartsInPlace(t *testing.T) {
 // (checked on Linux), and turns in flight, which a later restart must not
 // resume.
 func TestUpgradeKeepsServingWhenRestartFails(t *testing.T) {
+	t.Parallel()
 	f := startUpgradable(t, []byte("not a binary"), "ulimit -Sn 256; ")
 	limit := func() string {
 		if runtime.GOOS != "linux" {
