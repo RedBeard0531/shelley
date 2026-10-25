@@ -247,6 +247,17 @@ func queuedTranscriptionReceipt(t *testing.T, w *httptest.ResponseRecorder, data
 	return db.QueuedMessage{}
 }
 
+// holdTranscriptionProbe makes the worker's ffprobe wait for release, so a
+// launched job stays registered until the test has its done channel.
+func holdTranscriptionProbe(server *Server) (release func()) {
+	ch := make(chan struct{})
+	server.mediaRun = func(context.Context, string, ...string) ([]byte, error) {
+		<-ch
+		return []byte(`{"streams":[{"codec_type":"audio"}],"format":{"duration":"2"}}`), nil
+	}
+	return func() { close(ch) }
+}
+
 func transcriptionDone(t *testing.T, server *Server, queuedID string) <-chan struct{} {
 	t.Helper()
 	server.transcriptionMu.Lock()
@@ -876,9 +887,7 @@ func TestQueuedTranscriptionRecoveryResumesInterruptedWork(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 	server.transcriber = successfulRecordingTranscriber("recovered direct words")
-	server.mediaRun = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`{"streams":[{"codec_type":"audio"}],"format":{"duration":"2"}}`), nil
-	}
+	release := holdTranscriptionProbe(server)
 	parent, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -896,7 +905,9 @@ func TestQueuedTranscriptionRecoveryResumesInterruptedWork(t *testing.T) {
 	}
 
 	server.recoverQueuedTranscriptions(t.Context())
-	<-transcriptionDone(t, server, queued.ID)
+	done := transcriptionDone(t, server, queued.ID)
+	release()
+	<-done
 	persisted := queuedMessages(t, database, parent.ConversationID)
 	if len(persisted) != 1 || persisted[0].State != db.QueuedMessageStateReady {
 		t.Fatalf("resumed queue = %#v", persisted)
@@ -911,9 +922,7 @@ func TestQueuedTranscriptionRecoveryIncludesArchivedParents(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 	server.transcriber = successfulRecordingTranscriber("archived words")
-	server.mediaRun = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`{"streams":[{"codec_type":"audio"}],"format":{"duration":"2"}}`), nil
-	}
+	release := holdTranscriptionProbe(server)
 	parent, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -934,7 +943,9 @@ func TestQueuedTranscriptionRecoveryIncludesArchivedParents(t *testing.T) {
 	}
 
 	server.recoverQueuedTranscriptions(t.Context())
-	<-transcriptionDone(t, server, queued.ID)
+	done := transcriptionDone(t, server, queued.ID)
+	release()
+	<-done
 	persisted := queuedMessages(t, database, parent.ConversationID)
 	if len(persisted) != 1 || persisted[0].ID != queued.ID || persisted[0].State != db.QueuedMessageStateReady {
 		t.Fatalf("archived recovered queue = %#v", persisted)
@@ -945,9 +956,7 @@ func TestQueuedTranscriptionRecoveryIsIdempotent(t *testing.T) {
 	server, database, _ := newTestServer(t)
 	defer stopActiveConversationLoops(server)
 	server.transcriber = successfulRecordingTranscriber("recovered words")
-	server.mediaRun = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte(`{"streams":[{"codec_type":"audio"}],"format":{"duration":"2"}}`), nil
-	}
+	release := holdTranscriptionProbe(server)
 	parent, err := database.CreateConversation(t.Context(), nil, true, nil, nil, db.ConversationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -964,9 +973,12 @@ func TestQueuedTranscriptionRecoveryIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The held worker keeps the first job registered for the second scan.
 	server.recoverQueuedTranscriptions(t.Context())
 	server.recoverQueuedTranscriptions(t.Context())
-	<-transcriptionDone(t, server, queued.ID)
+	done := transcriptionDone(t, server, queued.ID)
+	release()
+	<-done
 	persisted := queuedMessages(t, database, parent.ConversationID)
 	if len(persisted) != 1 || persisted[0].ID != queued.ID || persisted[0].State != db.QueuedMessageStateReady {
 		t.Fatalf("recovered queue = %#v", persisted)
