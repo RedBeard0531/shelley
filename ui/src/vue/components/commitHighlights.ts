@@ -120,6 +120,9 @@ export function showHighlights(
   };
 }
 
+const COMMENT_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+
 function callout(comment: string, onComment: () => void, onKeyboardFocus: () => void) {
   const element = document.createElement("div");
   element.className = "diff-highlight-callout";
@@ -130,8 +133,9 @@ function callout(comment: string, onComment: () => void, onKeyboardFocus: () => 
   const button = document.createElement("button");
   button.type = "button";
   button.className = "diff-highlight-callout-comment";
-  button.textContent = "Comment";
+  button.setAttribute("aria-label", "Comment");
   button.title = "Comment on this highlight";
+  button.innerHTML = COMMENT_ICON;
   button.addEventListener("click", onComment);
   button.addEventListener("focus", () => {
     if (button.matches(":focus-visible")) onKeyboardFocus();

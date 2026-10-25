@@ -9027,20 +9027,27 @@ button.tour-visibility-control:focus-visible,
 .diff-highlight-callout-comment {
   pointer-events: auto;
   flex-shrink: 0;
-  margin-left: auto;
-  padding: 0 6px;
-  border: 1px solid rgba(217, 119, 6, 0.4);
+  display: flex;
+  /* A 24px touch target that overhangs the callout's padding, so it's no
+     taller than a line of text. */
+  margin: -3px -3px -3px auto;
+  padding: 4px;
+  border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--highlight-text);
-  font: inherit;
-  font-size: var(--font-size-12);
-  line-height: 1.5;
+  color: var(--text-secondary);
+  opacity: 0.8;
   cursor: pointer;
+}
+
+.diff-highlight-callout-comment svg {
+  width: 16px;
+  height: 16px;
 }
 
 .diff-highlight-callout-comment:hover,
 .diff-highlight-callout-comment:focus-visible {
+  opacity: 1;
   background: rgba(245, 158, 11, 0.2);
 }
 

@@ -147,7 +147,13 @@ test.describe("Commit highlights", () => {
       // Screen readers reach the callout and its button.
       const note = overlay.getByRole("note");
       await expect(note).toHaveText(/The one line that matters\./);
-      await note.getByRole("button", { name: "Comment" }).click();
+      const button = note.getByRole("button", { name: "Comment" });
+      // A quiet icon with a full touch target that doesn't heighten the note.
+      const target = (await button.boundingBox())!;
+      expect([target.width, target.height]).toEqual([24, 24]);
+      const text = (await note.locator(".diff-highlight-callout-text").boundingBox())!;
+      expect((await note.boundingBox())!.height).toBeCloseTo(text.height + 8, 0);
+      await button.click();
       const dialog = page.locator(".diff-viewer-comment-dialog");
       await expect(dialog).toContainText("Add Comment (Line 160, new)");
       await expect(dialog.locator(".diff-viewer-selected-text")).toHaveText(
@@ -213,17 +219,17 @@ test.describe("Commit highlights", () => {
         // Monaco re-renders lines as it lays out; retry until both show.
         const below = await nextLine.boundingBox();
         const box = await callout.boundingBox();
-        return below && box ? Math.round(below.y - (box.y + box.height)) : NaN;
+        return below && box ? below.y - (box.y + box.height) : NaN;
       };
       await expect(callout).toBeInViewport();
-      await expect.poll(gap).toBe(0);
+      await expect.poll(gap).toBeCloseTo(0, 0);
       const height = (await callout.boundingBox())!.height;
 
-      await page.setViewportSize({ width: 1000, height: 900 });
+      await page.setViewportSize({ width: 800, height: 900 });
       await expect
         .poll(async () => (await callout.boundingBox())?.height ?? 0)
         .toBeGreaterThan(height);
-      await expect.poll(gap).toBe(0);
+      await expect.poll(gap).toBeCloseTo(0, 0);
     });
   });
 
