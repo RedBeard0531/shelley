@@ -163,8 +163,11 @@ func TestDirectPTYCloseInterruptsRecv(t *testing.T) {
 		// on the PTY, or once the PTY is gone, on the command's exit.
 		parked []string
 	}{
-		{"holding the terminal", `trap "" HUP; echo ready; exec sleep 1000`, []string{"IO wait", "syscall"}},
-		{"detached", `trap "" HUP; echo ready; exec sleep 1000 </dev/null >/dev/null 2>&1`, []string{"select", "chan receive"}},
+		// No newline after "ready": the terminal writes the \r\n it becomes
+		// separately, and a read that stopped at "ready" would leave it for
+		// the Recv that is meant to be waiting.
+		{"holding the terminal", `trap "" HUP; printf ready; exec sleep 1000`, []string{"IO wait", "syscall"}},
+		{"detached", `trap "" HUP; printf ready; exec sleep 1000 </dev/null >/dev/null 2>&1`, []string{"select", "chan receive"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, err := startDirectPTY(tc.command, t.TempDir(), 80, 24, nil)
@@ -225,17 +228,19 @@ func TestDirectPTYCloseDropsQueuedInput(t *testing.T) {
 	}
 }
 
-// waitForParkedGoroutine polls until a goroutine is parked within fn in one
-// of states.
+// waitForParkedGoroutine polls until a goroutine the caller started is parked
+// within fn in one of states. Parallel tests' goroutines don't count.
 func waitForParkedGoroutine(t *testing.T, states []string, fn string) {
 	t.Helper()
 	buf := make([]byte, 1<<20)
+	self := strings.Fields(string(buf[:runtime.Stack(buf, false)]))[1]
+	createdBySelf := " in goroutine " + self + "\n"
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		n := runtime.Stack(buf, true)
 		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
 			for _, state := range states {
-				if strings.HasPrefix(g, "goroutine ") && strings.Contains(g, " ["+state) && strings.Contains(g, fn) {
+				if strings.HasPrefix(g, "goroutine ") && strings.Contains(g, " ["+state) && strings.Contains(g, fn) && strings.Contains(g, createdBySelf) {
 					return
 				}
 			}
