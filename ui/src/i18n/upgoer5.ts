@@ -446,6 +446,7 @@ export const upgoer5: TranslationKeys = {
   noModelSelectedPlaceholder: "No brain to use",
 
   // Status Bar
+  modelLabel: "Brain:",
   dirLabel: "Place:",
 
   // Sidebar buttons

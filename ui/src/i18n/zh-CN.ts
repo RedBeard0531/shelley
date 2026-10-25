@@ -443,6 +443,7 @@ export const zhCN: TranslationKeys = {
   noModelSelectedPlaceholder: "无可用模型",
 
   // Status Bar
+  modelLabel: "模型：",
   dirLabel: "目录：",
 
   // Sidebar buttons

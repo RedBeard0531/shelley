@@ -61,14 +61,12 @@
     @update:model-value="handleSelect"
     @filter="onFilter"
     @before-show="onBeforeShow"
-    @show="onShow"
     @blur="onTriggerBlur"
     @hide="onHide"
   >
     <template #value>
       <slot name="value" :label="selectedLabel">
         <span class="model-picker-value">
-          <slot name="prefix" />
           <span :class="['model-picker-value-name', { 'status-readout-affordance': inline }]">{{
             triggerLabel || selectedLabel
           }}</span>
@@ -282,7 +280,6 @@
           </section>
           <section
             v-if="knob.profiles.length > 0"
-            ref="profileSection"
             class="model-picker-section"
             data-testid="model-picker-profiles"
           >
@@ -719,8 +716,6 @@ function handleSelect(pickerValue: string) {
 // pick with the pointer (taken here, not by PrimeVue) has to move as well, or
 // Enter would pick the one focused before.
 type SelectInternals = {
-  $el: HTMLElement;
-  show(): void;
   hide(focusTrigger?: boolean): void;
   focusedOptionIndex: number;
   overlayVisible: boolean;
@@ -828,40 +823,16 @@ async function profileAction(action: () => Promise<void>) {
   // Escape; it goes to the profile in use.
   await nextTick();
   if (document.activeElement && document.activeElement !== document.body) return;
-  focusProfile();
-}
-// Focuses the profile in use, or the first if the settings have none.
-function focusProfile(options?: FocusOptions) {
   const pills = profilePills.value;
   (
     pills?.querySelector<HTMLElement>('[aria-checked="true"]') ?? pills?.querySelector("button")
-  )?.focus(options);
+  )?.focus();
 }
-// Opens the panel at its profiles, with focus on the one in use, for a
-// control elsewhere that names the profile; closing goes back to it.
-const profileSection = ref<HTMLElement | null>(null);
-let profilesOpener: HTMLElement | null = null;
-function openProfiles(opener: HTMLElement) {
-  if (props.disabled) return;
-  profilesOpener = opener;
-  select()?.show();
-}
-function onShow() {
-  if (!profilesOpener) return;
-  profileSection.value?.scrollIntoView({ block: "nearest" });
-  focusProfile({ preventScroll: true });
-}
-defineExpose({ openProfiles });
 function onBeforeShow() {
   heldRecent.value = liveRecent.value;
   keyboardRow = -1;
 }
 function onHide() {
-  // Close and Escape hand focus to the picker's own trigger.
-  if (profilesOpener?.isConnected && select()?.$el.contains(document.activeElement)) {
-    profilesOpener.focus();
-  }
-  profilesOpener = null;
   heldRecent.value = null;
   filterValue.value = "";
   newProfileName.value = null;

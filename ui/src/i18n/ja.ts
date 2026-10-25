@@ -450,6 +450,7 @@ export const ja: TranslationKeys = {
   noModelSelectedPlaceholder: "利用可能なモデルなし",
 
   // Status Bar
+  modelLabel: "モデル:",
   dirLabel: "ディレクトリ:",
 
   // Sidebar buttons

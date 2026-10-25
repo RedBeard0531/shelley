@@ -450,6 +450,7 @@ export const ru: TranslationKeys = {
   noModelSelectedPlaceholder: "Нет доступных моделей",
 
   // Status Bar
+  modelLabel: "Модель:",
   dirLabel: "Каталог:",
 
   // Sidebar buttons

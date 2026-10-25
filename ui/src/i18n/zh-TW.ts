@@ -443,6 +443,7 @@ export const zhTW: TranslationKeys = {
   noModelSelectedPlaceholder: "無可用模型",
 
   // Status Bar
+  modelLabel: "模型：",
   dirLabel: "目錄：",
 
   // Sidebar buttons

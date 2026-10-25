@@ -76,7 +76,6 @@
         >
           <template v-if="isMobile" #models="{ hide }">
             <ModelPicker
-              ref="menuModelPickerRef"
               class="overflow-menu-item model-picker-menu"
               :models="models"
               :selected-model="selectedModel"
@@ -109,18 +108,6 @@
                 <span class="overflow-menu-cwd" :title="label">{{ label }}</span>
               </template>
             </ModelPicker>
-            <button
-              v-if="knob.profiles.length > 0"
-              class="overflow-menu-item"
-              :disabled="conversationWorking || sending"
-              @click="menuModelPickerRef?.openProfiles($event.currentTarget as HTMLElement)"
-            >
-              <i class="pi pi-sliders-h chat-menu-icon" aria-hidden="true" />
-              {{ t("profileLabel") }}
-              <span :class="['overflow-menu-cwd', { italic: knob.changes.length > 0 }]">{{
-                knob.profile || t("profileUnsaved")
-              }}</span>
-            </button>
           </template>
           <button
             type="button"
@@ -485,7 +472,8 @@
         />
       </template>
       <template v-if="statusSlotInline" #status>
-        <ChatStatusContent v-bind="statusContentProps" />
+        <!-- An interrupted turn says so in the bar above. -->
+        <ChatStatusContent v-bind="statusContentProps" :interrupted="false" />
         <span :id="`${tocTargetId}-mobile`" class="status-navigation" />
       </template>
     </MessageInput>
@@ -932,7 +920,6 @@ const {
 // ---- core state ----
 const messageInputRef = ref<InstanceType<typeof MessageInput> | null>(null);
 const liveVoiceRef = ref<InstanceType<typeof LiveVoice> | null>(null);
-const menuModelPickerRef = ref<InstanceType<typeof ModelPicker> | null>(null);
 const voicePhase = ref<"idle" | "connecting" | "live">("idle");
 const liveExchangeTurns = computed(() => {
   const live = liveVoiceRef.value;
@@ -4355,11 +4342,18 @@ const canQueue = computed(() => agentWorking.value && !!props.conversationId);
 
 const tocTargetId = useId();
 
-// Status content visibility on mobile (mirrors the renderStatusContent gate)
+// Phones say a turn was interrupted, with Continue, in the bar above the
+// composer, unless an error or the connection state, which ChatStatusContent
+// shows first, has the composer row's status slot.
+const interruptedBar = computed(
+  () => conversationInterrupted.value && !error.value && props.streamStatus === "connected",
+);
+// Whether the status bar has content; phones use it only for what the
+// composer row's status slot can't hold.
 const showStatusContent = computed(
   () =>
     !isMobile.value ||
-    conversationInterrupted.value ||
+    interruptedBar.value ||
     !props.conversationId ||
     props.currentConversation?.is_draft ||
     props.currentConversation?.archived,
@@ -4369,14 +4363,13 @@ const statusSlotInline = computed(
     !!props.conversationId &&
     !props.currentConversation?.is_draft &&
     !props.currentConversation?.archived &&
-    !conversationInterrupted.value &&
     isMobile.value,
 );
 
 const statusBarClass = computed(
   () =>
     `status-bar${props.currentConversation?.archived ? " status-bar-archived" : ""}${
-      conversationInterrupted.value ? " status-bar-interrupted" : ""
+      interruptedBar.value ? " status-bar-interrupted" : ""
     }${!props.conversationId || props.currentConversation?.is_draft ? " status-bar-new" : ""}`,
 );
 
@@ -4430,8 +4423,8 @@ const loadingBarFillStyle = computed<Record<string, string> | undefined>(() => {
   return undefined;
 });
 
-// Props bundle for ChatStatusContent (rendered in the status bar OR the
-// mobile message-input slot — mutually exclusive locations).
+// Props bundle for ChatStatusContent, in the status bar and on phones the
+// composer row's status slot (both, for an interrupted turn).
 const statusContentProps = computed(() => {
   perfCount("chat.statusContentProps");
   return {

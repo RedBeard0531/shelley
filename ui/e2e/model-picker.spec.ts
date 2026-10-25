@@ -64,65 +64,55 @@ test.describe("Model picker (PrimeVue)", () => {
     await expect(panel).toBeHidden();
   });
 
-  test("mobile new conversations list model, profile and directory a row each", async ({
+  test("mobile new conversations label the model and directory fields a row each", async ({
     page,
   }) => {
     const panel = page.locator(".model-picker-panel");
-    const activeProfile = panel
-      .getByTestId("model-picker-profiles")
-      .getByRole("radio", { checked: true });
     const model = page.locator(".status-field-model .model-picker.p-select");
     const composer = page.locator(".status-bar-new");
-    const profile = composer.getByRole("button", { name: /^Profile / });
-    const directory = composer.getByRole("button", { name: /^Directory / });
+    const directory = page.locator(".status-field-cwd .status-chip");
+    const labels = composer.locator(".status-field-label");
     for (const width of [412, 320, 260]) {
       await page.setViewportSize({ width, height: 915 });
       await page.goto("/new");
-      // Stacked top to bottom, labelled, and inside the viewport.
+      // Stacked, inside the viewport, with the labels in a column of their
+      // own, right-aligned, and the fields boxed in one after it.
+      await expect(labels).toHaveText(["Model:", "Dir:"]);
       let bottom = 0;
-      for (const [row, label] of [
-        [model, "Model"],
-        [profile, "Profile"],
-        [directory, "Directory"],
+      const rights = new Set<number>();
+      const lefts = new Set<number>();
+      for (const [label, field] of [
+        [labels.first(), model],
+        [labels.last(), directory],
       ] as const) {
-        await expect(row).toBeVisible();
-        await expect(row.locator(".status-chip-icon")).toBeVisible();
-        await expect(row.locator(".status-chip-label")).toHaveText(label);
-        const bounds = (await row.boundingBox())!;
-        expect(bounds.y).toBeGreaterThanOrEqual(bottom);
-        expect(bounds.x).toBeGreaterThanOrEqual(0);
-        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
-        bottom = bounds.y + bounds.height;
+        const l = (await label.boundingBox())!;
+        const f = (await field.boundingBox())!;
+        expect(Math.min(l.y, f.y)).toBeGreaterThanOrEqual(bottom);
+        expect(l.x).toBeGreaterThanOrEqual(0);
+        expect(l.x + l.width).toBeLessThanOrEqual(f.x);
+        expect(f.x + f.width).toBeLessThanOrEqual(width);
+        await expect(field).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+        await expect(field).not.toHaveCSS("border-top-style", "none");
+        rights.add(Math.round(l.x + l.width));
+        lefts.add(Math.round(f.x));
+        bottom = Math.max(l.y + l.height, f.y + f.height);
       }
-      await expect(page.locator(".status-bar-new .status-field-label")).toBeHidden();
+      expect(rights.size).toBe(1);
+      expect(lefts.size).toBe(1);
       await expect(model.locator(".model-picker-value-name")).not.toHaveText("");
+      await expect(model.locator(".p-select-dropdown")).toBeVisible();
+      await expect(composer.getByRole("button", { name: /^Profile/ })).toHaveCount(0);
 
-      await model.click();
-      await expect(panel).toBeVisible();
-      await expect(activeProfile).not.toBeFocused();
-      await panel.getByRole("button", { name: "Close" }).click();
-      await expect(panel).toBeHidden();
-
-      // The profile row opens the same picker at its profiles, and closing
-      // it, by button or Escape, goes back to the row.
-      await profile.click();
-      await expect(activeProfile).toBeFocused();
-      await expect(activeProfile).toBeInViewport({ ratio: 1 });
-      await panel.getByRole("button", { name: "Close" }).click();
-      await expect(panel).toBeHidden();
-      await expect(profile).toBeFocused();
-      await profile.click();
-      await expect(activeProfile).toBeFocused();
-      await page.keyboard.press("Escape");
-      await expect(panel).toBeHidden();
-      await expect(profile).toBeFocused();
-      // The model row, borderless, still shows keyboard focus.
+      // Keyboard focus shows on the model's box.
+      await directory.focus();
+      const border = await model.evaluate((e) => getComputedStyle(e).borderTopColor);
       await page.keyboard.press("Shift+Tab");
       await expect(model.getByRole("combobox")).toBeFocused();
-      await expect(model).not.toHaveCSS("outline-style", "none");
+      await expect(model).not.toHaveCSS("border-top-color", border);
+
       await model.click();
       await expect(panel).toBeVisible();
-      await expect(activeProfile).not.toBeFocused();
+      await expect(panel.getByTestId("model-picker-profiles")).toBeAttached();
       await panel.getByRole("button", { name: "Close" }).click();
       await expect(panel).toBeHidden();
 
@@ -132,34 +122,30 @@ test.describe("Model picker (PrimeVue)", () => {
       await picker.getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(picker).toBeHidden();
 
-      // The menu still has them all.
+      // The menu has them too, the profile within the model's picker.
       await expect(await openModelPicker(page)).toHaveClass(/model-picker-menu/);
       await expect(panel).toBeVisible();
       await panel.getByRole("button", { name: "Close" }).click();
       const menu = page.locator(".chat-overflow-popover");
-      const menuProfile = menu.getByRole("button", { name: /^Profile\b/ });
-      await menuProfile.click();
-      await expect(activeProfile).toBeFocused();
-      await expect(activeProfile).toBeInViewport({ ratio: 1 });
-      await panel.getByRole("button", { name: "Close" }).click();
-      await expect(menuProfile).toBeFocused();
+      await expect(menu.getByRole("button", { name: /^Directory\b/ })).toBeVisible();
+      await expect(menu.getByRole("button", { name: /^Profile\b/ })).toHaveCount(0);
     }
     // A short viewport, as with Android's keyboard up, leaves them to the menu.
     await page.setViewportSize({ width: 393, height: 320 });
     await page.goto("/new");
     await expect(composer).toBeHidden();
     await expect(page.getByTestId("message-input")).toBeInViewport({ ratio: 1 });
-    // Desktop keeps its labelled fields, and the profile within the picker.
+    // Desktop keeps them in a row, with only the directory labelled.
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/new");
     await expect(model).toBeVisible();
-    await expect(page.locator(".status-field-cwd .status-chip")).toBeVisible();
-    await expect(page.locator(".status-bar-new .status-field-label")).toBeVisible();
-    await expect(profile).toBeHidden();
-    await expect(page.locator(".status-chip-icon:visible")).toHaveCount(0);
-    await model.click();
-    await expect(panel.getByRole("searchbox")).toBeFocused();
-    await expect(model).toHaveCSS("outline-style", "none");
+    await expect(directory).toBeVisible();
+    await expect(labels).toHaveText(["Model:", "Dir:"]);
+    await expect(labels.first()).toBeHidden();
+    await expect(labels.last()).toBeVisible();
+    const m = (await model.boundingBox())!;
+    const d = (await directory.boundingBox())!;
+    expect(Math.abs(m.y + m.height / 2 - (d.y + d.height / 2))).toBeLessThan(2);
   });
 
   test("does not focus model search when opened on mobile", async ({ page }) => {

@@ -449,6 +449,7 @@ export const en: TranslationKeys = {
   noModelSelectedPlaceholder: "No model available",
 
   // Status Bar
+  modelLabel: "Model:",
   dirLabel: "Dir:",
 
   // Sidebar buttons

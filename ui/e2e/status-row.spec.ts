@@ -23,6 +23,8 @@ test("TOC shares the compact status row across desktop and mobile", async ({ pag
   const dir = mkdtempSync(join(tmpdir(), "shelley-status-row-"));
   const pipe = join(dir, "gate");
   execFileSync("mkfifo", [pipe]);
+  // Where the phone's token count ends while the agent works.
+  let workingTokensRight = 0;
   try {
     await page.getByTestId("message-input").fill(`bash: read -r line < ${pipe}`);
     await page.getByTestId("send-button").click();
@@ -77,9 +79,12 @@ test("TOC shares the compact status row across desktop and mobile", async ({ pag
         if (width <= 767) {
           expect(geometry.status!.right - geometry.status!.left).toBe(1);
           expect(geometry.status!.bottom - geometry.status!.top).toBe(1);
-          // Phones keep just the token count from the readout, after Stop.
+          // Stop at the far left; of the readout, phones keep just the
+          // token count, against the buttons, so Stop doesn't move it.
+          expect(geometry.stop.left - geometry.row.left).toBeLessThan(1);
           expect(geometry.tokens.left).toBeGreaterThanOrEqual(geometry.stop.right);
-          expect(geometry.toc.left).toBeGreaterThanOrEqual(geometry.tokens.right);
+          expect(geometry.toc.left - geometry.tokens.right).toBeLessThan(12);
+          if (width === 390) workingTokensRight = geometry.tokens.right;
           expect(geometry.stop.right - geometry.stop.left).toBe(24);
           expect(geometry.send.bottom).toBeLessThanOrEqual(geometry.input.top);
           await expect(page.locator(".status-readout-cwd")).toBeHidden();
@@ -123,10 +128,15 @@ test("TOC shares the compact status row across desktop and mobile", async ({ pag
     await page.getByRole("button", { name: "Stop", exact: true }).click();
     await expect(page.getByTestId("agent-thinking")).toBeHidden();
     await expect(toc).toBeVisible();
+    await page.locator(".main-content").evaluate((el) => {
+      el.style.maxWidth = "";
+    });
     await page.setViewportSize({ width: 390, height: 800 });
     await expect(page.locator(".status-ready")).toBeHidden();
     await expect(page.locator(".status-stop-button")).toHaveCount(0);
     await expect(page.locator(".context-usage-label")).toBeVisible();
+    const idleTokens = (await page.locator(".context-usage-label-tokens").boundingBox())!;
+    expect(Math.abs(idleTokens.x + idleTokens.width - workingTokensRight)).toBeLessThan(1);
     await expect(page.locator(".status-readout-cwd-leaf")).toBeHidden();
     await expect(page.locator(".status-readout-cwd-path")).toBeHidden();
     for (const dark of [false, true]) {
@@ -254,7 +264,7 @@ test("context count opens the usage graphs on desktop and mobile", async ({ page
   }
 });
 
-test("an interrupted conversation fits Continue and the context count on phones", async ({
+test("an interrupted conversation keeps the context count in place on phones", async ({
   page,
   request,
 }) => {
@@ -289,16 +299,34 @@ test("an interrupted conversation fits Continue and the context count on phones"
       }
     };
   }, conversationId);
-  await page.goto(`/c/${slug}`);
+  // Where the count sits in a conversation that isn't interrupted.
+  const other = await createConversationViaAPIWithDetails(request, "echo usage");
+  const count = page.locator(".context-usage-label-tokens:visible");
+  const at = async () => {
+    const box = (await count.boundingBox())!;
+    return [Math.round(box.x + box.width), Math.round(box.y)];
+  };
   const group = page.getByTestId("conversation-interrupted");
   const message = group.locator(".status-message");
   for (const width of [1280, 390, 360, 320]) {
     await page.setViewportSize({ width, height: 800 });
-    await expect(message).toHaveText(width < 768 ? "Interrupted" : "Conversation Interrupted", {
-      useInnerText: true,
-    });
+    await page.goto(`/c/${other.slug}`);
+    await expect(count).toHaveCount(1);
+    const idle = await at();
+    await page.goto(`/c/${slug}`);
+    await expect(message).toHaveText("Conversation Interrupted", { useInnerText: true });
     await expect(page.getByTestId("resume-interrupted-button")).toBeVisible();
-    await expect(page.locator(".context-usage-label")).toBeVisible();
     expect(await message.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+    await expect(count).toHaveCount(1);
+    // Phones keep it in the composer row, where it is otherwise.
+    if (width < 768) expect(await at()).toEqual(idle);
   }
+  // A failed Continue says so once, where errors otherwise show.
+  await page.route("**/api/conversation/*/resume", (route) =>
+    route.fulfill({ status: 503, body: "Resume failed" }),
+  );
+  await page.getByTestId("resume-interrupted-button").click();
+  await expect(page.locator(".status-error")).toHaveText("Resume failed");
+  await expect(page.locator(".message-controls-status-slot .status-error")).toBeVisible();
+  await expect(group).toHaveCount(0);
 });

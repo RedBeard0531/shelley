@@ -447,6 +447,7 @@ export const vi: TranslationKeys = {
   noModelSelectedPlaceholder: "Không có model khả dụng",
 
   // Status Bar
+  modelLabel: "Model:",
   dirLabel: "Thư mục:",
 
   // Sidebar buttons

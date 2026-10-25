@@ -439,6 +439,7 @@ export interface TranslationKeys {
   noModelSelectedPlaceholder: string;
 
   // Status Bar
+  modelLabel: string;
   dirLabel: string;
 
   // AGENTS.md editor
