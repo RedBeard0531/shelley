@@ -51,9 +51,14 @@ if [ ! -x "$mise" ]; then
 fi
 
 "$mise" trust --quiet "$ui/mise.toml" >&2
-if ! "$mise" install --locked --quiet --cd "$ui" node aqua:pnpm/pnpm >&2; then
-    echo "with-node: if ui/mise.toml changed, run: $mise lock --cd $ui --platform linux-x64,linux-arm64,macos-arm64,macos-x64" >&2
-    exit 1
+# mise install takes a second of CPU even with nothing to install: it rebuilds
+# the shims of every config mise has seen, hundreds on a CI host. A dry run
+# answers in milliseconds, and exits 1 if anything is missing or not locked.
+if ! "$mise" install --locked --quiet --dry-run-code --cd "$ui" node aqua:pnpm/pnpm >/dev/null 2>&1; then
+    if ! "$mise" install --locked --quiet --cd "$ui" node aqua:pnpm/pnpm >&2; then
+        echo "with-node: if ui/mise.toml changed, run: $mise lock --cd $ui --platform linux-x64,linux-arm64,macos-arm64,macos-x64" >&2
+        exit 1
+    fi
 fi
 # Only these two: bin-paths alone would add every tool in the global mise config.
 dirs="$("$mise" bin-paths --cd "$ui" node aqua:pnpm/pnpm | paste -sd: -)"
