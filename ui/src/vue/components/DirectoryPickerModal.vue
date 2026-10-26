@@ -11,7 +11,7 @@
     @close="emit('close')"
   >
     <div class="directory-picker-body">
-      <div class="directory-picker-input-container directory-picker-input-row">
+      <div class="directory-picker-input-container">
         <input
           v-if="!recentMode"
           ref="inputRef"
@@ -276,8 +276,12 @@
                 />
               </svg>
               <span class="directory-picker-recent-main">
-                <span class="directory-picker-entry-name">{{ recentLabel(group, directory) }}</span>
-                <span class="directory-picker-recent-path">{{ homeRelative(directory.path) }}</span>
+                <span class="directory-picker-entry-name truncate">{{
+                  recentLabel(group, directory)
+                }}</span>
+                <span class="directory-picker-recent-path truncate">{{
+                  homeRelative(directory.path)
+                }}</span>
               </span>
               <span class="directory-picker-recent-time">{{
                 relativeTime(directory.updatedAt)
