@@ -485,10 +485,15 @@ export function renderMarkdownToSafeHTML(
   // Lex, then parse, so the token stream is available for MarkdownRenderInfo.
   // parse() runs walkTokens — where the image rewrite and file-reference hooks
   // live — between the two phases; replicate that when splitting them.
-  const options = { async: false, breaks: !reflow } as const;
-  const tokens = marked.lexer(text, options);
+  //
+  // Reflow is set on the instance, not passed to the two calls: lexer() and
+  // parser() treat an options argument as the *whole* option set (marked does
+  // not merge it into the defaults there), which would drop gfm (tables), the
+  // math extension, and the reference-chip renderer.
+  marked.setOptions({ breaks: !reflow });
+  const tokens = marked.lexer(text);
   if (marked.defaults.walkTokens) marked.walkTokens(tokens, marked.defaults.walkTokens);
-  const raw = marked.parser(tokens, options);
+  const raw = marked.parser(tokens);
   const root = DOMPurify.sanitize(raw, { ...SANITIZE_OPTS, RETURN_DOM: true }) as HTMLElement;
   linkifyCodeSpans(root, localhostLinks);
   const html = root.innerHTML;

@@ -68,6 +68,13 @@ assert(
   renderMarkdownToSafeHTML("```\nplain text\n```").includes("<pre><code>plain text\n</code></pre>"),
   "unlabeled fenced code remains plain",
 );
+// GFM tables survive the lex/parse split, which hands the parser its options
+// separately from the instance defaults (where `gfm`, the math extension, and
+// the reference-chip renderer live).
+assert(
+  renderMarkdownToSafeHTML("| a | b |\n| --- | --- |\n| 1 | 2 |").includes("<td>1</td>"),
+  "gfm table renders as a table",
+);
 assert(
   renderMarkdownToSafeHTML("<script>alert(1)</script>hello").includes("hello") &&
     !renderMarkdownToSafeHTML("<script>alert(1)</script>hello").includes("<script>"),
